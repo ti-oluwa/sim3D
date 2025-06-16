@@ -1,0 +1,19 @@
+[project]
+name = "sim2D"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "coolprop>=6.8.0",
+    "jupyterlab>=4.4.3",
+    "matplotlib>=3.10.3",
+    "numba>=0.61.2",
+    "numpy>=2.0.0",
+    "thermo>=0.4.2",
+]
+
+[dependency-groups]
+dev = [
+    "rich>=14.0.0",
+]
