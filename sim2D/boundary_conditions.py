@@ -1,3 +1,5 @@
+"""Utils for defining boundary conditions for a 2D reservoir model grid."""
+
 import typing
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -5,6 +7,14 @@ import numpy as np
 
 from sim2D.typing import TwoDimensionalGrid, OneDimensionalGrid
 
+
+__all__ = [
+    "NoFlowBoundary",
+    "ConstantBoundary",
+    "VariableBoundary",
+    "GridBoundaryCondition",
+    "BoundaryConditions",
+]
 
 class BoundaryCondition(typing.Protocol):
     """

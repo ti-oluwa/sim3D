@@ -5,13 +5,13 @@ from numpy.typing import NDArray
 
 Tco = typing.TypeVar("Tco", covariant=True)
 
-TwoDimensionalGrid = NDArray[np.floating]
+TwoDimensionalGrid = NDArray[np.float64]
 """2D grid type for simulation data, represented as a 2D NumPy array of floats"""
-OneDimensionalGrid = NDArray[np.floating]
+OneDimensionalGrid = NDArray[np.float64]
 """1D grid type for simulation data, represented as a 1D NumPy array of floats"""
 
-InjectionFluid = typing.Literal["CO2", "Water", "Methane", "N2"]
-"""Injection fluids supported in the simulation (recognized by CoolProp)"""
+InjectedFluidType = typing.Literal["water", "oil", "gas"]
+"""Types of fluids that can be injected in the simulation"""
 
 DiscretizationMethod = typing.Literal["implicit", "explicit", "adaptive"]
 """Discretization methods for numerical simulations"""

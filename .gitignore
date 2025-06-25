@@ -10,3 +10,4 @@ wheels/
 .venv
 .vscode
 *.mp4
+.ipynb_*
