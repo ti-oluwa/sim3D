@@ -5,8 +5,8 @@ import itertools
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
 
-from sim2D.typing import TwoDimensionalGrid, ArrayLike
-from sim2D.properties import (
+from _sim2D.types import TwoDimensionalGrid, ArrayLike
+from _sim2D.properties import (
     compute_fluid_viscosity,
     compute_fluid_density,
     compute_fluid_compressibility,
@@ -38,7 +38,7 @@ from sim2D.properties import (
     compute_gas_gravity,
     compute_gas_gravity_from_density,
 )
-from sim2D.models import CapillaryPressureParameters, RelativePermeabilityParameters
+from _sim2D.models import CapillaryPressureParameters, RelativePermeabilityParameters
 
 
 def build_2D_uniform_grid(

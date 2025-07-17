@@ -4,8 +4,8 @@ import typing
 import enum
 from dataclasses import dataclass, field
 
-from sim2D.typing import TwoDimensionalGrid
-from sim2D.boundary_conditions import BoundaryConditions
+from _sim2D.types import TwoDimensionalGrid
+from _sim2D.boundary_conditions import BoundaryConditions
 
 
 __all__ = [
@@ -179,15 +179,16 @@ class RockProperties:
 class TwoDimensionalReservoirModel:
     """Represents a 2D reservoir model with its properties and state."""
 
-    cell_dimension: typing.Tuple[float, float]
-    """Size of each cell in the grid (cell_size_x, cell_size_y) in meters."""
     grid_dimension: typing.Tuple[int, int]
     """Number of cells in the grid. A tuple of number of cells in x and y directions (cell_count_x, cell_count_y)."""
-
+    cell_dimension: typing.Tuple[float, float]
+    """Size of each cell in the grid (cell_size_x, cell_size_y) in ft."""
+    height_grid: TwoDimensionalGrid
+    """2D numpy array representing the height of each cell in the reservoir (ft)."""
     fluid_properties: FluidProperties
-    """str properties of the reservoir model."""
+    """Fluid properties of the reservoir model."""
     rock_properties: RockProperties
-    """str properties of the reservoir model."""
+    """Rock properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = field(default_factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
 

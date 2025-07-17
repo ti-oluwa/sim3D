@@ -1,19 +1,28 @@
 [project]
 name = "sim2D"
 version = "0.1.0"
-description = "Add your description here"
+description = "A 2D/3D reservoir simulation framework in Python."
+authors = [
+    { name = "ti-oluwa", email = "tioluwa.dev@gmail.com" },
+]
+license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "attrs>=25.3.0",
+    "cattrs>=25.1.1",
     "coolprop>=6.8.0",
-    "jupyterlab>=4.4.3",
     "matplotlib>=3.10.3",
     "numba>=0.61.2",
     "numpy>=2.0.0",
     "thermo>=0.4.2",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
+    "jupyterlab>=4.4.3",
+    "mypy>=1.16.1",
     "rich>=14.0.0",
+    "ruff>=0.12.1",
 ]
+

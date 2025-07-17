@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import Normalize
 import matplotlib.animation as animation
 
-from sim2D.simulation import ModelTimeState
+from _sim2D.simulation import ModelTimeState
 
 
 

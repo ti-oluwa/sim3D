@@ -4,26 +4,26 @@ from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
 import itertools
 
-from sim2D.typing import TwoDimensionalGrid
-from sim2D.constants import (
+from _sim2D.types import TwoDimensionalGrid
+from _sim2D.constants import (
     BBL_TO_FT3,
     SECONDS_TO_DAYS,
     MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
 )
-from sim2D.properties import (
+from _sim2D.properties import (
     compute_harmonic_mobility,
     compute_diffusion_number,
     compute_three_phase_relative_permeabilities,
 )
-from sim2D.grids import (
+from _sim2D.grids import (
     build_2D_total_fluid_compressibility_grid,
     edge_pad_grid,
     build_2D_three_phase_relative_mobilities_grids,
     build_2D_three_phase_capillary_pressure_grids,
 )
-from sim2D.models import RockProperties, FluidProperties
-from sim2D.wells import Wells, FluidPhase
-from sim2D.boundary_conditions import BoundaryConditions
+from _sim2D.models import RockProperties, FluidProperties
+from _sim2D.wells import Wells, FluidPhase
+from _sim2D.boundary_conditions import BoundaryConditions
 
 
 ###########################################################################
@@ -176,6 +176,7 @@ Notes:
 
 def compute_explicit_pressure_evolution(
     cell_dimension: typing.Tuple[float, float],
+    height_grid: TwoDimensionalGrid,
     time_step_size: float,
     boundary_conditions: BoundaryConditions,
     rock_properties: RockProperties,
@@ -211,6 +212,7 @@ def compute_explicit_pressure_evolution(
     and contribute to the right-hand side as source terms.
 
     :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet (ft).
+    :param height_grid: 2D numpy array representing the height of each cell in the reservoir (ft).
     :param time_step_size: Time step size (s) for each iteration.
     :param boundary_conditions: Boundary conditions for pressure and saturation grids.
     :param rock_properties: `RockProperties` object containing rock physical properties including
@@ -262,7 +264,6 @@ def compute_explicit_pressure_evolution(
     # Determine grid dimensions and cell sizes
     cell_count_x, cell_count_y = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
-    cell_depth = 1.0  # Assuming unit depth for 2D simulation (ft)
 
     # Compute total fluid system compressibility for each cell
     total_fluid_compressibility_grid = build_2D_total_fluid_compressibility_grid(
@@ -374,6 +375,7 @@ def compute_explicit_pressure_evolution(
             j + 1,
         )  # Padded indices for current cell (i,j)
 
+        current_cell_depth = height_grid[i, j]
         current_cell_oil_pressure = padded_oil_pressure_grid[
             current_cell_padded_index_x, current_cell_padded_index_y
         ]
@@ -581,8 +583,8 @@ def compute_explicit_pressure_evolution(
         )
         net_volumetric_flow_rate_into_cell_in_x_direction = (
             net_volumetric_flux_into_cell_in_x_direction
-            * ((cell_size_y * cell_depth) / cell_size_x**2)  # A_{i,j} / Δx²
-            # Multiply by face area (dy * unit_depth) / Δx²
+            * ((cell_size_y * current_cell_depth) / cell_size_x**2)  # A_{i,j} / Δx²
+            # Multiply by face area (dy * cell_depth) / Δx²
         )
 
         # For the volumetric flux into the current cell in the y direction,
@@ -758,8 +760,8 @@ def compute_explicit_pressure_evolution(
 
         net_volumetric_flow_rate_into_cell_in_y_direction = (
             net_volumetric_flux_into_cell_in_y_direction
-            * ((cell_size_x * cell_depth) / cell_size_y**2)  # A_{i,j} / Δy²
-            # Multiply by face area (dx * unit_depth) / Δy²
+            * ((cell_size_x * current_cell_depth) / cell_size_y**2)  # A_{i,j} / Δy²
+            # Multiply by face area (dx * current_cell_depth) / Δy²
         )
 
         # Combine the net volumetric flow rates from both directions
@@ -850,13 +852,15 @@ def compute_explicit_pressure_evolution(
         #     (q_{i,j} * A_{i,j} * Δx)
         # ]
 
-        time_in_days = time_step_size * SECONDS_TO_DAYS
+        time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
         change_in_pressure = (
-            time_in_days
+            time_step_size_in_days
             / (
                 current_cell_porosity
                 * current_cell_total_compressibility
-                * (cell_size_x * cell_size_y * cell_depth)  # Volume of the cell in ft³
+                * (
+                    cell_size_x * cell_size_y * current_cell_depth
+                )  # Volume of the cell in ft³
             )
         ) * total_flow_rate_into_cell
 
@@ -1056,6 +1060,7 @@ Where:
 
 def compute_implicit_pressure_evolution(
     cell_dimension: typing.Tuple[float, float],
+    height_grid: TwoDimensionalGrid,
     time_step_size: float,
     boundary_conditions: BoundaryConditions,
     rock_properties: RockProperties,
@@ -1085,7 +1090,8 @@ def compute_implicit_pressure_evolution(
 
     This formulation keeps the system linear for P_oil, making it solvable with direct methods like `spsolve`.
 
-    :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in meters (m).
+    :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet (ft).
+    :param height_grid: A 2D grid representing the depth of each cell in the reservoir (ft).
     :param time_step_size: Time step size (s) for the implicit scheme.
     :param boundary_conditions: Boundary conditions for pressure and saturation grids.
     :param rock_properties: ``RockProperties`` object containing rock physical properties including
@@ -1135,9 +1141,6 @@ def compute_implicit_pressure_evolution(
     # Determine grid dimensions and cell sizes
     cell_count_x, cell_count_y = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
-    cell_depth = 1.0  # Assuming unit depth for 2D grid
-    cell_area_2D = cell_size_x * cell_size_y
-    cell_volume = cell_area_2D * cell_depth  # Volume of a 2D cell (assuming unit depth)
 
     # Compute total fluid system compressibility for each cell (evaluated at time n)
     total_fluid_compressibility_grid = build_2D_total_fluid_compressibility_grid(
@@ -1253,10 +1256,12 @@ def compute_implicit_pressure_evolution(
     for i, j in itertools.product(range(cell_count_x), range(cell_count_y)):
         current_cell_padded_index_x, current_cell_padded_index_y = i + 1, j + 1
         current_cell_1d_index = to_1d_index(i, j)
+        current_cell_depth = height_grid[i, j]
+        current_cell_volume = cell_size_x * cell_size_y * current_cell_depth
         current_cell_porosity = porosity_grid[i, j]
         current_cell_total_compressibility = total_compressibility_grid[i, j]
         current_cell_oil_pressure = current_oil_pressure_grid[i, j]
-        time_in_days = time_step_size * SECONDS_TO_DAYS
+        time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
         current_cell_oil_water_capillary_pressure = (
             padded_oil_water_capillary_pressure_grid[
                 current_cell_padded_index_x, current_cell_padded_index_y
@@ -1271,8 +1276,10 @@ def compute_implicit_pressure_evolution(
         # Accumulation term coefficient for the diagonal of A
         # β = φ·c_t·A·Δx / Δt
         accumulation_coefficient = (
-            current_cell_porosity * current_cell_total_compressibility * cell_volume
-        ) / time_in_days
+            current_cell_porosity
+            * current_cell_total_compressibility
+            * current_cell_volume
+        ) / time_step_size_in_days
 
         # For the east neighbor (i+1, j) - Tx⁺ = λ_{i+1/2,j} * A / Δx²
         east_neighbor_padded_index_x, east_neighbor_padded_index_y = (
@@ -1332,7 +1339,9 @@ def compute_implicit_pressure_evolution(
         )
         # Tx⁺ = λ_{i+1/2,j} * A / Δx²
         transmissibility_east = (
-            total_harmonic_mobility_east * (cell_count_y * cell_depth) / cell_size_x**2
+            total_harmonic_mobility_east
+            * (cell_count_y * current_cell_depth)
+            / cell_size_x**2
         )
         # λ_w * (P_cow_{i+1,j} - P_cow_{i,j}) (ft²/psi.day * psi = ft²/day)
         water_capillary_pressure_term_east = (
@@ -1345,7 +1354,7 @@ def compute_implicit_pressure_evolution(
         # Total capillary pressure term for the east neighbor (ft²/day * ft = ft³/day)
         capillary_pressure_term_east = (
             (water_capillary_pressure_term_east + gas_capillary_pressure_term_east)
-            * (cell_size_y * cell_depth)
+            * (cell_size_y * current_cell_depth)
             / cell_size_x**2
         )  # Area of the face in ft²
 
@@ -1405,7 +1414,9 @@ def compute_implicit_pressure_evolution(
         )
         # Tx⁻ = λ_{i-1/2,j} * A / Δx²
         transmissibility_west = (
-            total_harmonic_mobility_west * (cell_count_y * cell_depth) / cell_size_x**2
+            total_harmonic_mobility_west
+            * (cell_count_y * current_cell_depth)
+            / cell_size_x**2
         )
         # λ_w * (P_cow_{i,j} - P_cow_{i-1,j})
         water_capillary_pressure_term_west = (
@@ -1418,7 +1429,7 @@ def compute_implicit_pressure_evolution(
         # Total capillary pressure term for the west neighbor
         capillary_pressure_term_west = (
             (water_capillary_pressure_term_west + gas_capillary_pressure_term_west)
-            * (cell_size_y * cell_depth)
+            * (cell_size_y * current_cell_depth)
             / cell_size_x**2
         )  # Area of the face in ft²
 
@@ -1476,7 +1487,9 @@ def compute_implicit_pressure_evolution(
         )
         # Ty⁺ = λ_{i,j+1/2} * A / Δy²
         transmissibility_north = (
-            total_harmonic_mobility_north * (cell_count_x * cell_depth) / cell_size_y**2
+            total_harmonic_mobility_north
+            * (cell_count_x * current_cell_depth)
+            / cell_size_y**2
         )
         # λ_w * (P_cow_{i,j+1} - P_cow_{i,j})
         water_capillary_pressure_term_north = (
@@ -1490,7 +1503,7 @@ def compute_implicit_pressure_evolution(
         # Total capillary pressure term for the north neighbor
         capillary_pressure_term_north = (
             (water_capillary_pressure_term_north + gas_capillary_pressure_term_north)
-            * (cell_size_x * cell_depth)
+            * (cell_size_x * current_cell_depth)
             / cell_size_y**2
         )  # Area of the face in ft²
 
@@ -1547,7 +1560,9 @@ def compute_implicit_pressure_evolution(
         )
         # Ty⁻ = λ_{i,j-1/2} * A / Δy²
         transmissibility_south = (
-            total_harmonic_mobility_south * (cell_count_x * cell_depth) / cell_size_y**2
+            total_harmonic_mobility_south
+            * (cell_count_x * current_cell_depth)
+            / cell_size_y**2
         )
         # λ_w * (P_cow_{i,j} - P_cow_{i,j-1})
         water_capillary_pressure_term_south = (
@@ -1561,7 +1576,7 @@ def compute_implicit_pressure_evolution(
         # Total capillary pressure term for the south neighbor
         capillary_pressure_term_south = (
             (water_capillary_pressure_term_south + gas_capillary_pressure_term_south)
-            * (cell_size_x * cell_depth)
+            * (cell_size_x * current_cell_depth)
             / cell_size_y**2
         )
 
@@ -1673,6 +1688,7 @@ def compute_implicit_pressure_evolution(
 
 def compute_adaptive_pressure_evolution(
     cell_dimension: typing.Tuple[float, float],
+    height_grid: TwoDimensionalGrid,
     time_step_size: float,
     boundary_conditions: BoundaryConditions,
     rock_properties: RockProperties,
@@ -1688,7 +1704,8 @@ def compute_adaptive_pressure_evolution(
     This function now uses RockProperties and FluidProperties to derive the necessary
     physical parameters for the three-phase flow.
 
-    :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in meters (m)
+    :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet (ft)
+    :param height_grid: 2D numpy array representing the height of each cell in the grid (ft).
     :param time_step_size: Time step size (s) for the implicit scheme
     :param boundary_conditions: Boundary conditions for pressure, saturation, etc, grids.
     :param rock_properties: RockProperties object containing rock physical properties.
@@ -1700,7 +1717,6 @@ def compute_adaptive_pressure_evolution(
     :return: A 2D numpy array representing the updated pressure distribution (psi)
         after solving the chosen system for the current time step.
     """
-    # Extract properties from provided objects for clarity and convenience
     current_oil_pressure_grid = fluid_properties.pressure_grid
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
@@ -1812,6 +1828,7 @@ def compute_adaptive_pressure_evolution(
     if max_diffusion_number > diffusion_number_threshold:
         updated_pressure_grid = compute_implicit_pressure_evolution(
             cell_dimension=cell_dimension,
+            height_grid=height_grid,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
@@ -1821,6 +1838,7 @@ def compute_adaptive_pressure_evolution(
     else:
         updated_pressure_grid = compute_explicit_pressure_evolution(
             cell_dimension=cell_dimension,
+            height_grid=height_grid,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
@@ -1934,6 +1952,7 @@ Notes:
 
 def compute_saturation_evolution(
     cell_dimension: typing.Tuple[float, float],
+    height_grid: TwoDimensionalGrid,
     time_step_size: float,
     boundary_conditions: BoundaryConditions,
     rock_properties: RockProperties,
@@ -1947,7 +1966,8 @@ def compute_saturation_evolution(
     This function simulates three-phase immiscible flow, considering pressure
     gradients (including capillary pressure effects) and relative permeabilities.
 
-    :param cell_dimension: Tuple representing the dimensions of each grid cell (cell_size_x, cell_size_y) in meters.
+    :param cell_dimension: Tuple representing the dimensions of each grid cell (cell_size_x, cell_size_y) in feet (ft).
+    :param height_grid: 2D numpy array representing the height of each cell in the grid (ft).
     :param time_step_size: Time step duration in seconds for the simulation.
     :param boundary_conditions: Boundary conditions for pressure and saturation grids.
     :param rock_properties: `RockProperties` object containing rock physical properties.
@@ -1961,9 +1981,7 @@ def compute_saturation_evolution(
     """
     cell_count_x, cell_count_y = fluid_properties.pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
-    # Assuming unit depth for 2D cell volume calculation
-    cell_depth = 1.0
-    time_in_days = time_step_size * SECONDS_TO_DAYS
+    time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
 
     # --- Extract current state and properties ---
     current_oil_pressure_grid = fluid_properties.pressure_grid
@@ -2071,9 +2089,6 @@ def compute_saturation_evolution(
     updated_oil_saturation_grid = current_oil_saturation_grid.copy()
     updated_gas_saturation_grid = current_gas_saturation_grid.copy()
 
-    # Define cell volume (assuming unit thickness for 2D simulation)
-    cell_total_volume = cell_size_x * cell_size_y * cell_depth
-
     # Define Corey's exponents
     water_corey_exponent = relative_permeability_params.water_exponent
     oil_corey_exponent = relative_permeability_params.oil_exponent
@@ -2083,6 +2098,8 @@ def compute_saturation_evolution(
     for i, j in itertools.product(range(cell_count_x), range(cell_count_y)):
         ip, jp = i + 1, j + 1  # Indices of cell in padded grid
 
+        current_cell_depth = height_grid[i, j]
+        cell_total_volume = cell_size_x * cell_size_y * current_cell_depth
         # Current cell properties
         cell_porosity = porosity_grid[i, j]
         # Cell pore volume = φ * A∆x
@@ -2244,7 +2261,7 @@ def compute_saturation_evolution(
 
         # Compute volumetric fluxes from the east neighbor for each phase
         # F_x_east = f_w * v_x * A
-        east_face_area = cell_size_y * cell_depth  # Area of the face (ft²)
+        east_face_area = cell_size_y * current_cell_depth  # Area of the face (ft²)
 
         # For water: F_w_east = f_w * v_w * A
         water_volumetric_flux_at_east_face = (
@@ -2411,7 +2428,7 @@ def compute_saturation_evolution(
 
         # Compute volumetric fluxes from the west neighbor for each phase
         # F_x_west = f_w * v_x * A
-        west_face_area = cell_size_y * cell_depth  # Area of the face (ft²)
+        west_face_area = cell_size_y * current_cell_depth  # Area of the face (ft²)
 
         # For water: F_w_west = f_w * v_w * A
         water_volumetric_flux_at_west_face = (
@@ -2582,7 +2599,7 @@ def compute_saturation_evolution(
 
         # Compute volumetric fluxes from the north neighbor for each phase
         # F_y_north = f_w * v_y * A
-        north_face_area = cell_size_x * cell_depth
+        north_face_area = cell_size_x * current_cell_depth
         # For water: F_w_north = f_w * v_w * A
         water_volumetric_flux_at_north_face = (
             water_fractional_flow_north * water_velocity_north * north_face_area
@@ -2751,7 +2768,7 @@ def compute_saturation_evolution(
 
         # Compute volumetric fluxes from the south neighbor for each phase
         # F_y_south = f_w * v_y * A
-        south_face_area = cell_size_x * cell_depth
+        south_face_area = cell_size_x * current_cell_depth
         # For water: F_w_south = f_w * v_w * A
         water_volumetric_flux_at_south_face = (
             water_fractional_flow_south * water_velocity_south * south_face_area
@@ -2796,7 +2813,9 @@ def compute_saturation_evolution(
         )
         # CFL condition for explicit saturation update
         # CFL condition: (Δt * max_flux) / (φ * A∆x) <= 1
-        if (time_in_days * max_water_flux) / (cell_porosity * cell_pore_volume) > 1.0:
+        if (time_step_size_in_days * max_water_flux) / (
+            cell_porosity * cell_pore_volume
+        ) > 1.0:
             raise RuntimeError(f"CFL violation in cell ({i},{j}) for water phase")
 
         # Compute Source/Sink Term for each phase (WellParameters) - q * A∆x (ft³/day)
@@ -2882,17 +2901,17 @@ def compute_saturation_evolution(
             # The change in saturation is (Net_Flux + Net_Well_Rate) * dt / Pore_Volume
             water_saturation_delta = (
                 (net_water_flux_from_neighbors + net_water_flow_rate_into_cell)
-                * time_in_days
+                * time_step_size_in_days
                 / cell_pore_volume
             )
             oil_saturation_delta = (
                 (net_oil_flux_from_neighbors + net_oil_flow_rate_into_cell)
-                * time_in_days
+                * time_step_size_in_days
                 / cell_pore_volume
             )
             gas_saturation_delta = (
                 (net_gas_flux_from_neighbors + net_gas_flow_rate_into_cell)
-                * time_in_days
+                * time_step_size_in_days
                 / cell_pore_volume
             )
         else:

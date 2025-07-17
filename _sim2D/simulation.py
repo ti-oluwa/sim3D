@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 
-from sim2D.models import FluidProperties, TwoDimensionalReservoirModel
-from sim2D.grids import (
+from _sim2D.models import FluidProperties, TwoDimensionalReservoirModel
+from _sim2D.grids import (
     build_2D_gas_compressibility_factor_grid,
     build_2D_gas_gravity_from_density_grid,
     build_2D_gas_molecular_weight_grid,
@@ -33,14 +33,14 @@ from sim2D.grids import (
     build_2D_water_density_grid,
     build_2D_gas_density_grid,
 )
-from sim2D.flow_evolution import (
+from _sim2D.flow_evolution import (
     compute_adaptive_pressure_evolution,
     compute_explicit_pressure_evolution,
     compute_implicit_pressure_evolution,
     compute_saturation_evolution,
 )
-from sim2D.wells import Wells
-from sim2D.typing import DiscretizationMethod, FluidMiscibility
+from _sim2D.wells import Wells
+from _sim2D.types import DiscretizationMethod, FluidMiscibility
 
 
 __all__ = [
@@ -124,6 +124,7 @@ def run_simulation(
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
+    height_grid = model.height_grid
     wells = copy.deepcopy(wells)
 
     if (method := params.discretization_method.lower()) == "adaptive":
@@ -156,6 +157,7 @@ def run_simulation(
         # Pressure evolution
         pressure_grid = compute_pressure_evolution(
             cell_dimension=cell_dimension,
+            height_grid=height_grid,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
@@ -179,6 +181,7 @@ def run_simulation(
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
             compute_saturation_evolution(
                 cell_dimension=cell_dimension,
+                height_grid=height_grid,
                 time_step_size=time_step_size,
                 boundary_conditions=boundary_conditions,
                 rock_properties=rock_properties,

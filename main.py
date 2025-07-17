@@ -1,8 +1,8 @@
 import numpy as np
 
-import sim2D
-from sim2D.grids import build_2D_layered_grid, build_2D_uniform_grid
-from sim2D.properties import (
+import _sim2D
+from _sim2D.grids import build_2D_layered_grid, build_2D_uniform_grid
+from _sim2D.properties import (
     compute_fluid_compressibility,
     compute_fluid_viscosity,
     compute_fluid_density,
@@ -18,12 +18,12 @@ np.set_printoptions(threshold=np.inf)  # type: ignore
 
 
 def simulate() -> None:
-    cell_dimension = (100, 100)
+    cell_dimension = (10.0, 10.0)
     grid_dimension = (50, 50)
-    pressure_range = (145, 1000)
-    oil_viscosity_range = (5, 10)
+    pressure_range = (145.0, 1000.0)
+    oil_viscosity_range = (5.0, 10.0)
     oil_compressibility_range = (7e-7, 1e-5)
-    oil_density_range = (55, 58)
+    oil_density_range = (55.0, 58.0)
     pressure_grid = build_2D_layered_grid(
         grid_dimension=grid_dimension,
         # layer_values=np.linspace(
@@ -89,19 +89,24 @@ def simulate() -> None:
     )
     rock_compressibility = 1.45e-13  # Rock compressibility in 1/psi
 
-    boundary_conditions = sim2D.BoundaryConditions(
+    boundary_conditions = _sim2D.BoundaryConditions(
         conditions={
-            "pressure": sim2D.GridBoundaryCondition(
-                north=sim2D.NoFlowBoundary(),
-                south=sim2D.NoFlowBoundary(),
-                east=sim2D.ConstantBoundary(1000),
-                west=sim2D.ConstantBoundary(1000),
+            "pressure": _sim2D.GridBoundaryCondition(
+                north=_sim2D.NoFlowBoundary(),
+                south=_sim2D.NoFlowBoundary(),
+                east=_sim2D.ConstantBoundary(1000),
+                west=_sim2D.ConstantBoundary(1000),
             )
         }
     )
-    model = sim2D.build_2D_reservoir_model(
+    height_grid = build_2D_uniform_grid(
+        grid_dimension=grid_dimension,
+        value=20.0,  # Height of the reservoir in feet
+    )
+    model = _sim2D.build_2D_reservoir_model(
         grid_dimension=grid_dimension,
         cell_dimension=cell_dimension,
+        height_grid=height_grid,
         pressure_grid=pressure_grid,
         oil_bubble_point_pressure_grid=oil_bubble_point_pressure_grid,
         absolute_permeability_grid=absolute_permeability_grid,
@@ -121,31 +126,31 @@ def simulate() -> None:
     # INJECTORS
     fluid_A = "Water"
     fluid_A_density = compute_fluid_density(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_A,
     )
     fluid_A_viscosity = compute_fluid_viscosity(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_A,
     )
     fluid_A_compressibility = compute_fluid_compressibility(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_A,
     )
     fluid_A_formation_volume_factor = compute_water_formation_volume_factor(
         water_density=fluid_A_density,
         salinity=10_000.0,  # Salinity in ppm
     )
-    injector_A = sim2D.build_injection_well(
+    injector_A = _sim2D.build_injection_well(
         well_name="Injector A",
         location=(10, 5),  # Position in grid coordinates
         radius=0.3281,
-        injected_fluid=sim2D.InjectedFluid(
+        injected_fluid=_sim2D.InjectedFluid(
             name=fluid_A,
-            phase=sim2D.FluidPhase.WATER,
+            phase=_sim2D.FluidPhase.WATER,
             volumetric_flow_rate=300.0,  # STB/day
             density=fluid_A_density,
             viscosity=fluid_A_viscosity,
@@ -157,37 +162,37 @@ def simulate() -> None:
 
     fluid_B = "CO2"
     fluid_B_density = compute_fluid_density(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_B,
     )
     fluid_B_viscosity = compute_fluid_viscosity(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_B,
     )
     fluid_B_compressibility = compute_fluid_compressibility(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         fluid=fluid_B,
     )
     fluid_B_compressibility_factor = compute_gas_compressibility_factor(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
-        gas_gravity=fluid_B_density / sim2D.constants.STANDARD_WATER_DENSITY,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        gas_gravity=fluid_B_density / _sim2D.constants.STANDARD_WATER_DENSITY,
     )
     fluid_B_formation_volume_factor = compute_gas_formation_volume_factor(
-        pressure=sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=_sim2D.constants.STANDARD_PRESSURE_IMPERIAL,
+        temperature=_sim2D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         gas_compressibility_factor=fluid_B_compressibility_factor,
     )
-    injector_B = sim2D.build_injection_well(
+    injector_B = _sim2D.build_injection_well(
         well_name="Injector B",
         location=(45, 10),  # Position in grid coordinates
         radius=0.3281,
-        injected_fluid=sim2D.InjectedFluid(
+        injected_fluid=_sim2D.InjectedFluid(
             name=fluid_B,
-            phase=sim2D.FluidPhase.GAS,
+            phase=_sim2D.FluidPhase.GAS,
             volumetric_flow_rate=1700.0,  # SCF/day
             viscosity=fluid_B_viscosity,
             density=fluid_B_density,
@@ -197,56 +202,56 @@ def simulate() -> None:
     )
 
     # PRODUCERS
-    producer_A = sim2D.build_production_well(
+    producer_A = _sim2D.build_production_well(
         well_name="Producer A",
         location=(5, 45),  # Position in grid coordinates
         radius=0.3281,
         produced_fluids=(
-            sim2D.ProducedFluid(
+            _sim2D.ProducedFluid(
                 name="Oil",
-                phase=sim2D.FluidPhase.OIL,
+                phase=_sim2D.FluidPhase.OIL,
                 volumetric_flow_rate=700.0,  # STB/day
             ),
-            sim2D.ProducedFluid(
+            _sim2D.ProducedFluid(
                 name="Gas",
-                phase=sim2D.FluidPhase.GAS,
+                phase=_sim2D.FluidPhase.GAS,
                 volumetric_flow_rate=1000.0,  # SCF/day
             ),
-            sim2D.ProducedFluid(
+            _sim2D.ProducedFluid(
                 name="Water",
-                phase=sim2D.FluidPhase.WATER,
+                phase=_sim2D.FluidPhase.WATER,
                 volumetric_flow_rate=150.0,  # STB/day
             ),
         ),
         skin_factor=0.2,  # Skin factor for the well
     )
-    producer_B = sim2D.build_production_well(
+    producer_B = _sim2D.build_production_well(
         well_name="Producer B",
         location=(40, 40),  # Position in grid coordinates
         radius=0.3281,
         produced_fluids=(
-            sim2D.ProducedFluid(
+            _sim2D.ProducedFluid(
                 name="Oil",
-                phase=sim2D.FluidPhase.OIL,
+                phase=_sim2D.FluidPhase.OIL,
                 volumetric_flow_rate=800.0,  # STB/day
             ),
-            sim2D.ProducedFluid(
+            _sim2D.ProducedFluid(
                 name="Gas",
-                phase=sim2D.FluidPhase.GAS,
+                phase=_sim2D.FluidPhase.GAS,
                 volumetric_flow_rate=1500.0,  # SCF/day
             ),
-            sim2D.ProducedFluid(
-                name="Water", phase=sim2D.FluidPhase.WATER, volumetric_flow_rate=15
+            _sim2D.ProducedFluid(
+                name="Water", phase=_sim2D.FluidPhase.WATER, volumetric_flow_rate=15
             ),
         ),
         skin_factor=0.1,  # Skin factor for the well
     )
-    wells = sim2D.Wells(
+    wells = _sim2D.Wells(
         injection_wells=[injector_A, injector_B],
         production_wells=[producer_A, producer_B],
     )
 
-    simulation_params = sim2D.SimulationParameters(
+    simulation_params = _sim2D.SimulationParameters(
         time_step_size=10,  # Time step in seconds (1 hour)
         total_time=86400,  # Total simulation time in seconds (1 day)
         max_iterations=100,  # Maximum number of iterations per time step
@@ -254,7 +259,7 @@ def simulate() -> None:
         output_frequency=4,  # Output every 4 time steps
         discretization_method="explicit",
     )
-    model_time_states = sim2D.run_simulation(
+    model_time_states = _sim2D.run_simulation(
         model=model,
         wells=wells,
         params=simulation_params,

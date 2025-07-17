@@ -7,9 +7,9 @@ import numpy as np
 from scipy.optimize import brentq, root_scalar
 from CoolProp.CoolProp import PropsSI
 
-from sim2D.typing import TwoDimensionalGrid, FluidMiscibility
-from sim2D.models import CapillaryPressureParameters, WettabilityType
-from sim2D.constants import (
+from sim3D.types import NDimension, NDimensionalGrid, FluidMiscibility
+from sim3D.models import CapillaryPressureParameters, WettabilityType
+from sim3D.constants import (
     FT3_TO_BBL,
     OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
     POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
@@ -393,7 +393,7 @@ def compute_diffusion_number(
 
     The formula used is:
 
-        D = [k * sum(k_r / μ)] / [(φ * C_t)) * (Δt / Δx²)]
+        D = [k * sum(k_r / μ)] / [(φ * C_t)) * (Δt / Δh²)]
 
     where:
         - k is the permeability in mD (millidarcies),
@@ -402,7 +402,7 @@ def compute_diffusion_number(
         - μ is the fluid viscosity (cP),
         - C_t is the total compressibility (psi⁻¹),
         - Δt is the time step size (s),
-        - Δx is the grid block size (ft)
+        - Δh is the grid block size (ft) in a specific direction (∆x, ∆y, ∆z).
 
     :param permeability: Rock permeability in millidarcies (mD)
     :param porosity: Rock porosity as a fraction (e.g., 0.2)
@@ -434,24 +434,23 @@ def compute_harmonic_mean(value1: float, value2: float) -> float:
 
 
 def compute_harmonic_mobility(
-    i1: int,
-    j1: int,
-    i2: int,
-    j2: int,
-    mobility_grid: TwoDimensionalGrid,
+    index1: NDimension,
+    index2: NDimension,
+    mobility_grid: NDimensionalGrid[NDimension],
 ) -> float:
     """
     Computes harmonic average mobility between two cells.
 
     If both mobilities are zero, returns zero to avoid division by zero.
 
-    :param i1: Row index of first cell
-    :param j1: Column index of first cell
-    :param i2: Row index of second cell
-    :param j2: Column index of second cell
+    :param index1: Index of the first cell in the mobility grid comprising
+        of N-dimensional indices (x, y, z, ...).
+    :param index2: Index of the second cell in the mobility grid comprising
+        of N-dimensional indices (x, y, z, ...).
+    :param mobility_grid: N-dimensional grid containing mobility values.
     """
-    λ1 = mobility_grid[i1, j1]
-    λ2 = mobility_grid[i2, j2]
+    λ1 = mobility_grid[index1]
+    λ2 = mobility_grid[index2]
     λ_harmonic = compute_harmonic_mean(λ1, λ2)
     return λ_harmonic
 

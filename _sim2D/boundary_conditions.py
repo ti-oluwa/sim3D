@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 import numpy as np
 
-from sim2D.typing import TwoDimensionalGrid, OneDimensionalGrid
+from _sim2D.types import TwoDimensionalGrid, OneDimensionalGrid
 
 
 __all__ = [
