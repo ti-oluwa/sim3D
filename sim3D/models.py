@@ -16,6 +16,7 @@ __all__ = [
     "FluidProperties",
     "RockProperties",
     "ReservoirModel",
+    "RockPermeability",
 ]
 
 
@@ -198,7 +199,7 @@ class ReservoirModel(typing.Generic[NDimension]):
 
     grid_dimension: NDimension
     """Number of cells in the grid. A tuple of number of cells in x and y directions (cell_count_x, cell_count_y)."""
-    cell_dimension: TwoDimensions
+    cell_dimension: typing.Tuple[float, float]
     """Size of each cell in the grid (cell_size_x, cell_size_y) in ft."""
     height_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the height of each cell in the reservoir (ft)."""

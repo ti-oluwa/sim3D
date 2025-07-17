@@ -1,3 +1,4 @@
+import copy
 import itertools
 import typing
 import enum
@@ -14,6 +15,13 @@ __all__ = [
     "InjectionWell",
     "ProductionWell",
     "Wells",
+    "ScheduledEvent",
+    "InjectionWellScheduledEvent",
+    "ProductionWellScheduledEvent",
+    "compute_well_index",
+    "compute_3D_effective_drainage_radius",
+    "compute_2D_effective_drainage_radius",
+    "compute_well_rate",
 ]
 
 
@@ -89,6 +97,7 @@ class _Well(typing.Generic[WellLocation]):
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
+    schedule: typing.MutableMapping[int, "ScheduledEvent"] = field(factory=dict)
 
     def __attrs_post_init__(self) -> None:
         """Ensure the well has a valid orientation."""
@@ -122,6 +131,62 @@ class _Well(typing.Generic[WellLocation]):
         axis = np.argmax(unit_vector)
         return Orientation(("x", "y", "z")[axis])
 
+    def update_schedule(self, event: "ScheduledEvent") -> None:
+        """
+        Update the well schedule
+
+        :param event:
+        """
+        self.schedule[event.time_step] = event
+
+    def evolve(self, time_step: int) -> None:
+        """
+        Evolve the well state to the next time step.
+
+        :param time_step: The current time step in the simulation.
+        """
+        if time_step in self.schedule:
+            event = self.schedule[time_step]
+            event.apply(self)
+        return None
+
+
+WellT = typing.TypeVar("WellT", bound=_Well)
+
+
+@define(slots=True)
+class ScheduledEvent(typing.Generic[WellT]):
+    """
+    Represents a scheduled event for a well at a specific time step.
+
+    This event can include changes to the well's bottom-hole pressure, skin factor,
+    and whether the well is active or not.
+    The event is applied to the well at the specified time step.
+    """
+
+    time_step: int
+    """The time step at which this schedule is applicable."""
+    bottom_hole_pressure: typing.Optional[float] = None
+    """Bottom-hole pressure for the well at this time step."""
+    skin_factor: typing.Optional[float] = None
+    """Skin factor for the well at this time step."""
+    is_active: typing.Optional[bool] = None
+    """Indicates whether the well is active at this time step."""
+
+    def apply(self, well: WellT) -> WellT:
+        """
+        Apply this schedule to a well.
+
+        :param well: The well to which this schedule will be applied.
+        """
+        if self.bottom_hole_pressure is not None:
+            well.bottom_hole_pressure = self.bottom_hole_pressure
+        if self.skin_factor is not None:
+            well.skin_factor = self.skin_factor
+        if self.is_active is not None:
+            well.is_active = self.is_active
+        return well
+
 
 @define(slots=True)
 class InjectionWell(_Well[WellLocation]):
@@ -147,7 +212,62 @@ class ProductionWell(_Well[WellLocation]):
     """List of fluids produced by the well. This can include multiple phases (e.g., oil, gas, water)."""
 
 
-WellT = typing.TypeVar("WellT", bound=_Well)
+InjectionWellT = typing.TypeVar("InjectionWellT", bound=InjectionWell)
+ProductionWellT = typing.TypeVar("ProductionWellT", bound=ProductionWell)
+
+
+@define(slots=True)
+class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
+    """
+    Scheduled event for an injection well.
+
+    This includes the well's perforating interval, bottom-hole pressure, skin factor, and injected fluid.
+    """
+
+    injected_fluid: typing.Optional[InjectedFluid] = field(
+        default=None, metadata={"description": "Injected fluid properties at this time step."}
+    )
+    """Injected fluid properties at this time step."""
+
+    def __attrs_post_init__(self) -> None:
+        """Ensure the injected fluid is properly initialized."""
+        self.injected_fluid = (
+            copy.deepcopy(self.injected_fluid) if self.injected_fluid else None
+        )
+
+    def apply(self, well: InjectionWellT) -> InjectionWellT:
+        """Apply this schedule to an injection well."""
+        well = super().apply(well)
+        if self.injected_fluid is not None:
+            well.injected_fluid = self.injected_fluid
+        return well
+
+
+@define(slots=True)
+class ProductionWellScheduledEvent(ScheduledEvent[ProductionWellT]):
+    """
+    Scheduled event for a production well.
+
+    This includes the well's perforating interval, bottom-hole pressure, skin factor, and produced fluids.
+    """
+
+    produced_fluids: typing.Optional[typing.Sequence[ProducedFluid]] = field(
+        default=None, metadata={"description": "List of produced fluids at this time step."}
+    )
+    """Produced fluids properties at this time step."""
+
+    def __attrs_post_init__(self) -> None:
+        """Ensure the produced fluids are properly initialized."""
+        self.produced_fluids = (
+            copy.deepcopy(self.produced_fluids) if self.produced_fluids else None
+        )
+
+    def apply(self, well: ProductionWellT) -> ProductionWellT:
+        """Apply this schedule to a production well."""
+        well = super().apply(well)
+        if self.produced_fluids is not None:
+            well.produced_fluids = self.produced_fluids
+        return well
 
 
 def _expand_interval(
@@ -283,23 +403,15 @@ class Wells(typing.Generic[WellLocation]):
         """
         return self.injectors[location], self.producers[location]
 
-    def evolve(
-        self, time_step_size: float, time_step: int, schedule: dict[int, dict]
-    ) -> None:
-        """Update well parameters from a schedule at given timestep."""
-        for injector in self.injection_wells:
-            if injector.name in schedule.get(time_step, {}):
-                params = schedule[time_step][injector.name]
-                if "bhp" in params:
-                    injector.bottom_hole_pressure = params["bhp"]
-                if "fluid" in params:
-                    injector.injected_fluid = params["fluid"]
+    def evolve(self, time_step: int) -> None:
+        """
+        Evolve all wells in the reservoir model to the next time step.
 
-        for producer in self.production_wells:
-            if producer.name in schedule.get(time_step, {}):
-                params = schedule[time_step][producer.name]
-                if "bhp" in params:
-                    producer.bottom_hole_pressure = params["bhp"]
+        This method updates the state of each well based on its schedule.
+        :param time_step: The current time step in the simulation.
+        """
+        for well in itertools.chain(self.injection_wells, self.production_wells):
+            well.evolve(time_step)
 
 
 def compute_well_index(

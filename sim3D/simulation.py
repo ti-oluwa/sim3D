@@ -40,13 +40,18 @@ from sim3D.flow_evolution import (
     compute_saturation_evolution,
 )
 from sim3D.wells import Wells
-from sim3D.types import DiscretizationMethod, FluidMiscibility, ThreeDimensions
+from sim3D.types import (
+    DiscretizationMethod,
+    FluidMiscibility,
+    NDimension,
+    ThreeDimensions,
+)
 
 
 __all__ = [
     "SimulationParameters",
     "ModelState",
-    "run_simulation",
+    "run_3D_simulation",
 ]
 
 
@@ -79,16 +84,25 @@ class SimulationParameters:
 
 
 @define(frozen=True, slots=True)
-class ModelState:
+class ModelState(typing.Generic[NDimension]):
     """
     Represents the state of the reservoir model at a specific time step during a simulation.
     """
 
-    time: float
-    """The time in seconds taken to reach this state."""
-    model: ReservoirModel
+    time_step: int
+    """The time step index of the model state."""
+    time_step_size: float
+    """The time step size in seconds."""
+    model: ReservoirModel[NDimension]
     """The reservoir model at this state."""
-    wells: Wells
+    wells: Wells[NDimension]
+
+    @property
+    def time(self) -> float:
+        """
+        Returns the total simulation time at this state.
+        """
+        return self.time_step * self.time_step_size
 
 
 NEGATIVE_PRESSURE_ERROR = """
@@ -115,11 +129,11 @@ Simulation aborted to avoid propagation of unphysical results.
 """
 
 
-def run_simulation(
+def run_3D_simulation(
     model: ReservoirModel[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     params: SimulationParameters,
-) -> typing.List[ModelState]:
+) -> typing.List[ModelState[ThreeDimensions]]:
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
@@ -136,11 +150,16 @@ def run_simulation(
     else:
         compute_pressure_evolution = compute_explicit_pressure_evolution
 
-    initial_state = ModelState(time=0.0, model=model)
+    time_step_size = params.time_step_size
+    initial_state = ModelState(
+        time_step=0,
+        time_step_size=time_step_size,
+        model=model,
+        wells=wells,
+    )
     model_states = [initial_state]
 
     boundary_conditions = model.boundary_conditions
-    time_step_size = params.time_step_size
     num_of_time_steps = min(
         (params.total_time // time_step_size), params.max_iterations
     )
@@ -186,6 +205,7 @@ def run_simulation(
         )
 
         # Update the fluid properties for the next iteration
+        #####################################################
         # Update the fluid properties with the new saturation grids
         current_fluid_properties = evolve(
             updated_fluid_properties,
@@ -201,12 +221,17 @@ def run_simulation(
         # Capture the model state at specified intervals and at the last time step
         if (time_step % output_frequency == 0) or (time_step == num_of_time_steps):
             model_state = ModelState(
-                time=time_step * time_step_size,
-                fluid_properties=current_fluid_properties,
-                wells=wells,
+                time_step=time_step,
+                time_step_size=time_step_size,
+                # Record the model state with updated fluid properties
+                model=evolve(model, fluid_properties=current_fluid_properties),
+                # Capture the current state of the wells
+                wells=copy.deepcopy(wells),
             )
             model_states.append(model_state)
 
+        # Update the wells for the next time step
+        wells.evolve(time_step=time_step)
     return model_states
 
 

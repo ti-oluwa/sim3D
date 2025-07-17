@@ -4,6 +4,22 @@ from typing_extensions import TypeAlias
 import numpy as np
 
 
+__all__ = [
+    "NDimension",
+    "WellLocation",
+    "ThreeDimensions",
+    "TwoDimensions",
+    "OneDimension",
+    "ThreeDimensionalGrid",
+    "TwoDimensionalGrid",
+    "OneDimensionalGrid",
+    "Orientation",
+    "InjectedFluidType",
+    "DiscretizationMethod",
+    "FluidMiscibility",
+    "ArrayLike",
+]
+
 Tco = typing.TypeVar("Tco", covariant=True)
 
 NDimension = typing.TypeVar("NDimension", bound=typing.Tuple[int, ...])

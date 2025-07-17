@@ -6,7 +6,7 @@ from sim3D.constants import (
     RESERVOIR_OIL_NAME,
     RESERVOIR_GAS_NAME,
 )
-from sim3D.types import NDimension, NDimensionalGrid, TwoDimensions, WellLocation
+from sim3D.types import NDimension, NDimensionalGrid, WellLocation
 from sim3D.grids import (
     build_fluid_compressibility_grid,
     build_gas_compressibility_factor_grid,
@@ -57,7 +57,7 @@ __all__ = [
 
 def build_reservoir_model(
     grid_dimension: NDimension,
-    cell_dimension: TwoDimensions,
+    cell_dimension: typing.Tuple[float, float],
     height_grid: NDimensionalGrid[NDimension],
     pressure_grid: NDimensionalGrid[NDimension],
     rock_compressibility: float,
