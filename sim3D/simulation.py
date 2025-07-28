@@ -1,18 +1,16 @@
-"""Run a simulation on a N-Dimensional reservoir model with specified fluid properties and wells."""
+"""Run a simulation on a 3-Dimensional reservoir model with specified fluid properties and wells."""
 
 import typing
 import copy
 from functools import partial
 from attrs import define, evolve
 import rich
+import logging
 import numpy as np
-
 
 from sim3D.models import FluidProperties, ReservoirModel
 from sim3D.grids import (
     build_gas_compressibility_factor_grid,
-    build_oil_api_gravity_grid,
-    build_oil_specific_gravity_grid,
     build_gas_solubility_in_water_grid,
     build_gas_to_oil_ratio_grid,
     build_oil_bubble_point_pressure_grid,
@@ -46,6 +44,8 @@ __all__ = [
     "ModelState",
     "run_3D_simulation",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @define(slots=True, frozen=True)
@@ -128,6 +128,7 @@ def run_3D_simulation(
     model: ReservoirModel[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     params: SimulationParameters,
+    output: typing.Optional[typing.Callable[[ModelState], typing.Any]] = None,
 ) -> typing.List[ModelState[ThreeDimensions]]:
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
@@ -272,9 +273,11 @@ def run_3D_simulation(
                 wells=copy.deepcopy(wells),
             )
             model_states.append(model_state)
+            if output:
+                output(model_state)
 
         if time_step > params.max_iterations:
-            print(
+            logger.debug(
                 f"Reached maximum number of iterations: {params.max_iterations}. Stopping simulation."
             )
             break
@@ -385,33 +388,33 @@ def update_static_fluid_properties(
         gas_molecular_weight_grid=fluid_properties.gas_molecular_weight_grid,
     )
 
-    # Print updated gas properties
-    rich.print(
-        "[bold]Gas Gravity:[/bold]",
-        fluid_properties.gas_gravity_grid.min(),
-        fluid_properties.gas_gravity_grid.max(),
-    )
-    rich.print(
-        "Gas Compressibility Factor:",
-        gas_compressibility_factor_grid.min(),
-        gas_compressibility_factor_grid.max(),
-    )
-    rich.print(
-        "New Gas Compressibility:",
-        new_gas_compressibility_grid.min(),
-        new_gas_compressibility_grid.max(),
-    )
-    rich.print(
-        "New Gas Formation Volume Factor:",
-        new_gas_formation_volume_factor_grid.min(),
-        new_gas_formation_volume_factor_grid.max(),
-    )
-    rich.print(
-        "New Gas Density:", new_gas_density_grid.min(), new_gas_density_grid.max()
-    )
-    rich.print(
-        "New Gas Viscosity:", new_gas_viscosity_grid.min(), new_gas_viscosity_grid.max()
-    )
+    # # Print updated gas properties
+    # rich.print(
+    #     "[bold]Gas Gravity:[/bold]",
+    #     fluid_properties.gas_gravity_grid.min(),
+    #     fluid_properties.gas_gravity_grid.max(),
+    # )
+    # rich.print(
+    #     "Gas Compressibility Factor:",
+    #     gas_compressibility_factor_grid.min(),
+    #     gas_compressibility_factor_grid.max(),
+    # )
+    # rich.print(
+    #     "New Gas Compressibility:",
+    #     new_gas_compressibility_grid.min(),
+    #     new_gas_compressibility_grid.max(),
+    # )
+    # rich.print(
+    #     "New Gas Formation Volume Factor:",
+    #     new_gas_formation_volume_factor_grid.min(),
+    #     new_gas_formation_volume_factor_grid.max(),
+    # )
+    # rich.print(
+    #     "New Gas Density:", new_gas_density_grid.min(), new_gas_density_grid.max()
+    # )
+    # rich.print(
+    #     "New Gas Viscosity:", new_gas_viscosity_grid.min(), new_gas_viscosity_grid.max()
+    # )
 
     # WATER PROPERTIES
     gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
@@ -456,42 +459,42 @@ def update_static_fluid_properties(
         pressure_grid=fluid_properties.pressure_grid,
     )
 
-    # Print updated water properties
-    rich.print(
-        "Gas Solubility in Water:",
-        gas_solubility_in_water_grid.min(),
-        gas_solubility_in_water_grid.max(),
-    )
-    rich.print(
-        "New Water Bubble Point Pressure:",
-        new_water_bubble_point_pressure_grid.min(),
-        new_water_bubble_point_pressure_grid.max(),
-    )
-    rich.print(
-        "New Water Compressibility:",
-        new_water_compressibility_grid.min(),
-        new_water_compressibility_grid.max(),
-    )
-    rich.print(
-        "New Water Formation Volume Factor:",
-        new_water_formation_volume_factor_grid.min(),
-        new_water_formation_volume_factor_grid.max(),
-    )
-    rich.print(
-        "New Water Density:", new_water_density_grid.min(), new_water_density_grid.max()
-    )
-    rich.print(
-        "New Water Viscosity:",
-        new_water_viscosity_grid.min(),
-        new_water_viscosity_grid.max(),
-    )
+    # # Print updated water properties
+    # rich.print(
+    #     "Gas Solubility in Water:",
+    #     gas_solubility_in_water_grid.min(),
+    #     gas_solubility_in_water_grid.max(),
+    # )
+    # rich.print(
+    #     "New Water Bubble Point Pressure:",
+    #     new_water_bubble_point_pressure_grid.min(),
+    #     new_water_bubble_point_pressure_grid.max(),
+    # )
+    # rich.print(
+    #     "New Water Compressibility:",
+    #     new_water_compressibility_grid.min(),
+    #     new_water_compressibility_grid.max(),
+    # )
+    # rich.print(
+    #     "New Water Formation Volume Factor:",
+    #     new_water_formation_volume_factor_grid.min(),
+    #     new_water_formation_volume_factor_grid.max(),
+    # )
+    # rich.print(
+    #     "New Water Density:", new_water_density_grid.min(), new_water_density_grid.max()
+    # )
+    # rich.print(
+    #     "New Water Viscosity:",
+    #     new_water_viscosity_grid.min(),
+    #     new_water_viscosity_grid.max(),
+    # )
 
-    # OIL PROPERTIES
-    print(
-        "Old GOR Grid:",
-        fluid_properties.gas_to_oil_ratio_grid.min(),
-        fluid_properties.gas_to_oil_ratio_grid.max(),
-    )
+    # # OIL PROPERTIES
+    # print(
+    #     "Old GOR Grid:",
+    #     fluid_properties.gas_to_oil_ratio_grid.min(),
+    #     fluid_properties.gas_to_oil_ratio_grid.max(),
+    # )
     # Make sure to always compute the oil bubble point pressure grid
     # before the gas to oil ratio grid, as the latter depends on the former.
     new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
@@ -553,41 +556,43 @@ def update_static_fluid_properties(
         gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
     )
 
-    # Print updated oil properties
-    rich.print(
-        "Oil Specific Gravity:",
-        fluid_properties.oil_specific_gravity_grid.min(),
-        fluid_properties.oil_specific_gravity_grid.max(),
-    )
-    rich.print(
-        "Oil API Gravity:", fluid_properties.oil_api_gravity_grid.min(), fluid_properties.oil_api_gravity_grid.max()
-    )
-    rich.print(
-        "New Oil Bubble Point Pressure:",
-        new_oil_bubble_point_pressure_grid.min(),
-        new_oil_bubble_point_pressure_grid.max(),
-    )
-    rich.print(
-        "New Oil Formation Volume Factor:",
-        new_oil_formation_volume_factor_grid.min(),
-        new_oil_formation_volume_factor_grid.max(),
-    )
-    rich.print(
-        "New Gas to Oil Ratio:",
-        new_gas_to_oil_ratio_grid.min(),
-        new_gas_to_oil_ratio_grid.max(),
-    )
-    rich.print(
-        "New Oil Compressibility:",
-        new_oil_compressibility_grid.min(),
-        new_oil_compressibility_grid.max(),
-    )
-    rich.print(
-        "New Oil Density:", new_oil_density_grid.min(), new_oil_density_grid.max()
-    )
-    rich.print(
-        "New Oil Viscosity:", new_oil_viscosity_grid.min(), new_oil_viscosity_grid.max()
-    )
+    # # Print updated oil properties
+    # rich.print(
+    #     "Oil Specific Gravity:",
+    #     fluid_properties.oil_specific_gravity_grid.min(),
+    #     fluid_properties.oil_specific_gravity_grid.max(),
+    # )
+    # rich.print(
+    #     "Oil API Gravity:",
+    #     fluid_properties.oil_api_gravity_grid.min(),
+    #     fluid_properties.oil_api_gravity_grid.max(),
+    # )
+    # rich.print(
+    #     "New Oil Bubble Point Pressure:",
+    #     new_oil_bubble_point_pressure_grid.min(),
+    #     new_oil_bubble_point_pressure_grid.max(),
+    # )
+    # rich.print(
+    #     "New Oil Formation Volume Factor:",
+    #     new_oil_formation_volume_factor_grid.min(),
+    #     new_oil_formation_volume_factor_grid.max(),
+    # )
+    # rich.print(
+    #     "New Gas to Oil Ratio:",
+    #     new_gas_to_oil_ratio_grid.min(),
+    #     new_gas_to_oil_ratio_grid.max(),
+    # )
+    # rich.print(
+    #     "New Oil Compressibility:",
+    #     new_oil_compressibility_grid.min(),
+    #     new_oil_compressibility_grid.max(),
+    # )
+    # rich.print(
+    #     "New Oil Density:", new_oil_density_grid.min(), new_oil_density_grid.max()
+    # )
+    # rich.print(
+    #     "New Oil Viscosity:", new_oil_viscosity_grid.min(), new_oil_viscosity_grid.max()
+    # )
     updated_fluid_properties = evolve(
         fluid_properties,
         gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,

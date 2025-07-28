@@ -12,7 +12,6 @@ from sim3D.properties import (
     compute_gas_compressibility_factor,
     compute_gas_gravity,
     compute_gas_density,
-    compute_oil_compressibility,
 )
 
 np.set_printoptions(threshold=np.inf)  # type: ignore
@@ -223,7 +222,7 @@ def simulate() -> None:
 
     simulation_params = sim3D.SimulationParameters(
         time_step_size=10,  # Time step in seconds (1 hour)
-        total_time=3600,  # Total simulation time in seconds (1 day)
+        total_time=100,  # Total simulation time in seconds (1 day)
         max_iterations=100,  # Maximum number of iterations per time step
         convergence_tolerance=1e-5,  # Convergence tolerance for the simulation
         output_frequency=4,  # Output every 4 time steps
@@ -234,12 +233,10 @@ def simulate() -> None:
         wells=wells,
         params=simulation_params,
     )
+    fig = sim3D.viz.animate_3d_property(
+        model_states,
+        property="pressure",
+        plot_type=sim3D.viz.PlotType.VOLUME_RENDER,
+    )
+    fig.show()
 
-    # for i in range(0, len(model_states), 4):
-    #     plot_model_time_state(model_time_state=model_states[i])
-
-    # animate_model_states(
-    #     model_states=model_states,
-    #     interval_ms=400,
-    #     save_path=f"./simulation{injected_fluid}{np.random.randint(1000, 12345)}.mp4",
-    # )

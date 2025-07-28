@@ -447,7 +447,7 @@ def build_injection_well(
     radius: float,
     bottom_hole_pressure: float,
     injected_fluid: InjectedFluid,
-) -> InjectionWell:
+) -> InjectionWell[WellLocation]:
     """
     Constructs an injection well with the given parameters.
 
@@ -473,7 +473,7 @@ def build_production_well(
     bottom_hole_pressure: float,
     produced_fluids: typing.Sequence[ProducedFluid],
     skin_factor: float = 0.0,
-) -> ProductionWell:
+) -> ProductionWell[WellLocation]:
     """
     Constructs a production well with the given parameters.
 
@@ -497,15 +497,15 @@ def build_production_well(
 
 
 def build_wells(
-    injection_wells: typing.Optional[typing.Sequence[InjectionWell]] = None,
-    production_wells: typing.Optional[typing.Sequence[ProductionWell]] = None,
-) -> Wells:
+    injection_wells: typing.Optional[typing.Sequence[InjectionWell[WellLocation]]] = None,
+    production_wells: typing.Optional[typing.Sequence[ProductionWell[WellLocation]]] = None,
+) -> Wells[WellLocation]:
     """
     Constructs a Wells instance containing both injection and production wells.
 
     :param injection_wells: Sequence of injection wells
     :param production_wells: Sequence of production wells
-    :return: `Wells` instance
+    :return: ``Wells`` instance
     """
     return Wells(
         injection_wells=injection_wells or [],
