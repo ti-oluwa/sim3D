@@ -2,19 +2,13 @@ import typing
 import warnings
 import numpy as np
 
-from sim3D.constants import (
-    RESERVOIR_OIL_NAME,
-    RESERVOIR_GAS_NAME,
-)
+from sim3D.constants import RESERVOIR_GAS_NAME
 from sim3D.types import NDimension, NDimensionalGrid, WellLocation
 from sim3D.grids import (
-    build_fluid_compressibility_grid,
     build_gas_compressibility_factor_grid,
-    build_gas_gravity_from_density_grid,
-    build_oil_specific_gravity_grid,
+    build_gas_free_water_formation_volume_factor_grid,
     build_fluid_viscosity_grid,
     build_uniform_grid,
-    build_fluid_density_grid,
     build_oil_formation_volume_factor_grid,
     build_gas_formation_volume_factor_grid,
     build_water_formation_volume_factor_grid,
@@ -23,6 +17,14 @@ from sim3D.grids import (
     build_water_bubble_point_pressure_grid,
     build_gas_to_oil_ratio_grid,
     build_oil_api_gravity_grid,
+    build_water_viscosity_grid,
+    build_gas_compressibility_grid,
+    build_gas_density_grid,
+    build_water_compressibility_grid,
+    build_water_density_grid,
+    build_gas_gravity_grid,
+    build_gas_molecular_weight_grid,
+    build_live_oil_density_grid,
 )
 from sim3D.boundary_conditions import BoundaryConditions, GridBoundaryCondition
 from sim3D.models import (
@@ -44,7 +46,6 @@ from sim3D.properties import (
     validate_input_temperature,
     validate_input_pressure,
     compute_gas_to_oil_ratio_standing,
-    estimate_bubble_point_pressure_standing,
 )
 
 __all__ = [
@@ -65,16 +66,19 @@ def build_reservoir_model(
     porosity_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
     oil_saturation_grid: NDimensionalGrid[NDimension],
-    oil_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    oil_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    oil_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    oil_bubble_point_pressure_grid: typing.Optional[
-        NDimensionalGrid[NDimension]
-    ] = None,
+    oil_viscosity_grid: NDimensionalGrid[NDimension],
+    oil_compressibility_grid: NDimensionalGrid[NDimension],
+    oil_specific_gravity_grid: NDimensionalGrid[NDimension],
+    oil_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
+    gas_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     residual_oil_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    gas_compressibility_factor_grid: typing.Optional[
+        NDimensionalGrid[NDimension]
+    ] = None,
+    gas_molecular_weight_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     residual_gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
@@ -104,6 +108,7 @@ def build_reservoir_model(
     net_to_gross_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_salinity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
+    reservoir_gas_name: str = RESERVOIR_GAS_NAME,
 ) -> ReservoirModel[NDimension]:
     """
     Constructs a N-Dimensional reservoir model with given rock and fluid properties.
@@ -127,13 +132,15 @@ def build_reservoir_model(
     :param porosity_grid: Porosity grid (fraction).
     :param temperature_grid: Reservoir temperature grid (°F).
     :param oil_saturation_grid: Oil saturation grid (fraction).
-    :param oil_viscosity_grid: Oil viscosity grid (cP), optional.
-    :param oil_compressibility_grid: Oil compressibility grid (psi⁻¹), optional.
-    :param oil_density_grid: Oil density grid (lb/ft³), optional.
+    :param oil_viscosity_grid: Oil viscosity grid (cP).
+    :param oil_compressibility_grid: Oil compressibility grid (psi⁻¹).
+    :param oil_specific_gravity_grid: Oil specific gravity grid (dimensionless).
+    :param gas_gravity_grid: Gas gravity grid (dimensionless), optional.
     :param residual_oil_saturation_grid: Residual oil saturation grid (fraction), optional.
     :param gas_saturation_grid: Gas saturation grid (fraction), optional.
     :param gas_viscosity_grid: Gas viscosity grid (cP), optional.
     :param gas_compressibility_grid: Gas compressibility grid (psi⁻¹), optional.
+    :param gas_compressibility_factor_grid: Gas compressibility factor grid (dimensionless), optional.
     :param gas_density_grid: Gas density grid (lb/ft³), optional.
     :param residual_gas_saturation_grid: Residual gas saturation grid (fraction), optional.
     :param water_saturation_grid: Water saturation grid (fraction), optional.
@@ -151,15 +158,16 @@ def build_reservoir_model(
     :param net_to_gross_ratio_grid: Net-to-gross ratio grid (fraction), optional.
     :param water_salinity_grid: Water salinity grid (ppm), optional.
     :param boundary_conditions: Boundary conditions for the model, optional. Defaults to no-flow conditions.
+    :param reservoir_gas_name: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`.
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
     if not 1 <= len(grid_dimension) <= 3:
         raise ValueError(
-            "grid_dimension must be a tuple of one to three integers (rows, columns, [depth])."
+            "`grid_dimension` must be a tuple of one to three integers (rows, columns, [depth])."
         )
     if len(cell_dimension) < 2:
         raise ValueError(
-            "cell_dimension must be a tuple of two floats (cell width, cell height)."
+            "`cell_dimension` must be a tuple of two floats (cell width, cell height)."
         )
 
     validate_input_pressure(pressure_grid)
@@ -180,11 +188,6 @@ def build_reservoir_model(
         )
 
     # Saturation grids
-    if irreducible_water_saturation_grid is None:
-        irreducible_water_saturation_grid = typing.cast(
-            NDimensionalGrid[NDimension], oil_saturation_grid * 0.2
-        )
-
     if residual_oil_saturation_grid is None:
         residual_oil_saturation_grid = typing.cast(
             NDimensionalGrid[NDimension], oil_saturation_grid * 0.2
@@ -208,83 +211,59 @@ def build_reservoir_model(
             1.0 - (oil_saturation_grid + gas_saturation_grid),
         )
 
-    # Viscosity Grids
-    if oil_viscosity_grid is None:
-        oil_viscosity_grid = build_fluid_viscosity_grid(
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-            fluid=RESERVOIR_OIL_NAME,
+    if irreducible_water_saturation_grid is None:
+        irreducible_water_saturation_grid = typing.cast(
+            NDimensionalGrid[NDimension], water_saturation_grid * 0.2
         )
 
+    # Viscosity Grids
     if gas_viscosity_grid is None:
         gas_viscosity_grid = build_fluid_viscosity_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
-            fluid=RESERVOIR_GAS_NAME,
+            fluid=reservoir_gas_name,
         )
 
+    if gas_gravity_grid is None:
+        gas_gravity_grid = build_gas_gravity_grid(gas=reservoir_gas_name)
+
     if water_viscosity_grid is None:
-        water_viscosity_grid = build_fluid_viscosity_grid(
+        water_viscosity_grid = build_water_viscosity_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
-            fluid="Water",
+            salinity_grid=water_salinity_grid,
+        )
+
+    if gas_compressibility_factor_grid is None:
+        gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
+            gas_gravity_grid=gas_gravity_grid,
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
         )
 
     # Compressibility Grids
-    if oil_compressibility_grid is None:
-        oil_compressibility_grid = build_fluid_compressibility_grid(
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-            fluid=RESERVOIR_OIL_NAME,
-        )
-
     if gas_compressibility_grid is None:
-        gas_compressibility_grid = build_fluid_compressibility_grid(
+        gas_compressibility_grid = build_gas_compressibility_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
-            fluid=RESERVOIR_GAS_NAME,
+            gas_gravity_grid=gas_gravity_grid,
+            gas_compressibility_factor_grid=gas_compressibility_factor_grid,
         )
 
-    if water_compressibility_grid is None:
-        water_compressibility_grid = build_fluid_compressibility_grid(
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-            fluid="Water",
+    if gas_molecular_weight_grid is None:
+        gas_molecular_weight_grid = build_gas_molecular_weight_grid(
+            gas_gravity_grid=gas_gravity_grid
         )
 
     # Density Grids
-    if oil_density_grid is None:
-        oil_density_grid = build_fluid_density_grid(
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-            fluid=RESERVOIR_OIL_NAME,
-        )
-
     if gas_density_grid is None:
-        gas_density_grid = build_fluid_density_grid(
+        gas_density_grid = build_gas_density_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
-            fluid=RESERVOIR_GAS_NAME,
+            gas_gravity_grid=gas_gravity_grid,
+            gas_compressibility_factor_grid=gas_compressibility_factor_grid,
         )
 
-    if water_density_grid is None:
-        water_density_grid = build_fluid_density_grid(
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-            fluid="Water",
-        )
-
-    gas_gravity_grid = build_gas_gravity_from_density_grid(
-        pressure_grid=pressure_grid,
-        temperature_grid=temperature_grid,
-        density_grid=gas_density_grid,
-    )
-    oil_specific_gravity_grid = build_oil_specific_gravity_grid(
-        oil_density_grid=oil_density_grid,
-        pressure_grid=pressure_grid,
-        temperature_grid=temperature_grid,
-        oil_compressibility_grid=oil_compressibility_grid,
-    )
     oil_api_gravity_grid = build_oil_api_gravity_grid(oil_specific_gravity_grid)
     if gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is not None:
         gas_to_oil_ratio_grid = build_gas_to_oil_ratio_grid(
@@ -301,52 +280,42 @@ def build_reservoir_model(
             temperature_grid=temperature_grid,
             gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
         )
-    else:
+    elif gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is None:
         warnings.warn(
-            "Both oil_bubble_point_pressure_grid and gas_to_oil_ratio_grid are not provided. "
+            "Both `oil_bubble_point_pressure_grid` and `gas_to_oil_ratio_grid` are not provided. "
             "Attempting to estimate the bubble point pressure and GOR. If estimation fails, "
             "please provide at least one of them. Note, estimating the bubble point pressure "
             "and GOR may not yield accurate results.",
             UserWarning,
         )
-        # Try to estimate the bubble point pressure and then calculate the GOR from that
+        # Try to estimate the GOR and then calculate the bubble point pressure from that
         # As either GOR or buble point is needed to build the model
-        guessed_gor_grid = np.vectorize(
+        estimated_gor_grid = np.vectorize(
             compute_gas_to_oil_ratio_standing, otypes=[np.float64]
         )(
             pressure_grid,
             oil_api_gravity_grid,
             gas_gravity_grid,
         )
-        oil_bubble_point_pressure_grid = np.vectorize(
-            estimate_bubble_point_pressure_standing, otypes=[np.float64]
-        )(
-            oil_api_gravity_grid,
-            gas_gravity_grid,
-            guessed_gor_grid,
-        )
-        oil_bubble_point_pressure_grid = typing.cast(
-            NDimensionalGrid[NDimension], oil_bubble_point_pressure_grid
-        )
-        gas_to_oil_ratio_grid = build_gas_to_oil_ratio_grid(
-            pressure_grid=pressure_grid,
+        oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
             temperature_grid=temperature_grid,
-            bubble_point_pressure_grid=oil_bubble_point_pressure_grid,
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
+            gas_to_oil_ratio_grid=estimated_gor_grid,
         )
+        gas_to_oil_ratio_grid = estimated_gor_grid
 
+    gas_to_oil_ratio_grid = typing.cast(
+        NDimensionalGrid[NDimension], gas_to_oil_ratio_grid
+    )
+    oil_bubble_point_pressure_grid = typing.cast(
+        NDimensionalGrid[NDimension], oil_bubble_point_pressure_grid
+    )
     gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
         pressure_grid=pressure_grid,
         temperature_grid=temperature_grid,
         salinity_grid=water_salinity_grid,
     )
-    if water_bubble_point_pressure_grid is None:
-        water_bubble_point_pressure_grid = build_water_bubble_point_pressure_grid(
-            temperature_grid=temperature_grid,
-            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
-            salinity_grid=water_salinity_grid,
-        )
 
     # Formation Volume Factor Grids
     if oil_formation_volume_factor_grid is None:
@@ -361,15 +330,25 @@ def build_reservoir_model(
         )
 
     if gas_formation_volume_factor_grid is None:
-        gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
-            gas_gravity_grid=gas_gravity_grid,
-            pressure_grid=pressure_grid,
-            temperature_grid=temperature_grid,
-        )
         gas_formation_volume_factor_grid = build_gas_formation_volume_factor_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
             gas_compressibility_factor_grid=gas_compressibility_factor_grid,
+        )
+
+    gas_free_water_formation_volume_factor_grid = (
+        build_gas_free_water_formation_volume_factor_grid(
+            pressure_grid=pressure_grid, temperature_grid=temperature_grid
+        )
+    )
+    if water_density_grid is None:
+        water_density_grid = build_water_density_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            gas_gravity_grid=gas_gravity_grid,
+            salinity_grid=water_salinity_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
         )
 
     if water_formation_volume_factor_grid is None:
@@ -378,6 +357,31 @@ def build_reservoir_model(
             salinity_grid=water_salinity_grid,
         )
 
+    if water_bubble_point_pressure_grid is None:
+        water_bubble_point_pressure_grid = build_water_bubble_point_pressure_grid(
+            temperature_grid=temperature_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            salinity_grid=water_salinity_grid,
+            gas=reservoir_gas_name,
+        )
+
+    if water_compressibility_grid is None:
+        water_compressibility_grid = build_water_compressibility_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=water_bubble_point_pressure_grid,
+            gas_formation_volume_factor_grid=gas_formation_volume_factor_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
+        )
+
+    oil_density_grid = build_live_oil_density_grid(
+        oil_api_gravity_grid=   oil_api_gravity_grid,
+        gas_gravity_grid=gas_gravity_grid,
+        gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+        formation_volume_factor_grid=oil_formation_volume_factor_grid,
+    )
+
     fluid_properties = FluidProperties(
         pressure_grid=pressure_grid,
         temperature_grid=temperature_grid,
@@ -385,10 +389,14 @@ def build_reservoir_model(
         oil_saturation_grid=oil_saturation_grid,
         oil_viscosity_grid=oil_viscosity_grid,
         oil_compressibility_grid=oil_compressibility_grid,
+        oil_specific_gravity_grid=oil_specific_gravity_grid,
+        oil_api_gravity_grid=oil_api_gravity_grid,
         oil_density_grid=oil_density_grid,
         gas_saturation_grid=gas_saturation_grid,
         gas_viscosity_grid=gas_viscosity_grid,
         gas_compressibility_grid=gas_compressibility_grid,
+        gas_gravity_grid=gas_gravity_grid,
+        gas_molecular_weight_grid=gas_molecular_weight_grid,
         gas_density_grid=gas_density_grid,
         water_saturation_grid=water_saturation_grid,
         water_viscosity_grid=water_viscosity_grid,

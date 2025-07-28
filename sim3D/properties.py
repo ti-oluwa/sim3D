@@ -3,6 +3,7 @@
 import functools
 import typing
 import warnings
+import logging
 import numpy as np
 from scipy.optimize import brentq, root_scalar
 from CoolProp.CoolProp import PropsSI
@@ -13,6 +14,7 @@ from sim3D.constants import (
     FT3_TO_BBL,
     OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
     POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
+    PPM_TO_WEIGHT_FRACTION,
     SECONDS_TO_DAYS,
     STANDARD_TEMPERATURE_IMPERIAL,
     STANDARD_PRESSURE_IMPERIAL,
@@ -23,8 +25,6 @@ from sim3D.constants import (
     POUNDS_PER_FT3_TO_KG_PER_M3,
     SCF_PER_POUND_MOLE,
     STANDARD_WATER_DENSITY_IMPERIAL,
-    STANDARD_TEMPERATURE,
-    STANDARD_PRESSURE,
     STANDARD_WATER_DENSITY,
     M3_PER_M3_TO_SCF_PER_STB,
     PSI_TO_PA,
@@ -41,6 +41,8 @@ from sim3D.constants import (
     MOLECULAR_WEIGHT_METHANE,
     MOLECULAR_WEIGHT_N2,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def validate_input_temperature(temperature: typing.Union[float, np.ndarray]) -> None:
@@ -126,7 +128,6 @@ def clip_temperature(temperature: float, fluid: str) -> float:
 ##################################################
 
 
-@functools.lru_cache(maxsize=128)
 def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid density from EOS using CoolProp.
@@ -149,7 +150,6 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     return density * KG_PER_M3_TO_POUNDS_PER_FT3
 
 
-@functools.lru_cache(maxsize=128)
 def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid dynamic viscosity from EOS using CoolProp.
@@ -172,7 +172,6 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
     return viscosity * PA_S_TO_CENTIPOISE
 
 
-@functools.lru_cache(maxsize=128)
 def compute_fluid_compressibility_factor(
     pressure: float, temperature: float, fluid: str
 ) -> float:
@@ -196,7 +195,6 @@ def compute_fluid_compressibility_factor(
     )
 
 
-@functools.lru_cache(maxsize=128)
 def compute_fluid_compressibility(
     pressure: float,
     temperature: float,
@@ -239,12 +237,13 @@ def compute_gas_gravity(gas: str) -> float:
     :param gas: gas name supported by CoolProp (e.g., 'Methane')
     :return: Gas gravity (dimensionless)
     """
-    density = compute_fluid_density(
-        STANDARD_PRESSURE_IMPERIAL, STANDARD_TEMPERATURE_IMPERIAL, gas
+    gas_density_at_stp = compute_fluid_density(
+        STANDARD_PRESSURE_IMPERIAL, STANDARD_TEMPERATURE_IMPERIAL, fluid=gas
     )
-    return density / PropsSI(
-        "D", "T", STANDARD_TEMPERATURE, "P", STANDARD_PRESSURE, "Air"
+    air_density_at_stp = compute_fluid_density(
+        STANDARD_PRESSURE_IMPERIAL, STANDARD_TEMPERATURE_IMPERIAL, fluid="Air"
     )
+    return gas_density_at_stp / air_density_at_stp
 
 
 ####################################################
@@ -252,7 +251,6 @@ def compute_gas_gravity(gas: str) -> float:
 ####################################################
 
 
-@functools.lru_cache(maxsize=128)
 def compute_gas_gravity_from_density(
     pressure: float,
     temperature: float,
@@ -277,7 +275,6 @@ def compute_gas_gravity_from_density(
     return density / (air_density * KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
-@functools.lru_cache(maxsize=128)
 def mix_fluid_property(
     fluid1_saturation: float,
     fluid1_property: float,
@@ -325,7 +322,6 @@ def mix_fluid_property(
     raise ValueError("Unknown mixing method.")
 
 
-@functools.lru_cache(maxsize=128)
 def compute_total_fluid_compressibility(
     water_saturation: float,
     oil_saturation: float,
@@ -356,7 +352,6 @@ def compute_total_fluid_compressibility(
     return total_fluid_compressibility
 
 
-@functools.lru_cache(maxsize=128)
 def linear_decay_factor_to_exponential_decay_constant(
     linear_decay_factor: float,
 ) -> float:
@@ -374,7 +369,6 @@ def linear_decay_factor_to_exponential_decay_constant(
     return -np.log(1 - linear_decay_factor)
 
 
-@functools.lru_cache(maxsize=128)
 def compute_diffusion_number(
     porosity: float,
     total_mobility: float,
@@ -419,7 +413,6 @@ def compute_diffusion_number(
     return diffusion_number
 
 
-@functools.lru_cache(maxsize=128)
 def compute_harmonic_mean(value1: float, value2: float) -> float:
     """
     Computes the harmonic mean of two values.
@@ -969,7 +962,11 @@ def compute_water_formation_volume_factor(
     :param salinity: Water salinity (ppm of NaCl)
     :return: Water formation volume factor in bbl/STB
     """
-    standard_water_density = compute_standard_water_density(salinity)
+    standard_water_density = compute_water_density_batzle(
+        pressure=STANDARD_PRESSURE_IMPERIAL,
+        temperature=STANDARD_TEMPERATURE_IMPERIAL,
+        salinity=salinity,
+    )
     if water_density <= 0:
         raise ValueError("Water density must be positive.")
     if standard_water_density <= 0:
@@ -1179,10 +1176,10 @@ def compute_oil_bubble_point_pressure(
     :return: Bubble point pressure (psi)
     """
     if gas_gravity <= 0:
-        raise ValueError("Oil specific gravity must be greater than zero.")
+        raise ValueError("Gas specific gravity must be greater than zero.")
     if oil_api_gravity <= 0:
         raise ValueError("Oil API gravity must be greater than zero.")
-    if temperature <= 32.0:
+    if temperature <= 32:
         raise ValueError("Temperature must be greater than absolute zero (32 °F).")
     if gas_to_oil_ratio < 0:
         raise ValueError("Gas-to-oil ratio must be non-negative.")
@@ -1192,7 +1189,6 @@ def compute_oil_bubble_point_pressure(
     )
 
     temperature_rankine = temperature + 459.67
-
     pressure = (
         gas_to_oil_ratio
         / (c1 * gas_gravity * np.exp((c3 * oil_api_gravity) / temperature_rankine))
@@ -1225,14 +1221,48 @@ def compute_water_bubble_point_pressure(
         bubble_point_pressure = max(0.0, (gas_solubility_in_water - A) / denominator)
         return bubble_point_pressure
 
+    lower_bound_pressure = 0.5
+    upper_bound_pressure = 14700
+
+    lower_bound_solubility = compute_gas_solubility_in_water(
+        pressure=lower_bound_pressure,
+        temperature=temperature,
+        salinity=salinity,
+        gas=gas,
+    )
+    upper_bound_solubility = compute_gas_solubility_in_water(
+        pressure=upper_bound_pressure,
+        temperature=temperature,
+        salinity=salinity,
+        gas=gas,
+    )
+
+    if not (
+        lower_bound_solubility <= gas_solubility_in_water <= upper_bound_solubility
+    ):
+        raise RuntimeError(
+            f"Target gas solubility {gas_solubility_in_water} SCF/STB is outside the range "
+            f"[{lower_bound_solubility:.2f}, {upper_bound_solubility:.2f}] "
+            f"for gas '{gas}' at T={temperature}°F and salinity={salinity} ppm."
+        )
+
     # Use numerical solver for Duan/Henry
+    # For gases like CO₂ and N₂ where no direct analytical formula exists to compute
+    # the bubble point pressure, we numerically invert the solubility model (e.g., Duan, Henry's).
+    # This inversion finds the pressure at which gas solubility in water equals the specified value.
+    # Though these models don't explicitly define a bubble point, this process yields the effective
+    # bubble point pressure—i.e., the pressure where gas begins to come out of solution.
     def residual(pressure: float) -> float:
         return (
-            compute_gas_solubility_in_water(pressure, temperature, salinity, gas)
+            compute_gas_solubility_in_water(
+                pressure=pressure, temperature=temperature, salinity=salinity, gas=gas
+            )
             - gas_solubility_in_water
         )
 
-    bubble_point_pressure = brentq(residual, 1.45, 14, 503.8, xtol=1.45e-7)
+    bubble_point_pressure = brentq(
+        residual, a=lower_bound_pressure, b=upper_bound_pressure, xtol=1e-6
+    )
     return typing.cast(float, bubble_point_pressure)
 
 
@@ -1265,6 +1295,11 @@ def compute_gas_to_oil_ratio(
         - T_R: Temperature in Rankine
         - C₁, C₂, C₃: Empirical coefficients
 
+    Valid for:
+        - Oil API: ~16-45°
+        - T: ~100-300 °F (converted to Rankine)
+        - GOR up to ~2000 scf/STB
+
     :param pressure: Reservoir pressure (psi)
     :param temperature: Reservoir temperature (°F)
     :param bubble_point_pressure: Bubble point pressure (psi)
@@ -1273,12 +1308,16 @@ def compute_gas_to_oil_ratio(
     :param gor_at_bubble_point_pressure: GOR at the bubble point pressure SCF/STB, optional
     :return: Gas-to-oil ratio SCF/STB
     """
+    if pressure <= 0:
+        raise ValueError("Pressure must be greater than zero.")
+
     temperature_in_rankine = temperature + 459.67
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         oil_api_gravity
     )
 
-    def _gor(pressure: float) -> float:
+    def compute_gor_vasquez_beggs(pressure: float) -> float:
+        """Implementation of the Vazquez-Beggs GOR correlation."""
         return (
             (pressure**c2)
             * c1
@@ -1290,89 +1329,56 @@ def compute_gas_to_oil_ratio(
         if gor_at_bubble_point_pressure is not None:
             return gor_at_bubble_point_pressure
 
-        gor = _gor(bubble_point_pressure)
         if pressure > bubble_point_pressure:
-            warnings.warn(
-                f"GOR at bubble point was inferred. Current pressure ({pressure:.2f} psi) > Pb ({bubble_point_pressure:.2f} psi)."
+            logger.debug(
+                f"GOR estimated at bubble point since pressure ({pressure:.2f} psi) > Pb ({bubble_point_pressure:.2f} psi)"
             )
-        return gor
+        gor = compute_gor_vasquez_beggs(bubble_point_pressure)
+        return max(0.0, gor)
 
-    gor = _gor(pressure)
+    gor = compute_gor_vasquez_beggs(pressure)
     return max(0.0, gor)
 
 
-def compute_dead_oil_viscosity_beggs(
-    temperature: float, oil_api_gravity: float
+def compute_dead_oil_viscosity_modified_beggs(
+    temperature: float,
+    oil_specific_gravity: float,
 ) -> float:
     """
-    Calculates the dead oil viscosity (mu_od) using the Beggs and Robinson correlation.
-    Viscosity is in centipoise (cP).
+    Calculates the dead oil viscosity (mu_od) using the Modified Beggs correlation.
+    Viscosity is in centipoise (cP), Labedi (1992).
 
-    mu_od = 10^A - 1
-
-    A = 10^(3.0324 - 0.0202 * API) * T_F^(-1.163)
+    log10(mu_od + 1) = 1.8653 - 0.025086 * γ_o - 0.5644 * log10(T_R)
 
     where:
     - mu_od is the dead oil viscosity (cP)
-    - API is the API gravity of the oil (degrees)
-    - T_F is the temperature in Fahrenheit (absolute scale, i.e., T_F = T_K * 9/5 - 459.67)
+    - γ_o is the specific gravity of oil
+    - T_R is temperature in Rankine (°R)
 
-    :param temperature: Reservoir temperature (°F).
-    :param oil_api_gravity: API gravity of the oil (degrees).
-    :return: Dead oil viscosity in (cP).
+    :param temperature: Temperature in Fahrenheit (°F)
+    :param oil_specific_gravity: Specific gravity of the oil (dimensionless)
+    :return: Dead oil viscosity in cP
     """
-    if not (5 <= oil_api_gravity <= 75):  # Some condensates may have very high API
+    oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
+    if not (5 <= oil_api_gravity <= 75):
         warnings.warn(
             f"API gravity {oil_api_gravity:.2f} is outside typical range [5, 75]. "
             f"Dead oil viscosity may be inaccurate."
         )
 
-    if temperature < 50:
-        warnings.warn(
-            f"Temperature {temperature:.2f}°F is unusually low for this correlation. "
-            f"Dead oil viscosity may be unreliable."
-        )
-
-    # Handle potential issues with temperature if very low
     if temperature <= 0:
-        # A more robust approach might be to use a different correlation for very low temps
-        # or raise an error for out-of-range inputs for this correlation.
-        # For simplicity, we'll return a very high viscosity or raise an error.
-        raise ValueError(
-            "Temperature in Fahrenheit must be positive for Beggs & Robinson dead oil viscosity."
-        )
+        raise ValueError("Temperature (°F) must be > 0 for this correlation.")
 
-    exponent_term_A = (3.0324 - 0.0202 * oil_api_gravity) * (temperature**-1.163)
-    dead_oil_viscosity = 10 ** (exponent_term_A) - 1
+    temperature_rankine = temperature + 459.67
+    oil_specific_gravity = 141.5 / (131.5 + oil_api_gravity)
 
-    # Viscosity cannot be negative
-    return max(0.0, dead_oil_viscosity)
-
-
-def _calculate_beggs_robinson_saturated_viscosity_coefficients(
-    gas_to_oil_ratio: float,
-) -> typing.Tuple[float, float]:
-    """
-    Calculates the 'a' and 'b' coefficients for the Beggs and Robinson
-    saturated oil viscosity correlation.
-
-    a = 10.715 * (Rs + 100)^-0.515
-    b = 5.44 * (Rs + 150)^-0.338
-
-    :param gas_to_oil_ratio: Gas-to-oil ratio in standard cubic feet per stock tank barrel (scf/stb).
-    :return: A tuple (a, b) where 'a' and 'b' are coefficients for the Beggs and Robinson correlation.
-    """
-    if gas_to_oil_ratio < 0:
-        raise ValueError("GOR (Rs) must be non-negative.")
-    elif gas_to_oil_ratio > 5000:
-        warnings.warn(
-            f"GOR {gas_to_oil_ratio:.2f} scf/STB is above typical range for oil systems. "
-            f"Saturated viscosity correlation may be extrapolated."
-        )
-
-    a = 10.715 * (gas_to_oil_ratio + 100) ** -0.515
-    b = 5.44 * (gas_to_oil_ratio + 150) ** -0.338
-    return a, b
+    log_viscosity = (
+        1.8653
+        - 0.025086 * oil_specific_gravity
+        - 0.5644 * np.log10(temperature_rankine)
+    )
+    viscosity = (10**log_viscosity) - 1
+    return max(0.0, viscosity)
 
 
 def compute_oil_viscosity(
@@ -1384,22 +1390,33 @@ def compute_oil_viscosity(
     gor_at_bubble_point_pressure: float,
 ) -> float:
     """
-    Computes oil viscosity (cP) using the Beggs & Robinson correlation for dead, saturated, and undersaturated oil.
+    Computes oil viscosity (cP) using the Modified Beggs & Robinson correlation
+    for dead, saturated, and undersaturated oil.
 
-    This function covers three viscosity regimes:
+    Saturated oil viscosity:
+        mu_os = x_sat * mu_od^y_sat
+        x_sat = 10.715 * (Rs + 100)^-0.515
+        y_sat = 5.44 * (Rs + 150)^-0.338
+        mu_od = 10^(1.8653 - 0.025086 * γ_o - 0.5644 * log10(T)) - 1
 
-    - Dead oil viscosity (mu_od):
-        mu_od = 10^A - 1
-        A = (3.0324 - 0.0202 * API) * T_F^-1.163
+    Undersaturated oil viscosity:
+        mu_o = mu_ob * (p / pb)^x_undersat
+        x_undersat = 2.6 * p^1.187 * exp(-11.513 - 8.98e-5 * p)
+        mu_ob = x_b * mu_od^y_b
 
-    - Saturated oil viscosity (P <= Pb):
-        mu_o = a * mu_od^b
-        a = 10.715 * (GOR + 100)^-0.515
-        b = 5.44 * (GOR + 150)^-0.338
-
-    - Undersaturated oil viscosity (P > Pb):
-        mu_o = mu_ob + 0.001 * (P - Pb) * (0.024 * mu_ob^1.6 + 0.038 * mu_ob^0.56)
-
+    Where:
+        - mu_od is the dead oil viscosity (cP)
+        - mu_os is the saturated oil viscosity (cP)
+        - mu_o is the undersaturated oil viscosity (cP)
+        - Rs is the gas-to-oil ratio (GOR) at current pressure in standard SCF/STB
+        - pb is the bubble point pressure (psi)
+        - p is the current reservoir pressure (psi)
+        - γ_o is the specific gravity of oil (dimensionless)
+        - T is the reservoir temperature (°F)
+        - mu_ob is the oil viscosity at bubble point pressure (cP)
+        - x_b and y_b are coefficients for the bubble point viscosity correlation.
+        - x_sat and y_sat are coefficients for the saturated viscosity correlation.
+        - x_undersat is the coefficient for the undersaturated viscosity correlation.
 
     :param pressure: Current reservoir pressure (psi)
     :param temperature: Reservoir temperature (°F)
@@ -1409,60 +1426,36 @@ def compute_oil_viscosity(
     :param gor_at_bubble_point_pressure: GOR at bubble point pressure in standard SCF/STB
     :return: Oil viscosity in cP
     """
-    if not (32 <= temperature <= 621):
-        warnings.warn(
-            f"Temperature {temperature:.2f} K is outside common operating range for oil viscosity models."
-        )
+    if temperature <= 0 or pressure <= 0 or bubble_point_pressure <= 0:
+        raise ValueError("Temperature and pressures must be positive.")
+    if oil_specific_gravity <= 0:
+        raise ValueError("Oil specific gravity must be positive.")
 
-    if bubble_point_pressure <= 0 or pressure <= 0:
-        raise ValueError(
-            "Pressure and bubble point pressure must be greater than zero."
-        )
+    # Dead oil viscosity (mu_od)
+    dead_oil_viscosity = compute_dead_oil_viscosity_modified_beggs(
+        temperature=temperature, oil_specific_gravity=oil_specific_gravity
+    )
 
-    if gas_to_oil_ratio < 0 or gor_at_bubble_point_pressure < 0:
-        raise ValueError("GOR values must be non-negative.")
-
-    if oil_specific_gravity < 0.1 or oil_specific_gravity > 1.0:
-        warnings.warn(
-            f"Oil specific gravity {oil_specific_gravity:.3f} is outside common range [0.1, 1.0]."
-        )
-
-    oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
-    # Calculate Dead Oil Viscosity (mu_od)
-    dead_oil_viscosity = compute_dead_oil_viscosity_beggs(temperature, oil_api_gravity)
-
-    # --- Case 1: Saturated Oil Viscosity (P <= Pb) ---
+    # If pressure is below or equal to bubble point, use saturated viscosity correlation
     if pressure <= bubble_point_pressure:
-        # Use gas_to_oil_ratio for saturated viscosity
-        a, b = _calculate_beggs_robinson_saturated_viscosity_coefficients(
-            gas_to_oil_ratio
-        )
-        saturated_oil_viscosity = a * (dead_oil_viscosity**b)
-        return max(0.0, saturated_oil_viscosity)  # Ensure viscosity is not negative
+        X_saturated = 10.715 * (gas_to_oil_ratio + 100) ** -0.515
+        Y_saturated = 5.44 * (gas_to_oil_ratio + 150) ** -0.338
+        saturated_live_oil_viscosity = X_saturated * (dead_oil_viscosity**Y_saturated)
+        return max(saturated_live_oil_viscosity, 1e-6)
 
-    # --- Case 2: Undersaturated Oil Viscosity (P > Pb) ---
-    else:
-        # First, calculate viscosity at the bubble point (mu_ob)
-        # This uses Rsb because at Pb, the oil is saturated with its max gas.
-        a, b = _calculate_beggs_robinson_saturated_viscosity_coefficients(
-            gor_at_bubble_point_pressure
-        )
-        oil_viscosity_at_bubble_point_pressure = a * (dead_oil_viscosity**b)
+    # Undersaturated case: compute mu_ob at Pb
+    X_bubble_point = 10.715 * (gor_at_bubble_point_pressure + 100) ** -0.515
+    Y_bubble_point = 5.44 * (gor_at_bubble_point_pressure + 150) ** -0.338
+    dead_oil_viscosity_at_bubble_point = X_bubble_point * (
+        dead_oil_viscosity**Y_bubble_point
+    )
 
-        # Now, calculate undersaturated viscosity using Vazquez and Beggs extension
-        # mu_o = mu_ob + 0.001 * (P - Pb) * (0.024 * mu_ob^1.6 + 0.038 * mu_ob^0.56)
-        under_saturated_oil_viscosity = (
-            oil_viscosity_at_bubble_point_pressure
-            + 0.001
-            * (pressure - bubble_point_pressure)
-            * (
-                0.024 * (oil_viscosity_at_bubble_point_pressure**1.6)
-                + 0.038 * (oil_viscosity_at_bubble_point_pressure**0.56)
-            )
-        )
-        return max(
-            0.0, under_saturated_oil_viscosity
-        )  # Ensure viscosity is not negative
+    # Apply undersaturated viscosity correlation
+    X_undersaturated = 2.6 * pressure**1.187 * np.exp(-11.513 - 8.98e-5 * pressure)
+    live_oil_viscosity_undersaturated = dead_oil_viscosity_at_bubble_point * (
+        (pressure / bubble_point_pressure) ** X_undersaturated
+    )
+    return max(live_oil_viscosity_undersaturated, 1e-6)
 
 
 def compute_gas_molecular_weight(gas_gravity: float) -> float:
@@ -1647,130 +1640,88 @@ def fahrenheit_to_kelvin(temp_F: float) -> float:
     return (temp_F - 32) * 5 / 9 + 273.15
 
 
+def fahrenheit_to_celsius(temp_F: float) -> float:
+    """Converts temperature from Fahrenheit to Celsius."""
+    return (temp_F - 32) * 5 / 9
+
+
 def compute_water_viscosity(
     temperature: float,
     salinity: float = 0.0,
     pressure: typing.Optional[float] = None,
 ) -> float:
     """
-    Calculates the water (brine) viscosity using the McCain correlation.
+    Computes water viscosity using McCain's corrected correlation for reservoir conditions.
 
-    This correlation considers the effects of temperature and salinity.
-    The effect of pressure is generally considered negligible for water
-    viscosity in most reservoir engineering applications, especially at
-    moderate pressures, and is not explicitly included here.
+    This correlation is valid for:
+        - Temperatures between 86 °F and 350 °F
+        - Salinities up to 300,000 ppm (weight-based)
+        - Pressures up to 10,000 psi
 
-    The McCain correlation is given by:
+    The viscosity at standard pressure (14.7 psia) is given by:
 
-    - For pure water viscosity at atmospheric pressure:
-
-        mu_w_o = 2.414 * 10**(-5) * 10**(247.8 / (temp_K - 140))
-
-    - For brine viscosity:
-
-        mu_ws = mu_w_o * (1 + 0.0001 * S_ppm * (2.2 - 0.015 * T_F))
-
-    - At a given pressure, the effect on water viscosity is typically
-    negligible, but if needed, it can be included as a small correction.
-
-        mu_ws_p = (0.9994 + (4.029e-5 * P) + (3.106e-9 * P**2)) * mu_ws
-
-    Note:
-    The McCain correlation is typically valid for temperatures between
-    approximately 100°F and 400°F (37.8°C to 204.4°C) and salinities
-    up to about 260,000 ppm NaCl equivalent. It may not be accurate
-    for extreme conditions outside this range.
+        mu_w_std = A - B * T + C * T²
 
     where:
-    - mu_w_o is the pure water viscosity at atmospheric pressure (cP)
-    - mu_ws is the saline water (brine) viscosity (cP) at atmospheric pressure
-    - S_ppm is the salinity in parts per million (ppm)
-    - T_F is the temperature in Fahrenheit (absolute scale, i.e., T_F = T_K * 9/5 - 459.67)
-    - P is the pressure (psi), but typically not included in McCain's correlation
-    - mu_ws_p is the water viscosity at pressure P (cP)
+        - mu_w_std is the water viscosity in cP at standard pressure
+        - T is the temperature in °F
+        - A = 1.0 + 1.17 * S + 3.15e-6 * S²
+        - B = 1.48e-3 - 1.8e-7 * S
+        - C = 2.94e-6
+        - S is the salinity in weight fraction (ppm divided by 1,000,000)
 
-    :param temperature: Reservoir temperature in Kelvin.
-    :param salinity: Salinity of the formation water in parts per million (ppm).
-        (e.g., 50000 for 50,000 ppm NaCl equivalent).
-    :param pressure: Optional reservoir pressure (psi). If not provided, the effect of pressure is ignored.
-    :return: Water (brine) viscosity in (cP).
+    If pressure is provided, the viscosity is corrected using:
+
+        mu_w = mu_w_std * (0.9994 + 4.0295e-5 * P + 3.1062e-9 * P²)
+
+    where:
+        - mu_w is the water viscosity at pressure P
+        - P is the pressure in psi
+
+    :param temperature: Temperature in Fahrenheit (°F)
+    :param salinity: Salinity in parts per million (ppm), default is 0 (fresh water)
+    :param pressure: Pressure in psi, optional. If not provided, assumes standard pressure (14.7 psia)
+    :return: Water viscosity in centipoise (cP)
     """
-    # Convert temperature to Fahrenheit for the correlation
-
-    # Validate temperature range for McCain correlation (approx. 100-400 F)
-    # The correlation is less accurate outside this range, and should ideally
-    # be used with lab data if available for extreme conditions.
-    if not (100.0 <= temperature <= 400.0):
-        warnings.warn(
-            f"Warning: Temperature {temperature:.2f} °F is outside the typical "
-            f"range (100-400 °F) for McCain's water viscosity correlation. "
-            f"Results may be less accurate."
-        )
-
-    # 1. Calculate pure water viscosity at atmospheric pressure (mu_w_o)
-    # A = 1.002
-    # B = 7.915 - 1.95 * ln(T_F)
-    # mu_w_o = A * T_F^B
-
-    # There are slight variations in the constants for McCain's correlation
-    # for pure water viscosity. Let's use a very common one:
-
-    # McCain's (1990) equation for pure water at atmospheric pressure (often used in reservoir engineering)
-    # mu_w_o = 2.414 * 10**(-5) * 10**(247.8 / (temp_K - 140)) # This is for Pa.s or mPa.s
-
-    # Let's stick with the form given in most petroleum engineering texts for McCain's pure water viscosity.
-    # A common form for pure water viscosity at atmospheric pressure:
-
-    # This is a very common empirical fit for pure water viscosity vs. temperature (in cP):
-    # This is often attributed to Standing or generalized fits.
-    # For example, using a common polynomial fit for water viscosity as function of temperature in F
-    # This is a simplified representation of water viscosity vs. temperature:
-
-    # Let's use a more explicit set of coefficients for pure water viscosity from a reliable source.
-    # A widely cited empirical equation (e.g., from Petroleum Reservoir Engineering Practice by Tarek Ahmed):
-    # For pure water viscosity (cP) as function of temperature (F):
-    pure_water_viscosity_at_atm_pressure = np.exp(
-        1.0035 - 1.479e-02 * temperature + 1.9825e-05 * temperature**2
-    )
-
-    # Validate for extreme salinity
     if salinity < 0:
-        raise ValueError("Salinity cannot be negative.")
-    if salinity > 300000:  # Typical upper limit for correlation validity
+        raise ValueError("Salinity must be non-negative.")
+
+    if pressure is not None and pressure < 0:
+        raise ValueError("Pressure must be non-negative.")
+
+    if not (86 <= temperature <= 350):
         warnings.warn(
-            f"Warning: Salinity {salinity} ppm is very high. "
-            f"McCain correlation may be less accurate for salinities above ~260,000 ppm."
+            f"Temperature {temperature:.2f}°F is outside the valid range for McCain's water viscosity correlation."
         )
 
-    # 2. Apply correction for salinity
-    # S_corr = 0.0001 * (S_ppm) * (2.2 - 0.015 * T_F)
-    # mu_ws = mu_w_o * (1 + S_corr)
-
-    # This is McCain's salinity correction:
-    salinity_correction_factor = 0.0001 * salinity * (2.2 - 0.015 * temperature)
-    saline_water_viscosity_at_atm_pressure = pure_water_viscosity_at_atm_pressure * (
-        1.0 + salinity_correction_factor
-    )
-
-    saline_water_viscosity_at_atm_pressure = max(
-        0.0, saline_water_viscosity_at_atm_pressure
-    )
-
-    # 3: Apply correction for pressure
-    # Factor to correct viscosity from atmospheric pressure to reservoir pressure
-    # mu_w / mu_w_o = (0.9994 + 4.029 * 10^-5 * P + 3.106 * 10^-9 * P^2)
-    # Where P is in psia
-    if pressure is not None:
-        pressure_correction_ratio = (
-            0.9994 + (4.029e-5 * pressure) + (3.106e-9 * pressure**2)
+    if salinity > 300_000:
+        warnings.warn(
+            f"Salinity {salinity:.2f} ppm is unusually high for McCain's water viscosity correlation."
         )
-        return saline_water_viscosity_at_atm_pressure * pressure_correction_ratio
 
-    return saline_water_viscosity_at_atm_pressure
+    if pressure is not None and pressure > 10_000:
+        warnings.warn(
+            f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
+        )
+
+    salinity_fraction = salinity * PPM_TO_WEIGHT_FRACTION
+    A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
+    B = 1.48e-3 - 1.8e-7 * salinity_fraction
+    C = 2.94e-6
+
+    viscosity_at_standard_pressure = A - (B * temperature) + (C * temperature**2)
+
+    if pressure is None:
+        return max(1e-6, viscosity_at_standard_pressure)
+
+    pressure_correction_factor = (
+        0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)
+    )
+    viscosity_at_pressure = viscosity_at_standard_pressure * pressure_correction_factor
+    return max(1e-6, viscosity_at_pressure)
 
 
-@functools.lru_cache(maxsize=128)
-def _compute_oil_compressibility_correction_term(
+def _compute_oil_compressibility_liberation_correction_term(
     pressure: float,
     temperature: float,
     gas_gravity: float,
@@ -1781,7 +1732,7 @@ def _compute_oil_compressibility_correction_term(
     gor_at_bubble_point_pressure: float,
 ) -> float:
     """
-    Computes the correction term for oil compressibility below bubble point pressure.
+    Computes the liberation correction term for oil compressibility below bubble point pressure.
 
     The correction term is give by:
 
@@ -1854,7 +1805,7 @@ def compute_oil_compressibility(
     The Vasquez and Beggs correlation is given by:
     For P > Pb (Undersaturated Oil):
 
-        C_o = (-1433 + 5 * R_s + 17.2 * T_F - 1180 * S.G + 12.61 * API) / P
+        C_o = (-1433 + 5 * R_s + 17.2 * T_F - 1180 * S.G + 12.61 * API) / 10⁵ * P
 
     For P <= Pb (Saturated Oil):
 
@@ -1894,20 +1845,20 @@ def compute_oil_compressibility(
             "All input parameters (P, Pb, T, Gas SG, API) must be positive."
         )
 
-    def base_formula(pressure: float) -> float:
+    def compute_base_compressibility(pressure: float) -> float:
         val = (
             -1433
             + 5 * gor_at_bubble_point_pressure
             + 17.2 * temperature
             - 1180 * gas_gravity
             + 12.61 * oil_api_gravity
-        ) / pressure
+        ) / ((10**5) * pressure)
         return max(val, 0.0)
 
     if pressure > bubble_point_pressure:
-        return base_formula(pressure)
+        return compute_base_compressibility(pressure)
 
-    correction_term = _compute_oil_compressibility_correction_term(
+    correction_term = _compute_oil_compressibility_liberation_correction_term(
         pressure=pressure,
         temperature=temperature,
         gas_gravity=gas_gravity,
@@ -1917,7 +1868,7 @@ def compute_oil_compressibility(
         oil_formation_volume_factor=oil_formation_volume_factor,
         gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
     )
-    return base_formula(pressure) + correction_term
+    return compute_base_compressibility(pressure) + correction_term
 
 
 def compute_gas_compressibility(
@@ -2127,8 +2078,10 @@ def _gas_solubility_in_water_duan_co2(
     )
 
     x_CO2 = np.exp(ln_x)  # mole fraction
-    if x_CO2 < 0:
-        raise ValueError("Calculated mole fraction of CO₂ is negative, check inputs.")
+    if x_CO2 < 0 or not np.isfinite(x_CO2):
+        raise ValueError(
+            "Calculated mole fraction of CO₂ is negative or infinite, check inputs."
+        )
 
     try:
         water_density = (
@@ -2176,7 +2129,7 @@ def _gas_solubility_in_water_henry_law(
         ln H = A + B / T + C * ln(T)     [Sander, 2020]
 
     Setschenow correction:
-        molality = salinity_ppm / (58.44 * 1000)
+        molality = salinity / (58.44 * 1000)
         exp(-k_s * molality)
 
     where:
@@ -2216,11 +2169,11 @@ def _gas_solubility_in_water_henry_law(
 
     # Setschenow salinity correction
     # Converts salinity from ppm (mg/kg) to mol/kg using molar mass in g/mol
-    molality = salinity / (MOLECULAR_WEIGHT_NACL * 1000)
+    molarity = salinity / (MOLECULAR_WEIGHT_NACL * 1000)
 
     setschenow_constants = {"co2": 0.12, "methane": 0.17, "n2": 0.13}
     k_s = setschenow_constants[gas]
-    salinity_factor = np.exp(-k_s * molality)
+    salinity_factor = np.exp(-k_s * molarity)
 
     gas_solubility = (
         (pressure / H) * (M / water_density) * salinity_factor
@@ -2472,44 +2425,115 @@ def compute_live_oil_density(
     return live_oil_density_lb_per_ft3
 
 
-def compute_standard_water_density(salinity: float) -> float:
+def compute_water_density_mccain(
+    pressure: float, temperature: float, salinity: float = 0.0
+) -> float:
     """
-    Computes the density of brine at standard conditions (60 F, 14.7 psia)
-    using McCain's correlation.
+    Computes the live water/brine density at reservoir conditions using McCain's correlation.
 
-    Correlation (McCain, "Properties of Petroleum Fluids", 3rd Ed., Eq. 18.4):
+    This includes the effects of salinity, pressure, and temperature deviations from standard conditions.
 
-        rho_w_std (lb/ft^3) = 62.368 + 0.438603 * S_wt% + 1.60074E-6 * S_wt%^2
+    Correlation adapted from:
+        McCain, "Properties of Petroleum Fluids", 2nd/3rd Ed.
 
-    Where S_wt% is salinity in weight percent.
+    rho_brine (lb/ft³) = rho_std + Δrho_salinity + Δrho_pressure + Δrho_temperature
 
-    :param salinity: Salinity in parts per million (ppm).
-    :return: Standard water density (rho_w_std) in lb/ft³.
+    where:
+        Δrho_salinity   = 0.438603 * salinity_wt_percent
+        Δrho_pressure   = 0.00001427 * (pressure - 14.7)
+        Δrho_temperature = -0.00048314 * (temperature - 60.0)
+
+    :param pressure: Pressure in psia.
+    :param temperature: Temperature in degrees Fahrenheit.
+    :param salinity: Salinity in ppm.
+    :return: Live brine density in lb/ft³.
     """
     if salinity < 0:
         raise ValueError("Salinity cannot be negative.")
+    if pressure < 0:
+        raise ValueError("Pressure cannot be negative.")
 
-    # Convert salinity from ppm to weight percent (wt%)
-    # Given that 10,000 ppm = 1 wt%
-    salinity_wt_percent = salinity / 10000.0
+    salinity_in_wt_percent = salinity / 10000.0
 
-    # McCain's correlation for standard brine density
-    water_standard_density = (
+    delta_salinity = 0.438603 * salinity_in_wt_percent
+    delta_pressure = 0.00001427 * (pressure - 14.7)
+    delta_temperature = -0.00048314 * (temperature - 60.0)
+    water_density = (
         STANDARD_WATER_DENSITY_IMPERIAL
-        + (0.438603 * salinity_wt_percent)
-        + (1.60074e-6 * salinity_wt_percent**2)
+        + delta_salinity
+        + delta_pressure
+        + delta_temperature
     )
-    return water_standard_density
+    return water_density
+
+
+def compute_water_density_batzle(
+    pressure: float, temperature: float, salinity: float
+) -> float:
+    """
+    Computes the live water/brine density using Batzle & Wang's correlation.
+
+    This is more accurate for high temperature and pressure conditions,
+    using empirical adjustments based on weight fraction salinity.
+
+    Correlation:
+        Batzle & Wang (1992), Geophysics, Vol. 57, No. 11
+
+    rho_brine (g/cm³) = 1.0 + 1e-3 * [
+        S * (0.668 + 0.44 * S + 1e-6 * (300 * T - 2400 * T * S + P * (80 + 3 * T - 3300 * S)))
+    ]
+
+    Converts to lb/ft³ using the conversion factor (1 g/cm³ = 62.42796 lb/ft³).
+
+    where:
+        rho_brine = brine density in g/cm³
+        S = salinity in weight fraction (ppm / 1e6)
+        T = temperature in Celsius
+        P = pressure in MPa
+
+    :param pressure: Pressure in psia.
+    :param temperature: Temperature in degrees Fahrenheit.
+    :param salinity: Salinity in ppm.
+    :return: Brine density in lb/ft³.
+    """
+    if salinity < 0:
+        raise ValueError("Salinity cannot be negative.")
+    if pressure < 0:
+        raise ValueError("Pressure cannot be negative.")
+
+    # Convert units
+    temperature_in_celsius = fahrenheit_to_celsius(temperature)  # °F to °C
+    pressure_MPa = pressure * 0.00689476  # psia to MPa
+    salinity_weight_fraction = salinity / 1e6  # ppm to weight fraction
+
+    S = salinity_weight_fraction
+    T = temperature_in_celsius
+    P = pressure_MPa
+
+    # Batzle & Wang correlation in g/cm³
+    brine_density_in_g_per_cm3 = 1.0 + 1e-3 * (
+        S
+        * (
+            0.668
+            + 0.44 * S
+            + 1e-6 * (300 * T - 2400 * T * S + P * (80 + 3 * T - 3300 * S))
+        )
+    )
+    # Convert to lb/ft³ (1 g/cm³ = 62.42796 lb/ft³)
+    water_density = brine_density_in_g_per_cm3 * 62.42796
+    return water_density
 
 
 def compute_water_density(
+    pressure: float,
+    temperature: float,
     gas_gravity: float = 0.0,
     salinity: float = 0.0,
     gas_solubility_in_water: float = 0.0,
-    gas_free_water_formation_volume_factor: float = 0.0,
+    gas_free_water_formation_volume_factor: float = 1.0,
 ) -> float:
     """
-    Calculates the live water (brine) density at reservoir conditions
+    Calculates the live water/brine density at reservoir conditions
     using McCain's correlations.
 
     The correlation is based on the mass balance:
@@ -2528,12 +2552,15 @@ def compute_water_density(
     :param gas_gravity: Specific gravity of dissolved gas (relative to air). Defaults to 0.0 if no gas.
     :param gas_solubility_in_water: Gas solubility in water (Rsw) in (SCF/STB) at current pressure and temperature.
     :param gas_free_water_formation_volume_factor: Gas-free water formation volume factor (Bw)(bbl/STB) at current pressure and temperature.
-    :return: Live water density (lb/ft³) at reservoir conditions.
+        Defaults to 1.0 (no gas effect).
+    :return: Live water/brine density (lb/ft³) at reservoir conditions.
     """
     if salinity < 0 or gas_gravity < 0:
         raise ValueError("Salinity and gas gravity must be non-negative.")
 
-    standard_water_density_in_lb_per_ft3 = compute_standard_water_density(salinity)
+    standard_water_density_in_lb_per_ft3 = compute_water_density_batzle(
+        pressure=pressure, temperature=temperature, salinity=salinity
+    )
 
     # For density calculation using the formula, Bw in the denominator is the *actual*
     # Bw (live water FVF). For water, dissolved gas usually has a very minor effect
@@ -2575,7 +2602,6 @@ def compute_water_density(
     live_water_density_in_lb_per_ft3 = (
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
     )  # lb/ft^3
-
     # Ensure density is non-negative
     return max(0.0, live_water_density_in_lb_per_ft3)
 

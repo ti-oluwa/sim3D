@@ -560,10 +560,10 @@ def compute_well_rate(
 
     The formula for the well rate is:
 
-        Q = 6.33e-3 * W * (P - P_bhp) * M
+        Q = 6.33e-3 * W * (P_bhp - P) * M
 
     Or for gas wells:
-        Q = 6.33e-3 * W * (P² - P_bhp²) * M
+        Q = 6.33e-3 * W * (P_bhp² - P²) * M
 
     where:
         - Q is the well rate (STB/day) or (SCF/day)
@@ -572,6 +572,8 @@ def compute_well_rate(
         - P_bhp is the bottom-hole pressure (psi)
         - M is the phase mobility (dimensionless, default is 1.0) (k_r / μ) (psi⁻¹)
 
+    Negative rate result indicates that the well is producing, while positive rates indicate injection.
+    
     :param well_index: The well index (STB/day/psi) or (SCF/day/psi).
     :param pressure: The reservoir pressure (psi).
     :param bottom_hole_pressure: The bottom-hole pressure (psi).
@@ -582,14 +584,14 @@ def compute_well_rate(
     """
     if well_index <= 0:
         raise ValueError("Well index must be a positive value.")
-    if pressure <= bottom_hole_pressure:
-        raise ValueError(
-            "Reservoir pressure must be greater than bottom-hole pressure."
-        )
+    # if pressure <= bottom_hole_pressure:
+    #     raise ValueError(
+    #         "Reservoir pressure must be greater than bottom-hole pressure."
+    #     )
 
     if use_pressure_squared:
-        pressure_difference = pressure**2 - bottom_hole_pressure**2
+        pressure_difference = bottom_hole_pressure**2 - pressure**2
     else:
-        pressure_difference = pressure - bottom_hole_pressure
+        pressure_difference = bottom_hole_pressure - pressure
     well_rate = 6.33e-3 * well_index * pressure_difference * phase_mobility
     return well_rate

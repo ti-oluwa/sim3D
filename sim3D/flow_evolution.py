@@ -1,11 +1,18 @@
 import typing
+import attrs
 import numpy as np
 from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
 import itertools
 import functools
 
-from sim3D.types import Orientation, ThreeDimensionalGrid, ThreeDimensions
+from sim3D.types import (
+    Orientation,
+    ThreeDimensionalGrid,
+    ThreeDimensions,
+    EvolutionScheme,
+    T,
+)
 from sim3D.constants import (
     BBL_TO_FT3,
     SECONDS_TO_DAYS,
@@ -60,6 +67,12 @@ from sim3D.boundary_conditions import BoundaryConditions
 # Therefore, we safely exclude the outermost cells and perform updates only
 # on interior cells where neighbour access is valid and consistent.
 # ###########################################################################
+
+
+@attrs.define(slots=True)
+class EvolutionResult(typing.Generic[T]):
+    value: T
+    scheme: EvolutionScheme
 
 
 """
@@ -222,7 +235,7 @@ def compute_explicit_pressure_evolution(
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-) -> ThreeDimensionalGrid:
+) -> EvolutionResult[ThreeDimensionalGrid]:
     """
     Computes the pressure evolution (specifically, oil phase pressure P_oil) in the reservoir grid
     for one time step using an explicit finite difference method. This function incorporates
@@ -323,18 +336,14 @@ def compute_explicit_pressure_evolution(
     total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
 
     # Pad all necessary grids for boundary conditions and neighbour access
-    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid.copy())
-    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid.copy())
-    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid.copy())
+    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
+    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid)
+    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid)
     padded_irreducible_water_saturation_grid = edge_pad_grid(
-        irreducible_water_saturation_grid.copy()
+        irreducible_water_saturation_grid
     )
-    padded_residual_oil_saturation_grid = edge_pad_grid(
-        residual_oil_saturation_grid.copy()
-    )
-    padded_residual_gas_saturation_grid = edge_pad_grid(
-        residual_gas_saturation_grid.copy()
-    )
+    padded_residual_oil_saturation_grid = edge_pad_grid(residual_oil_saturation_grid)
+    padded_residual_gas_saturation_grid = edge_pad_grid(residual_gas_saturation_grid)
 
     # Apply boundary conditions to relevant padded grids
     boundary_conditions["pressure"].apply(padded_oil_pressure_grid)
@@ -409,6 +418,18 @@ def compute_explicit_pressure_evolution(
         * gas_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     ) / gas_formation_volume_factor_grid
+    
+    # Clamp mobility grids to avoid numerical issues
+    # This ensures mobilities are never zero or negative (for numerical stability)
+    water_mobility_grid_x = np.maximum(water_mobility_grid_x, 1e-12)
+    oil_mobility_grid_x = np.maximum(oil_mobility_grid_x, 1e-12)
+    gas_mobility_grid_x = np.maximum(gas_mobility_grid_x, 1e-12)
+    water_mobility_grid_y = np.maximum(water_mobility_grid_y, 1e-12)
+    oil_mobility_grid_y = np.maximum(oil_mobility_grid_y, 1e-12)
+    gas_mobility_grid_y = np.maximum(gas_mobility_grid_y, 1e-12)
+    water_mobility_grid_z = np.maximum(water_mobility_grid_z, 1e-12)
+    oil_mobility_grid_z = np.maximum(oil_mobility_grid_z, 1e-12)
+    gas_mobility_grid_z = np.maximum(gas_mobility_grid_z, 1e-12)
 
     # Pad mobility grids for neighbour access
     padded_water_mobility_grid_x = edge_pad_grid(water_mobility_grid_x)
@@ -450,9 +471,9 @@ def compute_explicit_pressure_evolution(
         flux_configurations = {
             "x": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_x,
-                    "oil_mobility": padded_oil_mobility_grid_x,
-                    "gas_mobility": padded_gas_mobility_grid_x,
+                    "water_mobility_grid": padded_water_mobility_grid_x,
+                    "oil_mobility_grid": padded_oil_mobility_grid_x,
+                    "gas_mobility_grid": padded_gas_mobility_grid_x,
                 },
                 "positive_neighbour": (ip + 1, jp, kp),
                 "negative_neighbour": (ip - 1, jp, kp),
@@ -460,9 +481,9 @@ def compute_explicit_pressure_evolution(
             },
             "y": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_y,
-                    "oil_mobility": padded_oil_mobility_grid_y,
-                    "gas_mobility": padded_gas_mobility_grid_y,
+                    "water_mobility_grid": padded_water_mobility_grid_y,
+                    "oil_mobility_grid": padded_oil_mobility_grid_y,
+                    "gas_mobility_grid": padded_gas_mobility_grid_y,
                 },
                 "positive_neighbour": (ip, jp + 1, kp),
                 "negative_neighbour": (ip, jp - 1, kp),
@@ -470,9 +491,9 @@ def compute_explicit_pressure_evolution(
             },
             "z": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_z,
-                    "oil_mobility": padded_oil_mobility_grid_z,
-                    "gas_mobility": padded_gas_mobility_grid_z,
+                    "water_mobility_grid": padded_water_mobility_grid_z,
+                    "oil_mobility_grid": padded_oil_mobility_grid_z,
+                    "gas_mobility_grid": padded_gas_mobility_grid_z,
                 },
                 "positive_neighbour": (ip, jp, kp + 1),
                 "negative_neighbour": (ip, jp, kp - 1),
@@ -595,7 +616,7 @@ def compute_explicit_pressure_evolution(
                     * BBL_TO_FT3  # Convert bbl/day to ft³/day
                 )
             else:
-                # For oil and water, convert bbl/day to ft³/day
+                # For oil, convert bbl/day to ft³/day
                 cell_injection_rate *= (
                     fluid_properties.oil_formation_volume_factor_grid[
                         i, j, k
@@ -676,10 +697,11 @@ def compute_explicit_pressure_evolution(
                     # For oil, convert bbl/day to ft³/day
                     production_rate *= (
                         fluid_properties.oil_formation_volume_factor_grid[
-                            i, j
+                            i, j, k
                         ]  # bbl/STB
                         * BBL_TO_FT3  # Convert bbl/day to ft³/day
                     )
+
                 cell_production_rate += production_rate
 
         # Calculate the net well flow rate into the cell
@@ -719,7 +741,7 @@ def compute_explicit_pressure_evolution(
         # Apply the update to the pressure grid
         # P_oil^(n+1) = P_oil^n + dP_oil
         updated_oil_pressure_grid[i, j] += change_in_pressure
-    return updated_oil_pressure_grid
+    return EvolutionResult(updated_oil_pressure_grid, scheme="explicit")
 
 
 """
@@ -904,7 +926,7 @@ def compute_implicit_pressure_evolution(
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     capillary_pressure_stability_factor: float = 1.0,
-) -> ThreeDimensionalGrid:
+) -> EvolutionResult[ThreeDimensionalGrid]:
     """
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
     three-phase flow system in a 3D reservoir.
@@ -986,18 +1008,14 @@ def compute_implicit_pressure_evolution(
     total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
 
     # Pad all necessary grids for boundary conditions and neighbour access
-    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid.copy())
-    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid.copy())
-    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid.copy())
+    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
+    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid)
+    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid)
     padded_irreducible_water_saturation_grid = edge_pad_grid(
-        irreducible_water_saturation_grid.copy()
+        irreducible_water_saturation_grid
     )
-    padded_residual_oil_saturation_grid = edge_pad_grid(
-        residual_oil_saturation_grid.copy()
-    )
-    padded_residual_gas_saturation_grid = edge_pad_grid(
-        residual_gas_saturation_grid.copy()
-    )
+    padded_residual_oil_saturation_grid = edge_pad_grid(residual_oil_saturation_grid)
+    padded_residual_gas_saturation_grid = edge_pad_grid(residual_gas_saturation_grid)
 
     # Apply boundary conditions to relevant padded grids
     boundary_conditions["pressure"].apply(padded_oil_pressure_grid)
@@ -1073,6 +1091,18 @@ def compute_implicit_pressure_evolution(
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     ) / gas_formation_volume_factor_grid
 
+    # Clamp mobility grids to avoid numerical issues
+    # This ensures mobilities are never zero or negative (for numerical stability)
+    water_mobility_grid_x = np.maximum(water_mobility_grid_x, 1e-12)
+    oil_mobility_grid_x = np.maximum(oil_mobility_grid_x, 1e-12)
+    gas_mobility_grid_x = np.maximum(gas_mobility_grid_x, 1e-12)
+    water_mobility_grid_y = np.maximum(water_mobility_grid_y, 1e-12)
+    oil_mobility_grid_y = np.maximum(oil_mobility_grid_y, 1e-12)
+    gas_mobility_grid_y = np.maximum(gas_mobility_grid_y, 1e-12)
+    water_mobility_grid_z = np.maximum(water_mobility_grid_z, 1e-12)
+    oil_mobility_grid_z = np.maximum(oil_mobility_grid_z, 1e-12)
+    gas_mobility_grid_z = np.maximum(gas_mobility_grid_z, 1e-12)
+
     # Pad mobility grids for neighbour access
     padded_water_mobility_grid_x = edge_pad_grid(water_mobility_grid_x)
     padded_oil_mobility_grid_x = edge_pad_grid(oil_mobility_grid_x)
@@ -1135,9 +1165,9 @@ def compute_implicit_pressure_evolution(
         flux_configurations = {
             "x": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_x,
-                    "oil_mobility": padded_oil_mobility_grid_x,
-                    "gas_mobility": padded_gas_mobility_grid_x,
+                    "water_mobility_grid": padded_water_mobility_grid_x,
+                    "oil_mobility_grid": padded_oil_mobility_grid_x,
+                    "gas_mobility_grid": padded_gas_mobility_grid_x,
                 },
                 "positive_neighbour": (ip + 1, jp, kp),
                 "negative_neighbour": (ip - 1, jp, kp),
@@ -1147,9 +1177,9 @@ def compute_implicit_pressure_evolution(
             },
             "y": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_y,
-                    "oil_mobility": padded_oil_mobility_grid_y,
-                    "gas_mobility": padded_gas_mobility_grid_y,
+                    "water_mobility_grid": padded_water_mobility_grid_y,
+                    "oil_mobility_grid": padded_oil_mobility_grid_y,
+                    "gas_mobility_grid": padded_gas_mobility_grid_y,
                 },
                 "positive_neighbour": (ip, jp + 1, kp),
                 "negative_neighbour": (ip, jp - 1, kp),
@@ -1159,9 +1189,9 @@ def compute_implicit_pressure_evolution(
             },
             "z": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_z,
-                    "oil_mobility": padded_oil_mobility_grid_z,
-                    "gas_mobility": padded_gas_mobility_grid_z,
+                    "water_mobility_grid": padded_water_mobility_grid_z,
+                    "oil_mobility_grid": padded_oil_mobility_grid_z,
+                    "gas_mobility_grid": padded_gas_mobility_grid_z,
                 },
                 "positive_neighbour": (ip, jp, kp + 1),
                 "negative_neighbour": (ip, jp, kp - 1),
@@ -1425,7 +1455,8 @@ def compute_implicit_pressure_evolution(
     new_pressure_grid = new_pressure_grid_1d.reshape(
         (cell_count_x, cell_count_y, cell_count_z)
     )
-    return typing.cast(ThreeDimensionalGrid, new_pressure_grid)
+    new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
+    return EvolutionResult(new_pressure_grid, scheme="implicit")
 
 
 def compute_adaptive_pressure_evolution(
@@ -1438,7 +1469,7 @@ def compute_adaptive_pressure_evolution(
     wells: Wells[ThreeDimensions],
     diffusion_number_threshold: float = 0.24,  # Slightly below 0.25 for safety
     capillary_pressure_stability_factor: float = 1.0,
-) -> ThreeDimensionalGrid:
+) -> EvolutionResult[ThreeDimensionalGrid]:
     """
     Computes the pressure distribution in the reservoir grid for a single time step,
     adaptively choosing between explicit and implicit methods based on the maximum
@@ -1642,7 +1673,7 @@ def compute_adaptive_pressure_evolution(
 
     # Choose solver based on criterion
     if max_diffusion_number > diffusion_number_threshold:
-        updated_pressure_grid = compute_implicit_pressure_evolution(
+        return compute_implicit_pressure_evolution(
             cell_dimension=cell_dimension,
             height_grid=height_grid,
             time_step_size=time_step_size,
@@ -1652,18 +1683,15 @@ def compute_adaptive_pressure_evolution(
             wells=wells,
             capillary_pressure_stability_factor=capillary_pressure_stability_factor,
         )
-    else:
-        updated_pressure_grid = compute_explicit_pressure_evolution(
-            cell_dimension=cell_dimension,
-            height_grid=height_grid,
-            time_step_size=time_step_size,
-            boundary_conditions=boundary_conditions,
-            rock_properties=rock_properties,
-            fluid_properties=fluid_properties,
-            wells=wells,
-        )
-
-    return updated_pressure_grid
+    return compute_explicit_pressure_evolution(
+        cell_dimension=cell_dimension,
+        height_grid=height_grid,
+        time_step_size=time_step_size,
+        boundary_conditions=boundary_conditions,
+        rock_properties=rock_properties,
+        fluid_properties=fluid_properties,
+        wells=wells,
+    )
 
 
 """
@@ -1911,7 +1939,9 @@ def compute_saturation_evolution(
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
+) -> EvolutionResult[
+    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]
+]:
     """
     Computes the new/updated saturation distribution for water, oil, and gas
     across the reservoir grid using an explicit upwind finite difference method.
@@ -1927,7 +1957,7 @@ def compute_saturation_evolution(
     :param fluid_properties: `FluidProperties` object containing fluid physical properties,
         including current pressure and saturation grids.
 
-    :param wells: `Wells` object containing information about injection and production wells.
+    :param wells: ``Wells`` object containing information about injection and production wells.
     :return: A tuple of N-Dimensional numpy arrays representing the updated saturation distributions
         for water, oil, and gas, respectively.
         (updated_water_saturation_grid, updated_oil_saturation_grid, updated_gas_saturation_grid)
@@ -2079,6 +2109,18 @@ def compute_saturation_evolution(
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     ) / gas_formation_volume_factor_grid
 
+    # Clamp mobility grids to avoid numerical issues
+    # This ensures mobilities are never zero or negative (for numerical stability)
+    water_mobility_grid_x = np.maximum(water_mobility_grid_x, 1e-12)
+    oil_mobility_grid_x = np.maximum(oil_mobility_grid_x, 1e-12)
+    gas_mobility_grid_x = np.maximum(gas_mobility_grid_x, 1e-12)
+    water_mobility_grid_y = np.maximum(water_mobility_grid_y, 1e-12)
+    oil_mobility_grid_y = np.maximum(oil_mobility_grid_y, 1e-12)
+    gas_mobility_grid_y = np.maximum(gas_mobility_grid_y, 1e-12)
+    water_mobility_grid_z = np.maximum(water_mobility_grid_z, 1e-12)
+    oil_mobility_grid_z = np.maximum(oil_mobility_grid_z, 1e-12)
+    gas_mobility_grid_z = np.maximum(gas_mobility_grid_z, 1e-12)
+
     # Pad mobility grids for neighbour access
     padded_water_mobility_grid_x = edge_pad_grid(water_mobility_grid_x)
     padded_oil_mobility_grid_x = edge_pad_grid(oil_mobility_grid_x)
@@ -2128,9 +2170,9 @@ def compute_saturation_evolution(
         flux_configurations = {
             "x": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_x,
-                    "oil_mobility": padded_oil_mobility_grid_x,
-                    "gas_mobility": padded_gas_mobility_grid_x,
+                    "water_mobility_grid": padded_water_mobility_grid_x,
+                    "oil_mobility_grid": padded_oil_mobility_grid_x,
+                    "gas_mobility_grid": padded_gas_mobility_grid_x,
                 },
                 "positive_neighbour": (ip + 1, jp, kp),
                 "negative_neighbour": (ip - 1, jp, kp),
@@ -2139,9 +2181,9 @@ def compute_saturation_evolution(
             },
             "y": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_y,
-                    "oil_mobility": padded_oil_mobility_grid_y,
-                    "gas_mobility": padded_gas_mobility_grid_y,
+                    "water_mobility_grid": padded_water_mobility_grid_y,
+                    "oil_mobility_grid": padded_oil_mobility_grid_y,
+                    "gas_mobility_grid": padded_gas_mobility_grid_y,
                 },
                 "positive_neighbour": (ip, jp + 1, kp),
                 "negative_neighbour": (ip, jp - 1, kp),
@@ -2150,9 +2192,9 @@ def compute_saturation_evolution(
             },
             "z": {
                 "mobility_grids": {
-                    "water_mobility": padded_water_mobility_grid_z,
-                    "oil_mobility": padded_oil_mobility_grid_z,
-                    "gas_mobility": padded_gas_mobility_grid_z,
+                    "water_mobility_grid": padded_water_mobility_grid_z,
+                    "oil_mobility_grid": padded_oil_mobility_grid_z,
+                    "gas_mobility_grid": padded_gas_mobility_grid_z,
                 },
                 "positive_neighbour": (ip, jp, kp + 1),
                 "negative_neighbour": (ip, jp, kp - 1),
@@ -2235,9 +2277,9 @@ def compute_saturation_evolution(
 
         # CFL stability check: |flux| / V * Δt / φ ≤ 1
         max_flux_rate_per_volume = max(
-            abs(net_water_flux_from_neighbours) / cell_total_volume,
-            abs(net_oil_flux_from_neighbours) / cell_total_volume,
-            abs(net_gas_flux_from_neighbours) / cell_total_volume,
+            net_water_flux_from_neighbours / cell_total_volume,
+            net_oil_flux_from_neighbours / cell_total_volume,
+            net_gas_flux_from_neighbours / cell_total_volume,
         )
         if max_flux_rate_per_volume * time_step_in_days / cell_porosity > 1.0:
             raise RuntimeError(
@@ -2465,8 +2507,12 @@ def compute_saturation_evolution(
         updated_water_saturation_grid[i, j, k] = (
             cell_water_saturation + water_saturation_change
         )
-        updated_oil_saturation_grid[i, j, k] = cell_oil_saturation + oil_saturation_change
-        updated_gas_saturation_grid[i, j, k] = cell_gas_saturation + gas_saturation_change
+        updated_oil_saturation_grid[i, j, k] = (
+            cell_oil_saturation + oil_saturation_change
+        )
+        updated_gas_saturation_grid[i, j, k] = (
+            cell_gas_saturation + gas_saturation_change
+        )
 
     # Apply Saturation Constraints and Normalization across all cells
     # This loop runs *after* all cells have been updated in the previous loop.
@@ -2492,7 +2538,7 @@ def compute_saturation_evolution(
         )
 
         # Avoid division by zero if total_saturation is extremely small (e.g., in a void)
-        if total_saturation > 1e-9:
+        if total_saturation > 0.0:
             updated_water_saturation_grid[i, j, k] /= total_saturation
             updated_oil_saturation_grid[i, j, k] /= total_saturation
             updated_gas_saturation_grid[i, j, k] /= total_saturation
@@ -2503,8 +2549,11 @@ def compute_saturation_evolution(
             updated_oil_saturation_grid[i, j, k] = 0.0
             updated_gas_saturation_grid[i, j, k] = 0.0
 
-    return (
-        updated_water_saturation_grid,
-        updated_oil_saturation_grid,
-        updated_gas_saturation_grid,
+    return EvolutionResult(
+        (
+            updated_water_saturation_grid,
+            updated_oil_saturation_grid,
+            updated_gas_saturation_grid,
+        ),
+        scheme="explicit",
     )

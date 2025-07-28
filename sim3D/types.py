@@ -15,11 +15,12 @@ __all__ = [
     "OneDimensionalGrid",
     "Orientation",
     "InjectedFluidType",
-    "DiscretizationMethod",
+    "EvolutionScheme",
     "FluidMiscibility",
     "ArrayLike",
 ]
 
+T = typing.TypeVar("T")
 Tco = typing.TypeVar("Tco", covariant=True)
 
 NDimension = typing.TypeVar("NDimension", bound=typing.Tuple[int, ...])
@@ -55,7 +56,7 @@ class Orientation(enum.Enum):
 InjectedFluidType = typing.Literal["water", "oil", "gas"]
 """Types of fluids that can be injected in the simulation"""
 
-DiscretizationMethod = typing.Literal["implicit", "explicit", "adaptive"]
+EvolutionScheme = typing.Literal["implicit", "explicit"]
 """Discretization methods for numerical simulations"""
 
 FluidMiscibility = typing.Literal["logarithmic", "linear", "harmonic"]

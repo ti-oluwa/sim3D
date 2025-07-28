@@ -5,7 +5,7 @@ import enum
 from attrs import define, field
 import numpy as np
 
-from sim3D.types import NDimension, NDimensionalGrid, TwoDimensions
+from sim3D.types import NDimension, NDimensionalGrid
 from sim3D.boundary_conditions import BoundaryConditions
 
 
@@ -98,7 +98,37 @@ class FluidProperties(typing.Generic[NDimension]):
     """
     Fluid properties of a reservoir model.
 
-    These properties are liable to change over time due to flow.
+    Some of these properties are liable to change over time due to flow.
+
+    Changing properties include:
+    - Pressure
+    - Temperature
+    - Oil saturation
+    - Oil viscosity
+    - Oil compressibility
+    - Oil density
+    - Water saturation
+    - Water viscosity
+    - Water compressibility
+    - Water density
+    - Gas saturation
+    - Gas viscosity
+    - Gas compressibility
+    - Gas density
+    - Gas-to-oil ratio
+    - Oil formation volume factor
+    - Gas formation volume factor
+    - Water formation volume factor
+    - Oil bubble point pressure
+    - Water bubble point pressure
+
+    Constant properties include:
+    - Oil specific gravity
+    - Oil API gravity
+    - Water salinity
+    - Gas gravity
+    - Gas molecular weight
+    These properties are typically constant for a given fluid type, e.g., light oil, seawater, methane.
     """
 
     pressure_grid: NDimensionalGrid[NDimension]
@@ -113,8 +143,12 @@ class FluidProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the reservoir fluid (Oil) viscosity distribution in the reservoir in (cP)."""
     oil_compressibility_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the oil compressibility distribution in the reservoir (psi⁻¹)."""
+    oil_specific_gravity_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the oil specific gravity distribution in the reservoir (dimensionless). Should be constant for a given oil, e.g., 0.85 for light oil)."""
+    oil_api_gravity_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the oil API gravity distribution in the reservoir (°API). should be constant for a given oil, e.g., 35°API for light oil)."""
     oil_density_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the oil density distribution in the reservoir (lbm/ft³)."""
+    """N-dimensional numpy array representing the oil density distribution (usually live-oil) in the reservoir (lbm/ft³)."""
     water_bubble_point_pressure_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the bubble point pressure distribution for water in the reservoir (psi)."""
     water_saturation_grid: NDimensionalGrid[NDimension]
@@ -131,6 +165,10 @@ class FluidProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the reservoir fluid (Gas) viscosity distribution in the reservoir in (cP)."""
     gas_compressibility_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas compressibility distribution in the reservoir (psi⁻¹)."""
+    gas_gravity_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the gas gravity distribution in the reservoir (dimensionless). Should be constant for a given gas, e.g., Methane = 0.556)."""
+    gas_molecular_weight_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the gas molecular weight distribution in the reservoir (g/mol). Should be constant for a given gas, e.g., Methane = 16.04 g/mol)."""
     gas_density_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas density distribution in the reservoir (lbm/ft³)."""
     gas_to_oil_ratio_grid: NDimensionalGrid[NDimension]
@@ -142,7 +180,7 @@ class FluidProperties(typing.Generic[NDimension]):
     water_formation_volume_factor_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the water formation volume factor distribution (bbl/STB)."""
     water_salinity_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the water salinity distribution (ppm NaCl)."""
+    """N-dimensional numpy array representing the water salinity distribution (ppm NaCl). Should be constant for a given water type, e.g., seawater = 35,000 ppm NaCl)."""
 
 
 @define(slots=True, frozen=True)
@@ -209,4 +247,3 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
-    

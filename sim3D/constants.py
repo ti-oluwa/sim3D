@@ -143,9 +143,16 @@ MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY = 0.001127
 MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND = (
     MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / DAYS_TO_SECONDS
 )
+PPM_TO_WEIGHT_FRACTION = 1e-6
+"""Conversion factor from parts per million (ppm) to weight fraction"""
+PPM_TO_WEIGHT_PERCENT = 1e-4  # 1 ppm = 0.0001 weight percent
+"""Conversion factor from parts per million (ppm) to weight percent"""
+WEIGHT_PERCENT_TO_PPM = 1 / PPM_TO_WEIGHT_PERCENT
+"""Conversion factor from weight percent to parts per million (ppm)"""
+
 
 RESERVOIR_OIL_NAME = (
-    "n-Octane"  # Heavy oil, can be changed to any fluid supported by CoolProp
+    "n-Dodecane"  # Heavy oil, can be changed to any fluid supported by CoolProp
 )
 """Default displaced fluid for simulations, can be changed to any fluid supported by CoolProp"""
 RESERVOIR_GAS_NAME = "Methane"  # Default gas that exist with oil in the reservoir, can be changed to any fluid supported by CoolProp

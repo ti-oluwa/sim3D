@@ -3,15 +3,9 @@
 import typing
 import itertools
 import numpy as np
-from numpy.typing import DTypeLike, NDArray
+from numpy.typing import DTypeLike
 
-from sim3D.types import (
-    Orientation,
-    ThreeDimensions,
-    NDimensionalGrid,
-    NDimension,
-    ArrayLike,
-)
+from sim3D.types import Orientation, NDimensionalGrid, NDimension, ArrayLike
 from sim3D.properties import (
     compute_fluid_viscosity,
     compute_fluid_density,
@@ -133,7 +127,7 @@ def build_fluid_viscosity_grid(
     dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Builds a N-Dimensional grid of fluid viscosities based on pressure and temperature grids.
+    Builds a N-Dimensional grid of fluid viscosities.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -154,7 +148,7 @@ def build_fluid_compressibility_grid(
     dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Builds a N-Dimensional grid of fluid compressibilities based on pressure and temperature grids.
+    Builds a N-Dimensional grid of fluid compressibilities.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -175,7 +169,7 @@ def build_fluid_density_grid(
     dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Builds a N-Dimensional grid of fluid densities based on pressure and temperature grids.
+    Builds a N-Dimensional grid of fluid densities.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -274,8 +268,7 @@ def build_total_fluid_compressibility_grid(
     gas_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional array of total fluid compressibility based on the saturation of water, oil,
-    and optionally the gas, along with their respective compressibilities.
+    Computes a N-Dimensional array of total fluid compressibilities.
 
     The total fluid compressibility is defined as:
         C_total = (S_w * C_w) + (S_o * C_o) +( S_g * C_g)
@@ -582,7 +575,7 @@ def build_oil_api_gravity_grid(
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil API gravity based on oil density.
+    Computes a N-Dimensional grid of oil API gravities based on oil density.
 
     The API gravity is computed using the formula:
     API Gravity = (141.5 / Specific Gravity) - 131.5
@@ -602,7 +595,7 @@ def build_oil_specific_gravity_grid(
     oil_compressibility_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil specific gravity based on pressure, temperature, and oil density grids.
+    Computes a N-Dimensional grid of oil specific gravities.
 
     The specific gravity is computed as the ratio of the oil density to the standard density of water (1000 kg/m³).
 
@@ -628,7 +621,7 @@ def build_gas_compressibility_factor_grid(
     n2_mole_fraction: float = 0.0,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas compressibility factors based on gas gravity, pressure, and temperature grids.
+    Computes a N-Dimensional grid of gas compressibility factors.
 
     The compressibility factor is computed using the gas gravity and the pressure and temperature conditions.
 
@@ -666,7 +659,7 @@ def build_oil_formation_volume_factor_grid(
     oil_compressibility_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil formation volume factors based on pressure and temperature grids.
+    Computes a N-Dimensional grid of oil formation volume factors.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -712,7 +705,7 @@ def build_gas_formation_volume_factor_grid(
     gas_compressibility_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas formation volume factors based on pressure and temperature grids.
+    Computes a N-Dimensional grid of gas formation volume factors.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -737,7 +730,7 @@ def build_gas_to_oil_ratio_grid(
     ] = None,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of solution gas-to-oil ratios based on pressure, temperature, and bubble point pressure grids.
+    Computes a N-Dimensional grid of solution gas-to-oil ratios.
 
     :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
@@ -770,7 +763,7 @@ def build_oil_bubble_point_pressure_grid(
     gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil bubble point pressures based on oil specific gravity, gas gravity, and temperature grids.
+    Computes a N-Dimensional grid of oil bubble point pressures.
 
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
     :param oil_api_gravity_grid: N-Dimensional array of API gravity values.
@@ -794,7 +787,7 @@ def build_gas_solubility_in_water_grid(
     gas: str = "methane",
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas solubility in water based on pressure, temperature, and salinity grids.
+    Computes a N-Dimensional grid of gas solubilities.
 
     The solubility is computed using the Henry's law constant for the specific gas in water.
 
@@ -818,7 +811,7 @@ def build_water_bubble_point_pressure_grid(
     gas: str = "methane",
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of water bubble point pressures based on temperature, gas solubility in water, and salinity grids.
+    Computes a N-Dimensional grid of water bubble point pressures.
 
     The bubble point pressure is computed using the gas solubility in water and the salinity of the water.
 
@@ -848,7 +841,7 @@ def build_oil_viscosity_grid(
     gor_at_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil viscosities based on pressure, temperature, bubble point pressure, and gas-to-oil ratio grids.
+    Computes a N-Dimensional grid of oil viscosities.
 
     The viscosity is computed using the oil specific gravity, gas gravity, and the gas-to-oil ratio.
 
@@ -876,7 +869,7 @@ def build_gas_molecular_weight_grid(
     gas_gravity_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas molecular weights based on gas gravity.
+    Computes a N-Dimensional grid of gas molecular weights.
 
     The molecular weight is computed using the formula:
     Molecular Weight = Gas Gravity * 28.9644 g/mol (molecular weight of air)
@@ -917,7 +910,7 @@ def build_water_viscosity_grid(
     pressure_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of water viscosities based on pressure, temperature, and salinity grids.
+    Computes a N-Dimensional grid of water/brine viscosities.
 
     The viscosity is computed using the pressure, temperature, and salinity conditions.
 
@@ -926,7 +919,7 @@ def build_water_viscosity_grid(
     :param salinity_grid: N-Dimensional array of salinity values (ppm) representing the salinity of water in each grid cell.
     :param pressure_grid: Optional N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
-    :return: N-Dimensional array of water viscosities (cP) corresponding to each grid cell.
+    :return: N-Dimensional array of water/brine viscosities (cP) corresponding to each grid cell.
     """
     return np.vectorize(compute_water_viscosity, otypes=[np.float64])(
         temperature_grid, salinity_grid, pressure_grid
@@ -939,10 +932,12 @@ def build_oil_compressibility_grid(
     bubble_point_pressure_grid: NDimensionalGrid[NDimension],
     oil_api_gravity_grid: NDimensionalGrid[NDimension],
     gas_gravity_grid: NDimensionalGrid[NDimension],
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
+    gas_formation_volume_factor_grid: NDimensionalGrid[NDimension],
+    oil_formation_volume_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of oil compressibilities based on pressure, temperature, bubble point pressure, and gas-to-oil ratio grids.
+    Computes a N-Dimensional grid of oil compressibilities.
 
     The compressibility is computed using the oil API gravity, gas gravity, and the gas-to-oil ratio.
 
@@ -962,7 +957,9 @@ def build_oil_compressibility_grid(
         bubble_point_pressure_grid,
         oil_api_gravity_grid,
         gas_gravity_grid,
-        gas_to_oil_ratio_grid,
+        gor_at_bubble_point_pressure_grid,
+        gas_formation_volume_factor_grid,
+        oil_formation_volume_factor_grid,
     )
 
 
@@ -978,7 +975,7 @@ def build_gas_compressibility_grid(
     n2_mole_fraction: float = 0.0,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas compressibilities based on pressure, temperature, and gas gravity grids.
+    Computes a N-Dimensional grid of gas compressibilities.
 
     The compressibility is computed using the gas gravity and the pressure and temperature conditions.
 
@@ -1014,7 +1011,7 @@ def build_gas_free_water_formation_volume_factor_grid(
     temperature_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas free water formation volume factors based on pressure and temperature grids.
+    Computes a N-Dimensional grid of gas free water formation volume factors.
 
     The gas free water formation volume factor is computed using the pressure and temperature conditions.
 
@@ -1038,7 +1035,7 @@ def build_water_compressibility_grid(
     gas_free_water_formation_volume_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of water compressibilities based on pressure, temperature, and bubble point pressure grids.
+    Computes a N-Dimensional grid of water compressibilities.
 
     The compressibility is computed using the gas formation volume factor, gas solubility in water, and gas free water formation volume factor.
 
@@ -1046,7 +1043,7 @@ def build_water_compressibility_grid(
         of the reservoir across the grid cells.
     :param temperature_grid: N-Dimensional array of temperature values (°F) representing the temperature distribution
         of the reservoir across the grid cells.
-    :param bubble_point_pressure_grid: N-Dimensional array of bubble point pressures (psi) corresponding to each grid cell.
+    :param bubble_point_pressure_grid: N-Dimensional array of water bubble point pressures (psi) corresponding to each grid cell.
     :param gas_formation_volume_factor_grid: N-Dimensional array of gas formation volume factors (ft³/SCF) corresponding to each grid cell.
     :param gas_solubility_in_water_grid: N-Dimensional array of gas solubility in water (SCF/STB) corresponding to each grid cell.
     :param gas_free_water_formation_volume_factor_grid: N-Dimensional array of gas free water formation volume factors (bbl/STB).
@@ -1069,7 +1066,7 @@ def build_live_oil_density_grid(
     formation_volume_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of live oil densities based on pressure, bubble point pressure, and gas-to-oil ratio grids.
+    Computes a N-Dimensional grid of live oil densities.
 
     The density is computed using the oil API gravity, gas gravity, and the gas-to-oil ratio.
 
@@ -1094,7 +1091,7 @@ def build_gas_density_grid(
     gas_compressibility_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of gas densities based on pressure, temperature, and gas gravity grids.
+    Computes a N-Dimensional grid of gas densities.
 
     The density is computed using the gas gravity and the pressure and temperature conditions.
 
@@ -1116,23 +1113,31 @@ def build_gas_density_grid(
 
 
 def build_water_density_grid(
+    pressure_grid: NDimensionalGrid[NDimension],
+    temperature_grid: NDimensionalGrid[NDimension],
     gas_gravity_grid: NDimensionalGrid[NDimension],
     salinity_grid: NDimensionalGrid[NDimension],
     gas_solubility_in_water_grid: NDimensionalGrid[NDimension],
     gas_free_water_formation_volume_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
-    Computes a N-Dimensional grid of water densities based on gas gravity, salinity, and gas solubility in water grids.
+    Computes a N-Dimensional grid of water/brine densities.
 
     The density is computed using the gas gravity, salinity, and gas solubility in water.
 
+    :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
+        of the reservoir across the grid cells.
+    :param temperature_grid: N-Dimensional array of temperature values (°F) representing the temperature distribution
+        of the reservoir across the grid cells.
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
     :param salinity_grid: N-Dimensional array of salinity values (ppm) representing the salinity of water in each grid cell.
     :param gas_solubility_in_water_grid: N-Dimensional array of gas solubility in water (SCF/STB).
     :param gas_free_water_formation_volume_factor_grid: N-Dimensional array of gas free water formation volume factors (bbl/STB).
-    :return: N-Dimensional array of water densities (lbm/ft³) corresponding to each grid cell.
+    :return: N-Dimensional array of water/brine densities (lbm/ft³) corresponding to each grid cell.
     """
     return np.vectorize(compute_water_density, otypes=[np.float64])(
+        pressure_grid,
+        temperature_grid,
         gas_gravity_grid,
         salinity_grid,
         gas_solubility_in_water_grid,
