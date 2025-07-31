@@ -1,6 +1,5 @@
 import typing
 import numpy as np
-import rich
 
 import sim3D
 from sim3D.grids import build_layered_grid, build_uniform_grid
@@ -19,12 +18,13 @@ np.set_printoptions(threshold=np.inf)  # type: ignore
 
 # Ensure that wellbore radius is less than the cell dimension
 
-
-def simulate() -> None:
+def simulate():
     cell_dimension = (100.0, 100.0)
     grid_dimension = typing.cast(
-        sim3D.ThreeDimensions, (50, 50, 5)
+        sim3D.ThreeDimensions, (10, 10, 5)
     )  # (x, y, z) dimensions of the grid in cells
+    # Height of each cell in the z-direction (in feet)
+    height_grid = build_uniform_grid(grid_dimension=grid_dimension, value=70.0)
     pressure_range = (1500.0, 2000.0)
     oil_viscosity_range = (5.0, 10.0)
     oil_compressibility_range = (7e-7, 1e-5)
@@ -41,10 +41,6 @@ def simulate() -> None:
     oil_bubble_point_pressure_grid = build_uniform_grid(
         grid_dimension=grid_dimension, value=800.0
     )
-    # # Gas to oil ratio in SCF/STB
-    # gas_to_oil_ratio_grid = build_uniform_grid(
-    #     grid_dimension=grid_dimension, value=300.0
-    # )
     oil_saturation_grid = build_uniform_grid(grid_dimension=grid_dimension, value=0.8)
     residual_oil_saturation_grid = build_layered_grid(
         grid_dimension=grid_dimension,
@@ -103,17 +99,15 @@ def simulate() -> None:
     rock_compressibility = 1.45e-13  # Rock compressibility in 1/psi
 
     boundary_conditions = sim3D.BoundaryConditions(
-        # conditions={
-        #     "pressure": sim3D.GridBoundaryCondition(
-        #         x_minus=sim3D.NoFlowBoundary(),
-        #         x_plus=sim3D.NoFlowBoundary(),
-        #         y_minus=sim3D.ConstantBoundary(1000),
-        #         y_plus=sim3D.ConstantBoundary(1000),
-        #     )
-        # }
+        conditions={
+            "pressure": sim3D.GridBoundaryCondition(
+                x_minus=sim3D.NoFlowBoundary(),
+                x_plus=sim3D.NoFlowBoundary(),
+                y_minus=sim3D.ConstantBoundary(1000),
+                y_plus=sim3D.ConstantBoundary(1000),
+            )
+        }
     )
-    # Height of each cell in the z-direction (in feet)
-    height_grid = build_uniform_grid(grid_dimension=grid_dimension, value=20.0)
     methane_gravity = compute_gas_gravity(gas="Methane")
     gas_gravity_grid = build_uniform_grid(
         grid_dimension=grid_dimension, value=methane_gravity
@@ -135,7 +129,6 @@ def simulate() -> None:
         gas_gravity_grid=gas_gravity_grid,
         residual_oil_saturation_grid=residual_oil_saturation_grid,
         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        # gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
         boundary_conditions=boundary_conditions,
         reservoir_gas_name="Methane",
     )
@@ -173,8 +166,8 @@ def simulate() -> None:
     injector_A = sim3D.build_injection_well(
         well_name="Injector A",
         perforating_interval=(
-            (45, 10, 0),
-            (45, 10, 4),
+            (8, 9, 0),
+            (8, 9, 4),
         ),  # Perforating interval in grid coordinates
         radius=0.3281,
         bottom_hole_pressure=2300.0,  # Bottom hole pressure in psi
@@ -191,8 +184,8 @@ def simulate() -> None:
     producer_A = sim3D.build_production_well(
         well_name="Producer A",
         perforating_interval=(
-            (5, 45, 0),
-            (5, 45, 4),
+            (5, 9, 0),
+            (5, 9, 4),
         ),  # Perforating interval in grid coordinates
         radius=0.3281,
         bottom_hole_pressure=1520.0,  # Bottom hole pressure in psi
@@ -221,11 +214,11 @@ def simulate() -> None:
     wells = sim3D.Wells(injection_wells=[injector_A], production_wells=[producer_A])
 
     simulation_params = sim3D.SimulationParameters(
-        time_step_size=10,  # Time step in seconds (1 hour)
-        total_time=100,  # Total simulation time in seconds (1 day)
-        max_iterations=100,  # Maximum number of iterations per time step
-        convergence_tolerance=1e-5,  # Convergence tolerance for the simulation
-        output_frequency=4,  # Output every 4 time steps
+        time_step_size=100,
+        total_time=600,
+        max_iterations=100,
+        convergence_tolerance=1e-5,
+        output_frequency=1,
         evolution_scheme="implicit",
     )
     model_states = sim3D.run_3D_simulation(
@@ -233,10 +226,5 @@ def simulate() -> None:
         wells=wells,
         params=simulation_params,
     )
-    fig = sim3D.viz.animate_3d_property(
-        model_states,
-        property="pressure",
-        plot_type=sim3D.viz.PlotType.VOLUME_RENDER,
-    )
-    fig.show()
+    return model_states
 

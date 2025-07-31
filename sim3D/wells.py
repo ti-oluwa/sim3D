@@ -5,7 +5,7 @@ import enum
 from attrs import define, field
 import numpy as np
 
-from sim3D.types import Orientation, WellLocation
+from sim3D.types import NDimension, Orientation, WellLocation
 
 
 __all__ = [
@@ -150,6 +150,23 @@ class _Well(typing.Generic[WellLocation]):
             event.apply(self)
         return None
 
+    def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
+        """
+        Check if the well's perforating interval is within the grid dimensions.
+
+        :param grid_dimensions: The dimensions of the reservoir grid (i, j, k).
+        :raises ValueError: If the well's perforating interval is out of bounds.
+        """
+        start, end = self.perforating_interval
+        if not all(0 <= coord < dim for coord, dim in zip(start, grid_dimensions)):
+            raise ValueError(
+                f"Start location {start} for well {self.name!r} is out of bounds."
+            )
+        if not all(0 <= coord < dim for coord, dim in zip(end, grid_dimensions)):
+            raise ValueError(
+                f"End location {end} for well {self.name!r} is out of bounds."
+            )
+
 
 WellT = typing.TypeVar("WellT", bound=_Well)
 
@@ -225,7 +242,8 @@ class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
     """
 
     injected_fluid: typing.Optional[InjectedFluid] = field(
-        default=None, metadata={"description": "Injected fluid properties at this time step."}
+        default=None,
+        metadata={"description": "Injected fluid properties at this time step."},
     )
     """Injected fluid properties at this time step."""
 
@@ -252,7 +270,8 @@ class ProductionWellScheduledEvent(ScheduledEvent[ProductionWellT]):
     """
 
     produced_fluids: typing.Optional[typing.Sequence[ProducedFluid]] = field(
-        default=None, metadata={"description": "List of produced fluids at this time step."}
+        default=None,
+        metadata={"description": "List of produced fluids at this time step."},
     )
     """Produced fluids properties at this time step."""
 
@@ -412,6 +431,16 @@ class Wells(typing.Generic[WellLocation]):
         """
         for well in itertools.chain(self.injection_wells, self.production_wells):
             well.evolve(time_step)
+
+    def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
+        """
+        Check if all wells' perforating intervals are within the grid dimensions.
+
+        :param grid_dimensions: The dimensions of the reservoir grid (i, j, k).
+        :raises ValueError: If any well's perforating interval is out of bounds.
+        """
+        for well in itertools.chain(self.injection_wells, self.production_wells):
+            well.check_location(grid_dimensions)
 
 
 def compute_well_index(
@@ -573,7 +602,7 @@ def compute_well_rate(
         - M is the phase mobility (dimensionless, default is 1.0) (k_r / μ) (psi⁻¹)
 
     Negative rate result indicates that the well is producing, while positive rates indicate injection.
-    
+
     :param well_index: The well index (STB/day/psi) or (SCF/day/psi).
     :param pressure: The reservoir pressure (psi).
     :param bottom_hole_pressure: The bottom-hole pressure (psi).

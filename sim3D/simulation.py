@@ -134,6 +134,7 @@ def run_3D_simulation(
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
     height_grid = model.height_grid
+    wells.check_location(model.grid_dimension)
     wells = copy.deepcopy(wells)
 
     if (method := params.evolution_scheme.lower()) == "adaptive":
@@ -164,13 +165,13 @@ def run_3D_simulation(
     for time_step in range(1, int(num_of_time_steps + 1)):
         print(f"TIME STEP {time_step}")
         # Pressure evolution
-        rich.print("[bold cyan]Computing pressure evolution...[/bold cyan]")
+        # rich.print("[bold cyan]Computing pressure evolution...[/bold cyan]")
 
-        rich.print(
-            "Old Pressure Grid",
-            fluid_properties.pressure_grid.min(),
-            fluid_properties.pressure_grid.max(),
-        )
+        # rich.print(
+        #     "Old Pressure Grid",
+        #     fluid_properties.pressure_grid.min(),
+        #     fluid_properties.pressure_grid.max(),
+        # )
         pressure_evolution_result = compute_pressure_evolution(
             cell_dimension=cell_dimension,
             height_grid=height_grid,
@@ -182,7 +183,7 @@ def run_3D_simulation(
         )
         pressure_grid = pressure_evolution_result.value
 
-        rich.print("New Pressure Grid", pressure_grid.min(), pressure_grid.max())
+        # rich.print("New Pressure Grid", pressure_grid.min(), pressure_grid.max())
         if (negative_pressure_indices := np.argwhere(pressure_grid < 0)).size > 0:
             raise RuntimeError(
                 NEGATIVE_PRESSURE_ERROR.format(
@@ -205,22 +206,22 @@ def run_3D_simulation(
             # until after the saturation evolution.
             saturation_fluid_properties = copy.deepcopy(fluid_properties)
 
-        rich.print("[bold cyan]Updating fluid properties...[/bold cyan]")
-        rich.print(
-            "Old Water Saturation Grid",
-            fluid_properties.water_saturation_grid.min(),
-            fluid_properties.water_saturation_grid.max(),
-        )
-        rich.print(
-            "Old Oil Saturation Grid",
-            fluid_properties.oil_saturation_grid.min(),
-            fluid_properties.oil_saturation_grid.max(),
-        )
-        rich.print(
-            "Old Gas Saturation Grid",
-            fluid_properties.gas_saturation_grid.min(),
-            fluid_properties.gas_saturation_grid.max(),
-        )
+        # rich.print("[bold cyan]Updating fluid properties...[/bold cyan]")
+        # rich.print(
+        #     "Old Water Saturation Grid",
+        #     fluid_properties.water_saturation_grid.min(),
+        #     fluid_properties.water_saturation_grid.max(),
+        # )
+        # rich.print(
+        #     "Old Oil Saturation Grid",
+        #     fluid_properties.oil_saturation_grid.min(),
+        #     fluid_properties.oil_saturation_grid.max(),
+        # )
+        # rich.print(
+        #     "Old Gas Saturation Grid",
+        #     fluid_properties.gas_saturation_grid.min(),
+        #     fluid_properties.gas_saturation_grid.max(),
+        # )
         # Saturation evolution
         saturation_evolution_result = compute_saturation_evolution(
             cell_dimension=cell_dimension,
@@ -234,21 +235,21 @@ def run_3D_simulation(
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
             saturation_evolution_result.value
         )
-        rich.print(
-            "New Water Saturation Grid",
-            water_saturation_grid.min(),
-            water_saturation_grid.max(),
-        )
-        rich.print(
-            "New Oil Saturation Grid",
-            oil_saturation_grid.min(),
-            oil_saturation_grid.max(),
-        )
-        rich.print(
-            "New Gas Saturation Grid",
-            gas_saturation_grid.min(),
-            gas_saturation_grid.max(),
-        )
+        # rich.print(
+        #     "New Water Saturation Grid",
+        #     water_saturation_grid.min(),
+        #     water_saturation_grid.max(),
+        # )
+        # rich.print(
+        #     "New Oil Saturation Grid",
+        #     oil_saturation_grid.min(),
+        #     oil_saturation_grid.max(),
+        # )
+        # rich.print(
+        #     "New Gas Saturation Grid",
+        #     gas_saturation_grid.min(),
+        #     gas_saturation_grid.max(),
+        # )
 
         # Update the fluid properties for the next iteration
         #####################################################
@@ -356,7 +357,7 @@ def update_static_fluid_properties(
     :param fluid_properties: Current fluid property grids (pressure, temperature, salinity, densities, etc.)
     :return: Updated FluidProperties object with recalculated gas, water, and oil properties.
     """
-    rich.print("[bold cyan]Updating static fluid properties...[/bold cyan]")
+    # rich.print("[bold cyan]Updating static fluid properties...[/bold cyan]")
 
     # === Derived Grids ===
     # GAS PROPERTIES
