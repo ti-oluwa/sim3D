@@ -158,7 +158,7 @@ class PlotConfig:
     """Default color scheme for data visualization. Professional color schemes are optimized
     for scientific data visualization and accessibility."""
 
-    opacity: float = 1.0
+    opacity: float = 0.5
     """Default opacity level for plot elements (0.0 = transparent, 1.0 = opaque).
     Lower values allow better visualization of internal structures."""
 
@@ -612,9 +612,9 @@ class Base3DPlotter(ABC):
         elif abs_val < 1e-6 or (
             abs_val < 1 and len(f"{abs_val:.10f}".rstrip("0").split(".")[1]) > 6
         ):
-            return f"{value:.2e}"
+            return f"{value:.4e}"
         elif abs_val >= 1e6:
-            return f"{value:.2e}"
+            return f"{value:.4e}"
         elif abs_val >= 1000:
             return f"{value:.1f}"
         elif abs_val >= 1:
@@ -731,8 +731,10 @@ class VolumeRenderer(Base3DPlotter):
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         height_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        surface_count: int = 15,
+        surface_count: int = 30,
         opacity: typing.Optional[float] = None,
+        isomin: typing.Optional[float] = None,
+        isomax: typing.Optional[float] = None,
         use_opacity_scaling: typing.Optional[bool] = None,
         aspect_mode: typing.Optional[str] = "cube",
     ) -> go.Figure:
@@ -744,7 +746,9 @@ class VolumeRenderer(Base3DPlotter):
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
         :param height_grid: 3D array with height of each cell (feet)
         :param surface_count: Number of isosurfaces to generate for volume rendering
-        :param opacity: Opacity of the volume rendering (defaults to config value)
+        :param opacity: Opacity of the volume rendering (defaults to config value). Lower values allow better visualization of internal structures.
+        :param isomin: Minimum value for isosurface clipping (optional)
+        :param isomax: Maximum value for isosurface clipping (optional)
         :param use_opacity_scaling: Whether to use built-in opacity scaling for better depth perception (defaults to config)
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
         :return: Plotly figure object with volume rendering
@@ -846,6 +850,8 @@ class VolumeRenderer(Base3DPlotter):
                 # Since we use normalized data (0-1), map colorbar to actual values
                 cmin=0.0,  # Normalized minimum
                 cmax=1.0,  # Normalized maximum
+                isomin=isomin,
+                isomax=isomax,
                 lighting=self.config.lighting,
                 lightposition=self.config.light_position,
                 colorbar=dict(
@@ -956,10 +962,10 @@ class IsosurfacePlotter(Base3DPlotter):
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
         :param height_grid: 3D array with height of each cell (feet)
-        :param isomin: Minimum isovalue (defaults to 10th percentile)
-        :param isomax: Maximum isovalue (defaults to 90th percentile)
+        :param isomin: Minimum isovalue for isosurface
+        :param isomax: Maximum isovalue for isosurface
         :param surface_count: Number of isosurfaces to generate
-        :param opacity: Opacity of the isosurface (defaults to config value)
+        :param opacity: Opacity of the isosurface (defaults to config value). Lower values allow better visualization of internal structures.
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
         :return: Plotly figure object with isosurface plot
         """
@@ -1642,7 +1648,7 @@ class CellBlockPlotter(Base3DPlotter):
             (reducing total cells by ~87.5%), 3 renders every 3rd cell (~96% reduction), etc.
             For example, with a 100x100x50 grid: factor=1 shows 500K cells, factor=2 shows
             ~62.5K cells, factor=5 shows ~8K cells. Use higher values for large datasets.
-        :param opacity: Opacity of the cell blocks (defaults to config value)
+        :param opacity: Base opacity of the cell blocks (defaults to config value).
         :param show_outline: Whether to show wireframe outlines around each cell block (defaults to config)
         :param outline_color: Color of the cell block outlines (CSS color name, hex, or rgb, defaults to config)
         :param outline_width: Width/thickness of the outline wireframes in pixels (defaults to config)
@@ -2004,7 +2010,7 @@ class Scatter3DPlotter(Base3DPlotter):
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         height_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        threshold: float = 1.0,
+        threshold: float = 0.0,
         sample_rate: float = 1.0,
         marker_size: int = 3,
         opacity: typing.Optional[float] = None,
@@ -2054,6 +2060,12 @@ class Scatter3DPlotter(Base3DPlotter):
         else:
             x_coords, y_coords, z_coords_raw = indices
             values = display_data[mask]  # Use original values for display
+
+        if values.size == 0:
+            raise ValueError(
+                "No data points selected for Scatter3D plot. "
+                "Check your threshold, sample rate or data values."
+            )
 
         # Apply numpy convention: z=0 should be at top, z increases downward
         z_coords = data.shape[2] - 1 - z_coords_raw

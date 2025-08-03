@@ -16,8 +16,6 @@ from sim3D.properties import (
 np.set_printoptions(threshold=np.inf)  # type: ignore
 
 
-# Ensure that wellbore radius is less than the cell dimension
-
 def simulate():
     cell_dimension = (100.0, 100.0)
     grid_dimension = typing.cast(
@@ -133,7 +131,7 @@ def simulate():
         reservoir_gas_name="Methane",
     )
 
-    fluid_A = "CO2"
+    fluid_A = "N2"
     fluid_A_gravity = compute_gas_gravity(gas=fluid_A)
     fluid_A_compressibility_factor = compute_gas_compressibility_factor(
         pressure=sim3D.constants.STANDARD_PRESSURE_IMPERIAL,
@@ -194,10 +192,10 @@ def simulate():
                 name="Oil",
                 phase=sim3D.FluidPhase.OIL,
             ),
-            sim3D.ProducedFluid(
-                name="Gas",
-                phase=sim3D.FluidPhase.GAS,
-            ),
+            # sim3D.ProducedFluid(
+            #     name="Gas",
+            #     phase=sim3D.FluidPhase.GAS,
+            # ),
             sim3D.ProducedFluid(
                 name="Water",
                 phase=sim3D.FluidPhase.WATER,
@@ -206,16 +204,20 @@ def simulate():
         skin_factor=3.2,  # Skin factor for the well
     )
     producer_A.update_schedule(
-        sim3D.ProductionWellScheduledEvent(
+        event=sim3D.ProductionWellScheduledEvent(
             time_step=9,
-            bottom_hole_pressure=2000.0,  # Change bottom hole pressure after 9 time steps
+            # Change bottom hole pressure after 9 time steps
+            bottom_hole_pressure=2000.0,
         )
     )
-    wells = sim3D.Wells(injection_wells=[injector_A], production_wells=[producer_A])
+    wells = sim3D.Wells(
+        injection_wells=[injector_A],
+        production_wells=[producer_A],
+    )
 
     simulation_params = sim3D.SimulationParameters(
-        time_step_size=100,
-        total_time=600,
+        time_step_size=3600,
+        total_time=72000,
         max_iterations=100,
         convergence_tolerance=1e-5,
         output_frequency=1,
@@ -226,5 +228,4 @@ def simulate():
         wells=wells,
         params=simulation_params,
     )
-    return model_states
-
+    return list(model_states)

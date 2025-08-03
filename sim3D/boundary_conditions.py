@@ -69,9 +69,13 @@ class ConstantBoundary(typing.Generic[NDimension]):
 class VariableBoundary(typing.Generic[NDimension]):
     """Implements a variable boundary condition using a callable function."""
 
-    func: typing.Callable[[typing.Any, typing.Optional[typing.Any]], typing.Any]
+    func: typing.Callable[
+        [NDimensionalGrid[NDimension], typing.Optional[NDimensionalGrid[NDimension]]],
+        NDimensionalGrid[NDimension],
+    ]
+    """Function to compute boundary values based on the grid and an optional neighboring grid."""
 
-    def __attrs_post_init__(self):
+    def __attrs_post_init__(self) -> None:
         if not callable(self.func):
             raise ValueError("func must be a callable function.")
 
@@ -129,11 +133,17 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
     """
 
     x_minus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the left face (x-)."""
     x_plus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the right face (x+)."""
     y_minus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the bottom face (y-)."""
     y_plus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the top face (y+)."""
     z_minus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the front face (z-)."""
     z_plus: BoundaryCondition = field(factory=NoFlowBoundary)
+    """Boundary condition for the back face (z+)."""
 
     def apply(self, padded_grid: NDimensionalGrid[NDimension]) -> None:
         """
@@ -186,13 +196,13 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
             )
         else:
             raise ValueError(
-                "padded_grid must be a 2D or 3D numpy array with ghost cells."
+                "`padded_grid` must be a 2D or 3D numpy array with ghost cells."
             )
 
 
 class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
     """
-    A dictionary-like container for managing boundary conditions for different properties.
+    A dictionary-like container for managing reservoir model boundary conditions for different properties.
 
     This class allows you to define boundary conditions for various properties
     in a two-dimensional grid, with a default factory to create conditions

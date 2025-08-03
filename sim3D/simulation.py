@@ -128,8 +128,7 @@ def run_3D_simulation(
     model: ReservoirModel[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     params: SimulationParameters,
-    output: typing.Optional[typing.Callable[[ModelState], typing.Any]] = None,
-) -> typing.List[ModelState[ThreeDimensions]]:
+) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
@@ -154,13 +153,15 @@ def run_3D_simulation(
         model=model,
         wells=wells,
     )
-    model_states = [initial_state]
 
     boundary_conditions = model.boundary_conditions
     num_of_time_steps = min(
         (params.total_time // time_step_size), params.max_iterations
     )
     output_frequency = params.output_frequency
+
+    # Yield the Initial model state
+    yield initial_state
 
     for time_step in range(1, int(num_of_time_steps + 1)):
         print(f"TIME STEP {time_step}")
@@ -251,9 +252,6 @@ def run_3D_simulation(
         #     gas_saturation_grid.max(),
         # )
 
-        # Update the fluid properties for the next iteration
-        #####################################################
-        # Update the fluid properties with the new saturation grids
         fluid_properties = evolve(
             updated_fluid_properties,
             water_saturation_grid=water_saturation_grid,
@@ -273,24 +271,20 @@ def run_3D_simulation(
                 # Capture the current state of the wells
                 wells=copy.deepcopy(wells),
             )
-            model_states.append(model_state)
-            if output:
-                output(model_state)
+            yield model_state
 
         if time_step > params.max_iterations:
             logger.debug(
                 f"Reached maximum number of iterations: {params.max_iterations}. Stopping simulation."
             )
             break
-
         # Update the wells for the next time step
         wells.evolve(time_step=time_step)
-    return model_states
 
 
 def update_static_fluid_properties(
-    fluid_properties: FluidProperties,
-) -> FluidProperties:
+    fluid_properties: FluidProperties[ThreeDimensions],
+) -> FluidProperties[ThreeDimensions]:
     """
     Updates static fluid properties across the simulation grid using the current pressure and temperature values.
     This function recalculates the fluid PVT properties in a physically consistent sequence:
