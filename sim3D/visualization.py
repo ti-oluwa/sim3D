@@ -29,6 +29,9 @@ __all__ = [
     "PlotType",
     "ColorScheme",
     "PlotConfig",
+    "CameraPosition",
+    "Lighting",
+    "LightPosition",
     "PropertyMetadata",
     "PropertyRegistry",
     "Base3DPlotter",
@@ -37,6 +40,9 @@ __all__ = [
     "SlicePlotter",
     "CellBlockPlotter",
     "Scatter3DPlotter",
+    "Label",
+    "LabelCoordinate3D",
+    "LabelManager",
     "ReservoirModelVisualizer3D",
     "viz",
 ]
@@ -46,10 +52,15 @@ class PlotType(str, Enum):
     """Types of 3D plots available."""
 
     VOLUME_RENDER = "volume_render"
+    """Volume rendering for scalar fields, showing continuous data distribution."""
     ISOSURFACE = "isosurface"
+    """Isosurface plots for discrete value thresholds, showing surfaces at specific data values."""
     SLICE_PLANES = "slice_planes"
+    """Slice planes for cross-sectional views of 3D data, useful for examining internal structures."""
     SCATTER_3D = "scatter_3d"
+    """3D scatter plots for visualizing point data in 3D space."""
     CELL_BLOCKS = "cell_blocks"
+    """Cell block plots for visualizing individual reservoir cells as blocks in 3D space."""
 
 
 class ColorScheme(str, Enum):
@@ -293,6 +304,12 @@ class PropertyRegistry:
             unit="psi",
             color_scheme=ColorScheme.VIRIDIS,
         ),
+        "oil_pressure": PropertyMetadata(
+            name="fluid_properties.pressure_grid",
+            display_name="Oil Pressure",
+            unit="psi",
+            color_scheme=ColorScheme.VIRIDIS,
+        ),
         "temperature": PropertyMetadata(
             name="fluid_properties.temperature_grid",
             display_name="Temperature",
@@ -334,6 +351,12 @@ class PropertyRegistry:
             unit="bbl/STB",
             color_scheme=ColorScheme.RdYlBu,
         ),
+        "oil_fvf": PropertyMetadata(
+            name="fluid_properties.oil_formation_volume_factor_grid",
+            display_name="Oil FVF",
+            unit="bbl/STB",
+            color_scheme=ColorScheme.RdYlBu,
+        ),
         "oil_bubble_point_pressure": PropertyMetadata(
             name="fluid_properties.oil_bubble_point_pressure_grid",
             display_name="Oil Bubble Point Pressure",
@@ -370,6 +393,12 @@ class PropertyRegistry:
             log_scale=True,
         ),
         "water_formation_volume_factor": PropertyMetadata(
+            name="fluid_properties.water_formation_volume_factor_grid",
+            display_name="Water FVF",
+            unit="bbl/STB",
+            color_scheme=ColorScheme.PLASMA,
+        ),
+        "water_fvf": PropertyMetadata(
             name="fluid_properties.water_formation_volume_factor_grid",
             display_name="Water FVF",
             unit="bbl/STB",
@@ -421,7 +450,19 @@ class PropertyRegistry:
             unit="ft³/SCF",
             color_scheme=ColorScheme.RdBu,
         ),
+        "gas_fvf": PropertyMetadata(
+            name="fluid_properties.gas_formation_volume_factor_grid",
+            display_name="Gas FVF",
+            unit="ft³/SCF",
+            color_scheme=ColorScheme.RdBu,
+        ),
         "gas_to_oil_ratio": PropertyMetadata(
+            name="fluid_properties.gas_to_oil_ratio_grid",
+            display_name="Gas-Oil Ratio",
+            unit="SCF/STB",
+            color_scheme=ColorScheme.BALANCE,
+        ),
+        "gor": PropertyMetadata(
             name="fluid_properties.gas_to_oil_ratio_grid",
             display_name="Gas-Oil Ratio",
             unit="SCF/STB",
@@ -592,7 +633,8 @@ class Base3DPlotter(ABC):
         """
         return color_scheme.value
 
-    def format_value(self, value: float, metadata: PropertyMetadata) -> str:
+    @staticmethod
+    def format_value(value: float, metadata: PropertyMetadata) -> str:
         """
         Format a value for display with appropriate precision and scientific notation.
 
@@ -619,10 +661,9 @@ class Base3DPlotter(ABC):
             return f"{value:.1f}"
         elif abs_val >= 1:
             return f"{value:.3f}"
-        else:
-            # For values between 0 and 1, show up to 6 decimal places
-            formatted = f"{value:.6f}".rstrip("0").rstrip(".")
-            return formatted if formatted else "0"
+        # For values between 0 and 1, show up to 6 decimal places
+        formatted = f"{value:.6f}".rstrip("0").rstrip(".")
+        return formatted if formatted else "0"
 
     def normalize_data(
         self,
@@ -682,6 +723,7 @@ class Base3DPlotter(ABC):
         self,
         cell_dimension: typing.Tuple[float, float],
         height_grid: ThreeDimensionalGrid,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Create physical coordinate arrays based on cell dimensions and height grid.
@@ -693,21 +735,101 @@ class Base3DPlotter(ABC):
 
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
         :param height_grid: 3D array with height of each cell (feet)
+        :param coordinate_offsets: Optional cell index offsets for sliced data (x_offset, y_offset, z_offset)
         :return: Tuple of (X, Y, Z) coordinate arrays in physical units
         """
         nx, ny, nz = height_grid.shape
         dx, dy = cell_dimension
 
-        # Create base coordinate grids
-        x_coords = np.arange(nx + 1) * dx  # Cell boundaries
-        y_coords = np.arange(ny + 1) * dy  # Cell boundaries
+        # Calculate physical coordinate offsets from cell index offsets
+        physical_offsets = (0.0, 0.0, 0.0)
+        if coordinate_offsets is not None:
+            x_index_offset, y_index_offset, z_index_offset = coordinate_offsets
+            x_start_offset = x_index_offset * dx
+            y_start_offset = y_index_offset * dy
+
+            # Calculate Z offset from height grid
+            if z_index_offset > 0:
+                # Calculate cumulative depth to the starting Z slice
+                z_start_offset = -np.sum(
+                    height_grid[:, :, :z_index_offset], axis=2
+                ).mean()
+            else:
+                z_start_offset = 0.0
+
+            physical_offsets = (x_start_offset, y_start_offset, z_start_offset)
+
+        # Apply physical offsets (for sliced data)
+        x_offset, y_offset, z_offset = physical_offsets
+        # Create base coordinate grids with offsets
+        x_coords = x_offset + np.arange(nx + 1) * dx  # Cell boundaries
+        y_coords = y_offset + np.arange(ny + 1) * dy  # Cell boundaries
         z_coords = np.zeros((nx, ny, nz + 1), dtype=np.float64)
 
-        # Build coordinates downward - each layer is lower in Z
+        # Build coordinates downward - each layer is lower in Z, starting from z_offset
+        z_coords[:, :, 0] = z_offset  # Start from the Z offset
         for k in range(nz):
             z_coords[:, :, k + 1] = z_coords[:, :, k] - height_grid[:, :, k]
 
         return x_coords, y_coords, z_coords
+
+    def apply_labels(
+        self,
+        fig: go.Figure,
+        labels: typing.Optional[
+            typing.Union["LabelManager", typing.Iterable["Label"]]
+        ] = None,
+        data: typing.Optional[ThreeDimensionalGrid] = None,
+        metadata: typing.Optional[PropertyMetadata] = None,
+        cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
+        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
+        format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    ) -> None:
+        """
+        Apply labels to a 3D plot using the Label system.
+
+        :param fig: Plotly figure to add labels to
+        :param labels: Labels to apply (LabelManager or list of Label objects)
+        :param data: 3D data array for value extraction
+        :param metadata: Property metadata for formatting
+        :param cell_dimension: Physical cell dimensions for coordinate conversion
+        :param height_grid: Height grid for physical coordinate conversion
+        :param coordinate_offsets: Coordinate offsets for sliced data
+        :param format_kwargs: Additional formatting values
+        """
+        if labels is None:
+            return
+
+        # Handle both LabelManager and list of Labels
+        if isinstance(labels, LabelManager):
+            label_collection = labels
+        else:
+            label_collection = LabelManager(labels)
+
+        # Get Plotly annotations
+        annotations = label_collection.to_plotly_annotations(
+            data_grid=data,
+            metadata=metadata,
+            cell_dimension=cell_dimension,
+            height_grid=height_grid,
+            coordinate_offsets=coordinate_offsets,
+            format_kwargs=format_kwargs,
+        )
+
+        # Add annotations to the figure
+        if annotations:
+            # Get existing annotations or create empty list
+            existing_annotations = []
+            try:
+                scene = getattr(fig.layout, "scene", None)
+                if scene and hasattr(scene, "annotations"):
+                    existing_annotations = list(scene.annotations or [])
+            except (AttributeError, TypeError):
+                pass
+
+            existing_annotations.extend(annotations)
+            fig.update_layout(scene=dict(annotations=existing_annotations))
 
     @staticmethod
     def invert_z_axis(arr: np.ndarray) -> np.ndarray:
@@ -737,6 +859,8 @@ class VolumeRenderer(Base3DPlotter):
         isomax: typing.Optional[float] = None,
         use_opacity_scaling: typing.Optional[bool] = None,
         aspect_mode: typing.Optional[str] = "cube",
+        labels: typing.Optional["LabelManager"] = None,
+        **kwargs,
     ) -> go.Figure:
         """
         Create a volume rendering plot.
@@ -751,6 +875,7 @@ class VolumeRenderer(Base3DPlotter):
         :param isomax: Maximum value for isosurface clipping (optional)
         :param use_opacity_scaling: Whether to use built-in opacity scaling for better depth perception (defaults to config)
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with volume rendering
         """
         if data.ndim != 3:
@@ -773,8 +898,9 @@ class VolumeRenderer(Base3DPlotter):
 
         # Create coordinate grids - use physical coordinates if available
         if cell_dimension is not None and height_grid is not None:
+            coordinate_offsets = kwargs.get("coordinate_offsets", None)
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid
+                cell_dimension, height_grid, coordinate_offsets
             )
             # For volume rendering, we need cell centers
             nx, ny, nz = data.shape
@@ -801,6 +927,10 @@ class VolumeRenderer(Base3DPlotter):
             y_title = "Y Index"
             z_title = "Z Index"
 
+        # Extract index offsets to show original dataset indices in hover text
+        coordinate_offsets = kwargs.get("coordinate_offsets", None)
+        x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (0, 0, 0)
+
         # Create custom hover text with ORIGINAL physical values
         display_values = display_data.flatten()
 
@@ -810,11 +940,18 @@ class VolumeRenderer(Base3DPlotter):
             range(data.shape[0]), range(data.shape[1]), range(data.shape[2])
         ):
             flat_index = i * data.shape[1] * data.shape[2] + j * data.shape[2] + k
+            # Apply index offsets to show original dataset positions
+            absolute_i = x_index_offset + i
+            absolute_j = y_index_offset + j
+            absolute_k = z_index_offset + k
             # For hover text, map k to show k=0 at top (highest Z coordinate)
             display_k = data.shape[2] - 1 - k
+            absolute_display_k = (
+                z_index_offset + display_k
+            )  # Apply offset to display k as well
             if cell_dimension is not None and height_grid is not None:
                 hover_text.append(
-                    f"Cell: ({i}, {j}, {display_k})<br>"
+                    f"Cell: ({absolute_i}, {absolute_j}, {absolute_display_k})<br>"  # Show absolute indices
                     f"X: {x.flatten()[flat_index]:.1f} ft<br>"
                     f"Y: {y.flatten()[flat_index]:.1f} ft<br>"
                     f"Z: {z.flatten()[flat_index]:.1f} ft<br>"
@@ -823,7 +960,7 @@ class VolumeRenderer(Base3DPlotter):
                 )
             else:
                 hover_text.append(
-                    f"Cell: ({i}, {j}, {display_k})<br>"
+                    f"Cell: ({absolute_i}, {absolute_j}, {absolute_k})<br>"  # Show absolute indices for fallback
                     f"X: {x.flatten()[flat_index]:.1f}<br>"
                     f"Y: {y.flatten()[flat_index]:.1f}<br>"
                     f"Z: {z.flatten()[flat_index]:.1f}<br>"
@@ -886,6 +1023,18 @@ class VolumeRenderer(Base3DPlotter):
             z_title=z_title,
             aspect_mode=aspect_mode,
         )
+
+        if labels is not None:
+            self.apply_labels(
+                fig,
+                labels,
+                data=data,
+                metadata=metadata,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                format_kwargs=kwargs.get("format_kwargs", None),
+                coordinate_offsets=coordinate_offsets,
+            )
         return fig
 
     def update_layout(
@@ -954,6 +1103,8 @@ class IsosurfacePlotter(Base3DPlotter):
         surface_count: int = 3,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "cube",
+        labels: typing.Optional["LabelManager"] = None,
+        **kwargs,
     ) -> go.Figure:
         """
         Create an isosurface plot.
@@ -967,6 +1118,7 @@ class IsosurfacePlotter(Base3DPlotter):
         :param surface_count: Number of isosurfaces to generate
         :param opacity: Opacity of the isosurface (defaults to config value). Lower values allow better visualization of internal structures.
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with isosurface plot
         """
         if data.ndim != 3:
@@ -979,8 +1131,9 @@ class IsosurfacePlotter(Base3DPlotter):
 
         # Create coordinate grids - use physical coordinates if available
         if cell_dimension is not None and height_grid is not None:
+            coordinate_offsets = kwargs.get("coordinate_offsets", None)
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid
+                cell_dimension, height_grid, coordinate_offsets
             )
             # For isosurface, we need cell centers
             nx, ny, nz = data.shape
@@ -1014,16 +1167,32 @@ class IsosurfacePlotter(Base3DPlotter):
             y_title = "Y Index"
             z_title = "Z Index"
 
+        # Extract index offsets to show original dataset indices in hover text
+        coordinate_offsets = kwargs.get("coordinate_offsets", None)
+        x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (0, 0, 0)
+
         display_values = original_data.flatten()
-        hover_text = [
-            f"Cell: ({int(x_flat[i])}, {int(y_flat[i])}, {int(z_flat[i])})<br>"
-            f"X: {x_flat[i]:.2f}<br>"
-            f"Y: {y_flat[i]:.2f}<br>"
-            f"Z: {z_flat[i]:.2f}<br>"
-            f"{metadata.display_name}: {self.format_value(display_values[i], metadata)} {metadata.unit}"
-            + (" (log scale)" if metadata.log_scale else "")
-            for i in range(len(x_flat))
-        ]
+        hover_text = []
+        for i in range(len(x_flat)):
+            # Calculate original dataset indices for this flattened index
+            # Need to map back to 3D indices first
+            i_3d = i // (data.shape[1] * data.shape[2])
+            j_3d = (i % (data.shape[1] * data.shape[2])) // data.shape[2]
+            k_3d = i % data.shape[2]
+
+            # Apply index offsets to show original dataset positions
+            absolute_i = x_index_offset + i_3d
+            absolute_j = y_index_offset + j_3d
+            absolute_k = z_index_offset + k_3d
+
+            hover_text.append(
+                f"Cell: ({absolute_i}, {absolute_j}, {absolute_k})<br>"  # Show absolute indices
+                f"X: {x_flat[i]:.2f}<br>"
+                f"Y: {y_flat[i]:.2f}<br>"
+                f"Z: {z_flat[i]:.2f}<br>"
+                f"{metadata.display_name}: {self.format_value(display_values[i], metadata)} {metadata.unit}"
+                + (" (log scale)" if metadata.log_scale else "")
+            )
 
         fig = go.Figure(
             data=go.Isosurface(
@@ -1084,6 +1253,18 @@ class IsosurfacePlotter(Base3DPlotter):
             z_title=z_title,
             aspect_mode=aspect_mode,
         )
+
+        if labels is not None:
+            self.apply_labels(
+                fig,
+                labels,
+                data=data,
+                metadata=metadata,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                format_kwargs=kwargs.get("format_kwargs", None),
+                coordinate_offsets=coordinate_offsets,
+            )
         return fig
 
     def update_layout(
@@ -1148,34 +1329,58 @@ class SlicePlotter(Base3DPlotter):
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         height_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        x_slice: typing.Optional[int] = None,
-        y_slice: typing.Optional[int] = None,
-        z_slice: typing.Optional[int] = None,
+        slice_plane_x: typing.Optional[int] = None,
+        slice_plane_y: typing.Optional[int] = None,
+        slice_plane_z: typing.Optional[int] = None,
         show_x_slice: bool = True,
         show_y_slice: bool = True,
         show_z_slice: bool = True,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "cube",
+        labels: typing.Optional["LabelManager"] = None,
+        **kwargs,
     ) -> go.Figure:
         """
         Create slice plane plots showing cross-sections through 3D data.
 
-        :param data: 3D data array to slice through
+        .. warning::
+            SlicePlotter should not be used with pre-sliced data from ReservoirModelVisualizer3D's
+            slicing parameters (x_slice, y_slice, z_slice) from plot_property(). The combination creates confusing
+            results where slice positions don't correspond to meaningful locations in the
+            original dataset. Use other plot types (Volume, Isosurface, CellBlocks, Scatter3D)
+            for visualizing sliced data subsets.
+
+        :param data: 3D data array to slice through (should be full dataset, not pre-sliced)
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
         :param height_grid: 3D array with height of each cell (feet)
-        :param x_slice: X-coordinate for YZ plane slice (defaults to middle)
-        :param y_slice: Y-coordinate for XZ plane slice (defaults to middle)
-        :param z_slice: Z-coordinate for XY plane slice (defaults to middle)
+        :param slice_plane_x: X-coordinate for YZ plane slice (defaults to middle)
+        :param slice_plane_y: Y-coordinate for XZ plane slice (defaults to middle)
+        :param slice_plane_z: Z-coordinate for XY plane slice (defaults to middle)
         :param show_x_slice: Whether to show the YZ plane slice
         :param show_y_slice: Whether to show the XZ plane slice
         :param show_z_slice: Whether to show the XY plane slice
         :param opacity: Opacity of the slice planes (defaults to config value)
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with slice plane plots
         """
         if data.ndim != 3:
             raise ValueError("Slice plotting requires 3D data")
+
+        # Warning for data slicing usage
+        index_offsets = kwargs.get("index_offsets", None)
+        if index_offsets is not None:
+            import warnings
+
+            warnings.warn(
+                "SlicePlotter is being used with pre-sliced data. This creates confusing "
+                "results where slice positions don't correspond to meaningful locations "
+                "in the original dataset. Consider using other plot types (Volume, "
+                "Isosurface, CellBlocks, Scatter3D) for visualizing sliced data subsets.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         # Normalized data for surface color mapping, display(original) data for hover text and colorbar
         normalized_data, display_data = self.normalize_data(
@@ -1183,26 +1388,35 @@ class SlicePlotter(Base3DPlotter):
         )
 
         # Default slice positions
-        if x_slice is None:
-            x_slice = data.shape[0] // 2
-        if y_slice is None:
-            y_slice = data.shape[1] // 2
-        if z_slice is None:
-            z_slice = data.shape[2] // 2
+        if slice_plane_x is None:
+            slice_plane_x = data.shape[0] // 2
+        if slice_plane_y is None:
+            slice_plane_y = data.shape[1] // 2
+        if slice_plane_z is None:
+            slice_plane_z = data.shape[2] // 2
 
-        if x_slice < 0 or x_slice >= data.shape[0]:
-            raise ValueError(f"x_slice must be between 0 and {data.shape[0] - 1}")
-        if y_slice < 0 or y_slice >= data.shape[1]:
-            raise ValueError(f"y_slice must be between 0 and {data.shape[1] - 1}")
-        if z_slice < 0 or z_slice >= data.shape[2]:
-            raise ValueError(f"z_slice must be between 0 and {data.shape[2] - 1}")
+        if slice_plane_x < 0 or slice_plane_x >= data.shape[0]:
+            raise ValueError(f"slice_plane_x must be between 0 and {data.shape[0] - 1}")
+        if slice_plane_y < 0 or slice_plane_y >= data.shape[1]:
+            raise ValueError(f"slice_plane_y must be between 0 and {data.shape[1] - 1}")
+        if slice_plane_z < 0 or slice_plane_z >= data.shape[2]:
+            raise ValueError(f"slice_plane_z must be between 0 and {data.shape[2] - 1}")
 
         fig = go.Figure()
+
+        # Extract coordinate offsets from kwargs (used by both physical and index coordinates)
+        coordinate_offsets = kwargs.get("coordinate_offsets", None)
+
+        # Extract index offsets to show original dataset indices in hover text
+        x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (0, 0, 0)
+
+        # Extract individual coordinate offsets for use throughout the method
+        x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
 
         # Create coordinate grids - use physical coordinates if available
         if cell_dimension is not None and height_grid is not None:
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid
+                cell_dimension, height_grid, coordinate_offsets
             )
             x_title = "X Distance (ft)"
             y_title = "Y Distance (ft)"
@@ -1210,9 +1424,11 @@ class SlicePlotter(Base3DPlotter):
         else:
             # Fallback to index-based coordinates
             # Apply numpy convention: k=0 at top, k increases downward
-            x_coords = np.arange(data.shape[0] + 1)
-            y_coords = np.arange(data.shape[1] + 1)
-            z_coords = np.arange(data.shape[2] + 1)  # Normal order for direct mapping
+            x_coords = x_offset + np.arange(data.shape[0] + 1)
+            y_coords = y_offset + np.arange(data.shape[1] + 1)
+            z_coords = z_offset + np.arange(
+                data.shape[2] + 1
+            )  # Normal order for direct mapping
             x_title = "X Index"
             y_title = "Y Index"
             z_title = "Z Index"
@@ -1221,7 +1437,7 @@ class SlicePlotter(Base3DPlotter):
         if show_x_slice:
             if cell_dimension is not None and height_grid is not None:
                 # Use physical coordinates
-                x_pos = x_coords[x_slice]
+                x_pos = x_coords[slice_plane_x]
                 y_grid, z_grid = np.meshgrid(
                     y_coords[:-1], np.arange(data.shape[2]), indexing="ij"
                 )
@@ -1229,25 +1445,33 @@ class SlicePlotter(Base3DPlotter):
                 for j in range(data.shape[1]):
                     for k in range(data.shape[2]):
                         # Map k=0 (data index) to highest Z coordinate (visual top)
-                        z_idx = data.shape[2] - 1 - k  # FIX: reverse k for top-down
+                        z_index = (
+                            data.shape[2] - 1 - k
+                        )  # Reverse k for top-down display
                         z_physical[j, k] = (
-                            z_coords[x_slice, j, z_idx]
-                            + z_coords[x_slice, j, z_idx + 1]
+                            z_coords[slice_plane_x, j, z_index]
+                            + z_coords[slice_plane_x, j, z_index + 1]
                         ) / 2
-
-                # No need to reverse z_physical here; already top-down
 
                 # Create hover text for X slice
                 hover_text = []
                 for j in range(data.shape[1]):
                     hover_row = []
                     for k in range(data.shape[2]):
+                        # k here corresponds to the display order (0=top, increasing downward)
+                        original_k = (
+                            data.shape[2] - 1 - k
+                        )  # Map back to original data index
+                        # Apply index offsets to show original dataset positions
+                        absolute_x = x_index_offset + slice_plane_x
+                        absolute_j = y_index_offset + j
+                        absolute_k = z_index_offset + original_k
                         hover_row.append(
-                            f"Cell: ({x_slice}, {j}, {k})<br>"
+                            f"Cell: ({absolute_x}, {absolute_j}, {absolute_k})<br>"  # Show absolute indices in original dataset
                             f"X: {x_pos:.1f} ft<br>"
                             f"Y: {y_grid[j, k]:.1f} ft<br>"
                             f"Z: {z_physical[j, k]:.1f} ft<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[x_slice, j, k], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[slice_plane_x, j, original_k], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
 
@@ -1256,7 +1480,9 @@ class SlicePlotter(Base3DPlotter):
                         x=np.full_like(y_grid, x_pos),
                         y=y_grid,
                         z=z_physical,
-                        surfacecolor=normalized_data[x_slice, :, :],
+                        surfacecolor=normalized_data[
+                            slice_plane_x, :, ::-1
+                        ],  # Reverse Z dimension to match coordinates
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1276,24 +1502,33 @@ class SlicePlotter(Base3DPlotter):
                 for j in range(data.shape[1]):
                     hover_row = []
                     for k in range(data.shape[2]):
-                        z_display = (
+                        # k corresponds to display index (0=top), but we want original data index in hover
+                        z_display = z_offset + (
                             data.shape[2] - 1 - k
-                        )  # Reverse for downward scaling
+                        )  # Apply z_offset and reverse for downward scaling
+                        # Apply index offsets to show original dataset positions
+                        absolute_x = x_index_offset + slice_plane_x
+                        absolute_j = y_index_offset + j
+                        absolute_k = z_index_offset + k
                         hover_row.append(
-                            f"Cell: ({x_slice}, {j}, {k})<br>"
-                            f"X: {x_slice}<br>"
-                            f"Y: {j}<br>"
+                            f"Cell: ({absolute_x}, {absolute_j}, {absolute_k})<br>"  # Show absolute indices in original dataset
+                            f"X: {x_offset + slice_plane_x}<br>"
+                            f"Y: {y_offset + j}<br>"
                             f"Z: {z_display}<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[x_slice, j, k], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[slice_plane_x, j, k], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
 
                 fig.add_trace(
                     go.Surface(
-                        x=np.full((data.shape[1], data.shape[2]), x_slice),
-                        y=np.arange(data.shape[1])[:, np.newaxis],
-                        z=np.arange(data.shape[2])[::-1][np.newaxis, :],  # Reverse Z
-                        surfacecolor=normalized_data[x_slice, :, :],
+                        x=np.full(
+                            (data.shape[1], data.shape[2]), x_offset + slice_plane_x
+                        ),
+                        y=(y_offset + np.arange(data.shape[1]))[:, np.newaxis],
+                        z=(z_offset + np.arange(data.shape[2])[::-1])[
+                            np.newaxis, :
+                        ],  # Apply z_offset and reverse Z
+                        surfacecolor=normalized_data[slice_plane_x, :, :],
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1301,7 +1536,7 @@ class SlicePlotter(Base3DPlotter):
                         opacity=opacity if opacity is not None else self.config.opacity,
                         cmin=0,  # Ensure consistent color mapping
                         cmax=1,  # Ensure consistent color mapping
-                        name=f"X={x_slice}",
+                        name=f"X={slice_plane_x}",
                     )
                 )
 
@@ -1309,7 +1544,7 @@ class SlicePlotter(Base3DPlotter):
         if show_y_slice:
             if cell_dimension is not None and height_grid is not None:
                 # Use physical coordinates
-                y_pos = y_coords[y_slice]
+                y_pos = y_coords[slice_plane_y]
                 x_grid, z_grid = np.meshgrid(
                     x_coords[:-1], np.arange(data.shape[2]), indexing="ij"
                 )
@@ -1318,34 +1553,50 @@ class SlicePlotter(Base3DPlotter):
                     range(data.shape[0]), range(data.shape[2])
                 ):
                     # Map k=0 (data index) to highest Z coordinate (visual top)
-                    z_idx = k  # Use direct mapping since we want k=0 at top
+                    z_index = k  # Use direct mapping since we want k=0 at top
                     z_physical[i, k] = (
-                        z_coords[i, y_slice, z_idx] + z_coords[i, y_slice, z_idx + 1]
+                        z_coords[i, slice_plane_y, z_index]
+                        + z_coords[i, slice_plane_y, z_index + 1]
                     ) / 2
 
-                # Reverse Z coordinates for proper scaling (50-300 downwards)
-                z_physical = z_physical[:, ::-1]
-
-                # Create hover text for Y slice
+                # Create hover text for Y slice - accounting for coordinate reversal
                 hover_text = []
                 for i in range(data.shape[0]):
                     hover_row = []
                     for k in range(data.shape[2]):
+                        # Since we'll reverse the array, pre-calculate the indices that will be shown
+                        # after reversal: k=0 will end up at position (data.shape[2]-1), etc.
+                        final_k_index = (
+                            data.shape[2] - 1 - k
+                        )  # What k index will be after reversal
+                        # Apply index offsets to show original dataset positions
+                        absolute_i = x_index_offset + i
+                        absolute_y = y_index_offset + slice_plane_y
+                        absolute_k = z_index_offset + final_k_index
                         hover_row.append(
-                            f"Cell: ({i}, {y_slice}, {k})<br>"
+                            f"Cell: ({absolute_i}, {absolute_y}, {absolute_k})<br>"  # Show absolute indices in original dataset
                             f"X: {x_grid[i, k]:.1f} ft<br>"
                             f"Y: {y_pos:.1f} ft<br>"
                             f"Z: {z_physical[i, k]:.1f} ft<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[i, y_slice, k], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[i, slice_plane_y, final_k_index], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
+
+                # Now reverse Z coordinates and surface data for proper scaling (50-300 downwards)
+                z_physical = z_physical[:, ::-1]
+                surface_data = normalized_data[
+                    :, slice_plane_y, ::-1
+                ]  # Also reverse the surface data
+                hover_text = [
+                    row[::-1] for row in hover_text
+                ]  # Also reverse hover text to match
 
                 fig.add_trace(
                     go.Surface(
                         x=x_grid,
                         y=np.full_like(x_grid, y_pos),
                         z=z_physical,
-                        surfacecolor=normalized_data[:, y_slice, :],
+                        surfacecolor=surface_data,  # Use the reversed surface data
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1365,24 +1616,32 @@ class SlicePlotter(Base3DPlotter):
                 for i in range(data.shape[0]):
                     hover_row = []
                     for k in range(data.shape[2]):
-                        z_display = (
+                        z_display = z_offset + (
                             data.shape[2] - 1 - k
-                        )  # Reverse for downward scaling
+                        )  # Apply z_offset and reverse for downward scaling
+                        # Apply index offsets to show original dataset positions
+                        absolute_i = x_index_offset + i
+                        absolute_y = y_index_offset + slice_plane_y
+                        absolute_k = z_index_offset + k
                         hover_row.append(
-                            f"Cell: ({i}, {y_slice}, {k})<br>"
-                            f"X: {i}<br>"
-                            f"Y: {y_slice}<br>"
+                            f"Cell: ({absolute_i}, {absolute_y}, {absolute_k})<br>"  # Show absolute indices in original dataset
+                            f"X: {x_offset + i}<br>"
+                            f"Y: {y_offset + slice_plane_y}<br>"
                             f"Z: {z_display}<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[i, y_slice, k], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[i, slice_plane_y, k], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
 
                 fig.add_trace(
                     go.Surface(
-                        x=np.arange(data.shape[0])[:, np.newaxis],
-                        y=np.full((data.shape[0], data.shape[2]), y_slice),
-                        z=np.arange(data.shape[2])[::-1][np.newaxis, :],  # Reverse Z
-                        surfacecolor=normalized_data[:, y_slice, :],
+                        x=(x_offset + np.arange(data.shape[0]))[:, np.newaxis],
+                        y=np.full(
+                            (data.shape[0], data.shape[2]), y_offset + slice_plane_y
+                        ),
+                        z=(z_offset + np.arange(data.shape[2])[::-1])[
+                            np.newaxis, :
+                        ],  # Apply z_offset and reverse Z
+                        surfacecolor=normalized_data[:, slice_plane_y, :],
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1390,7 +1649,7 @@ class SlicePlotter(Base3DPlotter):
                         opacity=opacity if opacity is not None else self.config.opacity,
                         cmin=0,  # Ensure consistent color mapping
                         cmax=1,  # Ensure consistent color mapping
-                        name=f"Y={y_slice}",
+                        name=f"Y={slice_plane_y}",
                     )
                 )
 
@@ -1405,13 +1664,13 @@ class SlicePlotter(Base3DPlotter):
                 for i, j in itertools.product(
                     range(data.shape[0]), range(data.shape[1])
                 ):
-                    # Map z_slice (data index) to correct Z coordinate
+                    # Map slice_plane_z (data index) to correct Z coordinate
                     # For proper scaling, we need to map to the reversed coordinate system
-                    z_idx = (
-                        data.shape[2] - 1 - z_slice
+                    z_index = (
+                        data.shape[2] - 1 - slice_plane_z
                     )  # Reverse mapping for 50-300 downward scaling
                     z_physical[i, j] = (
-                        z_coords[i, j, z_idx] + z_coords[i, j, z_idx + 1]
+                        z_coords[i, j, z_index] + z_coords[i, j, z_index + 1]
                     ) / 2
 
                 # Create custom hover text for Z slice to show correct indices and proper Z values
@@ -1419,12 +1678,16 @@ class SlicePlotter(Base3DPlotter):
                 for i in range(data.shape[0]):
                     hover_row = []
                     for j in range(data.shape[1]):
+                        # Apply index offsets to show original dataset positions
+                        absolute_i = x_index_offset + i
+                        absolute_j = y_index_offset + j
+                        absolute_z = z_index_offset + slice_plane_z
                         hover_row.append(
-                            f"Cell: ({i}, {j}, {z_slice})<br>"
+                            f"Cell: ({absolute_i}, {absolute_j}, {absolute_z})<br>"  # Show absolute indices in original dataset
                             f"X: {x_grid[i, j]:.1f} ft<br>"
                             f"Y: {y_grid[i, j]:.1f} ft<br>"
                             f"Z: {z_physical[i, j]:.1f} ft<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[i, j, z_slice], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[i, j, slice_plane_z], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
 
@@ -1433,7 +1696,7 @@ class SlicePlotter(Base3DPlotter):
                         x=x_grid,
                         y=y_grid,
                         z=z_physical,
-                        surfacecolor=normalized_data[:, :, z_slice],
+                        surfacecolor=normalized_data[:, :, slice_plane_z],
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1485,30 +1748,34 @@ class SlicePlotter(Base3DPlotter):
             else:
                 # Fallback to index coordinates
                 # Apply numpy convention: k=0 at top, k increases downward with proper scaling
-                z_display = (
-                    data.shape[2] - 1 - z_slice
-                )  # Reverse for proper downward scaling
+                z_display = z_offset + (
+                    data.shape[2] - 1 - slice_plane_z
+                )  # Apply z_offset and reverse for proper downward scaling
 
                 # Create custom hover text for Z slice to show correct indices
                 hover_text = []
                 for i in range(data.shape[0]):
                     hover_row = []
                     for j in range(data.shape[1]):
+                        # Apply index offsets to show original dataset positions
+                        absolute_i = x_index_offset + i
+                        absolute_j = y_index_offset + j
+                        absolute_z = z_index_offset + slice_plane_z
                         hover_row.append(
-                            f"Cell: ({i}, {j}, {z_slice})<br>"
-                            f"X: {i}<br>"
-                            f"Y: {j}<br>"
+                            f"Cell: ({absolute_i}, {absolute_j}, {absolute_z})<br>"  # Show absolute indices in original dataset
+                            f"X: {x_offset + i}<br>"
+                            f"Y: {y_offset + j}<br>"
                             f"Z: {z_display}<br>"
-                            f"{metadata.display_name}: {self.format_value(display_data[i, j, z_slice], metadata)} {metadata.unit}"
+                            f"{metadata.display_name}: {self.format_value(display_data[i, j, slice_plane_z], metadata)} {metadata.unit}"
                         )
                     hover_text.append(hover_row)
 
                 fig.add_trace(
                     go.Surface(
-                        x=np.arange(data.shape[0])[:, np.newaxis],
-                        y=np.arange(data.shape[1])[np.newaxis, :],
+                        x=(x_offset + np.arange(data.shape[0]))[:, np.newaxis],
+                        y=(y_offset + np.arange(data.shape[1]))[np.newaxis, :],
                         z=np.full((data.shape[0], data.shape[1]), z_display),
-                        surfacecolor=normalized_data[:, :, z_slice],
+                        surfacecolor=normalized_data[:, :, slice_plane_z],
                         text=hover_text,
                         hovertemplate="%{text}<extra></extra>",
                         colorscale=self.get_colorscale(metadata.color_scheme),
@@ -1565,6 +1832,18 @@ class SlicePlotter(Base3DPlotter):
             z_title=z_title,
             aspect_mode=aspect_mode,
         )
+
+        if labels is not None:
+            self.apply_labels(
+                fig,
+                labels,
+                data=data,
+                metadata=metadata,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                format_kwargs=kwargs.get("format_kwargs", None),
+                coordinate_offsets=coordinate_offsets,
+            )
         return fig
 
     def update_layout(
@@ -1635,6 +1914,8 @@ class CellBlockPlotter(Base3DPlotter):
         outline_color: typing.Optional[str] = None,
         outline_width: typing.Optional[float] = None,
         use_opacity_scaling: bool = True,
+        labels: typing.Optional["LabelManager"] = None,
+        **kwargs,
     ) -> go.Figure:
         """
         Create a plot where each cell is rendered as an individual 3D block.
@@ -1653,6 +1934,7 @@ class CellBlockPlotter(Base3DPlotter):
         :param outline_color: Color of the cell block outlines (CSS color name, hex, or rgb, defaults to config)
         :param outline_width: Width/thickness of the outline wireframes in pixels (defaults to config)
         :param use_opacity_scaling: Whether to apply data-based opacity scaling for better depth perception
+        :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with cell block visualization
         """
         if data.ndim != 3:
@@ -1710,9 +1992,13 @@ class CellBlockPlotter(Base3DPlotter):
         fig = go.Figure()
 
         # Create physical coordinate grids
+        coordinate_offsets = kwargs.get("coordinate_offsets", None)
         x_coords, y_coords, z_coords = self.create_physical_coordinates(
-            cell_dimension, height_grid
+            cell_dimension, height_grid, coordinate_offsets
         )
+
+        # Extract index offsets to show original dataset indices in hover text
+        x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (0, 0, 0)
 
         # Subsample for performance
         i_indices = range(0, nx, subsample_factor)
@@ -1768,7 +2054,7 @@ class CellBlockPlotter(Base3DPlotter):
                 k_faces.extend([face[2], face[3]])
 
             normalized_cell_value = normalized_data[i, j, k]  # For color mapping
-            original_cell_value = display_data[i, j, k]  # For hover text
+            cell_value = display_data[i, j, k]  # For hover text
             cell_opacity = opacity_values[i, j, k]
 
             # Create the main cell block
@@ -1789,11 +2075,11 @@ class CellBlockPlotter(Base3DPlotter):
                     lighting=self.config.lighting,
                     lightposition=self.config.light_position,
                     hovertemplate=(
-                        f"Cell ({i}, {j}, {k})<br>"
+                        f"Cell ({x_index_offset + i}, {y_index_offset + j}, {z_index_offset + k})<br>"  # Show absolute indices
                         f"X: {(x_min + x_max) / 2:.2f} ft<br>"
                         f"Y: {(y_min + y_max) / 2:.2f} ft<br>"
                         f"Z: {(z_min + z_max) / 2:.2f} ft<br>"
-                        f"{metadata.display_name}: {self.format_value(original_cell_value, metadata)} {metadata.unit}"
+                        f"{metadata.display_name}: {self.format_value(cell_value, metadata)} {metadata.unit}"
                         + (" (log scale)" if metadata.log_scale else "")
                         + "<br>"
                         f"Cell Size: {dx:.1f} x {dy:.1f} x {height_grid[i, j, k]:.2f} ft<br>"
@@ -1948,6 +2234,18 @@ class CellBlockPlotter(Base3DPlotter):
             y_title="Y Distance (ft)",
             z_title="Z Distance (ft)",
         )
+
+        if labels is not None:
+            self.apply_labels(
+                fig,
+                labels,
+                data=data,
+                metadata=metadata,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                format_kwargs=kwargs.get("format_kwargs", None),
+                coordinate_offsets=kwargs.get("coordinate_offsets", None),
+            )
         return fig
 
     def update_layout(
@@ -2015,6 +2313,8 @@ class Scatter3DPlotter(Base3DPlotter):
         marker_size: int = 3,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "cube",
+        labels: typing.Optional["LabelManager"] = None,
+        **kwargs,
     ) -> go.Figure:
         """
         Create a 3D scatter plot for sparse data visualization.
@@ -2029,6 +2329,7 @@ class Scatter3DPlotter(Base3DPlotter):
 
         :param marker_size: Size of scatter plot markers
         :param opacity: Opacity of the markers (defaults to config value)
+        :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with 3D scatter plot
         """
         if data.ndim != 3:
@@ -2073,11 +2374,16 @@ class Scatter3DPlotter(Base3DPlotter):
         if cell_dimension is not None and height_grid is not None:
             # Convert indices to physical coordinates
             dx, dy = cell_dimension
-            x_physical = x_coords * dx
-            y_physical = y_coords * dy
+            coordinate_offsets = kwargs.get("coordinate_offsets", None)
+            x_offset, y_offset, _ = coordinate_offsets or (0, 0, 0)
+
+            x_physical = x_offset * dx + x_coords * dx
+            y_physical = y_offset * dy + y_coords * dy
 
             _, _, z_boundaries = self.create_physical_coordinates(
-                cell_dimension, height_grid
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                coordinate_offsets=coordinate_offsets,
             )
             z_physical = np.array(
                 [
@@ -2085,8 +2391,16 @@ class Scatter3DPlotter(Base3DPlotter):
                     for x, y, z in zip(x_coords, y_coords, z_coords)
                 ]
             )
+
+            # Extract index offsets to show original dataset indices in hover text
+            x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (
+                0,
+                0,
+                0,
+            )
+
             hover_text = [
-                f"Cell: ({x_coords[i]}, {y_coords[i]}, {z_coords[i]})<br>"
+                f"Cell: ({x_index_offset + x_coords[i]}, {y_index_offset + y_coords[i]}, {z_index_offset + z_coords[i]})<br>"  # Show absolute indices
                 f"X: {x_physical[i]:.1f} ft<br>"
                 f"Y: {y_physical[i]:.1f} ft<br>"
                 f"Z: {z_physical[i]:.1f} ft<br>"
@@ -2104,8 +2418,13 @@ class Scatter3DPlotter(Base3DPlotter):
             y_physical = y_coords
             z_physical = z_coords_raw
 
+            # Extract index offsets to show original dataset indices in hover text
+            x_index_offset, y_index_offset, z_index_offset = kwargs.get(
+                "coordinate_offsets", None
+            ) or (0, 0, 0)
+
             hover_text = [
-                f"Cell: ({x_coords[i]}, {y_coords[i]}, {z_coords[i]})<br>"
+                f"Cell: ({x_index_offset + x_coords[i]}, {y_index_offset + y_coords[i]}, {z_index_offset + z_coords[i]})<br>"  # Show absolute indices
                 f"{metadata.display_name}: {self.format_value(v, metadata)}"
                 + (" (log scale)" if metadata.log_scale else "")
                 for i, v in enumerate(values)
@@ -2162,6 +2481,18 @@ class Scatter3DPlotter(Base3DPlotter):
             y_title=y_title,
             z_title=z_title,
         )
+
+        if labels is not None:
+            self.apply_labels(
+                fig,
+                labels,
+                data=data,
+                metadata=metadata,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                coordinate_offsets=kwargs.get("coordinate_offsets", None),
+                format_kwargs=kwargs.get("format_kwargs", None),
+            )
         return fig
 
     def update_layout(
@@ -2222,6 +2553,401 @@ PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
     PlotType.SCATTER_3D: "3D Scatter",
     PlotType.CELL_BLOCKS: "3D Cell Blocks",
 }
+
+
+@dataclass(frozen=True)
+class LabelCoordinate3D:
+    """Represents a 3D position for placing labels."""
+
+    x: int
+    y: int
+    z: int
+
+    def as_physical(
+        self,
+        cell_dimension: typing.Tuple[float, float],
+        height_grid: ThreeDimensionalGrid,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
+    ) -> typing.Tuple[float, float, float]:
+        """
+        Convert index coordinates to physical coordinates.
+
+        :param cell_dimension: Physical size of each cell in x and y directions (feet)
+        :param height_grid: 3D array with height of each cell (feet)
+        :param coordinate_offsets: Optional cell index offsets to apply to the physical coordinates
+        :return: Tuple of (x_physical, y_physical, z_physical) coordinates
+        """
+        offsets = coordinate_offsets or (0, 0, 0)
+        dx, dy = cell_dimension
+
+        # Convert to physical coordinates
+        x_physical = (offsets[0] + self.x) * dx
+        y_physical = (offsets[1] + self.y) * dy
+
+        # For Z, we need to calculate cumulative depth
+        if isinstance(self.z, int) and self.z < height_grid.shape[2]:
+            z_physical = -np.sum(height_grid[self.x, self.y, : self.z])
+            if offsets[2] > 0:
+                # Add offset from previous layers
+                z_physical -= np.sum(height_grid[:, :, : offsets[2]], axis=2).mean()
+        else:
+            z_physical = offsets[2] + self.z  # Fallback
+        return x_physical, y_physical, z_physical
+
+
+class _SafeValuesDict(dict):
+    """A dictionary that safely handles missing keys by returning a formatted string."""
+
+    def __missing__(self, key) -> str:
+        return f"{{{key}}}"
+
+
+class LabelFormatValues(TypedDict):
+    """Format values for label text generation."""
+
+    x_index: typing.Union[int, float]
+    y_index: typing.Union[int, float]
+    z_index: typing.Union[int, float]
+    x_physical: typing.Optional[float]
+    y_physical: typing.Optional[float]
+    z_physical: typing.Optional[float]
+    value: typing.Union[int, float, str]
+    formatted_value: typing.Optional[str]
+    property_name: typing.Optional[str]
+    unit: typing.Optional[str]
+
+
+@dataclass(slots=True)
+class Label:
+    """
+    A flexible label that can be positioned in 3D space on a 3D grid and extract data dynamically.
+    """
+
+    position: LabelCoordinate3D
+    text_template: str = """
+    {name}
+    <br>
+    Cell Coordinates: ({x_index}, {y_index}, {z_index})
+    <br>
+    Physical Coordinates: ({x_physical:.2f}, {y_physical:.2f}, {z_physical:.2f}) ft
+    <br>
+    Value: {value}
+    <br>
+    Formatted Value: {formatted_value}
+    <br>
+    Property: {property_name}
+    <br>
+    Unit: {unit}
+    <br>
+    """
+
+    font_size: int = 12
+    font_color: str = "#333333"  # Default dark gray
+    background_color: typing.Optional[str] = "rgba(240, 240, 240, 0.9)"
+    border_color: typing.Optional[str] = None
+    border_width: int = 1
+    offset: typing.Tuple[float, float, float] = (0, 0, 0)
+    visible: bool = True
+    name: typing.Optional[str] = None
+
+    def get_text(
+        self,
+        data_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
+        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        metadata: typing.Optional[PropertyMetadata] = None,
+        format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    ) -> str:
+        """
+        Generate the label text based on data at the label position.
+
+        :param data_grid: 3D data array to extract values from
+        :param cell_dimension: Physical size of each cell in x and y directions (feet)
+        :param height_grid: 3D array with height of each cell (feet)
+        :param metadata: Property metadata for formatting
+        :param format_kwargs: Additional values for string formatting
+        :return: Formatted label text
+        """
+        values = {
+            "x_index": self.position.x,
+            "y_index": self.position.y,
+            "z_index": self.position.z,
+            "x_physical": None,
+            "y_physical": None,
+            "z_physical": None,
+            "value": "N/A",
+            "formatted_value": "N/A",
+            "property_name": "N/A",
+            "unit": "N/A",
+        }
+
+        raw_value = None
+        formatted_value = None
+        x_index = int(self.position.x)
+        y_index = int(self.position.y)
+        z_index = int(self.position.z)
+
+        # Extract data value if grid is provided
+        if data_grid is not None:
+            raw_value = data_grid[x_index, y_index, z_index]
+
+        if cell_dimension is not None and height_grid is not None:
+            x_physical, y_physical, z_physical = self.position.as_physical(
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                coordinate_offsets=None,  # Don't pass offset here, handle separately
+            )
+            # Apply the label's offset to the calculated physical coordinates
+            x_physical += self.offset[0]
+            y_physical += self.offset[1]
+            z_physical += self.offset[2]
+
+            values["x_physical"] = x_physical
+            values["y_physical"] = y_physical
+            values["z_physical"] = z_physical
+
+        if metadata is not None:
+            if raw_value is not None:
+                formatted_value = Base3DPlotter.format_value(raw_value, metadata)
+            values["unit"] = metadata.unit
+            values["property_name"] = metadata.display_name
+
+        values["value"] = raw_value if raw_value is not None else "N/A"
+        values["formatted_value"] = (
+            formatted_value if formatted_value is not None else "N/A"
+        )
+
+        # Add any additional format kwargs
+        if format_kwargs:
+            values.update(format_kwargs)
+        return self.text_template.format(**_SafeValuesDict(values))
+
+    def to_plotly_annotation(
+        self,
+        data_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
+        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        metadata: typing.Optional[PropertyMetadata] = None,
+        format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    ) -> typing.Dict[str, typing.Any]:
+        """
+        Convert label to Plotly 3D annotation format.
+
+        :param data_grid: 3D data array for value extraction
+        :param cell_dimension: Physical size of each cell in x and y directions (feet)
+        :param height_grid: 3D array with height of each cell (feet)
+        :param metadata: Property metadata for formatting
+        :param format_kwargs: Additional formatting values
+        :return: Plotly annotation dictionary
+        """
+        if not self.visible:
+            return {}
+
+        # Apply offset to position
+        x_position = self.position.x + self.offset[0]
+        y_position = self.position.y + self.offset[1]
+        z_position = self.position.z + self.offset[2]
+
+        annotation = {
+            "x": x_position,
+            "y": y_position,
+            "z": z_position,
+            "text": self.get_text(
+                data_grid=data_grid,
+                cell_dimension=cell_dimension,
+                height_grid=height_grid,
+                metadata=metadata,
+                format_kwargs=format_kwargs,
+            ),
+            "showarrow": True,
+            "font": {
+                "size": self.font_size,
+                "color": self.font_color,
+            },
+            "align": "left",
+            "bgcolor": self.background_color,
+            "bordercolor": self.border_color,
+            "borderwidth": self.border_width,
+        }
+        return {k: v for k, v in annotation.items() if v is not None}
+
+
+class LabelManager:
+    """
+    A collection of labels for 3D plots, allowing dynamic label creation and management.
+    """
+
+    def __init__(self, labels: typing.Optional[typing.Iterable[Label]] = None):
+        self.labels = list(labels) if labels is not None else []
+
+    def add_label(self, label: Label) -> None:
+        """Add a label to the collection."""
+        self.labels.append(label)
+
+    def add_grid_labels(
+        self,
+        data_shape: typing.Tuple[int, int, int],
+        spacing: typing.Tuple[int, int, int] = (10, 10, 5),
+        template: str = "({x_index}, {y_index}, {z_index})",
+        **label_kwargs,
+    ) -> None:
+        """
+        Add grid labels at regular intervals.
+
+        :param data_shape: Shape of the 3D data grid
+        :param spacing: Spacing between labels in each dimension
+        :param template: Text template for labels
+        :param label_kwargs: Additional Label constructor arguments
+        """
+        nx, ny, nz = data_shape
+        x_spacing, y_spacing, z_spacing = spacing
+
+        for x in range(0, nx, x_spacing):
+            for y in range(0, ny, y_spacing):
+                for z in range(0, nz, z_spacing):
+                    position = LabelCoordinate3D(x, y, z)
+                    label = Label(
+                        position=position, text_template=template, **label_kwargs
+                    )
+                    self.add_label(label)
+
+    def add_boundary_labels(
+        self,
+        data_shape: typing.Tuple[int, int, int],
+        template: str = "Boundary ({x_index}, {y_index}, {z_index})",
+        **label_kwargs,
+    ) -> None:
+        """
+        Add labels at the boundaries of the data grid.
+
+        :param data_shape: Shape of the 3D data grid
+        :param template: Text template for boundary labels
+        :param label_kwargs: Additional Label constructor arguments
+        """
+        nx, ny, nz = data_shape
+
+        # Corner positions
+        corners = [
+            (0, 0, 0),
+            (nx - 1, 0, 0),
+            (0, ny - 1, 0),
+            (0, 0, nz - 1),
+            (nx - 1, ny - 1, 0),
+            (nx - 1, 0, nz - 1),
+            (0, ny - 1, nz - 1),
+            (nx - 1, ny - 1, nz - 1),
+        ]
+
+        for x, y, z in corners:
+            position = LabelCoordinate3D(x, y, z)
+            label = Label(
+                position=position,
+                text_template=template,
+                name=f"corner_{x}_{y}_{z}",
+                **label_kwargs,
+            )
+            self.add_label(label)
+
+    def add_well_labels(
+        self,
+        well_positions: typing.List[typing.Tuple[int, int, int]],
+        well_names: typing.Optional[typing.List[str]] = None,
+        template: str = "Well - '{name}': {formatted_value} ({unit})",
+        **label_kwargs,
+    ) -> None:
+        """
+        Add labels for well positions.
+
+        :param well_positions: List of (x, y, z) well positions
+        :param well_names: Optional well names (defaults to Well_1, Well_2, etc.)
+        :param template: Text template for well labels
+        :param label_kwargs: Additional Label constructor arguments
+        """
+        for i, (x, y, z) in enumerate(well_positions):
+            name = (
+                well_names[i] if well_names and i < len(well_names) else f"Well_{i + 1}"
+            )
+            position = LabelCoordinate3D(x, y, z)
+            label_kwargs.setdefault("font_size", 12)  # Larger font for wells
+            label_kwargs.setdefault("font_color", "#333")  # Make wells stand out
+            label = Label(
+                position=position,
+                text_template=template,
+                name=name,
+                **label_kwargs,
+            )
+            self.add_label(label)
+
+    def visible_labels(self) -> typing.Generator[Label, None, None]:
+        """Return only visible labels."""
+        return (label for label in self.labels if label.visible)
+
+    def to_plotly_annotations(
+        self,
+        data_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        metadata: typing.Optional[PropertyMetadata] = None,
+        cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
+        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
+        format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    ) -> typing.List[typing.Dict[str, typing.Any]]:
+        """
+        Convert all visible labels to Plotly annotations.
+
+        :param data_grid: 3D data array for value extraction
+        :param metadata: Property metadata for formatting
+        :param cell_dimension: Physical cell dimensions for coordinate conversion
+        :param height_grid: Height grid for physical coordinate conversion
+        :param coordinate_offsets: Coordinate offsets for sliced data
+        :param format_kwargs: Additional formatting values
+        :return: List of Plotly annotation dictionaries
+        """
+        annotations = []
+
+        for label in self.visible_labels():
+            try:
+                # Check if label position is within the sliced data bounds
+                if coordinate_offsets and data_grid is not None:
+                    x_offset, y_offset, z_offset = coordinate_offsets
+
+                    # Check if label falls within the original slice range
+                    original_x = label.position.x + x_offset
+                    original_y = label.position.y + y_offset
+                    original_z = label.position.z + z_offset
+
+                    # If label is outside the slice range, skip it
+                    if (
+                        original_x < x_offset
+                        or original_x >= x_offset + data_grid.shape[0]
+                        or original_y < y_offset
+                        or original_y >= y_offset + data_grid.shape[1]
+                        or original_z < z_offset
+                        or original_z >= z_offset + data_grid.shape[2]
+                    ):
+                        continue
+
+                # Add custom values for well names, etc.
+                kwargs = {"name": label.name} if label.name else {}
+                kwargs.update(format_kwargs or {})
+                annotation = label.to_plotly_annotation(
+                    data_grid=data_grid,
+                    cell_dimension=cell_dimension,
+                    height_grid=height_grid,
+                    metadata=metadata,
+                    format_kwargs=kwargs,
+                )
+
+                if annotation:
+                    annotations.append(annotation)
+
+            except Exception as exc:
+                print(
+                    f"Warning: Failed to create annotation for label {label.name}: {exc}"
+                )
+                continue
+
+        return annotations
+
 
 _missing = object()
 
@@ -2285,6 +3011,85 @@ class ReservoirModelVisualizer3D:
             raise ValueError(f"Invalid plot type: {plot_type}")
         self.plotters[plot_type] = plotter_type(self.config, *args, **kwargs)
 
+    def _validate_and_apply_slice(
+        self,
+        data: ThreeDimensionalGrid,
+        x_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        y_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        z_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+    ) -> typing.Tuple[ThreeDimensionalGrid, typing.Tuple[slice, slice, slice]]:
+        """
+        Validate and apply slicing to 3D data, ensuring result is still 3D.
+
+        :param data: Input 3D data array
+        :param x_slice: X dimension slice specification
+        :param y_slice: Y dimension slice specification
+        :param z_slice: Z dimension slice specification
+        :return: Tuple of (sliced_data, actual_slices_used)
+        :raises ValueError: If slicing would result in non-3D data
+        """
+        nx, ny, nz = data.shape
+
+        def normalize_slice_spec(
+            spec: typing.Any, dim_size: int, dim_name: str
+        ) -> slice:
+            """Convert various slice specifications to a slice object."""
+            if spec is None:
+                return slice(None)  # Full dimension
+            elif isinstance(spec, int):
+                # Single index - convert to slice to maintain dimension
+                if spec < 0:
+                    spec = dim_size + spec  # Handle negative indexing
+                if spec < 0 or spec >= dim_size:
+                    raise ValueError(
+                        f"{dim_name}_slice index {spec} out of range [0, {dim_size - 1}]"
+                    )
+                return slice(spec, spec + 1)  # Single element slice
+            elif isinstance(spec, tuple) and len(spec) == 2:
+                start, stop = spec
+                if start < 0:
+                    start = dim_size + start
+                if stop < 0:
+                    stop = dim_size + stop
+                return slice(start, stop)
+            elif isinstance(spec, slice):
+                return spec
+            else:
+                raise ValueError(f"Invalid {dim_name}_slice specification: {spec}")
+
+        # Normalize all slice specifications
+        x_slice_obj = normalize_slice_spec(x_slice, nx, "x")
+        y_slice_obj = normalize_slice_spec(y_slice, ny, "y")
+        z_slice_obj = normalize_slice_spec(z_slice, nz, "z")
+
+        # Apply slicing
+        sliced_data = data[x_slice_obj, y_slice_obj, z_slice_obj]
+
+        # Validate result is still 3D
+        if sliced_data.ndim != 3:
+            raise ValueError(
+                f"Slicing resulted in {sliced_data.ndim}D data. "
+                f"All slice specifications must preserve 3D structure. "
+                f"Result shape: {sliced_data.shape}"
+            )
+
+        # Check minimum size requirements
+        if any(dim < 1 for dim in sliced_data.shape):
+            raise ValueError(
+                f"Slicing resulted in empty dimension(s). Shape: {sliced_data.shape}"
+            )
+        return typing.cast(ThreeDimensionalGrid, sliced_data), (
+            x_slice_obj,
+            y_slice_obj,
+            z_slice_obj,
+        )
+
     def _get_property(
         self, model_state: ModelState[ThreeDimensions], name: str
     ) -> ThreeDimensionalGrid:
@@ -2292,7 +3097,7 @@ class ReservoirModelVisualizer3D:
         Get property data from model state.
 
         :param model_state: The model state containing reservoir model
-        :param name: Name of the property to extract as defined by `PropertyMetadata.name`
+        :param name: Name of the property to extract as defined by the `PropertyMetadata.name`
         :return: A three-dimensional numpy array containing the property data
         :raises AttributeError: If property is not found in reservoir model properties
         :raises TypeError: If property is not a numpy array
@@ -2337,10 +3142,20 @@ class ReservoirModelVisualizer3D:
         title: typing.Optional[str] = None,
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
+        x_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        y_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        z_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        labels: typing.Optional["LabelManager"] = None,
         **kwargs,
     ) -> go.Figure:
         """
-        Plot a specific fluid property in 3D.
+        Plot a specific fluid property in 3D with optional data slicing.
 
         :param model_state: The model state containing the reservoir model data
         :param property: Name of the property to plot (from `PropertyRegistry`)
@@ -2348,16 +3163,90 @@ class ReservoirModelVisualizer3D:
         :param title: Custom title for this plot (overrides config title)
         :param width: Custom width for this plot (overrides config width)
         :param height: Custom height for this plot (overrides config height)
+        :param x_slice: X dimension slice specification:
+            - int: Single index (e.g., 5 for cells[5:6, :, :])
+            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
+            - slice: Full slice object (e.g., slice(10, 20, 2))
+            - None: Use full dimension
+        :param y_slice: Y dimension slice specification (same format as x_slice)
+        :param z_slice: Z dimension slice specification (same format as x_slice)
+        :param labels: Optional collection of labels to add to the plot
         :param kwargs: Additional plotting parameters specific to the plot type
         :return: Plotly figure object containing the 3D visualization
+
+        Usage Examples:
+
+        ```python
+            # Plot only cells 10-20 in X direction
+            viz.plot_property(state, "pressure", x_slice=(10, 20))
+
+            # Plot single layer at Z index 5
+            viz.plot_property(state, "oil_saturation", z_slice=5)
+
+            # Plot corner section
+            viz.plot_property(state, "temperature", x_slice=(0, 25), y_slice=(0, 25), z_slice=(0, 10))
+
+            # Use slice objects for advanced slicing
+            viz.plot_property(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
+        ```
         """
         metadata = self.registry[property]
         data = self._get_property(model_state, metadata.name)
+
+        # Get original cell dimensions and height grid
+        cell_dimension = model_state.model.cell_dimension
+        height_grid = model_state.model.height_grid
+
+        # Apply slicing if any slice parameters are provided
+        coordinate_offsets = None
+        if any(s is not None for s in [x_slice, y_slice, z_slice]):
+            data, normalized_slices = self._validate_and_apply_slice(
+                data, x_slice, y_slice, z_slice
+            )
+            x_slice_obj, y_slice_obj, z_slice_obj = normalized_slices
+
+            # Update title to indicate slicing
+            slice_info = []
+            if x_slice is not None:
+                slice_info.append(
+                    f"X[{x_slice_obj.start or 0}:{x_slice_obj.stop or data.shape[0]}]"
+                )
+            if y_slice is not None:
+                slice_info.append(
+                    f"Y[{y_slice_obj.start or 0}:{y_slice_obj.stop or data.shape[1]}]"
+                )
+            if z_slice is not None:
+                slice_info.append(
+                    f"Z[{z_slice_obj.start or 0}:{z_slice_obj.stop or data.shape[2]}]"
+                )
+
+            slice_suffix = f" - Subset: {', '.join(slice_info)}"
+            if title:
+                title += slice_suffix
+            else:
+                title = slice_suffix  # Will be used by _determine_title
+
+            # Calculate coordinate offsets for sliced data (cell index offsets)
+            coordinate_offsets = (
+                x_slice_obj.start or 0,
+                y_slice_obj.start or 0,
+                z_slice_obj.start or 0,
+            )
+
+            # If we sliced the data, we need to slice the height_grid as well for physical coordinates
+            if height_grid is not None:
+                height_grid = height_grid[x_slice_obj, y_slice_obj, z_slice_obj]  # type: ignore
+
         plot_type = plot_type or self.config.plot_type
         plotter = self.plotters[plot_type]
 
-        cell_dimension = model_state.model.cell_dimension
-        height_grid = model_state.model.height_grid
+        # Pass coordinate offsets to plotters
+        if coordinate_offsets is not None:
+            kwargs["coordinate_offsets"] = coordinate_offsets
+
+        # Pass labels to plotters that support them
+        if labels is not None:
+            kwargs["labels"] = labels
 
         # Pass physical dimensions to plotters that support them
         if plotter.supports_physical_dimensions:
@@ -2415,6 +3304,16 @@ class ReservoirModelVisualizer3D:
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
         title: typing.Optional[str] = None,
+        x_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        y_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        z_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        labels: typing.Optional["LabelManager"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -2427,6 +3326,14 @@ class ReservoirModelVisualizer3D:
         :param width: Custom width for the entire subplot figure
         :param height: Custom height for the entire subplot figure
         :param title: Custom title for the entire subplot figure
+        :param x_slice: X dimension slice specification:
+            - int: Single index (e.g., 5 for cells[5:6, :, :])
+            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
+            - slice: Full slice object (e.g., slice(10, 20, 2))
+            - None: Use full dimension
+        :param y_slice: Y dimension slice specification (same format as x_slice)
+        :param z_slice: Z dimension slice specification (same format as x_slice)
+        :param labels: Optional collection of labels to add to each subplot
         :param kwargs: Additional parameters for individual property plots. This will be
             passed to the plotter's plot method, allowing customization of each subplot.
         :return: Plotly figure with multiple property subplots
@@ -2451,7 +3358,14 @@ class ReservoirModelVisualizer3D:
 
             # Get individual plot - no custom size here since it's a subplot
             individual_fig = self.plot_property(
-                model_state, prop, plot_type=plot_type, **kwargs
+                model_state,
+                prop,
+                plot_type=plot_type,
+                x_slice=x_slice,
+                y_slice=y_slice,
+                z_slice=z_slice,
+                labels=labels,
+                **kwargs,
             )
             # Add traces to subplot
             for trace in individual_fig.data:
@@ -2477,6 +3391,16 @@ class ReservoirModelVisualizer3D:
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
         title: typing.Optional[str] = None,
+        x_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        y_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        z_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        labels: typing.Optional["LabelManager"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -2488,6 +3412,14 @@ class ReservoirModelVisualizer3D:
         :param width: Custom width for the dashboard
         :param height: Custom height for the dashboard
         :param title: Custom title for the dashboard
+        :param x_slice: X dimension slice specification:
+            - int: Single index (e.g., 5 for cells[5:6, :, :])
+            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
+            - slice: Full slice object (e.g., slice(10, 20, 2))
+            - None: Use full dimension
+        :param y_slice: Y dimension slice specification (same format as x_slice)
+        :param z_slice: Z dimension slice specification (same format as x_slice)
+        :param labels: Optional collection of labels to add to the dashboard
         :param kwargs: Additional parameters for individual property plots.
         :return: Dashboard figure with multiple reservoir property visualizations
         """
@@ -2499,6 +3431,10 @@ class ReservoirModelVisualizer3D:
             width=width,
             height=height,
             title=title or type(self).default_dashboard_title,
+            x_slice=x_slice,
+            y_slice=y_slice,
+            z_slice=z_slice,
+            labels=labels,
             **kwargs,
         )
 
@@ -2511,6 +3447,16 @@ class ReservoirModelVisualizer3D:
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
         title: typing.Optional[str] = None,
+        x_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        y_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        z_slice: typing.Optional[
+            typing.Union[int, slice, typing.Tuple[int, int]]
+        ] = None,
+        labels: typing.Optional["LabelManager"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -2523,6 +3469,15 @@ class ReservoirModelVisualizer3D:
         :param width: Custom width for the animation
         :param height: Custom height for the animation
         :param title: Custom title for the animation
+        :param x_slice: X dimension slice specification:
+            - int: Single index (e.g., 5 for cells[5:6, :, :])
+            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
+            - slice: Full slice object (e.g., slice(10, 20, 2))
+            - None: Use full dimension
+        :param y_slice: Y dimension slice specification (same format as x_slice)
+        :param z_slice: Z dimension slice specification (same format as x_slice)
+        :param labels: Optional collection of labels to add to the animation
+        :param kwargs: Additional parameters for individual property plots.
         :return: Animated Plotly figure with time controls
         """
         if not model_states:
@@ -2537,6 +3492,10 @@ class ReservoirModelVisualizer3D:
             plot_type=plot_type,
             width=width,
             height=height,
+            x_slice=x_slice,
+            y_slice=y_slice,
+            z_slice=z_slice,
+            labels=labels,
             **kwargs,
         )
 
@@ -2549,6 +3508,10 @@ class ReservoirModelVisualizer3D:
                 plot_type=plot_type,
                 width=width,
                 height=height,
+                x_slice=x_slice,
+                y_slice=y_slice,
+                z_slice=z_slice,
+                labels=labels,
                 **kwargs,
             )
 
@@ -2628,7 +3591,7 @@ class ReservoirModelVisualizer3D:
                     "yanchor": "top",
                     "xanchor": "left",
                     "currentvalue": {
-                        "font": {"size": 20},
+                        "font": {"size": 18},
                         "prefix": "Time Step:",
                         "visible": True,
                         "xanchor": "right",

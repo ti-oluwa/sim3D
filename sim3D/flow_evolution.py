@@ -69,7 +69,7 @@ from sim3D.boundary_conditions import BoundaryConditions
 # ###########################################################################
 
 
-@attrs.define(slots=True)
+@attrs.define(slots=True, frozen=True)
 class EvolutionResult(typing.Generic[T]):
     value: T
     scheme: EvolutionScheme
@@ -418,7 +418,7 @@ def compute_explicit_pressure_evolution(
         * gas_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     ) / gas_formation_volume_factor_grid
-    
+
     # Clamp mobility grids to avoid numerical issues
     # This ensures mobilities are never zero or negative (for numerical stability)
     water_mobility_grid_x = np.maximum(water_mobility_grid_x, 1e-12)

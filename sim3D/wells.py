@@ -422,6 +422,38 @@ class Wells(typing.Generic[WellLocation]):
         """
         return self.injectors[location], self.producers[location]
 
+    @property
+    def locations(
+        self
+    ) -> typing.Tuple[typing.List[WellLocation], typing.List[WellLocation]]:
+        """
+        Get all well locations in the reservoir.
+
+        :return: A tuple of (injection_well_locations, production_well_locations).
+        This returns a tuple containing two lists:
+            - A list of locations for injection wells.
+            - A list of locations for production wells.
+        """
+        return (
+            list(self.injectors.wells_map.keys()),
+            list(self.producers.wells_map.keys()),
+        )
+
+    @property
+    def names(self) -> typing.Tuple[typing.List[str], typing.List[str]]:
+        """
+        Get all well names in the reservoir.
+
+        :return: A tuple of (injection_well_names, production_well_names).
+        This returns a tuple containing two lists:
+            - A list of names for injection wells.
+            - A list of names for production wells.
+        """
+        return (
+            [well.name for well in self.injection_wells],
+            [well.name for well in self.production_wells],
+        )
+
     def evolve(self, time_step: int) -> None:
         """
         Evolve all wells in the reservoir model to the next time step.

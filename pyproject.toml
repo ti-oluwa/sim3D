@@ -26,8 +26,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "jupyterlab>=4.4.3",
+    "marimo>=0.14.16",
     "mypy>=1.16.1",
     "rich>=14.0.0",
     "ruff>=0.12.1",
+    "watchdog>=6.0.0",
 ]
 
+[tool.marimo.runtime]
+output_max_bytes = 10_000_000_000
