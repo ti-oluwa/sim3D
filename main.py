@@ -22,7 +22,7 @@ def simulate():
         sim3D.ThreeDimensions, (10, 10, 5)
     )  # (x, y, z) dimensions of the grid in cells
     # Height of each cell in the z-direction (in feet)
-    height_grid = build_uniform_grid(grid_dimension=grid_dimension, value=70.0)
+    thickness_grid = build_uniform_grid(grid_dimension=grid_dimension, value=70.0)
     pressure_range = (1500.0, 2000.0)
     oil_viscosity_range = (5.0, 10.0)
     oil_compressibility_range = (7e-7, 1e-5)
@@ -113,7 +113,7 @@ def simulate():
     model = sim3D.build_reservoir_model(
         grid_dimension=grid_dimension,
         cell_dimension=cell_dimension,
-        height_grid=height_grid,
+        thickness_grid=thickness_grid,
         pressure_grid=pressure_grid,
         oil_bubble_point_pressure_grid=oil_bubble_point_pressure_grid,
         absolute_permeability=absolute_permeability,
@@ -182,8 +182,8 @@ def simulate():
     producer_A = sim3D.build_production_well(
         well_name="Producer A",
         perforating_interval=(
-            (5, 9, 0),
-            (5, 9, 4),
+            (1, 1, 0),
+            (1, 1, 4),
         ),  # Perforating interval in grid coordinates
         radius=0.3281,
         bottom_hole_pressure=1520.0,  # Bottom hole pressure in psi
@@ -217,7 +217,7 @@ def simulate():
 
     simulation_params = sim3D.SimulationParameters(
         time_step_size=3600,
-        total_time=72000,
+        total_time=72000 * 3,
         max_iterations=100,
         convergence_tolerance=1e-5,
         output_frequency=1,

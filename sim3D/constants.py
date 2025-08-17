@@ -134,14 +134,14 @@ SCF_PER_DAY_TO_M3_PER_SECOND = (
     1 / M3_PER_SECOND_TO_SCF_PER_DAY
 )  
 """Conversion factor from standard cubic feet per day to cubic meters per second (m³/s)"""
-DAYS_TO_SECONDS = 3600 * 24
+SECONDS_PER_DAY = 3600 * 24
 """Conversion factor from days to seconds"""
-SECONDS_TO_DAYS = 1 / DAYS_TO_SECONDS
+DAYS_PER_SECOND = 1 / SECONDS_PER_DAY
 """Conversion factor from seconds to days"""
 MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY = 0.001127
 """Conversion factor from millidarcies per centipoise to ft²/psi.day"""
 MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND = (
-    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / DAYS_TO_SECONDS
+    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / SECONDS_PER_DAY
 )
 PPM_TO_WEIGHT_FRACTION = 1e-6
 """Conversion factor from parts per million (ppm) to weight fraction"""
@@ -149,7 +149,14 @@ PPM_TO_WEIGHT_PERCENT = 1e-4  # 1 ppm = 0.0001 weight percent
 """Conversion factor from parts per million (ppm) to weight percent"""
 WEIGHT_PERCENT_TO_PPM = 1 / PPM_TO_WEIGHT_PERCENT
 """Conversion factor from weight percent to parts per million (ppm)"""
-
+ACCELERATION_DUE_TO_GRAVITY_M_PER_S2 = 9.80665  # m/s²
+"""Standard acceleration due to gravity in meters per second squared (m/s²)"""
+ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 = 32.174  # ft/s²
+"""Standard acceleration due to gravity in feet per second squared (ft/s²)"""
+ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2 = (
+    ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * SECONDS_PER_DAY**2
+)  # ft/day²
+"""Standard acceleration due to gravity in feet per day squared (ft/day²)"""
 
 RESERVOIR_OIL_NAME = (
     "n-Dodecane"  # Heavy oil, can be changed to any fluid supported by CoolProp

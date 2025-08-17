@@ -134,14 +134,14 @@ SCF_PER_DAY_TO_M3_PER_SECOND = (
     1 / M3_PER_SECOND_TO_SCF_PER_DAY
 )  
 """Conversion factor from standard cubic feet per day to cubic meters per second (m³/s)"""
-DAYS_TO_SECONDS = 3600 * 24
+SECONDS_PER_DAY = 3600 * 24
 """Conversion factor from days to seconds"""
-SECONDS_TO_DAYS = 1 / DAYS_TO_SECONDS
+DAYS_PER_SECOND = 1 / SECONDS_PER_DAY
 """Conversion factor from seconds to days"""
 MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY = 0.001127
 """Conversion factor from millidarcies per centipoise to ft²/psi.day"""
 MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND = (
-    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / DAYS_TO_SECONDS
+    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / SECONDS_PER_DAY
 )
 
 RESERVOIR_OIL_NAME = (

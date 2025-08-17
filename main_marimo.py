@@ -25,13 +25,13 @@ def _(model_states, sim3D):
     sim3D.viz.animate_property(
         model_states,
         property="pressure",
-        plot_type=sim3D.PlotType.VOLUME_RENDER,
+        plot_type=sim3D.PlotType.CELL_BLOCKS,
         width=960,
         height=600,
         # x_slice=(2, 9),
         # y_slice=(2, 7),
         # z_slice=(2, 5),
-        labels=labels,
+        # labels=labels,
     )
     return
 

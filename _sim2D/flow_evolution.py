@@ -7,7 +7,7 @@ import itertools
 from _sim2D.types import TwoDimensionalGrid
 from _sim2D.constants import (
     BBL_TO_FT3,
-    SECONDS_TO_DAYS,
+    DAYS_PER_SECOND,
     MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
 )
 from _sim2D.properties import (
@@ -852,7 +852,7 @@ def compute_explicit_pressure_evolution(
         #     (q_{i,j} * A_{i,j} * Δx)
         # ]
 
-        time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
+        time_step_size_in_days = time_step_size * DAYS_PER_SECOND
         change_in_pressure = (
             time_step_size_in_days
             / (
@@ -1261,7 +1261,7 @@ def compute_implicit_pressure_evolution(
         current_cell_porosity = porosity_grid[i, j]
         current_cell_total_compressibility = total_compressibility_grid[i, j]
         current_cell_oil_pressure = current_oil_pressure_grid[i, j]
-        time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
+        time_step_size_in_days = time_step_size * DAYS_PER_SECOND
         current_cell_oil_water_capillary_pressure = (
             padded_oil_water_capillary_pressure_grid[
                 current_cell_padded_index_x, current_cell_padded_index_y
@@ -1981,7 +1981,7 @@ def compute_saturation_evolution(
     """
     cell_count_x, cell_count_y = fluid_properties.pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
-    time_step_size_in_days = time_step_size * SECONDS_TO_DAYS
+    time_step_size_in_days = time_step_size * DAYS_PER_SECOND
 
     # --- Extract current state and properties ---
     current_oil_pressure_grid = fluid_properties.pressure_grid

@@ -1,4 +1,4 @@
-"""Run a simulation on a 3-Dimensional reservoir model with specified fluid properties and wells."""
+"""Run a simulation on a 3-Dimensional reservoir model with specified properties and wells."""
 
 import typing
 import copy
@@ -132,7 +132,8 @@ def run_3D_simulation(
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
-    height_grid = model.height_grid
+    thickness_grid = model.thickness_grid
+    elevation_grid = model.get_elevation_grid(direction="downward")
     wells.check_location(model.grid_dimension)
     wells = copy.deepcopy(wells)
 
@@ -175,7 +176,8 @@ def run_3D_simulation(
         # )
         pressure_evolution_result = compute_pressure_evolution(
             cell_dimension=cell_dimension,
-            height_grid=height_grid,
+            thickness_grid=thickness_grid,
+            elevation_grid=elevation_grid,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
@@ -226,7 +228,8 @@ def run_3D_simulation(
         # Saturation evolution
         saturation_evolution_result = compute_saturation_evolution(
             cell_dimension=cell_dimension,
-            height_grid=height_grid,
+            thickness_grid=thickness_grid,
+            elevation_grid=elevation_grid,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,

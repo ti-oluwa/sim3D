@@ -59,7 +59,7 @@ __all__ = [
 def build_reservoir_model(
     grid_dimension: NDimension,
     cell_dimension: typing.Tuple[float, float],
-    height_grid: NDimensionalGrid[NDimension],
+    thickness_grid: NDimensionalGrid[NDimension],
     pressure_grid: NDimensionalGrid[NDimension],
     rock_compressibility: float,
     absolute_permeability: RockPermeability[NDimension],
@@ -124,8 +124,8 @@ def build_reservoir_model(
 
     :param grid_dimension: Number of grid cells (rows, columns).
     :param cell_dimension: Physical size of each cell (dx, dy) in feets.
-    :param height_grid: Reservoir height grid (ft).
-    :param pressure_grid: Reservoir pressure grid (psi).
+    :param thickness_grid: Reservoir cells' thickness grid (ft).
+    :param pressure_grid: Reservoir cells' pressure grid (psi).
     :param oil_bubble_point_pressure_grid: Oil bubble point pressure grid (psi).
     :param rock_compressibility: Rock compressibility in psi⁻¹.
     :param absolute_permeability_grid: Absolute permeability grid (mD).
@@ -434,7 +434,7 @@ def build_reservoir_model(
     return ReservoirModel(
         grid_dimension=grid_dimension,
         cell_dimension=cell_dimension,
-        height_grid=height_grid,
+        thickness_grid=thickness_grid,
         fluid_properties=fluid_properties,
         rock_properties=rock_properties,
         boundary_conditions=boundary_conditions,

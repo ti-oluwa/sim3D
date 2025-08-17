@@ -15,7 +15,7 @@ from sim3D.constants import (
     OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
     POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
     PPM_TO_WEIGHT_FRACTION,
-    SECONDS_TO_DAYS,
+    DAYS_PER_SECOND,
     STANDARD_TEMPERATURE_IMPERIAL,
     STANDARD_PRESSURE_IMPERIAL,
     BBL_TO_FT3,
@@ -406,7 +406,7 @@ def compute_diffusion_number(
     :param cell_size: Size of the grid block (ft)
     :return: Diffusion number (dimensionless)
     """
-    time_in_days = time_step_size * SECONDS_TO_DAYS
+    time_in_days = time_step_size * DAYS_PER_SECOND
     diffusion_number = (total_mobility / (porosity * total_compressibility)) * (
         time_in_days / cell_size**2
     )

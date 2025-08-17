@@ -239,11 +239,67 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Number of cells in the grid. A tuple of number of cells in x and y directions (cell_count_x, cell_count_y)."""
     cell_dimension: typing.Tuple[float, float]
     """Size of each cell in the grid (cell_size_x, cell_size_y) in ft."""
-    height_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the height of each cell in the reservoir (ft)."""
+    thickness_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the thickness of each cell in the reservoir (ft)."""
     fluid_properties: FluidProperties[NDimension]
     """Fluid properties of the reservoir model."""
     rock_properties: RockProperties[NDimension]
     """Rock properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
+
+    def get_elevation_grid(
+        self, direction: typing.Literal["downward", "upward"] = "downward"
+    ) -> NDimensionalGrid[NDimension]:
+        """
+        Generate an elevation grid based on the thickness grid and specified direction.
+
+        The elevation grid is generated based on the thickness of each cell, starting from the top or bottom
+        of the reservoir, depending on the specified direction.
+
+        :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
+        :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
+        """
+        return generate_elevation_grid(self.thickness_grid, direction)
+
+
+def generate_elevation_grid(
+    thickness_grid: NDimensionalGrid[NDimension],
+    direction: typing.Literal["downward", "upward"] = "downward",
+) -> NDimensionalGrid[NDimension]:
+    """
+    Convert a cell thickness (height) grid into an absolute elevation grid (cell center z-coordinates).
+
+    The elevation grid is generated based on the thickness of each cell, starting from the top or bottom
+    of the reservoir, depending on the specified direction.
+
+    :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft).
+    :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
+    :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
+    """
+    if direction not in {"downward", "upward"}:
+        raise ValueError("direction must be 'downward' or 'upward'")
+
+    nz, _, _ = thickness_grid.shape
+    elevation_grid = np.zeros_like(thickness_grid, dtype=float)
+
+    if direction == "downward":
+        # Start from top layer, move downward
+        elevation_grid[0] = thickness_grid[0] / 2
+        for k in range(1, nz):
+            elevation_grid[k] = (
+                elevation_grid[k - 1]
+                + thickness_grid[k - 1] / 2
+                + thickness_grid[k] / 2
+            )
+    else:
+        # Start from bottom layer, move upward
+        elevation_grid[-1] = thickness_grid[-1] / 2
+        for k in range(nz - 2, -1, -1):
+            elevation_grid[k] = (
+                elevation_grid[k + 1]
+                + thickness_grid[k + 1] / 2
+                + thickness_grid[k] / 2
+            )
+
+    return typing.cast(NDimensionalGrid[NDimension], elevation_grid)

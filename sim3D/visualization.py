@@ -92,7 +92,7 @@ class CameraPosition(TypedDict):
     """Up direction vector for the camera (x, y, z coordinates)."""
 
 
-class Lighting(TypedDict):
+class Lighting(TypedDict, total=False):
     """Lighting configuration for 3D plots."""
 
     ambient: float
@@ -128,16 +128,16 @@ class LightPosition(TypedDict):
 
 
 DEFAULT_CAMERA_POSITION = CameraPosition(
-    eye=dict(x=1.5, y=1.5, z=1.5),
+    eye=dict(x=1.5, y=1.5, z=1.8),
     center=dict(x=0, y=0, z=0),
     up=dict(x=0, y=0, z=1),
 )
 
 DEFAULT_OPACITY_SCALE_VALUES = [
-    [0, 0.3],
-    [0.2, 0.55],
+    [0, 0.5],
+    [0.2, 0.65],
     [0.5, 0.75],
-    [0.8, 0.90],
+    [0.8, 0.95],
     [1, 1.0],
 ]
 
@@ -169,7 +169,7 @@ class PlotConfig:
     """Default color scheme for data visualization. Professional color schemes are optimized
     for scientific data visualization and accessibility."""
 
-    opacity: float = 0.5
+    opacity: float = 0.65
     """Default opacity level for plot elements (0.0 = transparent, 1.0 = opaque).
     Lower values allow better visualization of internal structures."""
 
@@ -493,9 +493,9 @@ class PropertyRegistry:
             unit="dimensionless",
             color_scheme=ColorScheme.INFERNO,
         ),
-        "height": PropertyMetadata(
-            name="height_grid",
-            display_name="Height",
+        "thickness": PropertyMetadata(
+            name="thickness_grid",
+            display_name="Cell Thickness",
             unit="ft",
             color_scheme=ColorScheme.CIVIDIS,
         ),
@@ -722,7 +722,7 @@ class Base3DPlotter(ABC):
     def create_physical_coordinates(
         self,
         cell_dimension: typing.Tuple[float, float],
-        height_grid: ThreeDimensionalGrid,
+        thickness_grid: ThreeDimensionalGrid,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -734,11 +734,11 @@ class Base3DPlotter(ABC):
         - data[:, :, -1] (last array layer) appears at the BOTTOM of the visualization
 
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param coordinate_offsets: Optional cell index offsets for sliced data (x_offset, y_offset, z_offset)
         :return: Tuple of (X, Y, Z) coordinate arrays in physical units
         """
-        nx, ny, nz = height_grid.shape
+        nx, ny, nz = thickness_grid.shape
         dx, dy = cell_dimension
 
         # Calculate physical coordinate offsets from cell index offsets
@@ -752,7 +752,7 @@ class Base3DPlotter(ABC):
             if z_index_offset > 0:
                 # Calculate cumulative depth to the starting Z slice
                 z_start_offset = -np.sum(
-                    height_grid[:, :, :z_index_offset], axis=2
+                    thickness_grid[:, :, :z_index_offset], axis=2
                 ).mean()
             else:
                 z_start_offset = 0.0
@@ -769,7 +769,7 @@ class Base3DPlotter(ABC):
         # Build coordinates downward - each layer is lower in Z, starting from z_offset
         z_coords[:, :, 0] = z_offset  # Start from the Z offset
         for k in range(nz):
-            z_coords[:, :, k + 1] = z_coords[:, :, k] - height_grid[:, :, k]
+            z_coords[:, :, k + 1] = z_coords[:, :, k] - thickness_grid[:, :, k]
 
         return x_coords, y_coords, z_coords
 
@@ -782,7 +782,7 @@ class Base3DPlotter(ABC):
         data: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> None:
@@ -794,7 +794,7 @@ class Base3DPlotter(ABC):
         :param data: 3D data array for value extraction
         :param metadata: Property metadata for formatting
         :param cell_dimension: Physical cell dimensions for coordinate conversion
-        :param height_grid: Height grid for physical coordinate conversion
+        :param thickness_grid: Height grid for physical coordinate conversion
         :param coordinate_offsets: Coordinate offsets for sliced data
         :param format_kwargs: Additional formatting values
         """
@@ -812,7 +812,7 @@ class Base3DPlotter(ABC):
             data_grid=data,
             metadata=metadata,
             cell_dimension=cell_dimension,
-            height_grid=height_grid,
+            thickness_grid=thickness_grid,
             coordinate_offsets=coordinate_offsets,
             format_kwargs=format_kwargs,
         )
@@ -852,8 +852,8 @@ class VolumeRenderer(Base3DPlotter):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        surface_count: int = 30,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        surface_count: int = 50,
         opacity: typing.Optional[float] = None,
         isomin: typing.Optional[float] = None,
         isomax: typing.Optional[float] = None,
@@ -868,7 +868,7 @@ class VolumeRenderer(Base3DPlotter):
         :param data: 3D data array to render
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param surface_count: Number of isosurfaces to generate for volume rendering
         :param opacity: Opacity of the volume rendering (defaults to config value). Lower values allow better visualization of internal structures.
         :param isomin: Minimum value for isosurface clipping (optional)
@@ -897,10 +897,10 @@ class VolumeRenderer(Base3DPlotter):
         data_max = float(np.nanmax(display_data))
 
         # Create coordinate grids - use physical coordinates if available
-        if cell_dimension is not None and height_grid is not None:
+        if cell_dimension is not None and thickness_grid is not None:
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid, coordinate_offsets
+                cell_dimension, thickness_grid, coordinate_offsets
             )
             # For volume rendering, we need cell centers
             nx, ny, nz = data.shape
@@ -949,7 +949,7 @@ class VolumeRenderer(Base3DPlotter):
             absolute_display_k = (
                 z_index_offset + display_k
             )  # Apply offset to display k as well
-            if cell_dimension is not None and height_grid is not None:
+            if cell_dimension is not None and thickness_grid is not None:
                 hover_text.append(
                     f"Cell: ({absolute_i}, {absolute_j}, {absolute_display_k})<br>"  # Show absolute indices
                     f"X: {x.flatten()[flat_index]:.1f} ft<br>"
@@ -1031,7 +1031,7 @@ class VolumeRenderer(Base3DPlotter):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=coordinate_offsets,
             )
@@ -1097,10 +1097,10 @@ class IsosurfacePlotter(Base3DPlotter):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         isomin: typing.Optional[float] = None,
         isomax: typing.Optional[float] = None,
-        surface_count: int = 3,
+        surface_count: int = 50,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "cube",
         labels: typing.Optional["LabelManager"] = None,
@@ -1112,7 +1112,7 @@ class IsosurfacePlotter(Base3DPlotter):
         :param data: 3D data array to create isosurfaces from
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param isomin: Minimum isovalue for isosurface
         :param isomax: Maximum isovalue for isosurface
         :param surface_count: Number of isosurfaces to generate
@@ -1130,10 +1130,10 @@ class IsosurfacePlotter(Base3DPlotter):
         )
 
         # Create coordinate grids - use physical coordinates if available
-        if cell_dimension is not None and height_grid is not None:
+        if cell_dimension is not None and thickness_grid is not None:
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid, coordinate_offsets
+                cell_dimension, thickness_grid, coordinate_offsets
             )
             # For isosurface, we need cell centers
             nx, ny, nz = data.shape
@@ -1261,7 +1261,7 @@ class IsosurfacePlotter(Base3DPlotter):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=coordinate_offsets,
             )
@@ -1328,7 +1328,7 @@ class SlicePlotter(Base3DPlotter):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         slice_plane_x: typing.Optional[int] = None,
         slice_plane_y: typing.Optional[int] = None,
         slice_plane_z: typing.Optional[int] = None,
@@ -1353,7 +1353,7 @@ class SlicePlotter(Base3DPlotter):
         :param data: 3D data array to slice through (should be full dataset, not pre-sliced)
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param slice_plane_x: X-coordinate for YZ plane slice (defaults to middle)
         :param slice_plane_y: Y-coordinate for XZ plane slice (defaults to middle)
         :param slice_plane_z: Z-coordinate for XY plane slice (defaults to middle)
@@ -1414,9 +1414,9 @@ class SlicePlotter(Base3DPlotter):
         x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
 
         # Create coordinate grids - use physical coordinates if available
-        if cell_dimension is not None and height_grid is not None:
+        if cell_dimension is not None and thickness_grid is not None:
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, height_grid, coordinate_offsets
+                cell_dimension, thickness_grid, coordinate_offsets
             )
             x_title = "X Distance (ft)"
             y_title = "Y Distance (ft)"
@@ -1435,7 +1435,7 @@ class SlicePlotter(Base3DPlotter):
 
         # X slice (YZ plane)
         if show_x_slice:
-            if cell_dimension is not None and height_grid is not None:
+            if cell_dimension is not None and thickness_grid is not None:
                 # Use physical coordinates
                 x_pos = x_coords[slice_plane_x]
                 y_grid, z_grid = np.meshgrid(
@@ -1542,7 +1542,7 @@ class SlicePlotter(Base3DPlotter):
 
         # Y slice (XZ plane)
         if show_y_slice:
-            if cell_dimension is not None and height_grid is not None:
+            if cell_dimension is not None and thickness_grid is not None:
                 # Use physical coordinates
                 y_pos = y_coords[slice_plane_y]
                 x_grid, z_grid = np.meshgrid(
@@ -1655,7 +1655,7 @@ class SlicePlotter(Base3DPlotter):
 
         # Z slice (XY plane)
         if show_z_slice:
-            if cell_dimension is not None and height_grid is not None:
+            if cell_dimension is not None and thickness_grid is not None:
                 # Use physical coordinates - need to get the z position for this slice
                 x_grid, y_grid = np.meshgrid(
                     x_coords[:-1], y_coords[:-1], indexing="ij"
@@ -1840,7 +1840,7 @@ class SlicePlotter(Base3DPlotter):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=coordinate_offsets,
             )
@@ -1907,7 +1907,7 @@ class CellBlockPlotter(Base3DPlotter):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Tuple[float, float],
-        height_grid: ThreeDimensionalGrid,
+        thickness_grid: ThreeDimensionalGrid,
         subsample_factor: int = 1,
         opacity: typing.Optional[float] = None,
         show_outline: typing.Optional[bool] = None,
@@ -1923,7 +1923,7 @@ class CellBlockPlotter(Base3DPlotter):
         :param data: 3D data array to render
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param subsample_factor: Factor to reduce the number of cells rendered for performance.
             A value of 1 renders every cell, 2 renders every 2nd cell in each dimension
             (reducing total cells by ~87.5%), 3 renders every 3rd cell (~96% reduction), etc.
@@ -1972,14 +1972,12 @@ class CellBlockPlotter(Base3DPlotter):
             if data_max > data_min:
                 opacity_values = (display_data - data_min) / (data_max - data_min)
 
-                def interpolate_opacity(x, scale_values):
+                def interpolate_opacity(
+                    x: np.ndarray, scale_values: typing.Sequence[typing.Sequence[float]]
+                ):
                     # scale_values: list of [fraction, opacity]
                     fractions, opacities = zip(*scale_values)
                     return np.interp(x, fractions, opacities)
-
-                # Apply opacity scaling similar to volume renderer for better depth perception
-                def opacity_scale(x):
-                    return np.clip(0.1 + 0.8 * (x**0.7), 0.1, 0.9)
 
                 opacity_values = interpolate_opacity(
                     opacity_values, self.config.opacity_scale_values
@@ -1994,7 +1992,7 @@ class CellBlockPlotter(Base3DPlotter):
         # Create physical coordinate grids
         coordinate_offsets = kwargs.get("coordinate_offsets", None)
         x_coords, y_coords, z_coords = self.create_physical_coordinates(
-            cell_dimension, height_grid, coordinate_offsets
+            cell_dimension, thickness_grid, coordinate_offsets
         )
 
         # Extract index offsets to show original dataset indices in hover text
@@ -2016,7 +2014,7 @@ class CellBlockPlotter(Base3DPlotter):
             z_min, z_max = z_coords[i, j, k], z_coords[i, j, k + 1]
 
             # Create vertices for the cell block (cuboid)
-            # In our coordinate system: k=0 starts at Z=50 (visual top), Z increases downward
+            # In our coordinate system: k=0 starts at visual top, Z increases downward
             # So z_min is the top face (smaller Z value), z_max is the bottom face (larger Z value)
             vertices = [
                 [x_min, y_min, z_min],
@@ -2082,10 +2080,11 @@ class CellBlockPlotter(Base3DPlotter):
                         f"{metadata.display_name}: {self.format_value(cell_value, metadata)} {metadata.unit}"
                         + (" (log scale)" if metadata.log_scale else "")
                         + "<br>"
-                        f"Cell Size: {dx:.1f} x {dy:.1f} x {height_grid[i, j, k]:.2f} ft<br>"
+                        f"Cell Size: {dx:.1f} x {dy:.1f} x {thickness_grid[i, j, k]:.2f} ft<br>"
                         f"Opacity: {cell_opacity:.2f}"
                         "<extra></extra>"
                     ),
+                    flatshading=True,  # Use flat shading for better visibility
                 )
             )
 
@@ -2242,7 +2241,7 @@ class CellBlockPlotter(Base3DPlotter):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=kwargs.get("coordinate_offsets", None),
             )
@@ -2307,7 +2306,7 @@ class Scatter3DPlotter(Base3DPlotter):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         threshold: float = 0.0,
         sample_rate: float = 1.0,
         marker_size: int = 3,
@@ -2371,7 +2370,7 @@ class Scatter3DPlotter(Base3DPlotter):
         # Apply numpy convention: z=0 should be at top, z increases downward
         z_coords = data.shape[2] - 1 - z_coords_raw
 
-        if cell_dimension is not None and height_grid is not None:
+        if cell_dimension is not None and thickness_grid is not None:
             # Convert indices to physical coordinates
             dx, dy = cell_dimension
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
@@ -2382,7 +2381,7 @@ class Scatter3DPlotter(Base3DPlotter):
 
             _, _, z_boundaries = self.create_physical_coordinates(
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 coordinate_offsets=coordinate_offsets,
             )
             z_physical = np.array(
@@ -2489,7 +2488,7 @@ class Scatter3DPlotter(Base3DPlotter):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 coordinate_offsets=kwargs.get("coordinate_offsets", None),
                 format_kwargs=kwargs.get("format_kwargs", None),
             )
@@ -2566,14 +2565,14 @@ class LabelCoordinate3D:
     def as_physical(
         self,
         cell_dimension: typing.Tuple[float, float],
-        height_grid: ThreeDimensionalGrid,
+        thickness_grid: ThreeDimensionalGrid,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Tuple[float, float, float]:
         """
         Convert index coordinates to physical coordinates.
 
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param coordinate_offsets: Optional cell index offsets to apply to the physical coordinates
         :return: Tuple of (x_physical, y_physical, z_physical) coordinates
         """
@@ -2585,11 +2584,11 @@ class LabelCoordinate3D:
         y_physical = (offsets[1] + self.y) * dy
 
         # For Z, we need to calculate cumulative depth
-        if isinstance(self.z, int) and self.z < height_grid.shape[2]:
-            z_physical = -np.sum(height_grid[self.x, self.y, : self.z])
+        if isinstance(self.z, int) and self.z < thickness_grid.shape[2]:
+            z_physical = -np.sum(thickness_grid[self.x, self.y, : self.z])
             if offsets[2] > 0:
                 # Add offset from previous layers
-                z_physical -= np.sum(height_grid[:, :, : offsets[2]], axis=2).mean()
+                z_physical -= np.sum(thickness_grid[:, :, : offsets[2]], axis=2).mean()
         else:
             z_physical = offsets[2] + self.z  # Fallback
         return x_physical, y_physical, z_physical
@@ -2654,7 +2653,7 @@ class Label:
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> str:
@@ -2663,7 +2662,7 @@ class Label:
 
         :param data_grid: 3D data array to extract values from
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param metadata: Property metadata for formatting
         :param format_kwargs: Additional values for string formatting
         :return: Formatted label text
@@ -2691,10 +2690,10 @@ class Label:
         if data_grid is not None:
             raw_value = data_grid[x_index, y_index, z_index]
 
-        if cell_dimension is not None and height_grid is not None:
+        if cell_dimension is not None and thickness_grid is not None:
             x_physical, y_physical, z_physical = self.position.as_physical(
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 coordinate_offsets=None,  # Don't pass offset here, handle separately
             )
             # Apply the label's offset to the calculated physical coordinates
@@ -2726,7 +2725,7 @@ class Label:
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> typing.Dict[str, typing.Any]:
@@ -2735,7 +2734,7 @@ class Label:
 
         :param data_grid: 3D data array for value extraction
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param height_grid: 3D array with height of each cell (feet)
+        :param thickness_grid: 3D array with height of each cell (feet)
         :param metadata: Property metadata for formatting
         :param format_kwargs: Additional formatting values
         :return: Plotly annotation dictionary
@@ -2755,7 +2754,7 @@ class Label:
             "text": self.get_text(
                 data_grid=data_grid,
                 cell_dimension=cell_dimension,
-                height_grid=height_grid,
+                thickness_grid=thickness_grid,
                 metadata=metadata,
                 format_kwargs=format_kwargs,
             ),
@@ -2887,7 +2886,7 @@ class LabelManager:
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        height_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> typing.List[typing.Dict[str, typing.Any]]:
@@ -2897,7 +2896,7 @@ class LabelManager:
         :param data_grid: 3D data array for value extraction
         :param metadata: Property metadata for formatting
         :param cell_dimension: Physical cell dimensions for coordinate conversion
-        :param height_grid: Height grid for physical coordinate conversion
+        :param thickness_grid: Height grid for physical coordinate conversion
         :param coordinate_offsets: Coordinate offsets for sliced data
         :param format_kwargs: Additional formatting values
         :return: List of Plotly annotation dictionaries
@@ -2932,7 +2931,7 @@ class LabelManager:
                 annotation = label.to_plotly_annotation(
                     data_grid=data_grid,
                     cell_dimension=cell_dimension,
-                    height_grid=height_grid,
+                    thickness_grid=thickness_grid,
                     metadata=metadata,
                     format_kwargs=kwargs,
                 )
@@ -3195,7 +3194,7 @@ class ReservoirModelVisualizer3D:
 
         # Get original cell dimensions and height grid
         cell_dimension = model_state.model.cell_dimension
-        height_grid = model_state.model.height_grid
+        thickness_grid = model_state.model.thickness_grid
 
         # Apply slicing if any slice parameters are provided
         coordinate_offsets = None
@@ -3233,9 +3232,9 @@ class ReservoirModelVisualizer3D:
                 z_slice_obj.start or 0,
             )
 
-            # If we sliced the data, we need to slice the height_grid as well for physical coordinates
-            if height_grid is not None:
-                height_grid = height_grid[x_slice_obj, y_slice_obj, z_slice_obj]  # type: ignore
+            # If we sliced the data, we need to slice the thickness_grid as well for physical coordinates
+            if thickness_grid is not None:
+                thickness_grid = thickness_grid[x_slice_obj, y_slice_obj, z_slice_obj]  # type: ignore
 
         plot_type = plot_type or self.config.plot_type
         plotter = self.plotters[plot_type]
@@ -3254,7 +3253,7 @@ class ReservoirModelVisualizer3D:
                 data,
                 metadata,
                 cell_dimension=kwargs.pop("cell_dimension", cell_dimension),
-                height_grid=kwargs.pop("height_grid", height_grid),
+                thickness_grid=kwargs.pop("thickness_grid", thickness_grid),
                 **kwargs,
             )
         else:
