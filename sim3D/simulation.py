@@ -4,7 +4,6 @@ import typing
 import copy
 from functools import partial
 from attrs import define, evolve
-import rich
 import logging
 import numpy as np
 
@@ -129,22 +128,35 @@ def run_3D_simulation(
     wells: Wells[ThreeDimensions],
     params: SimulationParameters,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
+    logger.info("Starting 3D reservoir simulation")
+    logger.debug(f"Grid dimensions: {model.grid_dimension}")
+    logger.debug(f"Cell dimensions: {model.cell_dimension}")
+    logger.debug(f"Evolution scheme: {params.evolution_scheme}")
+    logger.debug(f"Time step size: {params.time_step_size} seconds")
+    logger.debug(f"Total simulation time: {params.total_time} seconds")
+
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
     thickness_grid = model.thickness_grid
     elevation_grid = model.get_elevation_grid(direction="downward")
+
+    logger.debug("Checking well locations against grid dimensions")
     wells.check_location(model.grid_dimension)
     wells = copy.deepcopy(wells)
 
     if (method := params.evolution_scheme.lower()) == "adaptive":
+        logger.debug("Using adaptive pressure evolution scheme")
         compute_pressure_evolution = partial(
             compute_adaptive_pressure_evolution,
             diffusion_number_threshold=params.diffusion_number_threshold,
         )
+        logger.debug(f"Diffusion number threshold: {params.diffusion_number_threshold}")
     elif method == "implicit":
+        logger.debug("Using implicit pressure evolution scheme")
         compute_pressure_evolution = compute_implicit_pressure_evolution
     else:
+        logger.debug("Using explicit pressure evolution scheme")
         compute_pressure_evolution = compute_explicit_pressure_evolution
 
     time_step_size = params.time_step_size
@@ -161,19 +173,25 @@ def run_3D_simulation(
     )
     output_frequency = params.output_frequency
 
+    logger.debug(f"Number of time steps to simulate: {int(num_of_time_steps)}")
+    logger.debug(f"Output frequency: every {output_frequency} steps")
+    logger.debug(f"Convergence tolerance: {params.convergence_tolerance}")
+
     # Yield the Initial model state
+    logger.debug("Yielding initial model state")
     yield initial_state
 
     for time_step in range(1, int(num_of_time_steps + 1)):
-        print(f"TIME STEP {time_step}")
-        # Pressure evolution
-        # rich.print("[bold cyan]Computing pressure evolution...[/bold cyan]")
+        logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
 
-        # rich.print(
-        #     "Old Pressure Grid",
-        #     fluid_properties.pressure_grid.min(),
-        #     fluid_properties.pressure_grid.max(),
-        # )
+        # Log simulation progress at regular intervals
+        if time_step % max(1, int(num_of_time_steps // 10)) == 0:
+            progress_percent = (time_step / num_of_time_steps) * 100
+            logger.info(
+                f"Simulation progress: {progress_percent:.1f}% (step {time_step}/{int(num_of_time_steps)})"
+            )
+
+        logger.debug("Computing pressure evolution...")
         pressure_evolution_result = compute_pressure_evolution(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -185,9 +203,18 @@ def run_3D_simulation(
             wells=wells,
         )
         pressure_grid = pressure_evolution_result.value
+        logger.debug(
+            f"Pressure evolution completed using {pressure_evolution_result.scheme} scheme"
+        )
 
-        # rich.print("New Pressure Grid", pressure_grid.min(), pressure_grid.max())
         if (negative_pressure_indices := np.argwhere(pressure_grid < 0)).size > 0:
+            logger.error(
+                f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
+            )
+            logger.error(f"Minimum pressure: {np.min(pressure_grid):.2f} psi")
+            logger.error(
+                f"First few negative pressure indices: {negative_pressure_indices[:5].tolist()}"
+            )
             raise RuntimeError(
                 NEGATIVE_PRESSURE_ERROR.format(
                     indices=negative_pressure_indices.tolist()
@@ -195,6 +222,7 @@ def run_3D_simulation(
                 + f"\nAt Time Step {time_step}."
             )
 
+        logger.debug("Updating fluid properties with new pressure grid...")
         updated_fluid_properties = evolve(
             fluid_properties,
             pressure_grid=pressure_grid,
@@ -202,30 +230,21 @@ def run_3D_simulation(
         if pressure_evolution_result.scheme == "implicit":
             # For implicit schemes, we need to update the fluid properties
             # with the new pressure grid before computing saturation evolution.
+            logger.debug(
+                "Using updated fluid properties for saturation evolution (implicit scheme)"
+            )
             saturation_fluid_properties = copy.deepcopy(updated_fluid_properties)
         else:
             # For explicit schemes, we can use the current fluid properties
             # as the saturation fluid properties, since they are not updated
             # until after the saturation evolution.
+            logger.debug(
+                "Using current fluid properties for saturation evolution (explicit scheme)"
+            )
             saturation_fluid_properties = copy.deepcopy(fluid_properties)
 
-        # rich.print("[bold cyan]Updating fluid properties...[/bold cyan]")
-        # rich.print(
-        #     "Old Water Saturation Grid",
-        #     fluid_properties.water_saturation_grid.min(),
-        #     fluid_properties.water_saturation_grid.max(),
-        # )
-        # rich.print(
-        #     "Old Oil Saturation Grid",
-        #     fluid_properties.oil_saturation_grid.min(),
-        #     fluid_properties.oil_saturation_grid.max(),
-        # )
-        # rich.print(
-        #     "Old Gas Saturation Grid",
-        #     fluid_properties.gas_saturation_grid.min(),
-        #     fluid_properties.gas_saturation_grid.max(),
-        # )
         # Saturation evolution
+        logger.debug("Computing saturation evolution...")
         saturation_evolution_result = compute_saturation_evolution(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -239,22 +258,9 @@ def run_3D_simulation(
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
             saturation_evolution_result.value
         )
-        # rich.print(
-        #     "New Water Saturation Grid",
-        #     water_saturation_grid.min(),
-        #     water_saturation_grid.max(),
-        # )
-        # rich.print(
-        #     "New Oil Saturation Grid",
-        #     oil_saturation_grid.min(),
-        #     oil_saturation_grid.max(),
-        # )
-        # rich.print(
-        #     "New Gas Saturation Grid",
-        #     gas_saturation_grid.min(),
-        #     gas_saturation_grid.max(),
-        # )
+        logger.debug("Saturation evolution completed")
 
+        logger.debug("Updating fluid properties with new saturation grids...")
         fluid_properties = evolve(
             updated_fluid_properties,
             water_saturation_grid=water_saturation_grid,
@@ -262,10 +268,13 @@ def run_3D_simulation(
             gas_saturation_grid=gas_saturation_grid,
         )
         # Update the static fluid properties
+        logger.debug("Updating static fluid properties (PVT properties)...")
         fluid_properties = update_static_fluid_properties(fluid_properties)
+        logger.debug("Static fluid properties update completed")
 
         # Capture the model state at specified intervals and at the last time step
         if (time_step % output_frequency == 0) or (time_step == num_of_time_steps):
+            logger.debug(f"Capturing model state at time step {time_step}")
             model_state = ModelState(
                 time_step=time_step,
                 time_step_size=time_step_size,
@@ -277,12 +286,17 @@ def run_3D_simulation(
             yield model_state
 
         if time_step > params.max_iterations:
-            logger.debug(
+            logger.warning(
                 f"Reached maximum number of iterations: {params.max_iterations}. Stopping simulation."
             )
             break
         # Update the wells for the next time step
+        logger.debug("Updating wells for next time step")
         wells.evolve(time_step=time_step)
+
+    # Log completion outside the loop to avoid unbound variable issues
+    final_time_step = min(int(num_of_time_steps), params.max_iterations)
+    logger.info(f"Simulation completed successfully after {final_time_step} time steps")
 
 
 def update_static_fluid_properties(
@@ -354,8 +368,6 @@ def update_static_fluid_properties(
     :param fluid_properties: Current fluid property grids (pressure, temperature, salinity, densities, etc.)
     :return: Updated FluidProperties object with recalculated gas, water, and oil properties.
     """
-    # rich.print("[bold cyan]Updating static fluid properties...[/bold cyan]")
-
     # === Derived Grids ===
     # GAS PROPERTIES
     gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
@@ -385,34 +397,6 @@ def update_static_fluid_properties(
         gas_density_grid=new_gas_density_grid,
         gas_molecular_weight_grid=fluid_properties.gas_molecular_weight_grid,
     )
-
-    # # Print updated gas properties
-    # rich.print(
-    #     "[bold]Gas Gravity:[/bold]",
-    #     fluid_properties.gas_gravity_grid.min(),
-    #     fluid_properties.gas_gravity_grid.max(),
-    # )
-    # rich.print(
-    #     "Gas Compressibility Factor:",
-    #     gas_compressibility_factor_grid.min(),
-    #     gas_compressibility_factor_grid.max(),
-    # )
-    # rich.print(
-    #     "New Gas Compressibility:",
-    #     new_gas_compressibility_grid.min(),
-    #     new_gas_compressibility_grid.max(),
-    # )
-    # rich.print(
-    #     "New Gas Formation Volume Factor:",
-    #     new_gas_formation_volume_factor_grid.min(),
-    #     new_gas_formation_volume_factor_grid.max(),
-    # )
-    # rich.print(
-    #     "New Gas Density:", new_gas_density_grid.min(), new_gas_density_grid.max()
-    # )
-    # rich.print(
-    #     "New Gas Viscosity:", new_gas_viscosity_grid.min(), new_gas_viscosity_grid.max()
-    # )
 
     # WATER PROPERTIES
     gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
@@ -457,42 +441,6 @@ def update_static_fluid_properties(
         pressure_grid=fluid_properties.pressure_grid,
     )
 
-    # # Print updated water properties
-    # rich.print(
-    #     "Gas Solubility in Water:",
-    #     gas_solubility_in_water_grid.min(),
-    #     gas_solubility_in_water_grid.max(),
-    # )
-    # rich.print(
-    #     "New Water Bubble Point Pressure:",
-    #     new_water_bubble_point_pressure_grid.min(),
-    #     new_water_bubble_point_pressure_grid.max(),
-    # )
-    # rich.print(
-    #     "New Water Compressibility:",
-    #     new_water_compressibility_grid.min(),
-    #     new_water_compressibility_grid.max(),
-    # )
-    # rich.print(
-    #     "New Water Formation Volume Factor:",
-    #     new_water_formation_volume_factor_grid.min(),
-    #     new_water_formation_volume_factor_grid.max(),
-    # )
-    # rich.print(
-    #     "New Water Density:", new_water_density_grid.min(), new_water_density_grid.max()
-    # )
-    # rich.print(
-    #     "New Water Viscosity:",
-    #     new_water_viscosity_grid.min(),
-    #     new_water_viscosity_grid.max(),
-    # )
-
-    # # OIL PROPERTIES
-    # print(
-    #     "Old GOR Grid:",
-    #     fluid_properties.gas_to_oil_ratio_grid.min(),
-    #     fluid_properties.gas_to_oil_ratio_grid.max(),
-    # )
     # Make sure to always compute the oil bubble point pressure grid
     # before the gas to oil ratio grid, as the latter depends on the former.
     new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
@@ -554,43 +502,6 @@ def update_static_fluid_properties(
         gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
     )
 
-    # # Print updated oil properties
-    # rich.print(
-    #     "Oil Specific Gravity:",
-    #     fluid_properties.oil_specific_gravity_grid.min(),
-    #     fluid_properties.oil_specific_gravity_grid.max(),
-    # )
-    # rich.print(
-    #     "Oil API Gravity:",
-    #     fluid_properties.oil_api_gravity_grid.min(),
-    #     fluid_properties.oil_api_gravity_grid.max(),
-    # )
-    # rich.print(
-    #     "New Oil Bubble Point Pressure:",
-    #     new_oil_bubble_point_pressure_grid.min(),
-    #     new_oil_bubble_point_pressure_grid.max(),
-    # )
-    # rich.print(
-    #     "New Oil Formation Volume Factor:",
-    #     new_oil_formation_volume_factor_grid.min(),
-    #     new_oil_formation_volume_factor_grid.max(),
-    # )
-    # rich.print(
-    #     "New Gas to Oil Ratio:",
-    #     new_gas_to_oil_ratio_grid.min(),
-    #     new_gas_to_oil_ratio_grid.max(),
-    # )
-    # rich.print(
-    #     "New Oil Compressibility:",
-    #     new_oil_compressibility_grid.min(),
-    #     new_oil_compressibility_grid.max(),
-    # )
-    # rich.print(
-    #     "New Oil Density:", new_oil_density_grid.min(), new_oil_density_grid.max()
-    # )
-    # rich.print(
-    #     "New Oil Viscosity:", new_oil_viscosity_grid.min(), new_oil_viscosity_grid.max()
-    # )
     updated_fluid_properties = evolve(
         fluid_properties,
         gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,

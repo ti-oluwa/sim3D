@@ -10,6 +10,7 @@ from attrs import asdict
 import numpy as np
 import typing
 import itertools
+import logging
 from typing_extensions import TypedDict
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -24,6 +25,7 @@ import matplotlib.animation as animation
 from sim3D.simulation import ModelState
 from sim3D.types import ThreeDimensions, ThreeDimensionalGrid
 
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "PlotType",
@@ -42,7 +44,7 @@ __all__ = [
     "Scatter3DPlotter",
     "Label",
     "LabelCoordinate3D",
-    "LabelManager",
+    "Labels",
     "ReservoirModelVisualizer3D",
     "viz",
 ]
@@ -777,7 +779,7 @@ class Base3DPlotter(ABC):
         self,
         fig: go.Figure,
         labels: typing.Optional[
-            typing.Union["LabelManager", typing.Iterable["Label"]]
+            typing.Union["Labels", typing.Iterable["Label"]]
         ] = None,
         data: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
@@ -790,7 +792,7 @@ class Base3DPlotter(ABC):
         Apply labels to a 3D plot using the Label system.
 
         :param fig: Plotly figure to add labels to
-        :param labels: Labels to apply (LabelManager or list of Label objects)
+        :param labels: Labels to apply (Labels or list of Label objects)
         :param data: 3D data array for value extraction
         :param metadata: Property metadata for formatting
         :param cell_dimension: Physical cell dimensions for coordinate conversion
@@ -801,14 +803,14 @@ class Base3DPlotter(ABC):
         if labels is None:
             return
 
-        # Handle both LabelManager and list of Labels
-        if isinstance(labels, LabelManager):
+        # Handle both Labels and list of Labels
+        if isinstance(labels, Labels):
             label_collection = labels
         else:
-            label_collection = LabelManager(labels)
+            label_collection = Labels(labels)
 
         # Get Plotly annotations
-        annotations = label_collection.to_plotly_annotations(
+        annotations = label_collection.as_annotations(
             data_grid=data,
             metadata=metadata,
             cell_dimension=cell_dimension,
@@ -830,6 +832,17 @@ class Base3DPlotter(ABC):
 
             existing_annotations.extend(annotations)
             fig.update_layout(scene=dict(annotations=existing_annotations))
+
+            # Debug information
+            logger.debug(f"Applied {len(annotations)} labels to 3D plot")
+            for i, ann in enumerate(annotations[:3]):  # Log first 3 annotations
+                logger.debug(
+                    f"Label {i}: position=({ann['x']:.2f}, {ann['y']:.2f}, {ann['z']:.2f})"
+                )
+        else:
+            logger.debug(
+                "No annotations to apply - labels may be filtered out or invisible"
+            )
 
     @staticmethod
     def invert_z_axis(arr: np.ndarray) -> np.ndarray:
@@ -858,8 +871,8 @@ class VolumeRenderer(Base3DPlotter):
         isomin: typing.Optional[float] = None,
         isomax: typing.Optional[float] = None,
         use_opacity_scaling: typing.Optional[bool] = None,
-        aspect_mode: typing.Optional[str] = "cube",
-        labels: typing.Optional["LabelManager"] = None,
+        aspect_mode: typing.Optional[str] = "auto",
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -1102,8 +1115,8 @@ class IsosurfacePlotter(Base3DPlotter):
         isomax: typing.Optional[float] = None,
         surface_count: int = 50,
         opacity: typing.Optional[float] = None,
-        aspect_mode: typing.Optional[str] = "cube",
-        labels: typing.Optional["LabelManager"] = None,
+        aspect_mode: typing.Optional[str] = "auto",
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -1336,8 +1349,8 @@ class SlicePlotter(Base3DPlotter):
         show_y_slice: bool = True,
         show_z_slice: bool = True,
         opacity: typing.Optional[float] = None,
-        aspect_mode: typing.Optional[str] = "cube",
-        labels: typing.Optional["LabelManager"] = None,
+        aspect_mode: typing.Optional[str] = "auto",
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -1914,7 +1927,7 @@ class CellBlockPlotter(Base3DPlotter):
         outline_color: typing.Optional[str] = None,
         outline_width: typing.Optional[float] = None,
         use_opacity_scaling: bool = True,
-        labels: typing.Optional["LabelManager"] = None,
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -2084,7 +2097,7 @@ class CellBlockPlotter(Base3DPlotter):
                         f"Opacity: {cell_opacity:.2f}"
                         "<extra></extra>"
                     ),
-                    flatshading=True,  # Use flat shading for better visibility
+                    alphahull=0.5,
                 )
             )
 
@@ -2176,9 +2189,6 @@ class CellBlockPlotter(Base3DPlotter):
 
         # Add a dummy trace for the colorbar
         if self.config.show_colorbar:
-            # Use the same global min/max that the cell blocks use for consistency
-            global_min = float(np.nanmin(normalized_data))
-            global_max = float(np.nanmax(normalized_data))
             # But get original data range for colorbar labels
             data_min = float(np.nanmin(display_data))
             data_max = float(np.nanmax(display_data))
@@ -2311,8 +2321,8 @@ class Scatter3DPlotter(Base3DPlotter):
         sample_rate: float = 1.0,
         marker_size: int = 3,
         opacity: typing.Optional[float] = None,
-        aspect_mode: typing.Optional[str] = "cube",
-        labels: typing.Optional["LabelManager"] = None,
+        aspect_mode: typing.Optional[str] = "auto",
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -2579,18 +2589,25 @@ class LabelCoordinate3D:
         offsets = coordinate_offsets or (0, 0, 0)
         dx, dy = cell_dimension
 
-        # Convert to physical coordinates
-        x_physical = (offsets[0] + self.x) * dx
-        y_physical = (offsets[1] + self.y) * dy
-
         # For Z, we need to calculate cumulative depth
-        if isinstance(self.z, int) and self.z < thickness_grid.shape[2]:
-            z_physical = -np.sum(thickness_grid[self.x, self.y, : self.z])
-            if offsets[2] > 0:
-                # Add offset from previous layers
-                z_physical -= np.sum(thickness_grid[:, :, : offsets[2]], axis=2).mean()
+        actual_x = offsets[0] + self.x
+        actual_y = offsets[1] + self.y
+        actual_z = offsets[2] + self.z
+        # Convert to physical coordinates
+        x_physical = actual_x * dx
+        y_physical = actual_y * dy
+
+        if (
+            actual_x < thickness_grid.shape[0]
+            and actual_y < thickness_grid.shape[1]
+            and actual_z < thickness_grid.shape[2]
+        ):
+            # Calculate cumulative depth from surface
+            z_physical = -np.sum(thickness_grid[actual_x, actual_y, :actual_z])
         else:
-            z_physical = offsets[2] + self.z  # Fallback
+            # Fallback to simple index-based positioning
+            z_physical = -(offsets[2] + self.z) * 10.0  # Assume 10 ft average thickness
+
         return x_physical, y_physical, z_physical
 
 
@@ -2721,13 +2738,14 @@ class Label:
             values.update(format_kwargs)
         return self.text_template.format(**_SafeValuesDict(values))
 
-    def to_plotly_annotation(
+    def as_annotation(
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Dict[str, typing.Any]:
         """
         Convert label to Plotly 3D annotation format.
@@ -2737,20 +2755,56 @@ class Label:
         :param thickness_grid: 3D array with height of each cell (feet)
         :param metadata: Property metadata for formatting
         :param format_kwargs: Additional formatting values
+        :param coordinate_offsets: Coordinate offsets for sliced data
         :return: Plotly annotation dictionary
         """
         if not self.visible:
             return {}
 
-        # Apply offset to position
-        x_position = self.position.x + self.offset[0]
-        y_position = self.position.y + self.offset[1]
-        z_position = self.position.z + self.offset[2]
+        # Determine if we should use physical coordinates
+        use_physical = cell_dimension is not None and thickness_grid is not None
 
+        if use_physical:
+            cell_dimension = typing.cast(typing.Tuple[float, float], cell_dimension)
+            thickness_grid = typing.cast(ThreeDimensionalGrid, thickness_grid)
+            # Convert to physical coordinates
+            try:
+                x_physical, y_physical, z_physical = self.position.as_physical(
+                    cell_dimension, thickness_grid, coordinate_offsets
+                )
+                # Apply offset in physical space
+                x_position = x_physical + self.offset[0]
+                y_position = y_physical + self.offset[1]
+                z_position = z_physical + self.offset[2]
+
+                # Log physical coordinates for debugging
+                logger.debug(
+                    f"Label at index ({self.position.x}, {self.position.y}, {self.position.z}) "
+                    f"-> physical ({x_position:.2f}, {y_position:.2f}, {z_position:.2f})"
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to convert to physical coordinates: {exc}. Using index coordinates."
+                )
+                use_physical = False
+
+        if not use_physical:
+            # Use index coordinates with offsets
+            offsets = coordinate_offsets or (0, 0, 0)
+            x_position = self.position.x + offsets[0] + self.offset[0]
+            y_position = self.position.y + offsets[1] + self.offset[1]
+            z_position = self.position.z + offsets[2] + self.offset[2]
+
+            logger.debug(
+                f"Label using index coordinates: ({x_position}, {y_position}, {z_position})"
+            )
+
+        # Create a minimal annotation first to test if basic rendering works
         annotation = {
-            "x": x_position,
-            "y": y_position,
-            "z": z_position,
+            "x": float(x_position),  # type: ignore
+            "y": float(y_position),  # type: ignore
+            "z": float(z_position),  # type: ignore
             "text": self.get_text(
                 data_grid=data_grid,
                 cell_dimension=cell_dimension,
@@ -2759,19 +2813,22 @@ class Label:
                 format_kwargs=format_kwargs,
             ),
             "showarrow": True,
-            "font": {
-                "size": self.font_size,
-                "color": self.font_color,
-            },
-            "align": "left",
-            "bgcolor": self.background_color,
-            "bordercolor": self.border_color,
-            "borderwidth": self.border_width,
+            "font": {"size": self.font_size, "color": self.font_color},
         }
-        return {k: v for k, v in annotation.items() if v is not None}
+
+        # Add optional styling only if values are provided
+        if self.background_color:
+            annotation["bgcolor"] = self.background_color
+        if self.border_color:
+            annotation["bordercolor"] = self.border_color
+        if self.border_width > 0:
+            annotation["borderwidth"] = self.border_width
+
+        logger.debug(f"Created annotation: {annotation}")
+        return annotation
 
 
-class LabelManager:
+class Labels:
     """
     A collection of labels for 3D plots, allowing dynamic label creation and management.
     """
@@ -2779,11 +2836,11 @@ class LabelManager:
     def __init__(self, labels: typing.Optional[typing.Iterable[Label]] = None):
         self.labels = list(labels) if labels is not None else []
 
-    def add_label(self, label: Label) -> None:
+    def add(self, label: Label) -> None:
         """Add a label to the collection."""
         self.labels.append(label)
 
-    def add_grid_labels(
+    def add_grids(
         self,
         data_shape: typing.Tuple[int, int, int],
         spacing: typing.Tuple[int, int, int] = (10, 10, 5),
@@ -2808,9 +2865,9 @@ class LabelManager:
                     label = Label(
                         position=position, text_template=template, **label_kwargs
                     )
-                    self.add_label(label)
+                    self.add(label)
 
-    def add_boundary_labels(
+    def add_boundaries(
         self,
         data_shape: typing.Tuple[int, int, int],
         template: str = "Boundary ({x_index}, {y_index}, {z_index})",
@@ -2845,13 +2902,13 @@ class LabelManager:
                 name=f"corner_{x}_{y}_{z}",
                 **label_kwargs,
             )
-            self.add_label(label)
+            self.add(label)
 
-    def add_well_labels(
+    def add_wells(
         self,
         well_positions: typing.List[typing.Tuple[int, int, int]],
         well_names: typing.Optional[typing.List[str]] = None,
-        template: str = "Well - '{name}': {formatted_value} ({unit})",
+        template: str = "Well - '{name}' ({x_index}, {y_index}, {z_index}): {formatted_value} ({unit})",
         **label_kwargs,
     ) -> None:
         """
@@ -2875,13 +2932,13 @@ class LabelManager:
                 name=name,
                 **label_kwargs,
             )
-            self.add_label(label)
+            self.add(label)
 
-    def visible_labels(self) -> typing.Generator[Label, None, None]:
+    def visible(self) -> typing.Generator[Label, None, None]:
         """Return only visible labels."""
         return (label for label in self.labels if label.visible)
 
-    def to_plotly_annotations(
+    def as_annotations(
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
@@ -2903,48 +2960,43 @@ class LabelManager:
         """
         annotations = []
 
-        for label in self.visible_labels():
+        for label in self.visible():
             try:
                 # Check if label position is within the sliced data bounds
-                if coordinate_offsets and data_grid is not None:
-                    x_offset, y_offset, z_offset = coordinate_offsets
-
-                    # Check if label falls within the original slice range
-                    original_x = label.position.x + x_offset
-                    original_y = label.position.y + y_offset
-                    original_z = label.position.z + z_offset
-
-                    # If label is outside the slice range, skip it
+                if coordinate_offsets is not None and data_grid is not None:
+                    # Check if label falls within the current slice bounds
+                    # Label position should be relative to the sliced data (0-indexed)
                     if (
-                        original_x < x_offset
-                        or original_x >= x_offset + data_grid.shape[0]
-                        or original_y < y_offset
-                        or original_y >= y_offset + data_grid.shape[1]
-                        or original_z < z_offset
-                        or original_z >= z_offset + data_grid.shape[2]
+                        label.position.x < 0
+                        or label.position.x >= data_grid.shape[0]
+                        or label.position.y < 0
+                        or label.position.y >= data_grid.shape[1]
+                        or label.position.z < 0
+                        or label.position.z >= data_grid.shape[2]
                     ):
+                        # Label is outside the sliced data bounds, skip it
                         continue
 
                 # Add custom values for well names, etc.
                 kwargs = {"name": label.name} if label.name else {}
                 kwargs.update(format_kwargs or {})
-                annotation = label.to_plotly_annotation(
+                annotation = label.as_annotation(
                     data_grid=data_grid,
                     cell_dimension=cell_dimension,
                     thickness_grid=thickness_grid,
                     metadata=metadata,
                     format_kwargs=kwargs,
+                    coordinate_offsets=coordinate_offsets,
                 )
 
                 if annotation:
                     annotations.append(annotation)
 
             except Exception as exc:
-                print(
-                    f"Warning: Failed to create annotation for label {label.name}: {exc}"
+                logger.warning(
+                    f"Failed to create annotation for label {label.name}: {exc}"
                 )
                 continue
-
         return annotations
 
 
@@ -3010,7 +3062,7 @@ class ReservoirModelVisualizer3D:
             raise ValueError(f"Invalid plot type: {plot_type}")
         self.plotters[plot_type] = plotter_type(self.config, *args, **kwargs)
 
-    def _validate_and_apply_slice(
+    def apply_slice(
         self,
         data: ThreeDimensionalGrid,
         x_slice: typing.Optional[
@@ -3150,7 +3202,7 @@ class ReservoirModelVisualizer3D:
         z_slice: typing.Optional[
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
-        labels: typing.Optional["LabelManager"] = None,
+        labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
         """
@@ -3199,9 +3251,7 @@ class ReservoirModelVisualizer3D:
         # Apply slicing if any slice parameters are provided
         coordinate_offsets = None
         if any(s is not None for s in [x_slice, y_slice, z_slice]):
-            data, normalized_slices = self._validate_and_apply_slice(
-                data, x_slice, y_slice, z_slice
-            )
+            data, normalized_slices = self.apply_slice(data, x_slice, y_slice, z_slice)
             x_slice_obj, y_slice_obj, z_slice_obj = normalized_slices
 
             # Update title to indicate slicing
@@ -3312,7 +3362,7 @@ class ReservoirModelVisualizer3D:
         z_slice: typing.Optional[
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
-        labels: typing.Optional["LabelManager"] = None,
+        labels: typing.Optional["Labels"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -3399,7 +3449,7 @@ class ReservoirModelVisualizer3D:
         z_slice: typing.Optional[
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
-        labels: typing.Optional["LabelManager"] = None,
+        labels: typing.Optional["Labels"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -3455,7 +3505,7 @@ class ReservoirModelVisualizer3D:
         z_slice: typing.Optional[
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
-        labels: typing.Optional["LabelManager"] = None,
+        labels: typing.Optional["Labels"] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """

@@ -97,14 +97,14 @@ def simulate():
     rock_compressibility = 1.45e-13  # Rock compressibility in 1/psi
 
     boundary_conditions = sim3D.BoundaryConditions(
-        conditions={
-            "pressure": sim3D.GridBoundaryCondition(
-                x_minus=sim3D.NoFlowBoundary(),
-                x_plus=sim3D.NoFlowBoundary(),
-                y_minus=sim3D.ConstantBoundary(1000),
-                y_plus=sim3D.ConstantBoundary(1000),
-            )
-        }
+        # conditions={
+        #     "pressure": sim3D.GridBoundaryCondition(
+        #         x_minus=sim3D.NoFlowBoundary(),
+        #         x_plus=sim3D.NoFlowBoundary(),
+        #         y_minus=sim3D.ConstantBoundary(1000),
+        #         y_plus=sim3D.ConstantBoundary(1000),
+        #     )
+        # }
     )
     methane_gravity = compute_gas_gravity(gas="Methane")
     gas_gravity_grid = build_uniform_grid(
