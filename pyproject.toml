@@ -1,7 +1,7 @@
 [project]
-name = "sim2D"
+name = "sim3D"
 version = "0.1.0"
-description = "A 2D/3D reservoir simulation framework in Python."
+description = "3D black-oil reservoir modelling and simulation library - 3D Cartesian grid | Linear flown."
 authors = [
     { name = "ti-oluwa", email = "tioluwa.dev@gmail.com" },
 ]
@@ -12,7 +12,6 @@ dependencies = [
     "attrs>=25.3.0",
     "cattrs>=25.1.1",
     "coolprop>=6.8.0",
-    "jupyter>=1.1.1",
     "kaleido>=1.0.0",
     "matplotlib>=3.10.3",
     "numba>=0.61.2",
@@ -25,7 +24,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "jupyterlab>=4.4.3",
     "marimo>=0.14.16",
     "mypy>=1.16.1",
     "rich>=14.0.0",

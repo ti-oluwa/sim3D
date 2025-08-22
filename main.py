@@ -217,13 +217,13 @@ def simulate():
 
     simulation_params = sim3D.SimulationParameters(
         time_step_size=3600,
-        total_time=72000 * 3,
+        total_time=72000 * 6,
         max_iterations=100,
         convergence_tolerance=1e-5,
         output_frequency=1,
         evolution_scheme="implicit",
     )
-    model_states = sim3D.run_3D_simulation(
+    model_states = sim3D.run_simulation(
         model=model,
         wells=wells,
         params=simulation_params,

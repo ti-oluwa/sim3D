@@ -5,6 +5,7 @@ from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
 import itertools
 import functools
+import numba
 
 from sim3D.types import (
     Orientation,
@@ -30,7 +31,7 @@ from sim3D.grids import (
     build_three_phase_relative_mobilities_grids,
     build_three_phase_capillary_pressure_grids,
 )
-from sim3D.models import RelativePermeabilityParameters, RockProperties, FluidProperties
+from sim3D.models import RockProperties, FluidProperties
 from sim3D.wells import (
     Wells,
     FluidPhase,
@@ -149,6 +150,7 @@ Notes:
 """
 
 
+@numba.njit(cache=True)
 def _compute_pseudo_volumetric_flux_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
@@ -985,6 +987,7 @@ Stability:
 """
 
 
+@numba.njit(cache=True)
 def to_1D_index(
     i: int,
     j: int,
@@ -1010,6 +1013,7 @@ def to_1D_index(
     return i * (cell_count_y * cell_count_z) + j * cell_count_z + k
 
 
+@numba.njit(cache=True)
 def _compute_pseudo_fluxes_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
@@ -2075,6 +2079,7 @@ Notes:
 """
 
 
+@numba.njit(cache=True)
 def _compute_phase_fluxes_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
@@ -2095,7 +2100,9 @@ def _compute_phase_fluxes_from_neighbour(
     irreducible_water_saturation_grid: ThreeDimensionalGrid,
     residual_oil_saturation_grid: ThreeDimensionalGrid,
     residual_gas_saturation_grid: ThreeDimensionalGrid,
-    relative_permeability_params: RelativePermeabilityParameters,
+    water_exponent: float = 2.0,
+    oil_exponent: float = 2.0,
+    gas_exponent: float = 2.0,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
@@ -2256,9 +2263,9 @@ def _compute_phase_fluxes_from_neighbour(
         irreducible_water_saturation=irreducible_water_saturation_grid[cell_indices],
         residual_oil_saturation=residual_oil_saturation_grid[cell_indices],
         residual_gas_saturation=residual_gas_saturation_grid[cell_indices],
-        water_exponent=relative_permeability_params.water_exponent,
-        oil_exponent=relative_permeability_params.oil_exponent,
-        gas_exponent=relative_permeability_params.gas_exponent,
+        water_exponent=water_exponent,
+        oil_exponent=oil_exponent,
+        gas_exponent=gas_exponent,
     )
     water_upwinded_mobility = (
         upwinded_water_relative_permeability / upwinded_water_viscosity
@@ -2540,6 +2547,10 @@ def compute_saturation_evolution(
     updated_oil_saturation_grid = current_oil_saturation_grid.copy()
     updated_gas_saturation_grid = current_gas_saturation_grid.copy()
 
+    water_exponent = relative_permeability_params.water_exponent
+    oil_exponent = relative_permeability_params.oil_exponent
+    gas_exponent = relative_permeability_params.gas_exponent
+
     # Iterate over each interior cell to compute saturation evolution
     for i, j, k in itertools.product(
         range(cell_count_x), range(cell_count_y), range(cell_count_z)
@@ -2637,7 +2648,9 @@ def compute_saturation_evolution(
                 irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
                 residual_oil_saturation_grid=padded_residual_oil_saturation_grid,
                 residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
-                relative_permeability_params=relative_permeability_params,
+                water_exponent=water_exponent,
+                oil_exponent=oil_exponent,
+                gas_exponent=gas_exponent,
                 oil_density_grid=flux_oil_density_grid,
                 water_density_grid=flux_water_density_grid,
                 gas_density_grid=flux_gas_density_grid,
@@ -2667,7 +2680,9 @@ def compute_saturation_evolution(
                 irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
                 residual_oil_saturation_grid=padded_residual_oil_saturation_grid,
                 residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
-                relative_permeability_params=relative_permeability_params,
+                water_exponent=water_exponent,
+                oil_exponent=oil_exponent,
+                gas_exponent=gas_exponent,
                 oil_density_grid=flux_oil_density_grid,
                 water_density_grid=flux_water_density_grid,
                 gas_density_grid=flux_gas_density_grid,

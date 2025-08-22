@@ -3,9 +3,10 @@ import itertools
 import typing
 import enum
 from attrs import define, field
+import numba
 import numpy as np
 
-from sim3D.types import NDimension, Orientation, WellLocation
+from sim3D.types import Orientation, WellLocation
 
 
 __all__ = [
@@ -475,6 +476,7 @@ class Wells(typing.Generic[WellLocation]):
             well.check_location(grid_dimensions)
 
 
+@numba.njit(cache=True)
 def compute_well_index(
     permeability: float,
     interval_thickness: float,
@@ -512,6 +514,7 @@ def compute_well_index(
     return well_index
 
 
+@numba.njit(cache=True)
 def compute_3D_effective_drainage_radius(
     interval_thickness: typing.Tuple[float, float, float],
     permeability: typing.Tuple[float, float, float],
@@ -609,6 +612,7 @@ def compute_2D_effective_drainage_radius(
     return effective_drainage_radius
 
 
+@numba.njit(cache=True)
 def compute_well_rate(
     well_index: float,
     pressure: float,

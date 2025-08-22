@@ -5,11 +5,12 @@ import typing
 import warnings
 import logging
 import numpy as np
+import numba
 from scipy.optimize import brentq, root_scalar
 from CoolProp.CoolProp import PropsSI
 
 from sim3D.types import NDimension, NDimensionalGrid, FluidMiscibility
-from sim3D.models import CapillaryPressureParameters, WettabilityType
+from sim3D.models import WettabilityType
 from sim3D.constants import (
     FT3_TO_BBL,
     OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
@@ -55,14 +56,15 @@ def validate_input_temperature(temperature: typing.Union[float, np.ndarray]) -> 
     :raises ValueError: If any temperature is outside the valid range.
     """
     temp_array = np.asarray(temperature)
-    invalid = (temp_array < MIN_VALID_TEMPERATURE) | (
+    invalid_mask = (temp_array < MIN_VALID_TEMPERATURE) | (
         temp_array > MAX_VALID_TEMPERATURE
     )
 
-    if np.any(invalid):
+    if np.any(invalid_mask):
+        invalid: np.ndarray = temp_array[invalid_mask]
         raise ValueError(
             f"Temperature(s) out of valid range [{MIN_VALID_TEMPERATURE}, {MAX_VALID_TEMPERATURE}] K: "
-            f"{temp_array[invalid]}"
+            f"{invalid}"
         )
 
 
@@ -123,6 +125,15 @@ def clip_temperature(temperature: float, fluid: str) -> float:
     return min(max(temperature, t_min + 0.1), t_max - 0.1)  # Add small buffer
 
 
+@numba.njit(cache=True)
+def clip_scalar(value: float, min_val: float, max_val: float) -> float:
+    if value < min_val:
+        return min_val
+    elif value > max_val:
+        return max_val
+    return value
+
+
 ##################################################
 # GENERIC FLUID PROPERTIES COMPUTATION FUNCTIONS #
 ##################################################
@@ -139,7 +150,7 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
     pressure_in_pascals = pressure * PSI_TO_PA
-    density = PropsSI(
+    density: float = PropsSI(
         "D",
         "P",
         clip_pressure(pressure_in_pascals, fluid),
@@ -275,6 +286,7 @@ def compute_gas_gravity_from_density(
     return density / (air_density * KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
+@numba.njit(cache=True)
 def mix_fluid_property(
     fluid1_saturation: float,
     fluid1_property: float,
@@ -298,8 +310,8 @@ def mix_fluid_property(
     :return: Effective mixed property value
     """
     # Clip saturations to avoid numerical issues
-    fluid1_saturation = np.clip(fluid1_saturation, 1e-8, 1 - 1e-8)
-    fluid2_saturation = np.clip(fluid2_saturation, 1e-8, 1 - 1e-8)
+    fluid1_saturation = clip_scalar(fluid1_saturation, 1e-8, 1 - 1e-8)
+    fluid2_saturation = clip_scalar(fluid2_saturation, 1e-8, 1 - 1e-8)
 
     if miscibility == "logarithmic":
         return (fluid1_property**fluid1_saturation) * (
@@ -322,6 +334,7 @@ def mix_fluid_property(
     raise ValueError("Unknown mixing method.")
 
 
+@numba.njit(cache=True)
 def compute_total_fluid_compressibility(
     water_saturation: float,
     oil_saturation: float,
@@ -352,6 +365,7 @@ def compute_total_fluid_compressibility(
     return total_fluid_compressibility
 
 
+@numba.njit(cache=True)
 def linear_decay_factor_to_exponential_decay_constant(
     linear_decay_factor: float,
 ) -> float:
@@ -369,6 +383,7 @@ def linear_decay_factor_to_exponential_decay_constant(
     return -np.log(1 - linear_decay_factor)
 
 
+@numba.njit(cache=True)
 def compute_diffusion_number(
     porosity: float,
     total_mobility: float,
@@ -413,6 +428,7 @@ def compute_diffusion_number(
     return diffusion_number
 
 
+@numba.njit(cache=True)
 def compute_harmonic_mean(value1: float, value2: float) -> float:
     """
     Computes the harmonic mean of two values.
@@ -426,6 +442,7 @@ def compute_harmonic_mean(value1: float, value2: float) -> float:
     return (2 * value1 * value2) / (value1 + value2)
 
 
+@numba.njit(cache=True)
 def compute_harmonic_mobility(
     index1: NDimension,
     index2: NDimension,
@@ -442,12 +459,13 @@ def compute_harmonic_mobility(
         of N-dimensional indices (x, y, z, ...).
     :param mobility_grid: N-dimensional grid containing mobility values.
     """
-    λ1 = mobility_grid[index1]
-    λ2 = mobility_grid[index2]
+    λ1: float = mobility_grid[index1]
+    λ2: float = mobility_grid[index2]
     λ_harmonic = compute_harmonic_mean(λ1, λ2)
     return λ_harmonic
 
 
+@numba.njit(cache=True)
 def compute_three_phase_relative_permeabilities(
     water_saturation: float,
     oil_saturation: float,
@@ -483,9 +501,9 @@ def compute_three_phase_relative_permeabilities(
     :return: A tuple (water_relative_permeability, oil_relative_permeability, gas_relative_permeability),
     """
     # Ensure saturations are within physical bounds and sum is manageable
-    water_saturation = np.clip(water_saturation, 0.0, 1.0)
-    gas_saturation = np.clip(gas_saturation, 0.0, 1.0)
-    oil_saturation = np.clip(oil_saturation, 0.0, 1.0)
+    water_saturation_clipped = clip_scalar(water_saturation, 0.0, 1.0)
+    gas_saturation_clipped = clip_scalar(gas_saturation, 0.0, 1.0)
+    oil_saturation_clipped = clip_scalar(oil_saturation, 0.0, 1.0)
 
     # Effective Saturations for Corey-type Models #
 
@@ -495,9 +513,9 @@ def compute_three_phase_relative_permeabilities(
         effective_water_saturation = 0.0
     else:
         effective_water_saturation = (
-            water_saturation - irreducible_water_saturation
+            water_saturation_clipped - irreducible_water_saturation
         ) / movable_water_range
-        effective_water_saturation = np.clip(effective_water_saturation, 0.0, 1.0)
+        effective_water_saturation = clip_scalar(effective_water_saturation, 0.0, 1.0)
     water_relative_permeability = effective_water_saturation**water_exponent
 
     # 2. Effective Gas Saturation (for krg)
@@ -508,9 +526,9 @@ def compute_three_phase_relative_permeabilities(
         effective_gas_saturation = 0.0
     else:
         effective_gas_saturation = (
-            gas_saturation - residual_gas_saturation
+            gas_saturation_clipped - residual_gas_saturation
         ) / movable_gas_range
-        effective_gas_saturation = np.clip(effective_gas_saturation, 0.0, 1.0)
+        effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
     gas_relative_permeability = effective_gas_saturation**gas_exponent
 
     # 3. Effective Oil Saturation (for oil_relative_permeability) - Highly Simplified!
@@ -531,15 +549,15 @@ def compute_three_phase_relative_permeabilities(
         effective_oil_saturation = 0.0
     else:
         effective_oil_saturation = (
-            oil_saturation - residual_oil_saturation
+            oil_saturation_clipped - residual_oil_saturation
         ) / total_movable_pore_space
-        effective_oil_saturation = np.clip(effective_oil_saturation, 0.0, 1.0)
+        effective_oil_saturation = clip_scalar(effective_oil_saturation, 0.0, 1.0)
     oil_relative_permeability = effective_oil_saturation**oil_exponent
 
     # Ensure all relative permeabilities are within [0, 1]
-    water_relative_permeability = np.clip(water_relative_permeability, 0.0, 1.0)
-    oil_relative_permeability = np.clip(oil_relative_permeability, 0.0, 1.0)
-    gas_relative_permeability = np.clip(gas_relative_permeability, 0.0, 1.0)
+    water_relative_permeability = clip_scalar(water_relative_permeability, 0.0, 1.0)
+    oil_relative_permeability = clip_scalar(oil_relative_permeability, 0.0, 1.0)
+    gas_relative_permeability = clip_scalar(gas_relative_permeability, 0.0, 1.0)
 
     return (
         float(water_relative_permeability),
@@ -548,13 +566,20 @@ def compute_three_phase_relative_permeabilities(
     )
 
 
+@numba.njit(cache=True)
 def compute_three_phase_capillary_pressures(
     water_saturation: float,
     gas_saturation: float,
     irreducible_water_saturation: float,
     residual_oil_saturation: float,
     residual_gas_saturation: float,
-    capillary_pressure_params: CapillaryPressureParameters,
+    wettability: WettabilityType,
+    oil_water_entry_pressure_water_wet: float,
+    oil_water_entry_pressure_oil_wet: float,
+    oil_water_pore_size_distribution_index_water_wet: float,
+    oil_water_pore_size_distribution_index_oil_wet: float,
+    gas_oil_entry_pressure: float,
+    gas_oil_pore_size_distribution_index: float,
 ) -> typing.Tuple[float, float]:
     """
     Computes capillary pressures (Pcow, Pcgo) for a given set of saturations
@@ -576,15 +601,20 @@ def compute_three_phase_capillary_pressures(
     :param irreducible_water_saturation: Irreducible water saturation (fraction).
     :param residual_oil_saturation: Residual oil saturation (fraction).
     :param residual_gas_saturation: Residual gas saturation (fraction).
-    :param capillary_pressure_params: Parameters defining the capillary pressure curve (e.g., Brooks-Corey).
+    :param oil_water_entry_pressure_water_wet: Entry pressure for oil-water in water-wet system (psi).
+    :param oil_water_entry_pressure_oil_wet: Entry pressure for oil-water in oil-wet system (psi).
+    :param oil_water_pore_size_distribution_index_water_wet: Pore size distribution index for oil-water in water-wet system.
+    :param oil_water_pore_size_distribution_index_oil_wet: Pore size distribution index for oil-water in oil-wet system.
+    :param gas_oil_entry_pressure: Entry pressure for gas-oil (psi).
+    :param gas_oil_pore_size_distribution_index: Pore size distribution index for gas-oil.
     :return: A tuple (oil_water_capillary_pressure, gas_oil_capillary_pressure) (psi).
     """
 
     # Ensure saturations are within bounds before calculation
-    water_saturation = np.clip(water_saturation, 0.0, 1.0)
-    gas_saturation = np.clip(gas_saturation, 0.0, 1.0)
+    water_saturation = clip_scalar(water_saturation, 0.0, 1.0)
+    gas_saturation = clip_scalar(gas_saturation, 0.0, 1.0)
     oil_saturation = 1.0 - water_saturation - gas_saturation
-    oil_saturation = np.clip(oil_saturation, 0.0, 1.0)
+    oil_saturation = clip_scalar(oil_saturation, 0.0, 1.0)
 
     # Effective saturation range - this is the total mobile pore space
     total_mobile_pore_space = (
@@ -601,7 +631,7 @@ def compute_three_phase_capillary_pressures(
     # Oil-Water Capillary Pressure: (Po - Pw)
     oil_water_capillary_pressure = 0.0
 
-    if capillary_pressure_params.wettability == WettabilityType.WATER_WET:
+    if wettability == WettabilityType.WATER_WET:
         # Water-wet system: Water is wetting, Oil is non-wetting.
         # So, P_oil > P_water. Pcow = Po - Pw will be POSITIVE.
 
@@ -609,7 +639,7 @@ def compute_three_phase_capillary_pressures(
         effective_water_saturation_wetting = (
             water_saturation - irreducible_water_saturation
         ) / total_mobile_pore_space
-        effective_water_saturation_wetting = np.clip(
+        effective_water_saturation_wetting = clip_scalar(
             effective_water_saturation_wetting, 1e-6, 1.0
         )  # Clip to avoid division by zero or very large numbers
 
@@ -619,16 +649,11 @@ def compute_three_phase_capillary_pressures(
             oil_water_capillary_pressure = 0.0
         else:
             # Brooks-Corey model: Pc = Pe * (Se)^(-1/lambda)
-            oil_water_capillary_pressure = (
-                capillary_pressure_params.oil_water_entry_pressure_water_wet
-                * (effective_water_saturation_wetting)
-                ** (
-                    -1.0
-                    / capillary_pressure_params.oil_water_pore_size_distribution_index_water_wet
-                )
-            )
+            oil_water_capillary_pressure = oil_water_entry_pressure_water_wet * (
+                effective_water_saturation_wetting
+            ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
 
-    elif capillary_pressure_params.wettability == WettabilityType.OIL_WET:
+    elif wettability == WettabilityType.OIL_WET:
         # Oil-wet system: Oil is wetting, Water is non-wetting.
         # So, P_water > P_oil. Pcow = Po - Pw will be NEGATIVE.
 
@@ -639,7 +664,7 @@ def compute_three_phase_capillary_pressures(
         effective_water_saturation_non_wetting = (
             water_saturation - irreducible_water_saturation
         ) / total_mobile_pore_space
-        effective_water_saturation_non_wetting = np.clip(
+        effective_water_saturation_non_wetting = clip_scalar(
             effective_water_saturation_non_wetting, 1e-6, 1.0
         )
 
@@ -648,12 +673,9 @@ def compute_three_phase_capillary_pressures(
         else:
             # This calculates the *magnitude* of (P_water - P_oil) for an oil-wet system.
             oil_water_capillary_pressure_magnitude = (
-                capillary_pressure_params.oil_water_entry_pressure_oil_wet
+                oil_water_entry_pressure_oil_wet
                 * (effective_water_saturation_non_wetting)
-                ** (
-                    -1.0
-                    / capillary_pressure_params.oil_water_pore_size_distribution_index_oil_wet
-                )
+                ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
             )
 
         # Since Pcow = Po - Pw, and for oil-wet, Pw > Po, Pcow must be negative.
@@ -667,20 +689,19 @@ def compute_three_phase_capillary_pressures(
     effective_gas_saturation = (
         gas_saturation - residual_gas_saturation
     ) / total_mobile_pore_space
-    effective_gas_saturation = np.clip(effective_gas_saturation, 1e-6, 1.0)
+    effective_gas_saturation = clip_scalar(effective_gas_saturation, 1e-6, 1.0)
 
     if effective_gas_saturation > 1.0 - 1e-6:
         gas_oil_capillary_pressure = 0.0
     else:
-        gas_oil_capillary_pressure = (
-            capillary_pressure_params.gas_oil_entry_pressure
-            * (effective_gas_saturation)
-            ** (-1.0 / capillary_pressure_params.gas_oil_pore_size_distribution_index)
-        )
+        gas_oil_capillary_pressure = gas_oil_entry_pressure * (
+            effective_gas_saturation
+        ) ** (-1.0 / gas_oil_pore_size_distribution_index)
 
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
+@numba.njit(cache=True)
 def compute_oil_specific_gravity_from_density(
     oil_density: float,
     pressure: float,
@@ -723,13 +744,14 @@ def compute_oil_specific_gravity_from_density(
         (oil_compressibility * delta_p)
         + (OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL * delta_t)
     )
-    correction_factor = np.clip(
+    correction_factor = clip_scalar(
         correction_factor, 0.2, 2.0
     )  # Avoid numerical issues with very small values
     oil_density_at_stp = oil_density * correction_factor
     return oil_density_at_stp / STANDARD_WATER_DENSITY_IMPERIAL
 
 
+@numba.njit(cache=True)
 def convert_surface_rate_to_reservoir(
     surface_rate: float, formation_volume_factor: float
 ) -> float:
@@ -766,6 +788,7 @@ def convert_reservoir_rate_to_surface(
         )  # Production surface volume is larger than reservoir volume
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_standing(
     temperature: float,
     oil_specific_gravity: float,
@@ -811,6 +834,7 @@ def compute_oil_formation_volume_factor_standing(
     return oil_fvf
 
 
+@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_fvf_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -819,6 +843,7 @@ def _get_vazquez_beggs_oil_fvf_coefficients(
     return 4.670e-4, 1.100e-5, 1.337e-9
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_vazquez_and_beggs(
     temperature: float,
     oil_specific_gravity: float,
@@ -863,6 +888,7 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
     return oil_fvf
 
 
+@numba.njit(cache=True)
 def correct_oil_fvf_for_pressure(
     saturated_oil_fvf: float,
     oil_compressibility: float,
@@ -885,12 +911,13 @@ def correct_oil_fvf_for_pressure(
         return saturated_oil_fvf
 
     delta_p = bubble_point_pressure - current_pressure
-    correction_factor = np.clip(
+    correction_factor = clip_scalar(
         np.exp(oil_compressibility * delta_p), 1e-6, 5.0
     )  # Avoid numerical issues with very small values
     return saturated_oil_fvf * correction_factor
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -941,6 +968,7 @@ def compute_oil_formation_volume_factor(
     )
 
 
+@numba.njit(cache=True)
 def compute_water_formation_volume_factor(
     water_density: float,
     salinity: float,
@@ -976,6 +1004,7 @@ def compute_water_formation_volume_factor(
     return water_fvf
 
 
+@numba.njit(cache=True)
 def compute_gas_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -1016,6 +1045,7 @@ def compute_gas_formation_volume_factor(
     )
 
 
+@numba.njit(cache=True)
 def compute_gas_compressibility_factor(
     pressure: float,
     temperature: float,
@@ -1079,8 +1109,8 @@ def compute_gas_compressibility_factor(
     pseudo_reduced_temperature = temperature / pseudo_critical_temperature
 
     # Clamp pseudo-reduced values to avoid extreme/unphysical Z outputs
-    pseudo_reduced_pressure = np.clip(pseudo_reduced_pressure, 0.2, 30)
-    pseudo_reduced_temperature = np.clip(pseudo_reduced_temperature, 1.0, 3.0)
+    pseudo_reduced_pressure = clip_scalar(pseudo_reduced_pressure, 0.2, 30)
+    pseudo_reduced_temperature = clip_scalar(pseudo_reduced_temperature, 1.0, 3.0)
     # Papay's correlation for gas compressibility factor
     compressibility_factor = (
         1
@@ -1099,6 +1129,7 @@ def compute_gas_compressibility_factor(
     )  # Ensure Z-factor is not less than 0.1 as Papay's correlation may under-predict at times
 
 
+@numba.njit(cache=True)
 def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     """
     Computes the API gravity (in degrees) from oil specific gravity.
@@ -1120,6 +1151,7 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     return (141.5 / oil_specific_gravity) - 131.5
 
 
+@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -1143,6 +1175,7 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         return 0.0178, 1.1870, 23.9310
 
 
+@numba.njit(cache=True)
 def compute_oil_bubble_point_pressure(
     gas_gravity: float,
     oil_api_gravity: float,
@@ -1340,6 +1373,25 @@ def compute_gas_to_oil_ratio(
     return max(0.0, gor)
 
 
+@numba.njit(cache=True)
+def _compute_dead_oil_viscosity_modified_beggs(
+    temperature: float, oil_api_gravity: float
+) -> float:
+    if temperature <= 0:
+        raise ValueError("Temperature (°F) must be > 0 for this correlation.")
+
+    temperature_rankine = temperature + 459.67
+    oil_specific_gravity = 141.5 / (131.5 + oil_api_gravity)
+
+    log_viscosity = (
+        1.8653
+        - 0.025086 * oil_specific_gravity
+        - 0.5644 * np.log10(temperature_rankine)
+    )
+    viscosity = (10**log_viscosity) - 1
+    return max(0.0, viscosity)
+
+
 def compute_dead_oil_viscosity_modified_beggs(
     temperature: float,
     oil_specific_gravity: float,
@@ -1365,20 +1417,37 @@ def compute_dead_oil_viscosity_modified_beggs(
             f"API gravity {oil_api_gravity:.2f} is outside typical range [5, 75]. "
             f"Dead oil viscosity may be inaccurate."
         )
+    return _compute_dead_oil_viscosity_modified_beggs(temperature, oil_api_gravity)
 
-    if temperature <= 0:
-        raise ValueError("Temperature (°F) must be > 0 for this correlation.")
 
-    temperature_rankine = temperature + 459.67
-    oil_specific_gravity = 141.5 / (131.5 + oil_api_gravity)
+@numba.njit(cache=True)
+def _compute_oil_viscosity(
+    pressure: float,
+    bubble_point_pressure: float,
+    dead_oil_viscosity: float,
+    gas_to_oil_ratio: float,
+    gor_at_bubble_point_pressure: float,
+) -> float:
+    # If pressure is below or equal to bubble point, use saturated viscosity correlation
+    if pressure <= bubble_point_pressure:
+        X_saturated = 10.715 * (gas_to_oil_ratio + 100) ** -0.515
+        Y_saturated = 5.44 * (gas_to_oil_ratio + 150) ** -0.338
+        saturated_live_oil_viscosity = X_saturated * (dead_oil_viscosity**Y_saturated)
+        return max(saturated_live_oil_viscosity, 1e-6)
 
-    log_viscosity = (
-        1.8653
-        - 0.025086 * oil_specific_gravity
-        - 0.5644 * np.log10(temperature_rankine)
+    # Undersaturated case: compute mu_ob at Pb
+    X_bubble_point = 10.715 * (gor_at_bubble_point_pressure + 100) ** -0.515
+    Y_bubble_point = 5.44 * (gor_at_bubble_point_pressure + 150) ** -0.338
+    dead_oil_viscosity_at_bubble_point = X_bubble_point * (
+        dead_oil_viscosity**Y_bubble_point
     )
-    viscosity = (10**log_viscosity) - 1
-    return max(0.0, viscosity)
+
+    # Apply undersaturated viscosity correlation
+    X_undersaturated = 2.6 * pressure**1.187 * np.exp(-11.513 - 8.98e-5 * pressure)
+    live_oil_viscosity_undersaturated = dead_oil_viscosity_at_bubble_point * (
+        (pressure / bubble_point_pressure) ** X_undersaturated
+    )
+    return max(live_oil_viscosity_undersaturated, 1e-6)
 
 
 def compute_oil_viscosity(
@@ -1435,29 +1504,16 @@ def compute_oil_viscosity(
     dead_oil_viscosity = compute_dead_oil_viscosity_modified_beggs(
         temperature=temperature, oil_specific_gravity=oil_specific_gravity
     )
-
-    # If pressure is below or equal to bubble point, use saturated viscosity correlation
-    if pressure <= bubble_point_pressure:
-        X_saturated = 10.715 * (gas_to_oil_ratio + 100) ** -0.515
-        Y_saturated = 5.44 * (gas_to_oil_ratio + 150) ** -0.338
-        saturated_live_oil_viscosity = X_saturated * (dead_oil_viscosity**Y_saturated)
-        return max(saturated_live_oil_viscosity, 1e-6)
-
-    # Undersaturated case: compute mu_ob at Pb
-    X_bubble_point = 10.715 * (gor_at_bubble_point_pressure + 100) ** -0.515
-    Y_bubble_point = 5.44 * (gor_at_bubble_point_pressure + 150) ** -0.338
-    dead_oil_viscosity_at_bubble_point = X_bubble_point * (
-        dead_oil_viscosity**Y_bubble_point
+    return _compute_oil_viscosity(
+        pressure=pressure,
+        bubble_point_pressure=bubble_point_pressure,
+        dead_oil_viscosity=dead_oil_viscosity,
+        gas_to_oil_ratio=gas_to_oil_ratio,
+        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
     )
 
-    # Apply undersaturated viscosity correlation
-    X_undersaturated = 2.6 * pressure**1.187 * np.exp(-11.513 - 8.98e-5 * pressure)
-    live_oil_viscosity_undersaturated = dead_oil_viscosity_at_bubble_point * (
-        (pressure / bubble_point_pressure) ** X_undersaturated
-    )
-    return max(live_oil_viscosity_undersaturated, 1e-6)
 
-
+@numba.njit(cache=True)
 def compute_gas_molecular_weight(gas_gravity: float) -> float:
     """
     Computes the apparent molecular weight of a gas (g/mol) from its specific gravity relative to air.
@@ -1478,6 +1534,7 @@ def compute_gas_molecular_weight(gas_gravity: float) -> float:
     return gas_gravity * MOLECULAR_WEIGHT_AIR
 
 
+@numba.njit(cache=True)
 def compute_gas_pseudocritical_properties(
     gas_gravity: float,
     h2s_mole_fraction: float = 0.0,
@@ -1630,19 +1687,43 @@ def compute_gas_viscosity(
     return max(0.0, gas_viscosity)
 
 
+@numba.njit(cache=True)
 def kelvin_to_fahrenheit(temp_K: float) -> float:
     """Converts temperature from Kelvin to Fahrenheit."""
     return (temp_K - 273.15) * 9 / 5 + 32
 
 
+@numba.njit(cache=True)
 def fahrenheit_to_kelvin(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Kelvin."""
     return (temp_F - 32) * 5 / 9 + 273.15
 
 
+@numba.njit(cache=True)
 def fahrenheit_to_celsius(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Celsius."""
     return (temp_F - 32) * 5 / 9
+
+
+@numba.njit(cache=True)
+def _compute_water_viscosity(
+    temperature: float, salinity: float, pressure: float, use_pressure: bool = True
+) -> float:
+    salinity_fraction = salinity * PPM_TO_WEIGHT_FRACTION
+    A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
+    B = 1.48e-3 - 1.8e-7 * salinity_fraction
+    C = 2.94e-6
+
+    viscosity_at_standard_pressure = A - (B * temperature) + (C * temperature**2)
+
+    if not use_pressure:
+        return max(1e-6, viscosity_at_standard_pressure)
+
+    pressure_correction_factor = (
+        0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)
+    )
+    viscosity_at_pressure = viscosity_at_standard_pressure * pressure_correction_factor
+    return max(1e-6, viscosity_at_pressure)
 
 
 def compute_water_viscosity(
@@ -1703,22 +1784,12 @@ def compute_water_viscosity(
         warnings.warn(
             f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
         )
-
-    salinity_fraction = salinity * PPM_TO_WEIGHT_FRACTION
-    A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
-    B = 1.48e-3 - 1.8e-7 * salinity_fraction
-    C = 2.94e-6
-
-    viscosity_at_standard_pressure = A - (B * temperature) + (C * temperature**2)
-
-    if pressure is None:
-        return max(1e-6, viscosity_at_standard_pressure)
-
-    pressure_correction_factor = (
-        0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)
+    return _compute_water_viscosity(
+        temperature=temperature,
+        salinity=salinity,
+        pressure=pressure or 0.0,
+        use_pressure=pressure is not None,
     )
-    viscosity_at_pressure = viscosity_at_standard_pressure * pressure_correction_factor
-    return max(1e-6, viscosity_at_pressure)
 
 
 def _compute_oil_compressibility_liberation_correction_term(
@@ -1950,6 +2021,7 @@ def compute_gas_compressibility(
     return max(0.0, gas_compressibility)  # Compressibility must be non-negative
 
 
+@numba.njit(cache=True)
 def _gas_solubility_in_water_mccain_methane(
     pressure: float,
     temperature: float,
@@ -2212,6 +2284,7 @@ def compute_gas_solubility_in_water(
         raise NotImplementedError(f"No model for gas '{gas}'.")
 
 
+@numba.njit(cache=True)
 def compute_gas_free_water_formation_volume_factor(
     pressure: float, temperature: float
 ) -> float:
@@ -2248,6 +2321,7 @@ def compute_gas_free_water_formation_volume_factor(
     return max(0.9, gas_free_water_fvf)  # Bw_gas_free is typically close to 1.0
 
 
+@numba.njit(cache=True)
 def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     """
     Calculates the derivative of gas solubility in water (Rsw) with respect to pressure,
@@ -2265,6 +2339,7 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     return derivative_pure_water * salinity_correction_factor
 
 
+@numba.njit(cache=True)
 def _compute_dBw_gas_free_dp_mccain(
     pressure: float,
     temperature: float,
@@ -2291,6 +2366,7 @@ def _compute_dBw_gas_free_dp_mccain(
     return thermal_expansion_term * isothermal_compressibility_derivative
 
 
+@numba.njit(cache=True)
 def compute_water_compressibility(
     pressure: float,
     temperature: float,
@@ -2378,6 +2454,7 @@ def compute_water_compressibility(
     return max(0.0, water_compressibility)  # Ensure non-negative compressibility
 
 
+@numba.njit(cache=True)
 def compute_live_oil_density(
     api_gravity: float,
     gas_gravity: float,
@@ -2425,6 +2502,7 @@ def compute_live_oil_density(
     return live_oil_density_lb_per_ft3
 
 
+@numba.njit(cache=True)
 def compute_water_density_mccain(
     pressure: float, temperature: float, salinity: float = 0.0
 ) -> float:
@@ -2467,6 +2545,7 @@ def compute_water_density_mccain(
     return water_density
 
 
+@numba.njit(cache=True)
 def compute_water_density_batzle(
     pressure: float, temperature: float, salinity: float
 ) -> float:
@@ -2524,6 +2603,7 @@ def compute_water_density_batzle(
     return water_density
 
 
+@numba.njit(cache=True)
 def compute_water_density(
     pressure: float,
     temperature: float,
@@ -2606,6 +2686,7 @@ def compute_water_density(
     return max(0.0, live_water_density_in_lb_per_ft3)
 
 
+@numba.njit(cache=True)
 def compute_gas_to_oil_ratio_standing(
     pressure: float,
     oil_api_gravity: float,
@@ -2649,6 +2730,7 @@ def compute_gas_to_oil_ratio_standing(
     return gor
 
 
+@numba.njit(cache=True)
 def estimate_bubble_point_pressure_standing(
     oil_api_gravity: float,
     gas_gravity: float,

@@ -32,7 +32,7 @@ class RelativePermeabilityParameters:
     """Corey exponent for gas relative permeability."""
 
 
-class WettabilityType(enum.Enum):
+class WettabilityType(str, enum.Enum):
     """Enum representing the wettability type of the reservoir rock."""
 
     WATER_WET = "water_wet"

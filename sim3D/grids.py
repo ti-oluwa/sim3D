@@ -451,7 +451,13 @@ def build_three_phase_capillary_pressure_grids(
             irreducible_water_saturation=irreducible_water_saturation,
             residual_oil_saturation=residual_oil_saturation,
             residual_gas_saturation=residual_gas_saturation,
-            capillary_pressure_params=capillary_pressure_params,
+            wettability=capillary_pressure_params.wettability,
+            oil_water_entry_pressure_oil_wet=capillary_pressure_params.oil_water_entry_pressure_oil_wet,
+            oil_water_entry_pressure_water_wet=capillary_pressure_params.oil_water_entry_pressure_water_wet,
+            gas_oil_entry_pressure=capillary_pressure_params.gas_oil_entry_pressure,
+            oil_water_pore_size_distribution_index_oil_wet=capillary_pressure_params.oil_water_pore_size_distribution_index_oil_wet,
+            oil_water_pore_size_distribution_index_water_wet=capillary_pressure_params.oil_water_pore_size_distribution_index_water_wet,
+            gas_oil_pore_size_distribution_index=capillary_pressure_params.gas_oil_pore_size_distribution_index,
         )
 
     return (

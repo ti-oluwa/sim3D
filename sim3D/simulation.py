@@ -41,7 +41,7 @@ from sim3D.types import EvolutionScheme, FluidMiscibility, NDimension, ThreeDime
 __all__ = [
     "SimulationParameters",
     "ModelState",
-    "run_3D_simulation",
+    "run_simulation",
 ]
 
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ Simulation aborted to avoid propagation of unphysical results.
 """
 
 
-def run_3D_simulation(
+def run_simulation(
     model: ReservoirModel[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     params: SimulationParameters,
