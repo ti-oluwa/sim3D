@@ -36,8 +36,8 @@ from sim3D.models import (
     CapillaryPressureParameters,
 )
 from sim3D.wells import (
-    InjectedFluid,
-    ProducedFluid,
+    WellFluid,
+    WellFluid,
     InjectionWell,
     ProductionWell,
     Wells,
@@ -446,7 +446,7 @@ def build_injection_well(
     perforating_interval: typing.Tuple[WellLocation, WellLocation],
     radius: float,
     bottom_hole_pressure: float,
-    injected_fluid: InjectedFluid,
+    injected_fluid: WellFluid,
 ) -> InjectionWell[WellLocation]:
     """
     Constructs an injection well with the given parameters.
@@ -454,7 +454,7 @@ def build_injection_well(
     :param well_name: Name or identifier for the well
     :param perforating_interval: Tuple representing the start and end locations of the well in the grid
     :param radius: Radius of the well (ft)
-    :param injected_fluid: The fluid being injected into the well, represented as a `InjectedFluid` instance.
+    :param injected_fluid: The fluid being injected into the well, represented as a `WellFluid` instance.
     :return: `InjectionWell` instance
     """
     return InjectionWell(
@@ -471,7 +471,7 @@ def build_production_well(
     perforating_interval: typing.Tuple[WellLocation, WellLocation],
     radius: float,
     bottom_hole_pressure: float,
-    produced_fluids: typing.Sequence[ProducedFluid],
+    produced_fluids: typing.Sequence[WellFluid],
     skin_factor: float = 0.0,
 ) -> ProductionWell[WellLocation]:
     """
@@ -480,7 +480,7 @@ def build_production_well(
     :param well_name: Name or identifier for the well
     :param perforating_interval: Tuple representing the start and end locations of the well in the grid
     :param radius: Radius of the well (ft)
-    :param produced_fluids: List of fluids being produced by the well, represented as a sequence of `ProducedFluid` instances.
+    :param produced_fluids: List of fluids being produced by the well, represented as a sequence of `WellFluid` instances.
     :param skin_factor: Skin factor for the well, default is 0.0
     :return: `ProductionWell` instance
     """

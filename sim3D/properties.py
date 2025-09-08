@@ -358,7 +358,6 @@ def compute_total_fluid_compressibility(
     total_fluid_compressibility = (water_saturation * water_compressibility) + (
         oil_saturation * oil_compressibility
     )
-
     if gas_saturation is not None and gas_compressibility is not None:
         total_fluid_compressibility += gas_saturation * gas_compressibility
 
@@ -1942,6 +1941,7 @@ def compute_oil_compressibility(
     return compute_base_compressibility(pressure) + correction_term
 
 
+@numba.njit(cache=True)
 def compute_gas_compressibility(
     pressure: float,
     temperature: float,

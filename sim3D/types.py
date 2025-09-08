@@ -14,7 +14,7 @@ __all__ = [
     "TwoDimensionalGrid",
     "OneDimensionalGrid",
     "Orientation",
-    "InjectedFluidType",
+    "WellFluidType",
     "EvolutionScheme",
     "FluidMiscibility",
     "ArrayLike",
@@ -33,7 +33,7 @@ TwoDimensions: TypeAlias = typing.Tuple[int, int]
 OneDimension: TypeAlias = typing.Tuple[int]
 """1D index"""
 
-NDimensionalGrid = np.ndarray[NDimension, np.dtype[np.float64]]
+NDimensionalGrid = np.ndarray[NDimension, np.dtype[np.floating]]
 
 ThreeDimensionalGrid = NDimensionalGrid[ThreeDimensions]
 """3D grid type for simulation data, represented as a 3D NumPy array of floats"""
@@ -53,7 +53,7 @@ class Orientation(enum.Enum):
     Z = "z"
 
 
-InjectedFluidType = typing.Literal["water", "oil", "gas"]
+WellFluidType = typing.Literal["water", "oil", "gas"]
 """Types of fluids that can be injected in the simulation"""
 
 EvolutionScheme = typing.Literal["implicit", "explicit"]

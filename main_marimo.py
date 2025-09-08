@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.16"
+__generated_with = "0.15.0"
 app = marimo.App(width="full", app_title="SIM3D")
 
 
@@ -24,17 +24,26 @@ def _(model_states, sim3D):
     well_positions = [injector_locations[0], producer_locations[0]]
     well_names = [*injector_names, *producer_names]
     labels = sim3D.Labels()
-    labels.add_wells(well_positions, well_names)
+    labels.add_well_labels(well_positions, well_names)
     sim3D.viz.animate_property(
         model_states,
-        property="pressure",
+        property="oil_pressure",
         plot_type=sim3D.PlotType.VOLUME_RENDER,
         width=960,
         height=600,
+        # isomin=800,
+        # cmin=600,
+        # cmax=2700,
+        opacity=0.5,
+        use_opacity_scaling=False,
+        # subsampling_factor=2,
+        # downsampling_factor=1,
         # x_slice=(2, 9),
         # y_slice=(2, 7),
         # z_slice=(2, 5),
         labels=labels,
+        # marker_size=12,
+        # notebook=True,
     )
     return
 

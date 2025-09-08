@@ -6,11 +6,9 @@ from sim3D.grids import build_layered_grid, build_uniform_grid
 from sim3D.properties import (
     compute_gas_compressibility,
     compute_gas_molecular_weight,
-    compute_gas_viscosity,
     compute_gas_formation_volume_factor,
     compute_gas_compressibility_factor,
     compute_gas_gravity,
-    compute_gas_density,
 )
 
 np.set_printoptions(threshold=np.inf)  # type: ignore
@@ -19,10 +17,11 @@ np.set_printoptions(threshold=np.inf)  # type: ignore
 def simulate():
     cell_dimension = (100.0, 100.0)
     grid_dimension = typing.cast(
-        sim3D.ThreeDimensions, (10, 10, 5)
+        sim3D.ThreeDimensions, (10, 10, 7)
     )  # (x, y, z) dimensions of the grid in cells
     # Height of each cell in the z-direction (in feet)
-    thickness_grid = build_uniform_grid(grid_dimension=grid_dimension, value=70.0)
+    thickness_grid = build_uniform_grid(grid_dimension=grid_dimension, value=50.0)
+    thickness_grid[:, :, 2] = 30.0  # Making the top layer thinner
     pressure_range = (1500.0, 2000.0)
     oil_viscosity_range = (5.0, 10.0)
     oil_compressibility_range = (7e-7, 1e-5)
@@ -97,14 +96,14 @@ def simulate():
     rock_compressibility = 1.45e-13  # Rock compressibility in 1/psi
 
     boundary_conditions = sim3D.BoundaryConditions(
-        # conditions={
-        #     "pressure": sim3D.GridBoundaryCondition(
-        #         x_minus=sim3D.NoFlowBoundary(),
-        #         x_plus=sim3D.NoFlowBoundary(),
-        #         y_minus=sim3D.ConstantBoundary(1000),
-        #         y_plus=sim3D.ConstantBoundary(1000),
-        #     )
-        # }
+        conditions={
+            "pressure": sim3D.GridBoundaryCondition(
+                x_minus=sim3D.NoFlowBoundary(),
+                x_plus=sim3D.NoFlowBoundary(),
+                y_minus=sim3D.ConstantBoundary(1000),
+                y_plus=sim3D.ConstantBoundary(1000),
+            )
+        }
     )
     methane_gravity = compute_gas_gravity(gas="Methane")
     gas_gravity_grid = build_uniform_grid(
@@ -127,7 +126,7 @@ def simulate():
         gas_gravity_grid=gas_gravity_grid,
         residual_oil_saturation_grid=residual_oil_saturation_grid,
         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        boundary_conditions=boundary_conditions,
+        # boundary_conditions=boundary_conditions,
         reservoir_gas_name="Methane",
     )
 
@@ -138,18 +137,7 @@ def simulate():
         temperature=sim3D.constants.STANDARD_TEMPERATURE_IMPERIAL,
         gas_gravity=fluid_A_gravity,
     )
-    fluid_A_density = compute_gas_density(
-        pressure=sim3D.constants.STANDARD_PRESSURE_IMPERIAL,
-        temperature=sim3D.constants.STANDARD_TEMPERATURE_IMPERIAL,
-        gas_gravity=fluid_A_gravity,
-        gas_compressibility_factor=fluid_A_compressibility_factor,
-    )
     fluid_A_molecular_weight = compute_gas_molecular_weight(gas_gravity=fluid_A_gravity)
-    fluid_A_viscosity = compute_gas_viscosity(
-        temperature=sim3D.constants.STANDARD_TEMPERATURE_IMPERIAL,
-        gas_density=fluid_A_density,
-        gas_molecular_weight=fluid_A_molecular_weight,
-    )
     fluid_A_compressibility = compute_gas_compressibility(
         pressure=sim3D.constants.STANDARD_PRESSURE_IMPERIAL,
         temperature=sim3D.constants.STANDARD_TEMPERATURE_IMPERIAL,
@@ -168,14 +156,13 @@ def simulate():
             (8, 9, 4),
         ),  # Perforating interval in grid coordinates
         radius=0.3281,
-        bottom_hole_pressure=2300.0,  # Bottom hole pressure in psi
-        injected_fluid=sim3D.InjectedFluid(
+        bottom_hole_pressure=1200.0,  # Bottom hole pressure in psi
+        injected_fluid=sim3D.WellFluid(
             name=fluid_A,
             phase=sim3D.FluidPhase.GAS,
-            viscosity=fluid_A_viscosity,
-            density=fluid_A_density,
+            specific_gravity=fluid_A_gravity,
+            molecular_weight=fluid_A_molecular_weight,
             compressibility=fluid_A_compressibility,
-            formation_volume_factor=fluid_A_formation_volume_factor,
         ),
     )
 
@@ -186,20 +173,22 @@ def simulate():
             (1, 1, 4),
         ),  # Perforating interval in grid coordinates
         radius=0.3281,
-        bottom_hole_pressure=1520.0,  # Bottom hole pressure in psi
+        bottom_hole_pressure=920.0,  # Bottom hole pressure in psi
         produced_fluids=(
-            sim3D.ProducedFluid(
+            sim3D.WellFluid(
                 name="Oil",
                 phase=sim3D.FluidPhase.OIL,
+                specific_gravity=0.85,  # Average specific gravity for oil
+                molecular_weight=170.0,  # Average molecular weight for oil
             ),
-            # sim3D.ProducedFluid(
+            # sim3D.WellFluid(
             #     name="Gas",
             #     phase=sim3D.FluidPhase.GAS,
             # ),
-            sim3D.ProducedFluid(
-                name="Water",
-                phase=sim3D.FluidPhase.WATER,
-            ),
+            # sim3D.WellFluid(
+            #     name="Water",
+            #     phase=sim3D.FluidPhase.WATER,
+            # ),
         ),
         skin_factor=3.2,  # Skin factor for the well
     )
@@ -217,7 +206,7 @@ def simulate():
 
     simulation_params = sim3D.SimulationParameters(
         time_step_size=3600,
-        total_time=72000 * 6,
+        total_time=72000 * 1,
         max_iterations=100,
         convergence_tolerance=1e-5,
         output_frequency=1,

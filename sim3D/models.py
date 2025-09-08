@@ -260,10 +260,10 @@ class ReservoirModel(typing.Generic[NDimension]):
         :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
         :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
         """
-        return generate_elevation_grid(self.thickness_grid, direction)
+        return build_elevation_grid(self.thickness_grid, direction)
 
 
-def generate_elevation_grid(
+def build_elevation_grid(
     thickness_grid: NDimensionalGrid[NDimension],
     direction: typing.Literal["downward", "upward"] = "downward",
 ) -> NDimensionalGrid[NDimension]:
@@ -274,7 +274,8 @@ def generate_elevation_grid(
     of the reservoir, depending on the specified direction.
 
     :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft).
-    :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
+    :param direction: Direction to generate the elevation grid. 
+        Can be "downward" (from top to bottom) or "upward" (from bottom to top).
     :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
     """
     if direction not in {"downward", "upward"}:
@@ -301,5 +302,4 @@ def generate_elevation_grid(
                 + thickness_grid[k + 1] / 2
                 + thickness_grid[k] / 2
             )
-
     return typing.cast(NDimensionalGrid[NDimension], elevation_grid)

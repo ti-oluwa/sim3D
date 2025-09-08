@@ -2,6 +2,7 @@
 
 import typing
 import itertools
+import numba
 import numpy as np
 from numpy.typing import DTypeLike
 
@@ -41,6 +42,7 @@ from sim3D.properties import (
 from sim3D.models import CapillaryPressureParameters, RelativePermeabilityParameters
 
 
+@numba.njit(cache=True)
 def build_uniform_grid(
     grid_dimension: NDimension,
     value: float = 0.0,
@@ -57,6 +59,7 @@ def build_uniform_grid(
     return np.full(grid_dimension, fill_value=value, dtype=dtype)
 
 
+@numba.njit(cache=True)
 def build_layered_grid(
     grid_dimension: NDimension,
     layer_values: ArrayLike[float],
@@ -196,7 +199,91 @@ def edge_pad_grid(
     :return: Padded N-Dimensional numpy array
     """
     padded_grid = np.pad(grid, pad_width=pad_width, mode="edge")
-    return typing.cast(NDimensionalGrid[NDimension], padded_grid)
+    padded_grid = typing.cast(NDimensionalGrid[NDimension], padded_grid)
+    return padded_grid
+
+
+def coarsen_grid(
+    data: NDimensionalGrid[NDimension],
+    batch_size: NDimension,
+    method: typing.Literal["mean", "sum", "max", "min"] = "mean",
+) -> NDimensionalGrid[NDimension]:
+    """
+    Coarsen (downsample) a 2D or 3D grid by aggregating blocks of adjacent cells.
+
+    Pads the grid if necessary to make dimensions divisible by batch_size, so no cells are lost.
+
+    :param data: 2D or 3D numpy array to coarsen. Shape can be (nx, ny) or (nx, ny, nz).
+    :param batch_size: Tuple of ints representing the coarsening factor along each dimension.
+                       Length must match data.ndim.
+                       Example: (2,2) for 2D, (2,2,2) for 3D.
+    :param method: Aggregation method to use on each block. One of 'mean', 'sum', 'max', 'min'.
+                   Default is 'mean'.
+    :return: Coarsened numpy array.
+    :raises ValueError: if batch_size length does not match data.ndim or if method is unsupported.
+
+    :example:
+    >>> data2d = np.arange(16).reshape(4,4)
+    >>> coarsen_grid(data2d, batch_size=(2,2))
+    array([[2.5, 4.5],
+           [10.5, 12.5]])
+
+    >>> data3d = np.arange(64).reshape(4,4,4)
+    >>> coarsen_grid(data3d, batch_size=(2,2,2), method='max')
+    array([[[ 5,  7],
+            [13, 15]],
+           [[21, 23],
+            [29, 31]]])
+    """
+    if len(batch_size) != data.ndim:
+        raise ValueError(
+            f"batch_size length {len(batch_size)} must match data.ndim {data.ndim}"
+        )
+
+    pad_width = []
+    for dim, b in zip(data.shape, batch_size):
+        remainder = dim % b
+        if remainder == 0:
+            pad_width.append((0, 0))
+        else:
+            pad_width.append((0, b - remainder))
+
+    # Pad with NaNs for mean, zeros for sum, -inf for max, +inf for min
+    if method == "mean":
+        pad_value = np.nan
+    elif method == "sum":
+        pad_value = 0
+    elif method == "max":
+        pad_value = -np.inf
+    elif method == "min":
+        pad_value = np.inf
+    else:
+        raise ValueError(f"Unsupported method '{method}'")
+
+    data_padded = np.pad(
+        data, pad_width=pad_width, mode="constant", constant_values=pad_value
+    )
+
+    # Reshape to group blocks along each dimension
+    reshape_shape = []
+    for dim, b in zip(data_padded.shape, batch_size):
+        reshape_shape.extend([dim // b, b])
+    data_reshaped = data_padded.reshape(reshape_shape)
+
+    # Axes to aggregate over: every second axis (the 'b' axes)
+    agg_axes = tuple(range(1, data_reshaped.ndim, 2))
+
+    # Apply aggregation
+    if method == "mean":
+        coarsened = np.nanmean(data_reshaped, axis=agg_axes)
+    elif method == "sum":
+        coarsened = data_reshaped.sum(axis=agg_axes)
+    elif method == "max":
+        coarsened = data_reshaped.max(axis=agg_axes)
+    elif method == "min":
+        coarsened = data_reshaped.min(axis=agg_axes)
+
+    return typing.cast(NDimensionalGrid[NDimension], coarsened)
 
 
 def build_gas_gravity_grid(gas: str) -> NDimensionalGrid[NDimension]:
@@ -342,7 +429,7 @@ def build_pressure_dependent_viscosity_grid(
     return typing.cast(
         NDimensionalGrid[NDimension],
         np.clip(
-            viscosity_grid, 1e-5, reference_viscosity, dtype=np.float64
+            viscosity_grid, 1e-5, reference_viscosity, dtype=np.float32
         ),  # enforce lower bound
     )
 
@@ -423,12 +510,12 @@ def build_three_phase_capillary_pressure_grids(
     oil_water_capillary_pressure_grid = build_uniform_grid(
         grid_dimension=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float64,
+        dtype=np.float32,
     )
     gas_oil_capillary_pressure_grid = build_uniform_grid(
         grid_dimension=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float64,
+        dtype=np.float32,
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):
@@ -505,17 +592,17 @@ def build_three_phase_relative_mobilities_grids(
     water_relative_mobility_grid = build_uniform_grid(
         grid_dimension=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float64,
+        dtype=np.float32,
     )
     oil_relative_mobility_grid = build_uniform_grid(
         grid_dimension=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float64,
+        dtype=np.float32,
     )
     gas_relative_mobility_grid = build_uniform_grid(
         grid_dimension=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float64,
+        dtype=np.float32,
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):

@@ -12,14 +12,18 @@ dependencies = [
     "attrs>=25.3.0",
     "cattrs>=25.1.1",
     "coolprop>=6.8.0",
+    "imageio>=2.37.0",
+    "ipython>=8.37.0",
     "kaleido>=1.0.0",
     "matplotlib>=3.10.3",
     "numba>=0.61.2",
     "numpy>=2.0.0",
     "plotly>=6.2.0",
+    "pyvista[jupyter]>=0.46.2",
     "scikit-image>=0.25.2",
     "scipy>=1.15.3",
     "thermo>=0.4.2",
+    "trame>=3.12.0",
 ]
 
 [project.optional-dependencies]

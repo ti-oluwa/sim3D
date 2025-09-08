@@ -8,7 +8,6 @@ import functools
 import numba
 
 from sim3D.types import (
-    Orientation,
     ThreeDimensionalGrid,
     ThreeDimensions,
     EvolutionScheme,
@@ -32,13 +31,7 @@ from sim3D.grids import (
     build_three_phase_capillary_pressure_grids,
 )
 from sim3D.models import RockProperties, FluidProperties
-from sim3D.wells import (
-    Wells,
-    FluidPhase,
-    compute_3D_effective_drainage_radius,
-    compute_well_index,
-    compute_well_rate,
-)
+from sim3D.wells import Wells, FluidPhase
 from sim3D.boundary_conditions import BoundaryConditions
 
 
@@ -595,6 +588,8 @@ def compute_explicit_pressure_evolution(
         cell_volume = cell_size_x * cell_size_y * cell_thickness
         cell_porosity = porosity_grid[i, j, k]
         cell_total_compressibility = total_compressibility_grid[i, j, k]
+        cell_oil_pressure = current_oil_pressure_grid[i, j, k]
+        cell_temperature = fluid_properties.temperature_grid[i, j, k]
 
         flux_configurations = {
             "x": {
@@ -695,77 +690,48 @@ def compute_explicit_pressure_evolution(
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
-        oil_pressure = current_oil_pressure_grid[i, j, k]
         if (
             injection_well is not None
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
             # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
-            if injection_well.orientation == Orientation.X:
-                directional_permeability = permeability[0]
-                directional_thickness = cell_size_x
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_x[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_x[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_x[i, j, k]
-
-            elif injection_well.orientation == Orientation.Y:
-                directional_permeability = permeability[1]
-                directional_thickness = cell_size_y
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_y[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_y[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_y[i, j, k]
-
+            if injected_phase == FluidPhase.GAS:
+                phase_mobility = gas_mobility_grid_z[i, j, k]
+            elif injected_phase == FluidPhase.WATER:
+                phase_mobility = water_mobility_grid_z[i, j, k]
             else:
-                directional_permeability = permeability[2]
-                directional_thickness = cell_thickness
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_z[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_z[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_z[i, j, k]
+                phase_mobility = oil_mobility_grid_z[i, j, k]
 
-            effective_drainage_radius = compute_3D_effective_drainage_radius(
+            well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                 permeability=permeability,
-                well_orientation=injection_well.orientation,
             )
-            well_index = compute_well_index(
-                permeability=directional_permeability,
-                interval_thickness=directional_thickness,
-                wellbore_radius=injection_well.radius,
-                effective_drainage_radius=effective_drainage_radius,
-                skin_factor=injection_well.skin_factor,
-            )
-            cell_injection_rate = compute_well_rate(
+            cell_injection_rate = injection_well.get_flow_rate(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
                 well_index=well_index,
-                pressure=oil_pressure,
-                bottom_hole_pressure=injection_well.bottom_hole_pressure,
                 phase_mobility=phase_mobility,
-                use_pressure_squared=injected_phase == FluidPhase.GAS,
+                fluid=injected_fluid,
             )  # STB/day or SCF/day
             if injected_phase == FluidPhase.GAS:
                 # Get the volumetric flow rate in ft³/day
-                cell_injection_rate *= (
-                    fluid_properties.gas_formation_volume_factor_grid[i, j, k]
-                )  # ft³/SCF
+                gas_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
+                )
+                cell_injection_rate *= gas_fvf  # ft³/SCF
             elif injected_phase == FluidPhase.WATER:
                 # For water, convert bbl/day to ft³/day
+                water_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                )  # bbl/STB
                 cell_injection_rate *= (
-                    fluid_properties.water_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # bbl/STB
-                    * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                )
+                    water_fvf * BBL_TO_FT3
+                )  # Convert bbl/day to ft³/day
             else:
-                # For oil, convert bbl/day to ft³/day
+                # For oil and water, convert bbl/day to ft³/day
                 cell_injection_rate *= (
                     fluid_properties.oil_formation_volume_factor_grid[
                         i, j, k
@@ -777,85 +743,56 @@ def compute_explicit_pressure_evolution(
             # If there is a production well, subtract its flow rate from the cell
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
-                production_orientation = production_well.orientation
-
-                if production_orientation == Orientation.X:
-                    directional_permeability = permeability[0]
-                    directional_thickness = cell_size_x
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_x[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_x[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_x[i, j, k]
-
-                elif production_orientation == Orientation.Y:
-                    directional_permeability = permeability[1]
-                    directional_thickness = cell_size_y
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_y[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_y[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_y[i, j, k]
-
+                if produced_phase == FluidPhase.GAS:
+                    phase_mobility = gas_mobility_grid_y[i, j, k]
+                elif produced_phase == FluidPhase.WATER:
+                    phase_mobility = water_mobility_grid_y[i, j, k]
                 else:
-                    directional_permeability = permeability[2]
-                    directional_thickness = cell_thickness
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_z[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_z[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_z[i, j, k]
+                    phase_mobility = oil_mobility_grid_y[i, j, k]
 
-                effective_drainage_radius = compute_3D_effective_drainage_radius(
+                well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                     permeability=permeability,
-                    well_orientation=production_well.orientation,
                 )
-                well_index = compute_well_index(
-                    permeability=directional_permeability,
-                    interval_thickness=directional_thickness,
-                    wellbore_radius=production_well.radius,
-                    effective_drainage_radius=effective_drainage_radius,
-                    skin_factor=production_well.skin_factor,
-                )
-                production_rate = compute_well_rate(
+                production_rate = production_well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
                     well_index=well_index,
-                    pressure=oil_pressure,
-                    bottom_hole_pressure=production_well.bottom_hole_pressure,
                     phase_mobility=phase_mobility,
-                    use_pressure_squared=produced_phase == FluidPhase.GAS,
+                    fluid=produced_fluid,
                 )  # STB/day or SCF/day
 
                 if produced_fluid.phase == FluidPhase.GAS:
                     # Get the volumetric flow rate in ft³/day
-                    production_rate *= (
-                        fluid_properties.gas_formation_volume_factor_grid[i, j, k]
-                    )
+                    gas_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
+                    )  # ft³/SCF
+                    production_rate *= gas_fvf
                 elif produced_fluid.phase == FluidPhase.WATER:
                     # For water, convert bbl/day to ft³/day
+                    water_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
                     production_rate *= (
-                        fluid_properties.water_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
+                        water_fvf * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
                 else:
                     # For oil, convert bbl/day to ft³/day
+                    oil_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.oil_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
                     production_rate *= (
-                        fluid_properties.oil_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
+                        oil_fvf * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
 
                 cell_production_rate += production_rate
 
-        # Calculate the net well flow rate into the cell
+        # Calculate the net well flow rate into the cell. Just add injection and production rates (since production rates are negative)
         # q_{i,j,k} * V = (q_{i,j,k}_injection - q_{i,j,k}_production)
-        net_well_flow_rate_into_cell = cell_injection_rate - cell_production_rate
+        net_well_flow_rate_into_cell = cell_injection_rate + cell_production_rate
 
         # Add the well flow rate to the net volumetric flow rate into the cell
         # Total flow rate into the cell (ft³/day)
@@ -1397,7 +1334,7 @@ def compute_implicit_pressure_evolution(
 
     # Initialize sparse coefficient matrix (A * P_o_new = b)
     total_cell_count = cell_count_x * cell_count_y * cell_count_z
-    A = lil_matrix((total_cell_count, total_cell_count), dtype=np.float64)
+    A = lil_matrix((total_cell_count, total_cell_count), dtype=np.float32)
     # Initialize RHS source vector
     b = np.zeros(total_cell_count)
     _to_1D_index = functools.partial(
@@ -1417,6 +1354,7 @@ def compute_implicit_pressure_evolution(
         cell_porosity = porosity_grid[i, j, k]
         cell_total_compressibility = total_compressibility_grid[i, j, k]
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
+        cell_temperature = fluid_properties.temperature_grid[i, j, k]
         time_step_size_in_days = time_step_size * DAYS_PER_SECOND
 
         # Accumulation term coefficient for the diagonal of A
@@ -1572,77 +1510,46 @@ def compute_implicit_pressure_evolution(
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
-        oil_pressure = current_oil_pressure_grid[i, j, k]
         if (
             injection_well is not None
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
             # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
-            if injection_well.orientation == Orientation.X:
-                directional_permeability = permeability[0]
-                directional_thickness = cell_size_x
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_x[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_x[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_x[i, j, k]
-
-            elif injection_well.orientation == Orientation.Y:
-                directional_permeability = permeability[1]
-                directional_thickness = cell_size_y
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_y[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_y[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_y[i, j, k]
-
+            if injected_phase == FluidPhase.GAS:
+                phase_mobility = gas_mobility_grid_z[i, j, k]
+            elif injected_phase == FluidPhase.WATER:
+                phase_mobility = water_mobility_grid_z[i, j, k]
             else:
-                directional_permeability = permeability[2]
-                directional_thickness = cell_thickness
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_z[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_z[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_z[i, j, k]
+                phase_mobility = oil_mobility_grid_z[i, j, k]
 
-            effective_drainage_radius = compute_3D_effective_drainage_radius(
+            well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                 permeability=permeability,
-                well_orientation=injection_well.orientation,
             )
-            well_index = compute_well_index(
-                permeability=directional_permeability,
-                interval_thickness=directional_thickness,
-                wellbore_radius=injection_well.radius,
-                effective_drainage_radius=effective_drainage_radius,
-                skin_factor=injection_well.skin_factor,
-            )
-            cell_injection_rate = compute_well_rate(
+            cell_injection_rate = injection_well.get_flow_rate(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
                 well_index=well_index,
-                pressure=oil_pressure,
-                bottom_hole_pressure=injection_well.bottom_hole_pressure,
                 phase_mobility=phase_mobility,
-                use_pressure_squared=injected_phase == FluidPhase.GAS,
+                fluid=injected_fluid,
             )  # STB/day or SCF/day
             if injected_phase == FluidPhase.GAS:
                 # Get the volumetric flow rate in ft³/day
-                cell_injection_rate *= (
-                    fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # ft³/SCF
-                )  # ft³/SCF
+                gas_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
+                )
+                cell_injection_rate *= gas_fvf  # ft³/SCF
             elif injected_phase == FluidPhase.WATER:
                 # For water, convert bbl/day to ft³/day
+                water_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                )  # bbl/STB
                 cell_injection_rate *= (
-                    fluid_properties.water_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # bbl/STB
-                    * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                )
+                    water_fvf * BBL_TO_FT3
+                )  # Convert bbl/day to ft³/day
             else:
                 # For oil and water, convert bbl/day to ft³/day
                 cell_injection_rate *= (
@@ -1656,86 +1563,56 @@ def compute_implicit_pressure_evolution(
             # If there is a production well, subtract its flow rate from the cell
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
-                production_orientation = production_well.orientation
-
-                if production_orientation == Orientation.X:
-                    directional_permeability = permeability[0]
-                    directional_thickness = cell_size_x
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_x[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_x[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_x[i, j, k]
-
-                elif production_orientation == Orientation.Y:
-                    directional_permeability = permeability[1]
-                    directional_thickness = cell_size_y
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_y[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_y[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_y[i, j, k]
-
+                if produced_phase == FluidPhase.GAS:
+                    phase_mobility = gas_mobility_grid_y[i, j, k]
+                elif produced_phase == FluidPhase.WATER:
+                    phase_mobility = water_mobility_grid_y[i, j, k]
                 else:
-                    directional_permeability = permeability[2]
-                    directional_thickness = cell_thickness
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_z[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_z[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_z[i, j, k]
+                    phase_mobility = oil_mobility_grid_y[i, j, k]
 
-                effective_drainage_radius = compute_3D_effective_drainage_radius(
+                well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                     permeability=permeability,
-                    well_orientation=production_well.orientation,
                 )
-                well_index = compute_well_index(
-                    permeability=directional_permeability,
-                    interval_thickness=directional_thickness,
-                    wellbore_radius=production_well.radius,
-                    effective_drainage_radius=effective_drainage_radius,
-                    skin_factor=production_well.skin_factor,
-                )
-                production_rate = compute_well_rate(
+                production_rate = production_well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
                     well_index=well_index,
-                    pressure=oil_pressure,
-                    bottom_hole_pressure=production_well.bottom_hole_pressure,
                     phase_mobility=phase_mobility,
-                    use_pressure_squared=produced_phase == FluidPhase.GAS,
+                    fluid=produced_fluid,
                 )  # STB/day or SCF/day
 
                 if produced_fluid.phase == FluidPhase.GAS:
                     # Get the volumetric flow rate in ft³/day
-                    production_rate *= (
-                        fluid_properties.gas_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # ft³/SCF
-                    )
+                    gas_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
+                    )  # ft³/SCF
+                    production_rate *= gas_fvf
                 elif produced_fluid.phase == FluidPhase.WATER:
                     # For water, convert bbl/day to ft³/day
+                    water_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
                     production_rate *= (
-                        fluid_properties.water_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
+                        water_fvf * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
                 else:
                     # For oil, convert bbl/day to ft³/day
+                    oil_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.oil_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
                     production_rate *= (
-                        fluid_properties.oil_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
+                        oil_fvf * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
+
                 cell_production_rate += production_rate
 
-        # Calculate the net well flow rate into the cell
+        # Calculate the net well flow rate into the cell. Just add injection and production rates (since production rates are negative)
         # q_{i,j,k} * V = (q_{i,j,k}_injection - q_{i,j,k}_production)
-        net_well_flow_rate_into_cell = cell_injection_rate - cell_production_rate
+        net_well_flow_rate_into_cell = cell_injection_rate + cell_production_rate
 
         # Compute the right-hand side source term vector b
         # b[i, j, k] = (β * P_{ijk}) + (q * V) + (capillary driven flow) + (gravity driven flow/segregation)
@@ -1826,7 +1703,7 @@ def compute_adaptive_pressure_evolution(
 
     # Determine grid dimensions and cell sizes
     cell_size_x, cell_size_y = cell_dimension
-    min_cell_thickness = np.min(thickness_grid)
+    min_cell_thickness = typing.cast(float, np.min(thickness_grid))
 
     # Compute total fluid system compressibility for each cell
     total_fluid_compressibility_grid = build_total_fluid_compressibility_grid(
@@ -2557,6 +2434,7 @@ def compute_saturation_evolution(
     ):
         ip, jp, kp = i + 1, j + 1, k + 1  # Indices of cell in padded grid
 
+        cell_temperature = fluid_properties.temperature_grid[i, j, k]
         cell_thickness = thickness_grid[i, j, k]
         cell_total_volume = cell_size_x * cell_size_y * cell_thickness
         # Current cell properties
@@ -2732,171 +2610,111 @@ def compute_saturation_evolution(
         ):
             # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
-            if injection_well.orientation == Orientation.X:
-                directional_permeability = permeability[0]
-                directional_thickness = cell_size_x
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_x[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_x[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_x[i, j, k]
-
-            elif injection_well.orientation == Orientation.Y:
-                directional_permeability = permeability[1]
-                directional_thickness = cell_size_y
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_y[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_y[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_y[i, j, k]
-
+            if injected_phase == FluidPhase.GAS:
+                phase_mobility = gas_mobility_grid_z[i, j, k]
+            elif injected_phase == FluidPhase.WATER:
+                phase_mobility = water_mobility_grid_z[i, j, k]
             else:
-                directional_permeability = permeability[2]
-                directional_thickness = cell_thickness
-                if injected_phase == FluidPhase.GAS:
-                    phase_mobility = gas_mobility_grid_z[i, j, k]
-                elif injected_phase == FluidPhase.WATER:
-                    phase_mobility = water_mobility_grid_z[i, j, k]
-                else:
-                    phase_mobility = oil_mobility_grid_z[i, j, k]
+                phase_mobility = oil_mobility_grid_z[i, j, k]
 
-            effective_drainage_radius = compute_3D_effective_drainage_radius(
+            well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                 permeability=permeability,
-                well_orientation=injection_well.orientation,
             )
-            well_index = compute_well_index(
-                permeability=directional_permeability,
-                interval_thickness=directional_thickness,
-                wellbore_radius=injection_well.radius,
-                effective_drainage_radius=effective_drainage_radius,
-                skin_factor=injection_well.skin_factor,
-            )
-            cell_injection_rate = compute_well_rate(
-                well_index=well_index,
+            cell_injection_rate = injection_well.get_flow_rate(
                 pressure=oil_pressure,
-                bottom_hole_pressure=injection_well.bottom_hole_pressure,
+                temperature=cell_temperature,
+                well_index=well_index,
                 phase_mobility=phase_mobility,
-                use_pressure_squared=injected_phase == FluidPhase.GAS,
+                fluid=injected_fluid,
             )  # STB/day or SCF/day
             if injected_phase == FluidPhase.GAS:
                 # Get the volumetric flow rate in ft³/day
-                cell_injection_rate *= (
-                    fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # ft³/SCF
+                gas_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
                 )  # ft³/SCF
+                cell_injection_rate *= gas_fvf
                 cell_gas_injection_rate = cell_injection_rate
             elif injected_phase == FluidPhase.WATER:
                 # For water, convert bbl/day to ft³/day
-                cell_injection_rate *= (
-                    fluid_properties.water_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # bbl/STB
-                    * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                )
-                cell_water_injection_rate = cell_injection_rate
+                water_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                )  # bbl/STB
+                cell_injection_rate *= water_fvf
+                cell_water_injection_rate = (
+                    cell_injection_rate * BBL_TO_FT3
+                )  # Convert bbl/day to ft³/day
             else:
                 # For oil and water, convert bbl/day to ft³/day
-                cell_injection_rate *= (
-                    fluid_properties.oil_formation_volume_factor_grid[
-                        i, j, k
-                    ]  # bbl/STB
-                    * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                )
-                cell_oil_injection_rate = cell_injection_rate
+                oil_fvf = (
+                    injected_fluid.formation_volume_factor
+                    or fluid_properties.oil_formation_volume_factor_grid[i, j, k]
+                )  # bbl/STB
+                cell_injection_rate *= oil_fvf
+                cell_oil_injection_rate = (
+                    cell_injection_rate * BBL_TO_FT3
+                )  # Convert bbl/day to ft³/day
 
         if production_well is not None:
             # If there is a production well, subtract its flow rate from the cell
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
-                production_orientation = production_well.orientation
-
-                if production_orientation == Orientation.X:
-                    directional_permeability = permeability[0]
-                    directional_thickness = cell_size_x
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_x[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_x[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_x[i, j, k]
-
-                elif production_orientation == Orientation.Y:
-                    directional_permeability = permeability[1]
-                    directional_thickness = cell_size_y
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_y[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_y[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_y[i, j, k]
-
+                if produced_phase == FluidPhase.GAS:
+                    phase_mobility = gas_mobility_grid_y[i, j, k]
+                elif produced_phase == FluidPhase.WATER:
+                    phase_mobility = water_mobility_grid_y[i, j, k]
                 else:
-                    directional_permeability = permeability[2]
-                    directional_thickness = cell_thickness
-                    if produced_phase == FluidPhase.GAS:
-                        phase_mobility = gas_mobility_grid_z[i, j, k]
-                    elif produced_phase == FluidPhase.WATER:
-                        phase_mobility = water_mobility_grid_z[i, j, k]
-                    else:
-                        phase_mobility = oil_mobility_grid_z[i, j, k]
+                    phase_mobility = oil_mobility_grid_y[i, j, k]
 
-                effective_drainage_radius = compute_3D_effective_drainage_radius(
+                well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                     permeability=permeability,
-                    well_orientation=production_well.orientation,
                 )
-                well_index = compute_well_index(
-                    permeability=directional_permeability,
-                    interval_thickness=directional_thickness,
-                    wellbore_radius=production_well.radius,
-                    effective_drainage_radius=effective_drainage_radius,
-                    skin_factor=production_well.skin_factor,
-                )
-                production_rate = compute_well_rate(
-                    well_index=well_index,
+                production_rate = production_well.get_flow_rate(
                     pressure=oil_pressure,
-                    bottom_hole_pressure=production_well.bottom_hole_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
                     phase_mobility=phase_mobility,
-                    use_pressure_squared=produced_phase == FluidPhase.GAS,
+                    fluid=produced_fluid,
                 )  # STB/day or SCF/day
 
                 if produced_fluid.phase == FluidPhase.GAS:
                     # Get the volumetric flow rate in ft³/day
-                    production_rate *= (
-                        fluid_properties.gas_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # ft³/SCF
-                    )
+                    gas_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.gas_formation_volume_factor_grid[i, j, k]
+                    )  # ft³/SCF
+                    production_rate *= gas_fvf
                     cell_gas_production_rate += production_rate
                 elif produced_fluid.phase == FluidPhase.WATER:
                     # For water, convert bbl/day to ft³/day
-                    production_rate *= (
-                        fluid_properties.water_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
-                    cell_water_production_rate += production_rate
+                    water_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.water_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
+                    production_rate *= water_fvf
+                    cell_water_production_rate += (
+                        production_rate * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
                 else:
                     # For oil, convert bbl/day to ft³/day
-                    production_rate *= (
-                        fluid_properties.oil_formation_volume_factor_grid[
-                            i, j, k
-                        ]  # bbl/STB
-                        * BBL_TO_FT3  # Convert bbl/day to ft³/day
-                    )
-                    cell_oil_production_rate += production_rate
+                    oil_fvf = (
+                        produced_fluid.formation_volume_factor
+                        or fluid_properties.oil_formation_volume_factor_grid[i, j, k]
+                    )  # bbl/STB
+                    production_rate *= oil_fvf
+                    cell_oil_production_rate += (
+                        production_rate * BBL_TO_FT3
+                    )  # Convert bbl/day to ft³/day
 
-        # Compute the net volumetric rate for each phase
+        # Compute the net volumetric rate for each phase. Just add injection and production rates (since production rates are negative)
         net_water_flow_rate_into_cell = (
-            cell_water_injection_rate - cell_water_production_rate
+            cell_water_injection_rate + cell_water_production_rate
         )
-        net_oil_flow_rate_into_cell = cell_oil_injection_rate - cell_oil_production_rate
-        net_gas_flow_rate_into_cell = cell_gas_injection_rate - cell_gas_production_rate
+        net_oil_flow_rate_into_cell = cell_oil_injection_rate + cell_oil_production_rate
+        net_gas_flow_rate_into_cell = cell_gas_injection_rate + cell_gas_production_rate
 
         # Calculate saturation changes for each phase
         # dS = Δt / (φ * V_cell) * [
@@ -2904,7 +2722,7 @@ def compute_saturation_evolution(
         #     + (q_x_ij * V)
         # ]
         if (
-            cell_pore_volume > 1e-12
+            cell_pore_volume > 1e-18
         ):  # Avoid division by zero for cells with no significant pore volume
             # The change in saturation is (Net_Flux + Net_Well_Rate) * dt / Pore_Volume
             water_saturation_change = (
@@ -2939,7 +2757,7 @@ def compute_saturation_evolution(
             cell_gas_saturation + gas_saturation_change
         )
 
-    # Apply Saturation Constraints and Normalization across all cells
+    # Apply saturation constraints and normalization across all cells
     # This loop runs *after* all cells have been updated in the previous loop.
     for i, j, k in itertools.product(
         range(cell_count_x), range(cell_count_y), range(cell_count_z)
@@ -2963,7 +2781,7 @@ def compute_saturation_evolution(
         )
 
         # Avoid division by zero if total_saturation is extremely small (e.g., in a void)
-        if total_saturation > 0.0:
+        if total_saturation > 1e-12:
             updated_water_saturation_grid[i, j, k] /= total_saturation
             updated_oil_saturation_grid[i, j, k] /= total_saturation
             updated_gas_saturation_grid[i, j, k] /= total_saturation
