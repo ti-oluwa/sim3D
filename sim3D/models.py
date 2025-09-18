@@ -1,12 +1,13 @@
 """Data models and schemas for the N-dimensional reservoir."""
 
-import typing
 import enum
+import typing
+
 from attrs import define, field
 import numpy as np
 
-from sim3D.types import NDimension, NDimensionalGrid
 from sim3D.boundary_conditions import BoundaryConditions
+from sim3D.types import NDimension, NDimensionalGrid
 
 
 __all__ = [

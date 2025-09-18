@@ -577,9 +577,18 @@ class WellsProxy(typing.Generic[WellLocation, WellT]):
 
     wells_map: typing.Dict[WellLocation, WellT] = field(init=False)
     """A map to store wells by their location for quick access."""
+    check_interval_overlap: bool = True
+    """
+    Whether to check for overlapping perforating intervals between wells.
+
+    You can disable this check if you are certain there are no overlapping wells or
+    you want to allow overlapping wells (e.g in multi-layered reservoirs or multi-lateral wells).
+    """
 
     def __attrs_post_init__(self) -> None:
         object.__setattr__(self, "wells_map", _prepare_wells_map(self.wells))
+        if not self.check_interval_overlap:
+            return
         # Check for overlapping wells
         expected_location_count = sum(
             len(_expand_interval(well.perforating_interval, well.orientation))
@@ -628,10 +637,27 @@ class Wells(typing.Generic[WellLocation]):
 
     This allows quick access to production wells by their location.
     """
+    check_interval_overlap: bool = True
+    """
+    Whether to check for overlapping perforating intervals between injection wells and/or production wells.
+    
+    You can disable this check if you are certain there are no overlapping wells or
+    you want to allow overlapping wells (e.g in multi-layered reservoirs or multi-lateral wells).
+    """
 
     def __attrs_post_init__(self) -> None:
-        self.injectors = WellsProxy(self.injection_wells)
-        self.producers = WellsProxy(self.production_wells)
+        self.injectors = WellsProxy(
+            wells=self.injection_wells,
+            check_interval_overlap=self.check_interval_overlap,
+        )
+        self.producers = WellsProxy(
+            wells=self.production_wells,
+            check_interval_overlap=self.check_interval_overlap,
+        )
+
+        if not self.check_interval_overlap:
+            return
+
         # Check for overlapping wells. Injection and production wells should not overlap.
         overlapping_locations = set(self.injectors.wells_map).intersection(
             self.producers.wells_map

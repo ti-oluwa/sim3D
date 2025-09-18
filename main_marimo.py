@@ -31,7 +31,7 @@ def _(model_states, sim3D):
         plot_type=sim3D.PlotType.VOLUME_RENDER,
         width=960,
         height=600,
-        # isomin=800,
+        isomin=1000,
         # cmin=600,
         # cmax=2700,
         opacity=0.5,

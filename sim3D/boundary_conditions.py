@@ -12,6 +12,8 @@ __all__ = [
     "NoFlowBoundary",
     "ConstantBoundary",
     "VariableBoundary",
+    "DirichletBoundary",
+    "NeumannBoundary",
     "GridBoundaryCondition",
     "BoundaryConditions",
 ]
@@ -86,6 +88,12 @@ class VariableBoundary(typing.Generic[NDimension]):
     ) -> None:
         vectorized_func = np.vectorize(self.func, otypes=[boundary_grid.dtype])
         boundary_grid[:] = vectorized_func(boundary_grid, neighboring_grid)
+
+
+DirichletBoundary = ConstantBoundary
+"""Alias for `ConstantBoundary` representing Dirichlet boundary conditions."""
+NeumannBoundary = VariableBoundary
+"""Alias for `VariableBoundary` representing Neumann boundary conditions."""
 
 
 @define(slots=True, frozen=True)
@@ -202,7 +210,7 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
 
 class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
     """
-    A dictionary-like container for managing reservoir model boundary conditions for different properties.
+    A container for managing reservoir model boundary conditions for different properties.
 
     This class allows you to define boundary conditions for various properties
     in a two-dimensional grid, with a default factory to create conditions
@@ -215,16 +223,16 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
     boundary_conditions = BoundaryConditions(
         conditions={
             "pressure": GridBoundaryCondition(
-                north=ConstantBoundary(constant=2000.0),
+                north=DirichletBoundary(constant=2000.0),
                 south=NoFlowBoundary(),
-                east=VariableBoundary(func=lambda x, y: x * 1.2),
+                east=NeumannBoundary(func=lambda x, y: x * 1.2),
                 west=NoFlowBoundary(),
             )
         },
         factory=lambda: GridBoundaryCondition(
-            north=ConstantBoundary(constant=1000.0),
+            north=DirichletBoundary(constant=1000.0),
             south=NoFlowBoundary(),
-            east=VariableBoundary(func=lambda x, y: x * 1.1),
+            east=NeumannBoundary(func=lambda x, y: x * 1.1),
             west=NoFlowBoundary(),
         ),
     )
@@ -259,7 +267,7 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
         Initializes the `BoundaryConditions`.
 
         :param factory: Optional callable to provide default boundary conditions.
-            If not provided, defaults to NoFlowBoundary for all sides.
+            If not provided, defaults to NoFlowBoundary for all sides/axes.
 
         :param conditions: Optional mapping of property names to their respective boundary conditions.
         """

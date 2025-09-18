@@ -1,47 +1,48 @@
 """Utilities for computing reservoir rock and fluid properties."""
 
 import functools
+import logging
 import typing
 import warnings
-import logging
-import numpy as np
-import numba
-from scipy.optimize import brentq, root_scalar
-from CoolProp.CoolProp import PropsSI
 
-from sim3D.types import NDimension, NDimensionalGrid, FluidMiscibility
-from sim3D.models import WettabilityType
+from CoolProp.CoolProp import PropsSI
+import numba
+import numpy as np
+from scipy.optimize import brentq, root_scalar
+
 from sim3D.constants import (
-    FT3_TO_BBL,
-    OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
-    POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
-    PPM_TO_WEIGHT_FRACTION,
-    DAYS_PER_SECOND,
-    STANDARD_TEMPERATURE_IMPERIAL,
-    STANDARD_PRESSURE_IMPERIAL,
     BBL_TO_FT3,
+    DAYS_PER_SECOND,
+    FT3_TO_BBL,
     FT3_TO_STB,
-    KG_PER_M3_TO_POUNDS_PER_FT3,
-    MOLECULAR_WEIGHT_AIR,
-    POUNDS_PER_FT3_TO_KG_PER_M3,
-    SCF_PER_POUND_MOLE,
-    STANDARD_WATER_DENSITY_IMPERIAL,
-    STANDARD_WATER_DENSITY,
-    M3_PER_M3_TO_SCF_PER_STB,
-    PSI_TO_PA,
-    PA_TO_PSI,
-    PA_S_TO_CENTIPOISE,
-    IDEAL_GAS_CONSTANT_IMPERIAL,
     GRAMS_PER_MOLE_TO_POUNDS_PER_MOLE,
-    MIN_VALID_PRESSURE,
+    IDEAL_GAS_CONSTANT_IMPERIAL,
+    KG_PER_M3_TO_POUNDS_PER_FT3,
+    M3_PER_M3_TO_SCF_PER_STB,
     MAX_VALID_PRESSURE,
-    MIN_VALID_TEMPERATURE,
     MAX_VALID_TEMPERATURE,
+    MIN_VALID_PRESSURE,
+    MIN_VALID_TEMPERATURE,
+    MOLECULAR_WEIGHT_AIR,
     MOLECULAR_WEIGHT_CO2,
-    MOLECULAR_WEIGHT_NACL,
     MOLECULAR_WEIGHT_METHANE,
     MOLECULAR_WEIGHT_N2,
+    MOLECULAR_WEIGHT_NACL,
+    OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
+    PA_S_TO_CENTIPOISE,
+    PA_TO_PSI,
+    POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
+    POUNDS_PER_FT3_TO_KG_PER_M3,
+    PPM_TO_WEIGHT_FRACTION,
+    PSI_TO_PA,
+    SCF_PER_POUND_MOLE,
+    STANDARD_PRESSURE_IMPERIAL,
+    STANDARD_TEMPERATURE_IMPERIAL,
+    STANDARD_WATER_DENSITY,
+    STANDARD_WATER_DENSITY_IMPERIAL,
 )
+from sim3D.models import WettabilityType
+from sim3D.types import FluidMiscibility, NDimension, NDimensionalGrid
 
 logger = logging.getLogger(__name__)
 

@@ -1,45 +1,46 @@
 """Utils for building N-Dimensional cartesian grids for reservoir simulation."""
 
-import typing
 import itertools
+import typing
+
 import numba
 import numpy as np
 from numpy.typing import DTypeLike
 
-from sim3D.types import Orientation, NDimensionalGrid, NDimension, ArrayLike
+from sim3D.models import CapillaryPressureParameters, RelativePermeabilityParameters
 from sim3D.properties import (
-    compute_fluid_viscosity,
-    compute_fluid_density,
     compute_fluid_compressibility,
-    compute_gas_molecular_weight,
-    mix_fluid_property,
-    compute_total_fluid_compressibility,
-    compute_three_phase_relative_permeabilities,
-    compute_three_phase_capillary_pressures,
-    compute_oil_api_gravity,
-    compute_oil_specific_gravity_from_density,
-    compute_oil_formation_volume_factor,
-    compute_water_formation_volume_factor,
-    compute_gas_formation_volume_factor,
-    compute_gas_compressibility_factor,
-    compute_oil_bubble_point_pressure,
-    compute_gas_to_oil_ratio,
-    compute_gas_solubility_in_water,
-    compute_water_bubble_point_pressure,
-    compute_oil_viscosity,
-    compute_gas_viscosity,
-    compute_water_viscosity,
-    compute_oil_compressibility,
-    compute_gas_free_water_formation_volume_factor,
-    compute_water_compressibility,
+    compute_fluid_density,
+    compute_fluid_viscosity,
     compute_gas_compressibility,
-    compute_live_oil_density,
+    compute_gas_compressibility_factor,
     compute_gas_density,
-    compute_water_density,
+    compute_gas_formation_volume_factor,
+    compute_gas_free_water_formation_volume_factor,
     compute_gas_gravity,
     compute_gas_gravity_from_density,
+    compute_gas_molecular_weight,
+    compute_gas_solubility_in_water,
+    compute_gas_to_oil_ratio,
+    compute_gas_viscosity,
+    compute_live_oil_density,
+    compute_oil_api_gravity,
+    compute_oil_bubble_point_pressure,
+    compute_oil_compressibility,
+    compute_oil_formation_volume_factor,
+    compute_oil_specific_gravity_from_density,
+    compute_oil_viscosity,
+    compute_three_phase_capillary_pressures,
+    compute_three_phase_relative_permeabilities,
+    compute_total_fluid_compressibility,
+    compute_water_bubble_point_pressure,
+    compute_water_compressibility,
+    compute_water_density,
+    compute_water_formation_volume_factor,
+    compute_water_viscosity,
+    mix_fluid_property,
 )
-from sim3D.models import CapillaryPressureParameters, RelativePermeabilityParameters
+from sim3D.types import ArrayLike, NDimension, NDimensionalGrid, Orientation
 
 
 @numba.njit(cache=True)

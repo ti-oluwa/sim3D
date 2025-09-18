@@ -5,21 +5,22 @@ This module provides a comprehensive visualization factory for 3D reservoir simu
 including interactive 3D plots, volume rendering, cross-sections, and animations.
 """
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from attrs import asdict
-import numpy as np
-import typing
+from dataclasses import dataclass, field
+from enum import Enum
 import itertools
 import logging
-from typing_extensions import TypedDict
-from abc import ABC, abstractmethod
-from enum import Enum
-from dataclasses import dataclass, field
+import typing
+
+from attrs import asdict
+from matplotlib import pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.colors import Normalize
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
-import matplotlib.animation as animation
+from typing_extensions import TypedDict
 
 from sim3D.grids import coarsen_grid
 from sim3D.simulation import ModelState
@@ -27,12 +28,12 @@ from sim3D.types import (
     NDimension,
     NDimensionalGrid,
     OneDimensionalGrid,
-    ThreeDimensions,
     ThreeDimensionalGrid,
+    ThreeDimensions,
 )
 from sim3D.visualization.base import (
-    PropertyMetadata,
     ColorScheme,
+    PropertyMetadata,
     PropertyRegistry,
     property_registry,
 )
@@ -2981,6 +2982,7 @@ class ModelVisualizer3D:
         plot_type = plot_type or PlotType.VOLUME_RENDER
 
         if "cmin" not in kwargs:
+            # Add cmin/cmax to kwargs for consistent color mapping across frames
             data_list = [
                 self._get_property(state, metadata.name) for state in model_states
             ]
@@ -3028,15 +3030,56 @@ class ModelVisualizer3D:
             else:
                 time_str = f"t={state.time:.2f} seconds"
 
+            # Extract annotations from the frame figure if they exist
+            frame_layout: typing.Dict[str, typing.Any] = {
+                "title": f"{metadata.display_name} at {time_str}"
+            }
+
+            if labels is not None:
+                try:
+                    # Extract annotations from the frame figure's scene layout
+                    scene_layout = getattr(frame_fig.layout, "scene", None)
+                    if scene_layout and hasattr(scene_layout, "annotations"):
+                        annotations = list(scene_layout.annotations or [])
+                        if annotations:
+                            frame_layout["scene"] = {"annotations": annotations}
+                            logger.debug(
+                                f"Extracted {len(annotations)} annotations for frame {i}"
+                            )
+                        else:
+                            frame_layout["scene"] = {"annotations": []}
+                    else:
+                        frame_layout["scene"] = {"annotations": []}
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to extract annotations for frame {i}: {exc}"
+                    )
+                    frame_layout["scene"] = {"annotations": []}
+
             frame = go.Frame(
                 data=frame_fig.data,
                 name=f"frame_{i}",
-                layout=dict(title=f"{metadata.display_name} at {time_str}"),
+                layout=frame_layout,
             )
             frames.append(frame)
 
         # Add frames to figure
         base_fig.frames = frames
+
+        # Set initial annotations for the base figure (from first frame)
+        if frames and labels is not None:
+            try:
+                if scene_layout := getattr(frames[0].layout, "scene", None) is not None:
+                    initial_annotations = getattr(scene_layout, "annotations", [])
+                    if initial_annotations:
+                        base_fig.update_layout(
+                            scene=dict(annotations=initial_annotations)
+                        )
+                        logger.debug(
+                            f"Set {len(initial_annotations)} initial annotations on base figure"
+                        )
+            except Exception as exc:
+                logger.warning(f"Failed to set initial annotations: {exc}")
 
         # Set final title for animation
         if title:
@@ -3132,254 +3175,3 @@ class ModelVisualizer3D:
 
 viz = ModelVisualizer3D()
 """Default 3D visualizer instance for reservoir models."""
-
-
-def plot_model_state(
-    model_state: ModelState,
-) -> None:
-    """
-    Legacy 2D matplotlib plotting function for backward compatibility.
-    Creates a 2x2 grid of plots showing the reservoir pressure, oil saturation,
-    water saturation, and oil viscosity distributions.
-
-    :param model_state: Simulated reservoir model time state containing the grids
-    """
-    # Extract data from model state
-    fluid_properties = model_state.model.fluid_properties
-
-    pressure_grid = fluid_properties.pressure_grid
-    oil_saturation_grid = fluid_properties.oil_saturation_grid
-    water_saturation_grid = fluid_properties.water_saturation_grid
-    oil_viscosity_grid = fluid_properties.oil_viscosity_grid
-
-    total_time_in_hrs = model_state.time / 3600
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12), constrained_layout=True)
-    axes = axes.flatten()  # Flatten the 2x2 array of axes for easier iteration
-
-    # For 3D data, take middle slice
-    if pressure_grid.ndim == 3:
-        z_mid = pressure_grid.shape[2] // 2
-        pressure_slice = pressure_grid[:, :, z_mid]
-        oil_saturation_slice = oil_saturation_grid[:, :, z_mid]
-        water_saturation_slice = water_saturation_grid[:, :, z_mid]
-        oil_viscosity_slice = oil_viscosity_grid[:, :, z_mid]
-    else:
-        pressure_slice = pressure_grid
-        oil_saturation_slice = oil_saturation_grid
-        water_saturation_slice = water_saturation_grid
-        oil_viscosity_slice = oil_viscosity_grid
-
-    # Pressure Plot
-    pcm1 = axes[0].pcolormesh(pressure_slice.T, cmap="viridis", shading="auto")
-    axes[0].set_title("Reservoir Pressure Distribution")
-    axes[0].set_xlabel("X cell index")
-    axes[0].set_ylabel("Y cell index")
-    axes[0].set_aspect("equal")
-    fig.colorbar(pcm1, ax=axes[0], label="Pressure (psi)")
-
-    # Oil Saturation Plot
-    pcm2 = axes[1].pcolormesh(
-        oil_saturation_slice.T,
-        cmap="plasma",
-        shading="auto",
-        norm=Normalize(vmin=0, vmax=1),
-    )
-    axes[1].set_title("Oil Saturation Distribution")
-    axes[1].set_xlabel("X cell index")
-    axes[1].set_ylabel("Y cell index")
-    axes[1].set_aspect("equal")
-    fig.colorbar(pcm2, ax=axes[1], label="Saturation")
-
-    # Water Saturation Plot
-    pcm3 = axes[2].pcolormesh(
-        water_saturation_slice.T,
-        cmap="cividis",
-        shading="auto",
-        norm=Normalize(vmin=0, vmax=1),
-    )
-    axes[2].set_title("Water Saturation Distribution")
-    axes[2].set_xlabel("X cell index")
-    axes[2].set_ylabel("Y cell index")
-    axes[2].set_aspect("equal")
-    fig.colorbar(pcm3, ax=axes[2], label="Saturation")
-
-    # Oil Viscosity Plot
-    viscosity_min = oil_viscosity_slice.min()
-    viscosity_max = oil_viscosity_slice.max()
-
-    pcm4 = axes[3].pcolormesh(
-        oil_viscosity_slice.T,
-        cmap="magma",
-        shading="auto",
-        norm=Normalize(vmin=viscosity_min, vmax=viscosity_max),
-    )
-    axes[3].set_title("Oil Viscosity Distribution")
-    axes[3].set_xlabel("X cell index")
-    axes[3].set_ylabel("Y cell index")
-    axes[3].set_aspect("equal")
-    fig.colorbar(pcm4, ax=axes[3], label="Viscosity (cP)")
-
-    fig.suptitle(
-        f"Reservoir Simulation at {total_time_in_hrs:.2f} hr(s)",
-        fontsize=16,
-    )
-    plt.show()
-
-
-def animate_model_states(
-    model_states: typing.Sequence[ModelState],
-    interval_ms: int = 100,
-    save_path: typing.Optional[str] = None,
-) -> None:
-    """
-    Legacy matplotlib animation function for backward compatibility.
-    Animates the reservoir properties over multiple time states.
-
-    :param model_states: A sequence of ModelState objects representing reservoir snapshots over time
-    :param interval_ms: Delay between animation frames in milliseconds
-    :param save_path: Optional file path to save the animation (supports .mp4 and .gif)
-    """
-    if not model_states:
-        print("No model states provided for animation.")
-        return
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12), constrained_layout=True)
-    axes = axes.flatten()
-
-    initial_state = model_states[0]
-    fluid_properties = initial_state.model.fluid_properties
-
-    # Get all data for consistent color scaling
-    all_pressures = np.array(
-        [s.model.fluid_properties.pressure_grid for s in model_states]
-    )
-    all_oil_viscosities = np.array(
-        [s.model.fluid_properties.oil_viscosity_grid for s in model_states]
-    )
-
-    min_pressure, max_pressure = all_pressures.min(), all_pressures.max()
-    min_viscosity, max_viscosity = all_oil_viscosities.min(), all_oil_viscosities.max()
-
-    # Handle 3D data by taking middle slice
-    if fluid_properties.pressure_grid.ndim == 3:
-        z_mid = fluid_properties.pressure_grid.shape[2] // 2
-        pressure_slice = fluid_properties.pressure_grid[:, :, z_mid]
-        oil_saturation_slice = fluid_properties.oil_saturation_grid[:, :, z_mid]
-        water_saturation_slice = fluid_properties.water_saturation_grid[:, :, z_mid]
-        oil_viscosity_slice = fluid_properties.oil_viscosity_grid[:, :, z_mid]
-    else:
-        pressure_slice = fluid_properties.pressure_grid
-        oil_saturation_slice = fluid_properties.oil_saturation_grid
-        water_saturation_slice = fluid_properties.water_saturation_grid
-        oil_viscosity_slice = fluid_properties.oil_viscosity_grid
-
-    # Initial plots
-    pcm1 = axes[0].pcolormesh(
-        pressure_slice.T,
-        cmap="viridis",
-        shading="auto",
-        norm=Normalize(vmin=min_pressure, vmax=max_pressure),
-    )
-    axes[0].set_title("Reservoir Pressure Distribution")
-    axes[0].set_xlabel("X cell index")
-    axes[0].set_ylabel("Y cell index")
-    axes[0].set_aspect("equal")
-    fig.colorbar(pcm1, ax=axes[0], label="Pressure (psi)")
-
-    pcm2 = axes[1].pcolormesh(
-        oil_saturation_slice.T,
-        cmap="plasma",
-        shading="auto",
-        norm=Normalize(vmin=0, vmax=1),
-    )
-    axes[1].set_title("Oil Saturation Distribution")
-    axes[1].set_xlabel("X cell index")
-    axes[1].set_ylabel("Y cell index")
-    axes[1].set_aspect("equal")
-    fig.colorbar(pcm2, ax=axes[1], label="Saturation")
-
-    pcm3 = axes[2].pcolormesh(
-        water_saturation_slice.T,
-        cmap="cividis",
-        shading="auto",
-        norm=Normalize(vmin=0, vmax=1),
-    )
-    axes[2].set_title("Water Saturation Distribution")
-    axes[2].set_xlabel("X cell index")
-    axes[2].set_ylabel("Y cell index")
-    axes[2].set_aspect("equal")
-    fig.colorbar(pcm3, ax=axes[2], label="Saturation")
-
-    pcm4 = axes[3].pcolormesh(
-        oil_viscosity_slice.T,
-        cmap="magma",
-        shading="auto",
-        norm=Normalize(vmin=min_viscosity, vmax=max_viscosity),
-    )
-    axes[3].set_title("Oil Viscosity Distribution")
-    axes[3].set_xlabel("X cell index")
-    axes[3].set_ylabel("Y cell index")
-    axes[3].set_aspect("equal")
-    fig.colorbar(pcm4, ax=axes[3], label="Viscosity (cP)")
-
-    current_time_hrs = initial_state.time / 3600
-    fig_suptitle = fig.suptitle(
-        f"Reservoir Simulation at {current_time_hrs:.2f} hr(s)",
-        fontsize=16,
-    )
-
-    def update(frame_index: int):
-        """Updates the plot data for each frame of the animation."""
-        state = model_states[frame_index]
-        fluid_props = state.model.fluid_properties
-
-        # Handle 3D data
-        if fluid_props.pressure_grid.ndim == 3:
-            z_mid = fluid_props.pressure_grid.shape[2] // 2
-            pressure_data = fluid_props.pressure_grid[:, :, z_mid]
-            oil_sat_data = fluid_props.oil_saturation_grid[:, :, z_mid]
-            water_sat_data = fluid_props.water_saturation_grid[:, :, z_mid]
-            oil_visc_data = fluid_props.oil_viscosity_grid[:, :, z_mid]
-        else:
-            pressure_data = fluid_props.pressure_grid
-            oil_sat_data = fluid_props.oil_saturation_grid
-            water_sat_data = fluid_props.water_saturation_grid
-            oil_visc_data = fluid_props.oil_viscosity_grid
-
-        # Update data for all four plots
-        pcm1.set_array(pressure_data.T.ravel())
-        pcm2.set_array(oil_sat_data.T.ravel())
-        pcm3.set_array(water_sat_data.T.ravel())
-        pcm4.set_array(oil_visc_data.T.ravel())
-
-        # Update title
-        current_time_hrs = state.time / 3600
-        fig_suptitle.set_text(f"Reservoir Simulation at {current_time_hrs:.2f} hr(s)")
-
-        return (pcm1, pcm2, pcm3, pcm4, fig_suptitle)
-
-    anim = animation.FuncAnimation(
-        fig,
-        update,
-        frames=len(model_states),
-        interval=interval_ms,
-        blit=False,
-        repeat=False,
-    )
-
-    if save_path:
-        print(f"Saving animation to {save_path}...")
-        Writer = (
-            animation.writers["ffmpeg"]
-            if save_path.endswith(".mp4")
-            else animation.writers["pillow"]
-        )
-        writer = Writer(
-            fps=1000 // interval_ms, metadata=dict(artist="sim3D"), bitrate=1800
-        )
-        anim.save(save_path, writer=writer, dpi=100)
-        print("Animation saved.")
-
-    plt.show()
-    plt.close(fig)

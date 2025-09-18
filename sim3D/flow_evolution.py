@@ -1,38 +1,34 @@
+import functools
+import itertools
 import typing
+
 import attrs
+import numba
 import numpy as np
 from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
-import itertools
-import functools
-import numba
 
-from sim3D.types import (
-    ThreeDimensionalGrid,
-    ThreeDimensions,
-    EvolutionScheme,
-    T,
-)
+from sim3D.boundary_conditions import BoundaryConditions
 from sim3D.constants import (
+    ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
     BBL_TO_FT3,
     DAYS_PER_SECOND,
     MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
-    ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
-)
-from sim3D.properties import (
-    compute_harmonic_mobility,
-    compute_diffusion_number,
-    compute_three_phase_relative_permeabilities,
 )
 from sim3D.grids import (
+    build_three_phase_capillary_pressure_grids,
+    build_three_phase_relative_mobilities_grids,
     build_total_fluid_compressibility_grid,
     edge_pad_grid,
-    build_three_phase_relative_mobilities_grids,
-    build_three_phase_capillary_pressure_grids,
 )
-from sim3D.models import RockProperties, FluidProperties
-from sim3D.wells import Wells, FluidPhase
-from sim3D.boundary_conditions import BoundaryConditions
+from sim3D.models import FluidProperties, RockProperties
+from sim3D.properties import (
+    compute_diffusion_number,
+    compute_harmonic_mobility,
+    compute_three_phase_relative_permeabilities,
+)
+from sim3D.types import EvolutionScheme, T, ThreeDimensionalGrid, ThreeDimensions
+from sim3D.wells import FluidPhase, Wells
 
 
 ###########################################################################

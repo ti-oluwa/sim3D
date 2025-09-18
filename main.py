@@ -1,14 +1,15 @@
 import typing
+
 import numpy as np
 
 import sim3D
 from sim3D.grids import build_layered_grid, build_uniform_grid
 from sim3D.properties import (
     compute_gas_compressibility,
-    compute_gas_molecular_weight,
-    compute_gas_formation_volume_factor,
     compute_gas_compressibility_factor,
+    compute_gas_formation_volume_factor,
     compute_gas_gravity,
+    compute_gas_molecular_weight,
 )
 
 np.set_printoptions(threshold=np.inf)  # type: ignore
