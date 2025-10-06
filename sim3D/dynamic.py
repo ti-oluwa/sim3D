@@ -1,80 +1,50 @@
-"""Run a simulation on a 3-Dimensional reservoir model with specified properties and wells."""
+"""Dynamic simulation on a 3-Dimensional reservoir model with specified properties and wells."""
 
-import typing
 import copy
-from functools import partial
-from attrs import define, evolve
 import logging
+import typing
+
+from attrs import define, evolve
 import numpy as np
 
-from sim3D.models import FluidProperties, ReservoirModel
+from sim3D.flow import (
+    evolve_pressure_adaptively,
+    evolve_pressure_explicitly,
+    evolve_pressure_implicitly,
+    evolve_saturation_explicitly,
+    evolve_saturation_implicitly,
+)
 from sim3D.grids import (
     build_gas_compressibility_factor_grid,
-    build_gas_solubility_in_water_grid,
-    build_gas_to_oil_ratio_grid,
-    build_oil_bubble_point_pressure_grid,
-    build_water_bubble_point_pressure_grid,
-    build_oil_viscosity_grid,
-    build_water_viscosity_grid,
-    build_gas_viscosity_grid,
-    build_oil_formation_volume_factor_grid,
-    build_water_formation_volume_factor_grid,
+    build_gas_compressibility_grid,
+    build_gas_density_grid,
     build_gas_formation_volume_factor_grid,
     build_gas_free_water_formation_volume_factor_grid,
-    build_gas_compressibility_grid,
-    build_oil_compressibility_grid,
-    build_water_compressibility_grid,
+    build_gas_solubility_in_water_grid,
+    build_gas_to_oil_ratio_grid,
+    build_gas_viscosity_grid,
     build_live_oil_density_grid,
+    build_oil_bubble_point_pressure_grid,
+    build_oil_compressibility_grid,
+    build_oil_formation_volume_factor_grid,
+    build_oil_viscosity_grid,
+    build_water_bubble_point_pressure_grid,
+    build_water_compressibility_grid,
     build_water_density_grid,
-    build_gas_density_grid,
+    build_water_formation_volume_factor_grid,
+    build_water_viscosity_grid,
 )
-from sim3D.flow_evolution import (
-    compute_adaptive_pressure_evolution,
-    compute_explicit_pressure_evolution,
-    compute_implicit_pressure_evolution,
-    compute_saturation_evolution,
-)
+from sim3D.static import FluidProperties, ReservoirModel
+from sim3D.types import NDimension, Options, ThreeDimensions
 from sim3D.wells import Wells
-from sim3D.types import EvolutionScheme, FluidMiscibility, NDimension, ThreeDimensions
 
 
 __all__ = [
-    "SimulationParameters",
     "ModelState",
     "run_simulation",
 ]
 
 logger = logging.getLogger(__name__)
-
-
-@define(slots=True, frozen=True)
-class SimulationParameters:
-    """
-    Represents the simulation parameters for the reservoir model.
-    """
-
-    time_step_size: float = 3600.0
-    """Time step for the simulation in seconds (default is 1 hour)."""
-    total_time: float = 86400.0
-    """Total simulation time in seconds (default is 1 day)."""
-    max_iterations: int = 1000
-    """Maximum number of iterations for the simulation."""
-    convergence_tolerance: float = 1e-6
-    """Convergence tolerance for the simulation."""
-    output_frequency: int = 10
-    """Frequency of output results during the simulation."""
-    evolution_scheme: typing.Union[EvolutionScheme, typing.Literal["adaptive"]] = (
-        "adaptive"
-    )
-    """Discretization method for the simulation (e.g., 'adaptive', 'explicit', 'implicit')."""
-    fluid_miscibility: typing.Optional[FluidMiscibility] = None
-    """Fluid miscibility model to use (e.g., 'harmonic', 'linear', ...). If None, no miscibility model is applied."""
-    pressure_decay_constant: float = 1e-8
-    """Pressure decay constant for the simulation (default is 1e-8)."""
-    saturation_mixing_factor: float = 0.5
-    """Saturation mixing factor for the simulation (default is 0.5)."""
-    diffusion_number_threshold: float = 0.24
-    """Threshold for the diffusion number to determine stability of the simulation (default is 0.24)."""
 
 
 @define(frozen=True, slots=True)
@@ -90,6 +60,7 @@ class ModelState(typing.Generic[NDimension]):
     model: ReservoirModel[NDimension]
     """The reservoir model at this state."""
     wells: Wells[NDimension]
+    """The wells configuration at this state."""
 
     @property
     def time(self) -> float:
@@ -115,6 +86,7 @@ Potential causes include:
 Suggested actions:
 - Validate boundary conditions and ensure fixed-pressure constraints are properly applied.
 - Check permeability, porosity, and compressibility values.
+- Cell dimensions and bulk volume should be appropriate for the physical scale of the reservoir.
 - Use smaller time steps if using explicit updates.
 - Clamp pressure updates to a minimum floor (e.g., 1.45 psi) to prevent blow-up.
 - Cross-check well source/sink terms for sign and magnitude correctness.
@@ -126,18 +98,19 @@ Simulation aborted to avoid propagation of unphysical results.
 def run_simulation(
     model: ReservoirModel[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    params: SimulationParameters,
+    options: Options,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     logger.info("Starting 3D reservoir simulation")
     logger.debug(f"Grid dimensions: {model.grid_dimension}")
     logger.debug(f"Cell dimensions: {model.cell_dimension}")
-    logger.debug(f"Evolution scheme: {params.evolution_scheme}")
-    logger.debug(f"Time step size: {params.time_step_size} seconds")
-    logger.debug(f"Total simulation time: {params.total_time} seconds")
+    logger.debug(f"Evolution scheme: {options.evolution_scheme}")
+    logger.debug(f"Time step size: {options.time_step_size} seconds")
+    logger.debug(f"Total simulation time: {options.total_time} seconds")
 
     cell_dimension = model.cell_dimension
     fluid_properties = copy.deepcopy(model.fluid_properties)
     rock_properties = copy.deepcopy(model.rock_properties)
+    rock_fluid_properties = copy.deepcopy(model.rock_fluid_properties)
     thickness_grid = model.thickness_grid
     elevation_grid = model.get_elevation_grid(direction="downward")
 
@@ -145,21 +118,31 @@ def run_simulation(
     wells.check_location(model.grid_dimension)
     wells = copy.deepcopy(wells)
 
-    if (method := params.evolution_scheme.lower()) == "adaptive":
-        logger.debug("Using adaptive pressure evolution scheme")
-        compute_pressure_evolution = partial(
-            compute_adaptive_pressure_evolution,
-            diffusion_number_threshold=params.diffusion_number_threshold,
+    if (method := options.evolution_scheme.lower()) == "adaptive_explicit":
+        logger.debug("Using adaptive pressure, explicit saturation evolution scheme")
+        evolve_pressure = evolve_pressure_adaptively
+        evolve_saturation = evolve_saturation_explicitly
+        logger.debug(
+            f"Diffusion number threshold: {options.diffusion_number_threshold}"
         )
-        logger.debug(f"Diffusion number threshold: {params.diffusion_number_threshold}")
-    elif method == "implicit":
-        logger.debug("Using implicit pressure evolution scheme")
-        compute_pressure_evolution = compute_implicit_pressure_evolution
+    elif method == "explicit_implicit":
+        logger.debug("Using explicit pressure, implicit saturation evolution scheme")
+        evolve_pressure = evolve_pressure_explicitly
+        evolve_saturation = evolve_saturation_implicitly
+    elif method == "implicit_explicit":
+        logger.debug("Using implicit pressure, explicit saturation evolution scheme")
+        evolve_pressure = evolve_pressure_implicitly
+        evolve_saturation = evolve_saturation_explicitly
+    elif method == "fully_implicit":
+        logger.debug("Using fully implicit evolution scheme")
+        evolve_pressure = evolve_pressure_implicitly
+        evolve_saturation = evolve_saturation_implicitly
     else:
-        logger.debug("Using explicit pressure evolution scheme")
-        compute_pressure_evolution = compute_explicit_pressure_evolution
+        logger.debug("Using fully explicit evolution scheme")
+        evolve_pressure = evolve_pressure_explicitly
+        evolve_saturation = evolve_saturation_explicitly
 
-    time_step_size = params.time_step_size
+    time_step_size = options.time_step_size
     initial_state = ModelState(
         time_step=0,
         time_step_size=time_step_size,
@@ -169,13 +152,13 @@ def run_simulation(
 
     boundary_conditions = model.boundary_conditions
     num_of_time_steps = min(
-        (params.total_time // time_step_size), params.max_iterations
+        (options.total_time // time_step_size), options.max_iterations
     )
-    output_frequency = params.output_frequency
+    output_frequency = options.output_frequency
 
     logger.debug(f"Number of time steps to simulate: {int(num_of_time_steps)}")
     logger.debug(f"Output frequency: every {output_frequency} steps")
-    logger.debug(f"Convergence tolerance: {params.convergence_tolerance}")
+    logger.debug(f"Convergence tolerance: {options.convergence_tolerance}")
 
     # Yield the Initial model state
     logger.debug("Yielding initial model state")
@@ -192,17 +175,22 @@ def run_simulation(
             )
 
         logger.debug("Computing pressure evolution...")
-        pressure_evolution_result = compute_pressure_evolution(
+        pressure_evolution_result = evolve_pressure(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
             elevation_grid=elevation_grid,
+            time_step=time_step,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
             fluid_properties=fluid_properties,
+            rock_fluid_properties=rock_fluid_properties,
             wells=wells,
+            options=options,
         )
         pressure_grid = pressure_evolution_result.value
+        # import rich
+        # rich.print(pressure_grid)
         logger.debug(
             f"Pressure evolution completed using {pressure_evolution_result.scheme} scheme"
         )
@@ -245,15 +233,18 @@ def run_simulation(
 
         # Saturation evolution
         logger.debug("Computing saturation evolution...")
-        saturation_evolution_result = compute_saturation_evolution(
+        saturation_evolution_result = evolve_saturation(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
             elevation_grid=elevation_grid,
+            time_step=time_step,
             time_step_size=time_step_size,
             boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
             fluid_properties=saturation_fluid_properties,
+            rock_fluid_properties=rock_fluid_properties,
             wells=wells,
+            options=options,
         )
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
             saturation_evolution_result.value
@@ -285,9 +276,9 @@ def run_simulation(
             )
             yield model_state
 
-        if time_step > params.max_iterations:
+        if time_step > options.max_iterations:
             logger.warning(
-                f"Reached maximum number of iterations: {params.max_iterations}. Stopping simulation."
+                f"Reached maximum number of iterations: {options.max_iterations}. Stopping simulation."
             )
             break
         # Update the wells for the next time step
@@ -295,7 +286,7 @@ def run_simulation(
         wells.evolve(time_step=time_step)
 
     # Log completion outside the loop to avoid unbound variable issues
-    final_time_step = min(int(num_of_time_steps), params.max_iterations)
+    final_time_step = min(int(num_of_time_steps), options.max_iterations)
     logger.info(f"Simulation completed successfully after {final_time_step} time steps")
 
 
@@ -403,6 +394,7 @@ def update_static_fluid_properties(
         pressure_grid=fluid_properties.pressure_grid,
         temperature_grid=fluid_properties.temperature_grid,
         salinity_grid=fluid_properties.water_salinity_grid,
+        gas=fluid_properties.reservoir_gas_name,
     )
     gas_free_water_formation_volume_factor_grid = (
         build_gas_free_water_formation_volume_factor_grid(
@@ -501,10 +493,11 @@ def update_static_fluid_properties(
         gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
         gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
     )
-
+    # Finally, evolve the fluid properties with all the new grids
     updated_fluid_properties = evolve(
         fluid_properties,
         gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
+        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
         oil_bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
         water_bubble_point_pressure_grid=new_water_bubble_point_pressure_grid,
         oil_viscosity_grid=new_oil_viscosity_grid,

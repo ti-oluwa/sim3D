@@ -1,43 +1,26 @@
-"""Data models and schemas for the N-dimensional reservoir."""
+"""Static data models and schemas for the N-dimensional reservoir."""
 
-import enum
 import typing
 
 from attrs import define, field
 import numpy as np
 
-from sim3D.boundary_conditions import BoundaryConditions
-from sim3D.types import NDimension, NDimensionalGrid
+from sim3D.boundaries import BoundaryConditions
+from sim3D.types import (
+    NDimension,
+    NDimensionalGrid,
+    WettabilityType,
+    RelativePermeabilityFunc,
+)
 
 
 __all__ = [
-    "RelativePermeabilityParameters",
     "CapillaryPressureParameters",
-    "WettabilityType",
     "FluidProperties",
     "RockProperties",
     "ReservoirModel",
     "RockPermeability",
 ]
-
-
-@define(slots=True, frozen=True)
-class RelativePermeabilityParameters:
-    """Parameters defining the relative permeability curves (e.g., Corey exponents)."""
-
-    water_exponent: float = 2.0  # Nw
-    """Corey exponent for water relative permeability."""
-    oil_exponent: float = 2.0  # No
-    """Corey exponent for oil relative permeability."""
-    gas_exponent: float = 2.0  # Ng
-    """Corey exponent for gas relative permeability."""
-
-
-class WettabilityType(str, enum.Enum):
-    """Enum representing the wettability type of the reservoir rock."""
-
-    WATER_WET = "water_wet"
-    OIL_WET = "oil_wet"
 
 
 @define(slots=True, frozen=True)
@@ -173,7 +156,9 @@ class FluidProperties(typing.Generic[NDimension]):
     gas_density_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas density distribution in the reservoir (lbm/ft³)."""
     gas_to_oil_ratio_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the gas-to-oil ratio distribution at standard conditions (SCF/STB)."""
+    """N-dimensional numpy array representing the solution gas-to-oil ratio distribution at standard conditions (SCF/STB)."""
+    gas_solubility_in_water_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the gas solubility in water distribution at standard conditions (SCF/STB)."""
     oil_formation_volume_factor_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the oil formation volume factor distribution (bbl/STB)."""
     gas_formation_volume_factor_grid: NDimensionalGrid[NDimension]
@@ -182,10 +167,19 @@ class FluidProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the water formation volume factor distribution (bbl/STB)."""
     water_salinity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the water salinity distribution (ppm NaCl). Should be constant for a given water type, e.g., seawater = 35,000 ppm NaCl)."""
+    reservoir_gas_name: str = "Methane"
+    """Name of the reservoir gas (e.g., Methane, Ethane, CO2, N2). Can also be the name of the gas injected into the reservoir."""
 
 
 @define(slots=True, frozen=True)
 class RockPermeability(typing.Generic[NDimension]):
+    """
+    Rock permeability in the reservoir, in milliDarcy (mD).
+
+    Permeability can be anisotropic, meaning it can vary in different directions (x, y, z).
+    If only the x-direction permeability is provided, it is assumed that the y and z directions have the same permeability (isotropic).
+    """
+
     x: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the permeability distribution in the x-direction (mD)."""
     y: NDimensionalGrid[NDimension] = field(factory=lambda: np.empty((0, 0)))  # type: ignore[assignment]
@@ -218,14 +212,23 @@ class RockProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the porosity distribution across the reservoir rock (fraction)."""
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the irreducible water saturation distribution (fraction)."""
-    residual_oil_saturation_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the residual oil saturation distribution (fraction)."""
+    residual_oil_saturation_water_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the residual oil saturation distribution during water flooding (fraction)."""
+    residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the residual oil saturation distribution during gas flooding (fraction)."""
     residual_gas_saturation_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the residual gas saturation distribution (fraction)."""
-    relative_permeability_params: RelativePermeabilityParameters = field(
-        factory=RelativePermeabilityParameters
-    )
-    """Parameters for relative permeability curves."""
+
+
+@define(slots=True, frozen=True)
+class RockFluidProperties:
+    """
+    Combined rock and fluid properties of a reservoir model.
+    These properties include both rock and fluid characteristics necessary for reservoir simulation.
+    """
+
+    relative_permeability_func: RelativePermeabilityFunc
+    """Callable that evaluates the relative permeability curves based on fluid saturations."""
     capillary_pressure_params: CapillaryPressureParameters = field(
         factory=CapillaryPressureParameters
     )
@@ -246,6 +249,8 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Fluid properties of the reservoir model."""
     rock_properties: RockProperties[NDimension]
     """Rock properties of the reservoir model."""
+    rock_fluid_properties: RockFluidProperties
+    """Rock-fluid properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
 
@@ -275,7 +280,7 @@ def build_elevation_grid(
     of the reservoir, depending on the specified direction.
 
     :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft).
-    :param direction: Direction to generate the elevation grid. 
+    :param direction: Direction to generate the elevation grid.
         Can be "downward" (from top to bottom) or "upward" (from bottom to top).
     :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
     """

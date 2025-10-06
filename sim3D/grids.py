@@ -7,7 +7,7 @@ import numba
 import numpy as np
 from numpy.typing import DTypeLike
 
-from sim3D.models import CapillaryPressureParameters, RelativePermeabilityParameters
+from sim3D.static import CapillaryPressureParameters
 from sim3D.properties import (
     compute_fluid_compressibility,
     compute_fluid_density,
@@ -31,7 +31,6 @@ from sim3D.properties import (
     compute_oil_specific_gravity_from_density,
     compute_oil_viscosity,
     compute_three_phase_capillary_pressures,
-    compute_three_phase_relative_permeabilities,
     compute_total_fluid_compressibility,
     compute_water_bubble_point_pressure,
     compute_water_compressibility,
@@ -40,7 +39,13 @@ from sim3D.properties import (
     compute_water_viscosity,
     mix_fluid_property,
 )
-from sim3D.types import ArrayLike, NDimension, NDimensionalGrid, Orientation
+from sim3D.types import (
+    ArrayLike,
+    NDimension,
+    NDimensionalGrid,
+    Orientation,
+    RelativePermeabilityFunc,
+)
 
 
 @numba.njit(cache=True)
@@ -490,7 +495,8 @@ def build_three_phase_capillary_pressure_grids(
     water_saturation_grid: NDimensionalGrid[NDimension],
     gas_saturation_grid: NDimensionalGrid[NDimension],
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
-    residual_oil_saturation_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_water_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension],
     residual_gas_saturation_grid: NDimensionalGrid[NDimension],
     capillary_pressure_params: CapillaryPressureParameters,
 ) -> typing.Tuple[NDimensionalGrid[NDimension], NDimensionalGrid[NDimension]]:
@@ -502,7 +508,8 @@ def build_three_phase_capillary_pressure_grids(
     :param water_saturation_grid: N-Dimensional array of water saturation values (fraction).
     :param gas_saturation_grid: N-Dimensional array of gas saturation values (fraction).
     :param irreducible_water_saturation_grid: N-Dimensional array of irreducible water saturation values (fraction).
-    :param residual_oil_saturation_grid: N-Dimensional array of residual oil saturation values (fraction).
+    :param residual_oil_saturation_water_grid: N-Dimensional array of residual oil saturation values during water flooding (fraction).
+    :param residual_oil_saturation_gas_grid: N-Dimensional array of residual oil saturation values during gas flooding (fraction).
     :param residual_gas_saturation_grid: N-Dimensional array of residual gas saturation values (fraction).
     :param capillary_pressure_params: `CapillaryPressureParameters` object containing parameters for capillary pressure calculations.
     :return: Tuple of (oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid)
@@ -526,7 +533,8 @@ def build_three_phase_capillary_pressure_grids(
 
         # Get cell-specific rock properties
         irreducible_water_saturation = irreducible_water_saturation_grid[indices]
-        residual_oil_saturation = residual_oil_saturation_grid[indices]
+        residual_oil_saturation_water = residual_oil_saturation_water_grid[indices]
+        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
         residual_gas_saturation = residual_gas_saturation_grid[indices]
 
         # Compute three-phase capillary pressures
@@ -537,7 +545,8 @@ def build_three_phase_capillary_pressure_grids(
             water_saturation=water_saturation,
             gas_saturation=gas_saturation,
             irreducible_water_saturation=irreducible_water_saturation,
-            residual_oil_saturation=residual_oil_saturation,
+            residual_oil_saturation_water=residual_oil_saturation_water,
+            residual_oil_saturation_gas=residual_oil_saturation_gas,
             residual_gas_saturation=residual_gas_saturation,
             wettability=capillary_pressure_params.wettability,
             oil_water_entry_pressure_oil_wet=capillary_pressure_params.oil_water_entry_pressure_oil_wet,
@@ -562,9 +571,10 @@ def build_three_phase_relative_mobilities_grids(
     oil_viscosity_grid: NDimensionalGrid[NDimension],
     gas_viscosity_grid: NDimensionalGrid[NDimension],
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
-    residual_oil_saturation_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_water_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension],
     residual_gas_saturation_grid: NDimensionalGrid[NDimension],
-    relative_permeability_params: RelativePermeabilityParameters,
+    relative_permeability_func: RelativePermeabilityFunc,
 ) -> typing.Tuple[
     NDimensionalGrid[NDimension],
     NDimensionalGrid[NDimension],
@@ -585,9 +595,10 @@ def build_three_phase_relative_mobilities_grids(
     :param oil_viscosity_grid: N-Dimensional array of oil viscosity values (cP).
     :param gas_viscosity_grid: N-Dimensional array of gas viscosity values (cP).
     :param irreducible_water_saturation_grid: N-Dimensional array of irreducible water saturation values (fraction).
-    :param residual_oil_saturation_grid: N-Dimensional array of residual oil saturation values (fraction).
+    :param residual_oil_saturation_water_grid: N-Dimensional array of residual oil saturation values during water flooding (fraction).
+    :param residual_oil_saturation_gas_grid: N-Dimensional array of residual oil saturation values during gas flooding (fraction).
     :param residual_gas_saturation_grid: N-Dimensional array of residual gas saturation values (fraction).
-    :param relative_permeability_params: `RelativePermeabilityParameters` object containing Corey exponents for water, oil, and gas.
+    :param relative_permeability_func: Relative permeability function to use for calculations (e.g., Corey model).
     :return: Tuple of (water_relative_mobility_grid, oil_relative_mobility_grid, gas_relative_mobility_grid) in 1/(cP).
     """
     water_relative_mobility_grid = build_uniform_grid(
@@ -620,32 +631,31 @@ def build_three_phase_relative_mobilities_grids(
 
         # Get cell-specific rock properties
         irreducible_water_saturation = irreducible_water_saturation_grid[indices]
-        residual_oil_saturation = residual_oil_saturation_grid[indices]
+        residual_oil_saturation_water = residual_oil_saturation_water_grid[indices]
+        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
         residual_gas_saturation = residual_gas_saturation_grid[indices]
 
         # Compute three-phase relative permeabilities
-        (
-            water_relative_permeability,
-            oil_relative_permeability,
-            gas_relative_permeability,
-        ) = compute_three_phase_relative_permeabilities(
+        relative_permeabilities = relative_permeability_func(
             water_saturation=water_saturation,
             oil_saturation=oil_saturation,
             gas_saturation=gas_saturation,
             irreducible_water_saturation=irreducible_water_saturation,
-            residual_oil_saturation=residual_oil_saturation,
+            residual_oil_saturation_water=residual_oil_saturation_water,
+            residual_oil_saturation_gas=residual_oil_saturation_gas,
             residual_gas_saturation=residual_gas_saturation,
-            water_exponent=relative_permeability_params.water_exponent,
-            oil_exponent=relative_permeability_params.oil_exponent,
-            gas_exponent=relative_permeability_params.gas_exponent,
         )
 
         # Compute phase mobilities
         water_relative_mobility_grid[indices] = (
-            water_relative_permeability / water_viscosity
+            relative_permeabilities["water"] / water_viscosity
         )
-        oil_relative_mobility_grid[indices] = oil_relative_permeability / oil_viscosity
-        gas_relative_mobility_grid[indices] = gas_relative_permeability / gas_viscosity
+        oil_relative_mobility_grid[indices] = (
+            relative_permeabilities["oil"] / oil_viscosity
+        )
+        gas_relative_mobility_grid[indices] = (
+            relative_permeabilities["gas"] / gas_viscosity
+        )
 
     # Ensure no NaN or Inf values in the mobility grids
     water_relative_mobility_grid[
@@ -657,7 +667,6 @@ def build_three_phase_relative_mobilities_grids(
     gas_relative_mobility_grid[
         np.isnan(gas_relative_mobility_grid) | np.isinf(gas_relative_mobility_grid)
     ] = 0.0
-
     return (
         water_relative_mobility_grid,
         oil_relative_mobility_grid,

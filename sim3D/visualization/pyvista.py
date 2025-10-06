@@ -1494,7 +1494,7 @@ class ModelVisualizer3D:
         plot_name = self.plot_type_names.get(plot_type, "3D Plot")
         return f"{plot_name}: {metadata.display_name} ({metadata.unit})"
 
-    def plot_property(
+    def make_plot(
         self,
         model_state: ModelState[ThreeDimensions],
         property: str,
@@ -1624,7 +1624,7 @@ class ModelVisualizer3D:
             plotter.show()
         return plotter
 
-    def animate_property(
+    def animate(
         self,
         model_states: Sequence[ModelState[ThreeDimensions]],
         property: str,
@@ -1675,7 +1675,7 @@ class ModelVisualizer3D:
                 plotter.clear()
 
             kwargs["show"] = False  # Prevent showing each frame
-            self.plot_property(
+            self.make_plot(
                 model_state=model_state,
                 property=property,
                 plotter=plotter,

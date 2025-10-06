@@ -1,13 +1,13 @@
 import copy
+import functools
 import itertools
 import typing
-import enum
-from attrs import define, field
+import attrs
 import numba
 import numpy as np
 from scipy.integrate import quad
 
-from sim3D.types import Orientation, WellLocation
+from sim3D.types import Orientation, WellLocation, FluidPhase
 from sim3D.properties import (
     compute_gas_density,
     compute_gas_viscosity,
@@ -16,7 +16,6 @@ from sim3D.properties import (
 
 
 __all__ = [
-    "FluidPhase",
     "WellFluid",
     "InjectionWell",
     "ProductionWell",
@@ -31,15 +30,7 @@ __all__ = [
 ]
 
 
-class FluidPhase(enum.Enum):
-    """Enum representing the phase of the fluid in the reservoir."""
-
-    WATER = "water"
-    GAS = "gas"
-    OIL = "oil"
-
-
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class WellFluid:
     """Properties of the fluid being injected into or produced by a well."""
 
@@ -59,7 +50,7 @@ class WellFluid:
     """Salinity of the fluid in (ppm NaCl)."""
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class Well(typing.Generic[WellLocation]):
     """Models a well in the reservoir model."""
 
@@ -73,11 +64,21 @@ class Well(typing.Generic[WellLocation]):
     """Well bottom-hole flowing pressure in psi"""
     skin_factor: float = 0.0
     """Skin factor for the well, affecting flow performance."""
-    orientation: Orientation = field(init=False, default=Orientation.Z)
+    orientation: Orientation = attrs.field(init=False, default=Orientation.Z)
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
-    schedule: typing.MutableMapping[int, "ScheduledEvent"] = field(factory=dict)
+    schedule: typing.MutableMapping[int, "ScheduledEvent"] = attrs.field(factory=dict)
+    """Schedule of events for the well, mapping time steps to scheduled events."""
+    auto_clamp: bool = True
+    """
+    Whether to automatically clamp the well rate to zero if the flow direction is reversed.
+
+    If True, Production wells with positive flow rates and Injection wells with negative flow rates will be automatically clamped.
+    If False, wells will remain active regardless of flow direction.
+
+    It is advised to keep this option enabled to prevent unphysical scenarios in the simulation.
+    """
 
     def __attrs_post_init__(self) -> None:
         """Ensure the well has a valid orientation."""
@@ -86,6 +87,16 @@ class Well(typing.Generic[WellLocation]):
                 "Well bottom-hole flowing pressure must be a positive value."
             )
         self.orientation = self.get_orientation()
+
+    @property
+    def is_shut_in(self) -> bool:
+        """Check if the well is shut in."""
+        return not self.is_active
+
+    @property
+    def is_open(self) -> bool:
+        """Check if the well is open."""
+        return self.is_active
 
     def get_orientation(self) -> Orientation:
         """
@@ -239,7 +250,8 @@ class Well(typing.Generic[WellLocation]):
         phase_mobility: float,
         well_index: float,
         fluid: typing.Optional[WellFluid] = None,
-        use_pseudo_pressure: typing.Optional[bool] = None,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
         z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
         viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
     ) -> float:
@@ -248,26 +260,25 @@ class Well(typing.Generic[WellLocation]):
 
         :param pressure: The reservoir pressure at the well location (psi).
         :param temperature: The reservoir temperature at the well location (°F).
-        :param phase_mobility: The mobility of the fluid phase being produced or injected (ft²/(psi·day)).
+        :param phase_mobility: The relative mobility of the fluid phase being produced or injected.
         :param well_index: The well index (md*ft).
         :param fluid: The fluid being produced or injected. If None, uses the well's injected_fluid.
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
+        :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
         :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
         :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: The flow rate (STB/day or SCF/day).
+        :return: The flow rate in (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobility.
         """
         # If no fluid is injected, return 0 flow rate
-        if fluid is None:
+        if fluid is None or phase_mobility <= 0.0 or not self.is_open:
             return 0.0
-        use_pseudo_pressure = (
-            use_pseudo_pressure
-            if use_pseudo_pressure is not None
-            else fluid.phase == FluidPhase.GAS
-        )
+
+        compressibility_factor = 1.0
 
         if use_pseudo_pressure and z_factor_func is None and viscosity_func is None:
             specific_gravity = fluid.specific_gravity
 
+            @functools.cache
             def _z_factor_func(pressure: float) -> float:
                 nonlocal specific_gravity, temperature
 
@@ -277,6 +288,7 @@ class Well(typing.Generic[WellLocation]):
                     gas_gravity=specific_gravity,
                 )
 
+            @functools.cache
             def _viscosity_func(pressure: float) -> float:
                 nonlocal specific_gravity, temperature
 
@@ -300,21 +312,33 @@ class Well(typing.Generic[WellLocation]):
             z_factor_func = _z_factor_func
             viscosity_func = _viscosity_func
 
+        if z_factor_func is not None:
+            compressibility_factor = z_factor_func(pressure)
         return compute_well_rate(
             well_index=well_index,
             pressure=pressure,
             bottom_hole_pressure=self.bottom_hole_pressure,
             phase_mobility=phase_mobility,
-            use_pseudo_pressure=use_pseudo_pressure,
+            use_pseudo_pressure=bool(use_pseudo_pressure),
+            compressibility_factor=compressibility_factor,
+            fluid_compressibility=fluid_compressibility,
             z_factor_func=z_factor_func,
             viscosity_func=viscosity_func,
         )
+
+    def shut_in(self) -> None:
+        """Shut in the well."""
+        self.is_active = False
+
+    def open(self) -> None:
+        """Open the well."""
+        self.is_active = True
 
 
 WellT = typing.TypeVar("WellT", bound=Well)
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class ScheduledEvent(typing.Generic[WellT]):
     """
     Represents a scheduled event for a well at a specific time step.
@@ -348,7 +372,7 @@ class ScheduledEvent(typing.Generic[WellT]):
         return well
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class InjectionWell(Well[WellLocation]):
     """
     Models an injection well in the reservoir model.
@@ -366,7 +390,8 @@ class InjectionWell(Well[WellLocation]):
         phase_mobility: float,
         well_index: float,
         fluid: typing.Optional[WellFluid] = None,
-        use_pseudo_pressure: typing.Optional[bool] = None,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
         z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
         viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
     ) -> float:
@@ -375,13 +400,14 @@ class InjectionWell(Well[WellLocation]):
 
         :param pressure: The reservoir pressure at the well location (psi).
         :param temperature: The reservoir temperature at the well location (°F).
-        :param phase_mobility: The mobility of the fluid phase being produced or injected (ft²/(psi·day)).
+        :param phase_mobility: The relative mobility of the fluid phase being injected.
         :param well_index: The well index (md*ft).
         :param fluid: The fluid being injected into the well. If None, uses the well's injected_fluid property.
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
+        :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
         :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
         :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: The flow rate (STB/day or SCF/day).
+        :return: The flow rate (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobilities.
         """
         return super().get_flow_rate(
             pressure=pressure,
@@ -390,12 +416,13 @@ class InjectionWell(Well[WellLocation]):
             well_index=well_index,
             fluid=fluid or self.injected_fluid,
             use_pseudo_pressure=use_pseudo_pressure,
+            fluid_compressibility=fluid_compressibility,
             z_factor_func=z_factor_func,
             viscosity_func=viscosity_func,
         )
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class ProductionWell(Well[WellLocation]):
     """
     Models a production well in the reservoir model.
@@ -403,7 +430,7 @@ class ProductionWell(Well[WellLocation]):
     This well produces fluids from the reservoir.
     """
 
-    produced_fluids: typing.Sequence[WellFluid] = field(factory=list)
+    produced_fluids: typing.Sequence[WellFluid] = attrs.field(factory=list)
     """List of fluids produced by the well. This can include multiple phases (e.g., oil, gas, water)."""
 
     def get_flow_rates(
@@ -412,22 +439,24 @@ class ProductionWell(Well[WellLocation]):
         temperature: float,
         phase_mobilities: typing.Sequence[float],
         well_index: float,
-        use_pseudo_pressure: typing.Optional[bool] = None,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
         z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
         viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
-    ) -> typing.Iterator[float]:
+    ) -> typing.Generator[float]:
         """
         Compute the flow rates for the produced fluids using Darcy's law.
 
         :param pressure: The reservoir pressure at the well location (psi).
         :param temperature: The reservoir temperature at the well location (°F).
-        :param phase_mobilities: The mobilities of the fluid phases being produced (ft²/(psi·day)).
+        :param phase_mobilities: The relative mobilities of the fluid phases being produced.
             This should be a sequence with the same length as produced_fluids.
         :param well_index: The well index (md*ft).
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
+        :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
         :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
         :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: A list of flow rates (STB/day or SCF/day) for each produced fluid.
+        :return: A list of flow rates (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobilities.
         """
         return (
             self.get_flow_rate(
@@ -437,6 +466,7 @@ class ProductionWell(Well[WellLocation]):
                 well_index=well_index,
                 fluid=fluid,
                 use_pseudo_pressure=use_pseudo_pressure,
+                fluid_compressibility=fluid_compressibility,
                 z_factor_func=z_factor_func,
                 viscosity_func=viscosity_func,
             )
@@ -448,7 +478,7 @@ InjectionWellT = typing.TypeVar("InjectionWellT", bound=InjectionWell)
 ProductionWellT = typing.TypeVar("ProductionWellT", bound=ProductionWell)
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
     """
     Scheduled event for an injection well.
@@ -456,7 +486,7 @@ class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
     This includes the well's perforating interval, bottom-hole pressure, skin factor, and injected fluid.
     """
 
-    injected_fluid: typing.Optional[WellFluid] = field(
+    injected_fluid: typing.Optional[WellFluid] = attrs.field(
         default=None,
         metadata={"description": "Injected fluid properties at this time step."},
     )
@@ -476,7 +506,7 @@ class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
         return well
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class ProductionWellScheduledEvent(ScheduledEvent[ProductionWellT]):
     """
     Scheduled event for a production well.
@@ -484,7 +514,7 @@ class ProductionWellScheduledEvent(ScheduledEvent[ProductionWellT]):
     This includes the well's perforating interval, bottom-hole pressure, skin factor, and produced fluids.
     """
 
-    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = field(
+    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = attrs.field(
         default=None,
         metadata={"description": "List of produced fluids at this time step."},
     )
@@ -568,14 +598,14 @@ def _prepare_wells_map(
     return wells_map
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class WellsProxy(typing.Generic[WellLocation, WellT]):
     """A proxy class for quick access to wells by their location."""
 
     wells: typing.Sequence[WellT]
     """A map of well perforating intervals to the well objects."""
 
-    wells_map: typing.Dict[WellLocation, WellT] = field(init=False)
+    wells_map: typing.Dict[WellLocation, WellT] = attrs.field(init=False)
     """A map to store wells by their location for quick access."""
     check_interval_overlap: bool = True
     """
@@ -609,7 +639,7 @@ class WellsProxy(typing.Generic[WellLocation, WellT]):
         self.wells_map[location] = well
 
 
-@define(slots=True)
+@attrs.define(slots=True)
 class Wells(typing.Generic[WellLocation]):
     """
     Models a collection of injection and production wells in the reservoir model.
@@ -617,19 +647,23 @@ class Wells(typing.Generic[WellLocation]):
     This includes both production and injection wells.
     """
 
-    injection_wells: typing.Sequence[InjectionWell[WellLocation]] = field(factory=list)
+    injection_wells: typing.Sequence[InjectionWell[WellLocation]] = attrs.field(
+        factory=list
+    )
     """List of injection wells in the reservoir."""
-    production_wells: typing.Sequence[ProductionWell[WellLocation]] = field(
+    production_wells: typing.Sequence[ProductionWell[WellLocation]] = attrs.field(
         factory=list
     )
     """List of production wells in the reservoir."""
-    injectors: WellsProxy[WellLocation, InjectionWell[WellLocation]] = field(init=False)
+    injectors: WellsProxy[WellLocation, InjectionWell[WellLocation]] = attrs.field(
+        init=False
+    )
     """
     Proxy for injection wells.
 
     This allows quick access to injection wells by their location.
     """
-    producers: WellsProxy[WellLocation, ProductionWell[WellLocation]] = field(
+    producers: WellsProxy[WellLocation, ProductionWell[WellLocation]] = attrs.field(
         init=False
     )
     """
@@ -686,17 +720,21 @@ class Wells(typing.Generic[WellLocation]):
         self,
     ) -> typing.Tuple[typing.List[WellLocation], typing.List[WellLocation]]:
         """
-        Get all well locations in the reservoir.
+        Get the starting locations of all wells in the reservoir.
 
         :return: A tuple of (injection_well_locations, production_well_locations).
         This returns a tuple containing two lists:
             - A list of locations for injection wells.
             - A list of locations for production wells.
         """
-        return (
-            list(self.injectors.wells_map.keys()),
-            list(self.producers.wells_map.keys()),
-        )
+        injection_well_heads = []
+        production_well_heads = []
+        for well in self.injection_wells:
+            injection_well_heads.append(well.perforating_interval[0])
+
+        for well in self.production_wells:
+            production_well_heads.append(well.perforating_interval[0])
+        return injection_well_heads, production_well_heads
 
     @property
     def names(self) -> typing.Tuple[typing.List[str], typing.List[str]]:
@@ -764,7 +802,7 @@ def compute_well_index(
     :param wellbore_radius: Radius of the wellbore (ft).
     :param effective_drainage_radius: Effective drainage radius (ft).
     :param skin_factor: Skin factor for the well (dimensionless, default is 0).
-    :return: The well index (md*ft).
+    :return: The well index in (mD*ft).
     """
     well_index = (permeability * interval_thickness) / (
         np.log(effective_drainage_radius / wellbore_radius) + skin_factor
@@ -880,7 +918,7 @@ def compute_gas_pseudo_pressure(
 
     The formula for the gas pseudo-pressure is:
 
-        m(p) = ∫(2 * p / z(p)) dp
+        m(p) = ∫(2 * p / μ(p) * z(p)) dp
 
     where:
         - m(p) is the gas pseudo-pressure (psi²)
@@ -907,39 +945,53 @@ def compute_well_rate(
     bottom_hole_pressure: float,
     phase_mobility: float = 1.0,
     use_pseudo_pressure: bool = False,
+    compressibility_factor: float = 1.0,
+    fluid_compressibility: typing.Optional[float] = None,
     z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
     viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
 ) -> float:
     """
     Compute the well rate using the well index and pressure drop.
 
+    This assume radial steady-state flow to/from the wellbore.
+
     The formula for the well rate is:
 
-        Q = 6.33e-3 * W * (P_bhp - P) * M
+        Q = 7.08e-3 * W * (P_bhp - P) * M
 
     Or for gas wells:
-        Q = 6.33e-3 * W * (m(P_bhp) - m(P)) * M
+
+        Q = 7.08e-3 * W * (m(P_bhp) - m(P)) * M
+
+    or for slightly compressible fluids:
+
+        Q = 7.08e-3 * W * M * ln(1 + c_f * (P_bhp - P)) / c_f
 
     where:
-        - Q is the well rate (STB/day) or (SCF/day)
-        - W is the well index (STB/day/psi) or (SCF/day/psi)
+        - Q is the well rate (STB/day) or (SCF/day), or (bbl/day) or (ft³/day)
+        - W is the well index (mD*ft)
         - P is the reservoir pressure (psi)
         - P_bhp is the bottom-hole pressure (psi)
-        - M is the phase mobility (dimensionless, default is 1.0) (k_r / μ) (psi⁻¹)
+        - M is the phase mobility (dimensionless, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
 
     Negative rate result indicates that the well is producing, while positive rates indicate injection.
 
-    :param well_index: The well index (STB/day/psi) or (SCF/day/psi).
+    :param well_index: The well index (mD*ft).
     :param pressure: The reservoir pressure (psi).
     :param bottom_hole_pressure: The bottom-hole pressure (psi).
-    :param phase_mobility: The phase mobility (dimensionless, default is 1.0) (k_r / μ) (psi⁻¹).
+    :param phase_mobility: The phase relative mobility (dimensionless, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
     :param use_pseudo_pressure: If True, use the real gas pseudo-pressure difference instead of simple pressure difference.
         This is typically used for gas wells to account for the non-linear relationship.
+    :param compressibility_factor: The gas compressibility factor (dimensionless, default is 1.0).
+        Only required if `use_pseudo_pressure` is True.
+    :param fluid_compressibility: The fluid compressibility (1/psi). For slightly compressible fluids.
     :param z_factor_func: A callable function that returns the gas compressibility factor (z) at a given pressure.
         Only required if `use_pseudo_pressure` is True.
     :param viscosity_func: A callable function that returns the gas viscosity (μ) at a given pressure.
         Only required if `use_pseudo_pressure` is True.
-    :return: The well rate (STB/day) or (SCF/day).
+    :return: The well rate (STB/day) or (SCF/day) if phase mobility incorporates the formation volume factor.
+        i.e phase_mobility = (k_r / (μ * B)).
+        Else, the rate is in reservoir volume units (bbl/day or ft³/day).
     """
     if well_index <= 0:
         raise ValueError("Well index must be a positive value.")
@@ -959,5 +1011,15 @@ def compute_well_rate(
         pressure_difference = bottom_hole_pseudo_pressure - reservoir_pseudo_pressure
     else:
         pressure_difference = bottom_hole_pressure - pressure
-    well_rate = 6.33e-3 * well_index * pressure_difference * phase_mobility
-    return well_rate
+
+    if not use_pseudo_pressure and fluid_compressibility:
+        well_rate = (
+            7.08e-3
+            * well_index
+            * phase_mobility
+            * np.log(1 + (fluid_compressibility * pressure_difference))
+            / fluid_compressibility
+        )
+    else:
+        well_rate = 7.08e-3 * well_index * phase_mobility * pressure_difference
+    return well_rate / compressibility_factor

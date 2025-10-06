@@ -124,7 +124,7 @@ class PropertyRegistry:
             name="fluid_properties.oil_viscosity_grid",
             display_name="Oil Viscosity",
             unit="cP",
-            color_scheme=ColorScheme.MAGMA,
+            color_scheme=ColorScheme.INFERNO,
             log_scale=True,
         ),
         "oil_density": PropertyMetadata(
@@ -282,6 +282,12 @@ class PropertyRegistry:
             unit="°API",
             color_scheme=ColorScheme.PLASMA,
         ),
+        "api_gravity": PropertyMetadata(
+            name="fluid_properties.oil_api_gravity_grid",
+            display_name="Oil API Gravity",
+            unit="°API",
+            color_scheme=ColorScheme.PLASMA,
+        ),
         "oil_specific_gravity": PropertyMetadata(
             name="fluid_properties.oil_specific_gravity_grid",
             display_name="Oil Specific Gravity",
@@ -331,8 +337,20 @@ class PropertyRegistry:
             color_scheme=ColorScheme.CIVIDIS,
         ),
         "residual_oil_saturation": PropertyMetadata(
-            name="rock_properties.residual_oil_saturation_grid",
-            display_name="Residual Oil Saturation",
+            name="rock_properties.residual_oil_saturation_water_grid",
+            display_name="Residual Oil Saturation (Water Flooded)",
+            unit="fraction",
+            color_scheme=ColorScheme.MAGMA,
+        ),
+        "residual_oil_saturation_water": PropertyMetadata(
+            name="rock_properties.residual_oil_saturation_water_grid",
+            display_name="Residual Oil Saturation (Water Flooded)",
+            unit="fraction",
+            color_scheme=ColorScheme.MAGMA,
+        ),
+        "residual_oil_saturation_gas": PropertyMetadata(
+            name="rock_properties.residual_oil_saturation_gas_grid",
+            display_name="Residual Oil Saturation (Gas Flooded)",
             unit="fraction",
             color_scheme=ColorScheme.MAGMA,
         ),
@@ -361,7 +379,12 @@ class PropertyRegistry:
         """
         return list(self._properties.keys())
 
-    def get_metadata(self, property: str) -> PropertyMetadata:
+    @staticmethod
+    def clean_property_name(name: str) -> str:
+        """Clean and standardize property name for lookup."""
+        return name.strip().replace("-", "_").replace(" ", "_").lower()
+
+    def get_metadata(self, name: str) -> PropertyMetadata:
         """
         Get metadata for a specific property.
 
@@ -369,11 +392,12 @@ class PropertyRegistry:
         :return: `PropertyMetadata` object containing display information
         :raises ValueError: If property is not found in the registry
         """
-        if property not in self._properties:
+        name = self.clean_property_name(name)
+        if name not in self._properties:
             raise ValueError(
-                f"Unknown property: {property}. Available: {', '.join(self.get_available_properties())}"
+                f"Unknown property: {name}. Available: {', '.join(self.get_available_properties())}"
             )
-        return self._properties[property]
+        return self._properties[name]
 
     def __getitem__(self, name: str, /) -> PropertyMetadata:
         return self.get_metadata(name)
@@ -381,10 +405,13 @@ class PropertyRegistry:
     def __setitem__(self, name: str, value: PropertyMetadata, /) -> None:
         if not isinstance(value, PropertyMetadata):
             raise TypeError("Value must be a `PropertyMetadata` instance")
+
+        name = self.clean_property_name(name)
         self._properties[name] = value
 
     def __contains__(self, name: str, /) -> bool:
         """Check if a property exists in the registry."""
+        name = self.clean_property_name(name)
         return name in self._properties
 
     def __iter__(self) -> typing.Iterator[str]:

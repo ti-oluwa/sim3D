@@ -1,52 +1,52 @@
 import typing
 import warnings
+
 import numpy as np
 
+from sim3D.boundaries import BoundaryConditions, GridBoundaryCondition
 from sim3D.constants import RESERVOIR_GAS_NAME
-from sim3D.types import NDimension, NDimensionalGrid, WellLocation
 from sim3D.grids import (
-    build_gas_compressibility_factor_grid,
-    build_gas_free_water_formation_volume_factor_grid,
     build_fluid_viscosity_grid,
-    build_uniform_grid,
-    build_oil_formation_volume_factor_grid,
-    build_gas_formation_volume_factor_grid,
-    build_water_formation_volume_factor_grid,
-    build_gas_solubility_in_water_grid,
-    build_oil_bubble_point_pressure_grid,
-    build_water_bubble_point_pressure_grid,
-    build_gas_to_oil_ratio_grid,
-    build_oil_api_gravity_grid,
-    build_water_viscosity_grid,
+    build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
     build_gas_density_grid,
-    build_water_compressibility_grid,
-    build_water_density_grid,
+    build_gas_formation_volume_factor_grid,
+    build_gas_free_water_formation_volume_factor_grid,
     build_gas_gravity_grid,
     build_gas_molecular_weight_grid,
+    build_gas_solubility_in_water_grid,
+    build_gas_to_oil_ratio_grid,
     build_live_oil_density_grid,
+    build_oil_api_gravity_grid,
+    build_oil_bubble_point_pressure_grid,
+    build_oil_formation_volume_factor_grid,
+    build_uniform_grid,
+    build_water_bubble_point_pressure_grid,
+    build_water_compressibility_grid,
+    build_water_density_grid,
+    build_water_formation_volume_factor_grid,
+    build_water_viscosity_grid,
 )
-from sim3D.boundary_conditions import BoundaryConditions, GridBoundaryCondition
-from sim3D.models import (
-    ReservoirModel,
+from sim3D.static import (
+    CapillaryPressureParameters,
     FluidProperties,
+    ReservoirModel,
+    RockFluidProperties,
     RockPermeability,
     RockProperties,
-    RelativePermeabilityParameters,
-    CapillaryPressureParameters,
-)
-from sim3D.wells import (
-    WellFluid,
-    WellFluid,
-    InjectionWell,
-    ProductionWell,
-    Wells,
 )
 from sim3D.properties import (
-    validate_input_temperature,
-    validate_input_pressure,
     compute_gas_to_oil_ratio_standing,
+    validate_input_pressure,
+    validate_input_temperature,
 )
+from sim3D.types import (
+    NDimension,
+    NDimensionalGrid,
+    RelativePermeabilityFunc,
+    WellLocation,
+)
+from sim3D.wells import InjectionWell, ProductionWell, WellFluid, Wells
 
 __all__ = [
     "build_reservoir_model",
@@ -65,14 +65,21 @@ def build_reservoir_model(
     absolute_permeability: RockPermeability[NDimension],
     porosity_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
+    water_saturation_grid: NDimensionalGrid[NDimension],
+    gas_saturation_grid: NDimensionalGrid[NDimension],
     oil_saturation_grid: NDimensionalGrid[NDimension],
     oil_viscosity_grid: NDimensionalGrid[NDimension],
     oil_compressibility_grid: NDimensionalGrid[NDimension],
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
     oil_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
+    relative_permeability_func: RelativePermeabilityFunc,
     gas_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    residual_oil_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    residual_oil_saturation_water_grid: typing.Optional[
+        NDimensionalGrid[NDimension]
+    ] = None,
+    residual_oil_saturation_gas_grid: typing.Optional[
+        NDimensionalGrid[NDimension]
+    ] = None,
     gas_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_factor_grid: typing.Optional[
@@ -81,7 +88,6 @@ def build_reservoir_model(
     gas_molecular_weight_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     residual_gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    water_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
@@ -91,11 +97,9 @@ def build_reservoir_model(
     irreducible_water_saturation_grid: typing.Optional[
         NDimensionalGrid[NDimension]
     ] = None,
-    relative_permeability_params: typing.Optional[
-        RelativePermeabilityParameters
-    ] = None,
     capillary_pressure_params: typing.Optional[CapillaryPressureParameters] = None,
     gas_to_oil_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    gas_solubility_in_water_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_formation_volume_factor_grid: typing.Optional[
         NDimensionalGrid[NDimension]
     ] = None,
@@ -136,7 +140,8 @@ def build_reservoir_model(
     :param oil_compressibility_grid: Oil compressibility grid (psi⁻¹).
     :param oil_specific_gravity_grid: Oil specific gravity grid (dimensionless).
     :param gas_gravity_grid: Gas gravity grid (dimensionless), optional.
-    :param residual_oil_saturation_grid: Residual oil saturation grid (fraction), optional.
+    :param residual_oil_saturation_water_grid: Residual oil saturation during water flooding grid (fraction), optional.
+    :param residual_oil_saturation_gas_grid: Residual oil saturation during gas flooding grid (fraction), optional.
     :param gas_saturation_grid: Gas saturation grid (fraction), optional.
     :param gas_viscosity_grid: Gas viscosity grid (cP), optional.
     :param gas_compressibility_grid: Gas compressibility grid (psi⁻¹), optional.
@@ -151,14 +156,15 @@ def build_reservoir_model(
     :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction), optional.
     :param relative_permeability_params: Relative permeability parameters, optional.
     :param capillary_pressure_params: Capillary pressure parameters, optional.
-    :param gas_to_oil_ratio_grid: Gas to oil ratio grid (scf/bbl), optional.
+    :param gas_to_oil_ratio_grid: Solution gas to oil ratio grid (scf/bbl), optional.
+    :param gas_solubility_in_water_grid: Gas solubility in water grid (scf/bbl), optional.
     :param oil_formation_volume_factor_grid: Oil formation volume factor grid (bbl/scf), optional.
     :param gas_formation_volume_factor_grid: Gas formation volume factor grid (bbl/scf), optional.
     :param water_formation_volume_factor_grid: Water formation volume factor grid (bbl/scf), optional.
     :param net_to_gross_ratio_grid: Net-to-gross ratio grid (fraction), optional.
     :param water_salinity_grid: Water salinity grid (ppm), optional.
     :param boundary_conditions: Boundary conditions for the model, optional. Defaults to no-flow conditions.
-    :param reservoir_gas_name: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`.
+    :param reservoir_gas_name: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`. Can also be the name of the gas injected into the reservoir.
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
     if not 1 <= len(grid_dimension) <= 3:
@@ -169,11 +175,9 @@ def build_reservoir_model(
         raise ValueError(
             "`cell_dimension` must be a tuple of two floats (cell width, cell height)."
         )
-
     validate_input_pressure(pressure_grid)
     validate_input_temperature(temperature_grid)
 
-    # Generics
     if water_salinity_grid is None:
         water_salinity_grid = build_uniform_grid(
             grid_dimension=grid_dimension,
@@ -181,39 +185,84 @@ def build_reservoir_model(
         )
 
     if net_to_gross_ratio_grid is None:
-        # assuming a uniform net-to-gross ratio of 1.0 (fully net)
+        # Assume uniform net-to-gross ratio of 1.0 (fully net)
         net_to_gross_ratio_grid = build_uniform_grid(
             grid_dimension=grid_dimension,
             value=1.0,
         )
 
+    if not np.all(
+        np.isclose(
+            oil_saturation_grid + water_saturation_grid + gas_saturation_grid,
+            1.0,
+        )
+    ):
+        warnings.warn(
+            "The sum of oil, water, and gas saturations does not equal 1 everywhere. "
+            "Adjusting saturations to ensure they sum to 1.",
+            UserWarning,
+        )
+        total_saturation = (
+            oil_saturation_grid + water_saturation_grid + gas_saturation_grid
+        )
+        # Avoid division by zero
+        total_saturation = np.where(total_saturation == 0, 1, total_saturation)
+        oil_saturation_grid = oil_saturation_grid / total_saturation  # type: ignore
+        water_saturation_grid = water_saturation_grid / total_saturation  # type: ignore
+        gas_saturation_grid = gas_saturation_grid / total_saturation  # type: ignore
+
+    if np.any(oil_saturation_grid < 0) or np.any(oil_saturation_grid >= 1):
+        raise ValueError("Oil saturation grid values must be in the range [0, 1).")
+
+    if np.any(water_saturation_grid < 0) or np.any(water_saturation_grid >= 1):
+        raise ValueError("Water saturation grid values must be in the range [0, 1).")
+
+    if np.any(gas_saturation_grid < 0) or np.any(gas_saturation_grid >= 1):
+        raise ValueError("Gas saturation grid values must be in the range [0, 1).")
+
     # Saturation grids
-    if residual_oil_saturation_grid is None:
-        residual_oil_saturation_grid = typing.cast(
+    if residual_oil_saturation_water_grid is None:
+        residual_oil_saturation_water_grid = typing.cast(
             NDimensionalGrid[NDimension], oil_saturation_grid * 0.2
+        )
+    elif np.any(residual_oil_saturation_water_grid < 0) or np.any(
+        residual_oil_saturation_water_grid >= oil_saturation_grid
+    ):
+        raise ValueError(
+            "Residual oil saturation during water flooding grid values must be in the range [0, oil_saturation)."
+        )
+
+    if residual_oil_saturation_gas_grid is None:
+        residual_oil_saturation_gas_grid = typing.cast(
+            NDimensionalGrid[NDimension], oil_saturation_grid * 0.1
+        )
+    elif np.any(residual_oil_saturation_gas_grid < 0) or np.any(
+        residual_oil_saturation_gas_grid >= oil_saturation_grid
+    ):
+        raise ValueError(
+            "Residual oil saturation during gas flooding grid values must be in the range [0, oil_saturation)."
         )
 
     if residual_gas_saturation_grid is None:
-        residual_gas_saturation_grid = build_uniform_grid(
-            grid_dimension=grid_dimension,
-            value=0.0,
+        residual_gas_saturation_grid = typing.cast(
+            NDimensionalGrid[NDimension], gas_saturation_grid * 0.2
         )
-
-    if gas_saturation_grid is None:
-        # assuming no gas in the model by default
-        gas_saturation_grid = build_uniform_grid(
-            grid_dimension=grid_dimension,
-            value=0.0,
-        )
-    if water_saturation_grid is None:
-        water_saturation_grid = typing.cast(
-            NDimensionalGrid[NDimension],
-            1.0 - (oil_saturation_grid + gas_saturation_grid),
+    elif np.any(residual_gas_saturation_grid < 0) or np.any(
+        residual_gas_saturation_grid >= gas_saturation_grid
+    ):
+        raise ValueError(
+            "Residual gas saturation grid values must be in the range [0, gas_saturation)."
         )
 
     if irreducible_water_saturation_grid is None:
         irreducible_water_saturation_grid = typing.cast(
             NDimensionalGrid[NDimension], water_saturation_grid * 0.2
+        )
+    elif np.any(irreducible_water_saturation_grid < 0) or np.any(
+        irreducible_water_saturation_grid >= water_saturation_grid
+    ):
+        raise ValueError(
+            "Irreducible water saturation grid values must be in the range [0, water_saturation)."
         )
 
     # Viscosity Grids
@@ -311,11 +360,14 @@ def build_reservoir_model(
     oil_bubble_point_pressure_grid = typing.cast(
         NDimensionalGrid[NDimension], oil_bubble_point_pressure_grid
     )
-    gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
-        pressure_grid=pressure_grid,
-        temperature_grid=temperature_grid,
-        salinity_grid=water_salinity_grid,
-    )
+
+    if gas_solubility_in_water_grid is None:
+        gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            salinity_grid=water_salinity_grid,
+            gas=reservoir_gas_name,
+        )
 
     # Formation Volume Factor Grids
     if oil_formation_volume_factor_grid is None:
@@ -376,7 +428,7 @@ def build_reservoir_model(
         )
 
     oil_density_grid = build_live_oil_density_grid(
-        oil_api_gravity_grid=   oil_api_gravity_grid,
+        oil_api_gravity_grid=oil_api_gravity_grid,
         gas_gravity_grid=gas_gravity_grid,
         gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
         formation_volume_factor_grid=oil_formation_volume_factor_grid,
@@ -404,21 +456,25 @@ def build_reservoir_model(
         water_density_grid=water_density_grid,
         water_bubble_point_pressure_grid=water_bubble_point_pressure_grid,
         gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
         oil_formation_volume_factor_grid=oil_formation_volume_factor_grid,
         gas_formation_volume_factor_grid=gas_formation_volume_factor_grid,
         water_formation_volume_factor_grid=water_formation_volume_factor_grid,
         water_salinity_grid=water_salinity_grid,
+        reservoir_gas_name=reservoir_gas_name,
     )
     rock_properties = RockProperties(
         compressibility=rock_compressibility,
         absolute_permeability=absolute_permeability,
         net_to_gross_ratio_grid=net_to_gross_ratio_grid,
         porosity_grid=porosity_grid,
-        residual_oil_saturation_grid=residual_oil_saturation_grid,
+        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
         residual_gas_saturation_grid=residual_gas_saturation_grid,
         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        relative_permeability_params=relative_permeability_params
-        or RelativePermeabilityParameters(),
+    )
+    rock_fluid_properties = RockFluidProperties(
+        relative_permeability_func=relative_permeability_func,
         capillary_pressure_params=capillary_pressure_params
         or CapillaryPressureParameters(),
     )
@@ -437,6 +493,7 @@ def build_reservoir_model(
         thickness_grid=thickness_grid,
         fluid_properties=fluid_properties,
         rock_properties=rock_properties,
+        rock_fluid_properties=rock_fluid_properties,
         boundary_conditions=boundary_conditions,
     )
 
@@ -497,8 +554,12 @@ def build_production_well(
 
 
 def build_wells(
-    injection_wells: typing.Optional[typing.Sequence[InjectionWell[WellLocation]]] = None,
-    production_wells: typing.Optional[typing.Sequence[ProductionWell[WellLocation]]] = None,
+    injection_wells: typing.Optional[
+        typing.Sequence[InjectionWell[WellLocation]]
+    ] = None,
+    production_wells: typing.Optional[
+        typing.Sequence[ProductionWell[WellLocation]]
+    ] = None,
 ) -> Wells[WellLocation]:
     """
     Constructs a Wells instance containing both injection and production wells.

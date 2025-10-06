@@ -31,6 +31,7 @@ from sim3D.constants import (
     OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
     PA_S_TO_CENTIPOISE,
     PA_TO_PSI,
+    PSI_TO_BAR,
     POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
     POUNDS_PER_FT3_TO_KG_PER_M3,
     PPM_TO_WEIGHT_FRACTION,
@@ -41,8 +42,7 @@ from sim3D.constants import (
     STANDARD_WATER_DENSITY,
     STANDARD_WATER_DENSITY_IMPERIAL,
 )
-from sim3D.models import WettabilityType
-from sim3D.types import FluidMiscibility, NDimension, NDimensionalGrid
+from sim3D.types import FluidMiscibility, NDimension, NDimensionalGrid, WettabilityType
 
 logger = logging.getLogger(__name__)
 
@@ -466,112 +466,12 @@ def compute_harmonic_mobility(
 
 
 @numba.njit(cache=True)
-def compute_three_phase_relative_permeabilities(
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-    irreducible_water_saturation: float,
-    residual_oil_saturation: float,
-    residual_gas_saturation: float,
-    water_exponent: float,
-    oil_exponent: float,
-    gas_exponent: float,
-) -> typing.Tuple[float, float, float]:
-    """
-    Computes relative permeability for water, oil, and gas in a three-phase system.
-    This uses a simplified approach (e.g., modified Corey-type models for each phase),
-    acknowledging that oil's relative permeability (oil_relative_permeability) in three phases is complex
-    and often requires models like Stone's Method I or II for accuracy.
-
-    Assumptions for this simplified model:
-    - Water (wetting phase) water_relative_permeability depends primarily on Sw.
-    - Gas (non-wetting phase) krg depends primarily on Sg.
-    - Oil (intermediate wetting) oil_relative_permeability is approximated here.
-    - krw_max=1, kro_max=1, krg_max=1 (maximum relative permeabilities are 1).
-
-    :param water_saturation: Current water saturation (fraction, between 0 and 1).
-    :param oil_saturation: Current oil saturation (fraction, between 0 and 1).
-    :param gas_saturation: Current gas saturation (fraction, between 0 and 1).
-    :param irreducible_water_saturation: Irreducible water saturation (fraction).
-    :param residual_oil_saturation: Residual oil saturation (fraction).
-    :param residual_gas_saturation: Residual gas saturation (fraction).
-    :param water_exponent: Corey exponent for water. Controls the curvature of the water relative permeability curve.
-    :param oil_exponent: Corey exponent for oil. Controls the curvature of the oil relative permeability curve.
-    :param gas_exponent: Corey exponent for gas. Controls the curvature of the gas relative permeability curve.
-    :return: A tuple (water_relative_permeability, oil_relative_permeability, gas_relative_permeability),
-    """
-    # Ensure saturations are within physical bounds and sum is manageable
-    water_saturation_clipped = clip_scalar(water_saturation, 0.0, 1.0)
-    gas_saturation_clipped = clip_scalar(gas_saturation, 0.0, 1.0)
-    oil_saturation_clipped = clip_scalar(oil_saturation, 0.0, 1.0)
-
-    # Effective Saturations for Corey-type Models #
-
-    # 1. Effective Water Saturation (for water_relative_permeability)
-    movable_water_range = 1.0 - irreducible_water_saturation
-    if movable_water_range <= 1e-6:
-        effective_water_saturation = 0.0
-    else:
-        effective_water_saturation = (
-            water_saturation_clipped - irreducible_water_saturation
-        ) / movable_water_range
-        effective_water_saturation = clip_scalar(effective_water_saturation, 0.0, 1.0)
-    water_relative_permeability = effective_water_saturation**water_exponent
-
-    # 2. Effective Gas Saturation (for krg)
-    movable_gas_range = (
-        1.0 - residual_gas_saturation
-    )  # Assuming gas becomes mobile above Sgr
-    if movable_gas_range <= 1e-6:
-        effective_gas_saturation = 0.0
-    else:
-        effective_gas_saturation = (
-            gas_saturation_clipped - residual_gas_saturation
-        ) / movable_gas_range
-        effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
-    gas_relative_permeability = effective_gas_saturation**gas_exponent
-
-    # 3. Effective Oil Saturation (for oil_relative_permeability) - Highly Simplified!
-    # This is typically the most complex part in 3-phase relative permeability.
-    # Stone's models (I or II) are common.
-    # A very basic approximation (e.g., for demonstration):
-    # Oil's mobile range considering both water and gas residuals.
-    total_non_oil_pore_volume = (
-        irreducible_water_saturation + residual_gas_saturation + residual_oil_saturation
-    )  # This `residual_oil_saturation` is tricky, should be `min(sorw, sorg)`
-
-    # Let's define the total movable pore space for any phase.
-    total_movable_pore_space = (
-        1.0 - total_non_oil_pore_volume
-    )  # Assuming a generic minimum residual oil
-
-    if total_movable_pore_space <= 1e-6:
-        effective_oil_saturation = 0.0
-    else:
-        effective_oil_saturation = (
-            oil_saturation_clipped - residual_oil_saturation
-        ) / total_movable_pore_space
-        effective_oil_saturation = clip_scalar(effective_oil_saturation, 0.0, 1.0)
-    oil_relative_permeability = effective_oil_saturation**oil_exponent
-
-    # Ensure all relative permeabilities are within [0, 1]
-    water_relative_permeability = clip_scalar(water_relative_permeability, 0.0, 1.0)
-    oil_relative_permeability = clip_scalar(oil_relative_permeability, 0.0, 1.0)
-    gas_relative_permeability = clip_scalar(gas_relative_permeability, 0.0, 1.0)
-
-    return (
-        float(water_relative_permeability),
-        float(oil_relative_permeability),
-        float(gas_relative_permeability),
-    )
-
-
-@numba.njit(cache=True)
 def compute_three_phase_capillary_pressures(
     water_saturation: float,
     gas_saturation: float,
     irreducible_water_saturation: float,
-    residual_oil_saturation: float,
+    residual_oil_saturation_water: float,
+    residual_oil_saturation_gas: float,
     residual_gas_saturation: float,
     wettability: WettabilityType,
     oil_water_entry_pressure_water_wet: float,
@@ -599,7 +499,8 @@ def compute_three_phase_capillary_pressures(
     :param water_saturation: Current water saturation (fraction, between 0 and 1).
     :param gas_saturation: Current gas saturation (fraction, between 0 and 1).
     :param irreducible_water_saturation: Irreducible water saturation (fraction).
-    :param residual_oil_saturation: Residual oil saturation (fraction).
+    :param residual_oil_saturation_water: Residual oil saturation during water flooding (fraction).
+    :param residual_oil_saturation_gas: Residual oil saturation during gas flooding (fraction).
     :param residual_gas_saturation: Residual gas saturation (fraction).
     :param oil_water_entry_pressure_water_wet: Entry pressure for oil-water in water-wet system (psi).
     :param oil_water_entry_pressure_oil_wet: Entry pressure for oil-water in oil-wet system (psi).
@@ -609,94 +510,58 @@ def compute_three_phase_capillary_pressures(
     :param gas_oil_pore_size_distribution_index: Pore size distribution index for gas-oil.
     :return: A tuple (oil_water_capillary_pressure, gas_oil_capillary_pressure) (psi).
     """
-
-    # Ensure saturations are within bounds before calculation
+    # Clip saturations
     water_saturation = clip_scalar(water_saturation, 0.0, 1.0)
     gas_saturation = clip_scalar(gas_saturation, 0.0, 1.0)
     oil_saturation = 1.0 - water_saturation - gas_saturation
     oil_saturation = clip_scalar(oil_saturation, 0.0, 1.0)
 
-    # Effective saturation range - this is the total mobile pore space
-    total_mobile_pore_space = (
+    # Effective pore spaces
+    total_mobile_pore_space_water = (
         1.0
         - irreducible_water_saturation
-        - residual_oil_saturation
+        - residual_oil_saturation_water
         - residual_gas_saturation
     )
-    if (
-        total_mobile_pore_space <= 1e-9
-    ):  # Avoid division by zero if all phases are immobile
-        return 0.0, 0.0  # Return zero capillary pressure if no mobile pore space
+    total_mobile_pore_space_gas = (
+        1.0
+        - irreducible_water_saturation
+        - residual_oil_saturation_gas
+        - residual_gas_saturation
+    )
 
-    # Oil-Water Capillary Pressure: (Po - Pw)
+    # ---------------- Pcow (Po - Pw) ----------------
     oil_water_capillary_pressure = 0.0
-
-    if wettability == WettabilityType.WATER_WET:
-        # Water-wet system: Water is wetting, Oil is non-wetting.
-        # So, P_oil > P_water. Pcow = Po - Pw will be POSITIVE.
-
-        # Effective saturation for water (wetting phase)
-        effective_water_saturation_wetting = (
+    if total_mobile_pore_space_water > 1e-9:
+        effective_water_saturation = (
             water_saturation - irreducible_water_saturation
-        ) / total_mobile_pore_space
-        effective_water_saturation_wetting = clip_scalar(
-            effective_water_saturation_wetting, 1e-6, 1.0
-        )  # Clip to avoid division by zero or very large numbers
+        ) / total_mobile_pore_space_water
+        effective_water_saturation = clip_scalar(effective_water_saturation, 1e-6, 1.0)
 
-        if (
-            effective_water_saturation_wetting > 1.0 - 1e-6
-        ):  # At very high water saturation, capillary pressure approaches zero
-            oil_water_capillary_pressure = 0.0
-        else:
-            # Brooks-Corey model: Pc = Pe * (Se)^(-1/lambda)
-            oil_water_capillary_pressure = oil_water_entry_pressure_water_wet * (
-                effective_water_saturation_wetting
-            ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
+        if effective_water_saturation < 1.0 - 1e-6:
+            if wettability == WettabilityType.WATER_WET:
+                oil_water_capillary_pressure = oil_water_entry_pressure_water_wet * (
+                    effective_water_saturation
+                ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
+            elif wettability == WettabilityType.OIL_WET:
+                oil_water_capillary_pressure = -(
+                    oil_water_entry_pressure_oil_wet
+                    * effective_water_saturation
+                    ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
+                )
 
-    elif wettability == WettabilityType.OIL_WET:
-        # Oil-wet system: Oil is wetting, Water is non-wetting.
-        # So, P_water > P_oil. Pcow = Po - Pw will be NEGATIVE.
-
-        # Effective saturation for water (non-wetting phase)
-        # Note: In an oil-wet system, water is often the invading (non-wetting) phase
-        # displacing oil (wetting phase). The Brooks-Corey formula, by default,
-        # models a non-wetting phase displacing a wetting phase.
-        effective_water_saturation_non_wetting = (
-            water_saturation - irreducible_water_saturation
-        ) / total_mobile_pore_space
-        effective_water_saturation_non_wetting = clip_scalar(
-            effective_water_saturation_non_wetting, 1e-6, 1.0
-        )
-
-        if effective_water_saturation_non_wetting > 1.0 - 1e-6:
-            oil_water_capillary_pressure_magnitude = 0.0
-        else:
-            # This calculates the *magnitude* of (P_water - P_oil) for an oil-wet system.
-            oil_water_capillary_pressure_magnitude = (
-                oil_water_entry_pressure_oil_wet
-                * (effective_water_saturation_non_wetting)
-                ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
-            )
-
-        # Since Pcow = Po - Pw, and for oil-wet, Pw > Po, Pcow must be negative.
-        oil_water_capillary_pressure = -oil_water_capillary_pressure_magnitude
-
-    # --- Pcgo (Gas-Oil Capillary Pressure: Pg - Po) ---
-    # Gas is generally non-wetting to oil, regardless of water/oil wettability.
-    # So, Pg > Po. Pcgo will be POSITIVE.
+    # ---------------- Pcgo (Pg - Po) ----------------
     gas_oil_capillary_pressure = 0.0
-    # Effective gas saturation
-    effective_gas_saturation = (
-        gas_saturation - residual_gas_saturation
-    ) / total_mobile_pore_space
-    effective_gas_saturation = clip_scalar(effective_gas_saturation, 1e-6, 1.0)
+    if total_mobile_pore_space_gas > 1e-9:
+        effective_gas_saturation = (
+            gas_saturation - residual_gas_saturation
+        ) / total_mobile_pore_space_gas
+        effective_gas_saturation = clip_scalar(effective_gas_saturation, 1e-6, 1.0)
 
-    if effective_gas_saturation > 1.0 - 1e-6:
-        gas_oil_capillary_pressure = 0.0
-    else:
-        gas_oil_capillary_pressure = gas_oil_entry_pressure * (
-            effective_gas_saturation
-        ) ** (-1.0 / gas_oil_pore_size_distribution_index)
+        if effective_gas_saturation < 1.0 - 1e-6:
+            gas_oil_capillary_pressure = gas_oil_entry_pressure * (
+                effective_gas_saturation
+            ) ** (-1.0 / gas_oil_pore_size_distribution_index)
 
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
@@ -764,10 +629,11 @@ def convert_surface_rate_to_reservoir(
     """
     if surface_rate > 0:  # Injection
         return surface_rate * formation_volume_factor
-    else:  # Production (rate is negative)
-        return (
-            surface_rate / formation_volume_factor
-        )  # Production reservoir volume is larger than surface
+
+    # Production (rate is negative)
+    return (
+        surface_rate / formation_volume_factor
+    )  # Production reservoir volume is larger than surface
 
 
 def convert_reservoir_rate_to_surface(
@@ -782,10 +648,11 @@ def convert_reservoir_rate_to_surface(
     """
     if reservoir_rate > 0:  # Injection
         return reservoir_rate / formation_volume_factor
-    else:  # Production (rate is negative)
-        return (
-            reservoir_rate * formation_volume_factor
-        )  # Production surface volume is larger than reservoir volume
+
+    # Production (rate is negative)
+    return (
+        reservoir_rate * formation_volume_factor
+    )  # Production surface volume is larger than reservoir volume
 
 
 @numba.njit(cache=True)
@@ -1220,7 +1087,6 @@ def compute_oil_bubble_point_pressure(
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         oil_api_gravity
     )
-
     temperature_rankine = temperature + 459.67
     pressure = (
         gas_to_oil_ratio
@@ -1593,10 +1459,8 @@ def compute_gas_pseudocritical_properties(
             )
         )
 
-    pseudocritical_temperature_in_fahrenheit = (
-        pseudocritical_temperature_rankine - 459.67
-    )
-    return pseudocritical_pressure, pseudocritical_temperature_in_fahrenheit
+    pseudocritical_temperature_fahrenheit = pseudocritical_temperature_rankine - 459.67
+    return pseudocritical_pressure, pseudocritical_temperature_fahrenheit
 
 
 def compute_gas_density(
@@ -1668,9 +1532,9 @@ def compute_gas_viscosity(
     density_in_grams_per_cm3 = gas_density * POUNDS_PER_FT3_TO_GRAMS_PER_CM3
 
     k = (
-        (9.4 + 0.02 * gas_molecular_weight_lbm_per_mole)
+        (9.4 + (0.02 * gas_molecular_weight_lbm_per_mole))
         * (temperature_in_rankine**1.5)
-        / (209 + 19 * gas_molecular_weight_lbm_per_mole + temperature_in_rankine)
+        / (209 + (19 * gas_molecular_weight_lbm_per_mole) + temperature_in_rankine)
     )
 
     x = (
@@ -2009,7 +1873,6 @@ def compute_gas_compressibility(
 
     # Calculate the gas compressibility (C_g)
     # C_g = (1/P) - (1/(Z * Ppc)) * (dZ/dPpr)
-
     # Ensure Ppc is not zero, which should be handled by compute_gas_pseudocritical_properties
     if pseudo_critical_pressure == 0:
         raise ValueError(
@@ -2062,48 +1925,47 @@ def _gas_solubility_in_water_mccain_methane(
         )
 
     # A(T_F) term from McCain
-    A_term = 2.12 + 0.00345 * temperature - 0.0000125 * temperature**2
+    A_term = 2.12 + (0.00345 * temperature) - (0.0000125 * temperature**2)
 
     # B is a constant in the validated McCain form
     B = 0.000045
 
-    salinity_correction = 1.0 - 0.000001 * salinity
+    salinity_correction = 1.0 - (0.000001 * salinity)
     gas_solubility = A_term + (B * pressure * salinity_correction)
     return max(0.0, gas_solubility)  # clamp to non-negative
 
 
-def _gas_solubility_in_water_duan_co2(
+MOLALITY_TO_SCF_STB_CO2 = 315.4  # Approximate conversion factor for CO2
+
+
+def _gas_solubility_in_water_duan_sun_co2(
     pressure: float, temperature: float, salinity: float = 0.0
 ) -> float:
     """
-    Calculates CO₂ solubility in water (Rsw) using Duan's empirical correlation
-    with salinity correction.
+    Calculates CO₂ solubility in water (Rsw) using the Duan and Sun (2003) model.
+
+    The coefficients are from Duan and Sun, "An improved model for the calculation of CO2 solubility
+    in pure water and aqueous NaCl solutions", Chemical Geology, 2003.
+
+    The formula is:
+        ln(m_CO2) = c1 + c2/T + c3*ln(T) + (c4*P)/T + (c5*P²)/T² - k_s * m_NaCl
+        m_NaCl = salinity / (58.44 * 1000)  # Convert ppm to molality (mol/kg H2O)
+        k_s = 0.119 + 0.0003 * T  # Setschenow coefficient
+        Rsw = m_CO2 * 315.4  # Convert molality to SCF/STB
+
+    where:
+        - m_CO2 is the molality of CO₂ in mol/kg H₂O
+        - T is temperature in Kelvin
+        - P is pressure in bar
+        - m_NaCl is the molality of NaCl in mol/kg H₂O
+        - k_s is the Setschenow coefficient for CO₂-NaCl interaction
+        - Rsw is the CO₂ solubility in standard cubic feet per stock tank barrel (SCF/STB)
+        - c1, c2, c3, c4, c5 are empirical coefficients
 
     The model is valid for:
-        - Temperature: 273.15 K to 573.15 K
-        - Pressure: up to 200 MPa
-        - Salinity: expressed as molality derived from ppm NaCl
-
-    The solubility is computed from the mole fraction of CO₂ in water:
-
-        ln(x_CO2) = A + B*P + C*ln(P) + D/T + E*T + F*T² + G*P² + H/T² + I*ln(T) + J*P/T + ln(γ)
-
-        ln(γ) = -S * (0.03 + 1.5/T + 0.0005*P)
-
-    where:
-        - x_CO2 is the mole fraction of CO₂ in water
-        - T is temperature in Kelvin
-        - P is pressure in MPa
-        - S is the NaCl molality in mol/kg water
-        - γ is the activity coefficient for CO₂ in saline water
-
-    The mole fraction is converted to volume basis using:
-
-        Rsw = (x_CO2 * M_CO2) / ρ_water
-
-    where:
-        - M_CO2 is molar mass of CO₂ (kg/mol)
-        - ρ_water is water density (lbm/ft³), obtained from EOS
+        - Temperature: 273.15 K to 533.15 K
+        - Pressure: 0 to 2000 bar
+        - Salinity: up to 4.5 mol/kg NaCl
 
     :param pressure: Pressure (psi)
     :param temperature: Temperature (°F)
@@ -2113,62 +1975,52 @@ def _gas_solubility_in_water_duan_co2(
     if pressure <= 0 or temperature <= 0:
         raise ValueError("Pressure and temperature must be positive.")
 
-    # Convert units
-    P = pressure * PSI_TO_PA / 1e6  # Pa → MPa
-    T = fahrenheit_to_kelvin(temperature)  # °F → K
-    S = salinity / (
-        MOLECULAR_WEIGHT_NACL * 1000
-    )  # ppm → g/kg → approx mol/kg (assume ~1 mol/kg per 58.44 g/L NaCl)
+    P = pressure * PSI_TO_BAR
+    T = fahrenheit_to_kelvin(temperature)
 
-    # Duan constants (for CO₂ in brine)
-    A = -60.2409
-    B = 93.4517
-    C = 23.3585
-    D = 0.023517
-    E = -0.0000449
-    F = 0.00000042
-    G = 0.00000003
-    H = -0.00000025
-    I = 0.032975  # noqa
-    J = -0.00035
-
-    # ln(gamma) salinity correction
-    ln_gamma = -S * (0.03 + (1.5 / T) + 0.0005 * P)
-
-    # log mole fraction of CO₂
-    ln_x = (
-        A
-        + B * P
-        + C * np.log(P)
-        + D / T
-        + E * T
-        + F * T**2
-        + G * P**2
-        + H / T**2
-        + I * np.log(T)
-        + J * P / T
-        + ln_gamma
-    )
-
-    x_CO2 = np.exp(ln_x)  # mole fraction
-    if x_CO2 < 0 or not np.isfinite(x_CO2):
+    if not (273.15 <= T <= 533.15):
         raise ValueError(
-            "Calculated mole fraction of CO₂ is negative or infinite, check inputs."
+            "Temperature is out of the valid range for this model (0-260°C)."
+        )
+    if not (0 < P <= 2000):
+        raise ValueError(
+            "Pressure is out of the valid range for this model (0-2000 bar)."
         )
 
-    try:
-        water_density = (
-            compute_fluid_density(pressure, temperature, "Water")
-            * POUNDS_PER_FT3_TO_KG_PER_M3
-        )
-    except Exception:
-        water_density = STANDARD_WATER_DENSITY
+    # Calculate CO₂ molality in PURE WATER
+    # Using the equation from Duan & Sun (2003) for the fugacity of CO2
+    c1 = 16.3869
+    c2 = -3013.95
+    c3 = -2.25336
+    c4 = 0.00693898
+    c5 = -6.65349e-7
 
-    co2_molar_mass_in_kg_per_mol = (
-        MOLECULAR_WEIGHT_CO2 / 1000
-    )  # Convert g/mol to kg/mol
-    gas_solubility = (x_CO2 * co2_molar_mass_in_kg_per_mol) / water_density  # m³/m³
-    return gas_solubility * M3_PER_M3_TO_SCF_PER_STB
+    # This calculates ln(y*P), which for a pure CO2 phase is ln(f_CO2).
+    # The exponential gives the fugacity of CO2.
+    # At equilibrium, f_CO2_gas = f_CO2_liquid = m_CO2 * H_CO2
+    # This simplified form directly calculates the molality (m_CO2)
+    ln_m_co2_pure = c1 + c2 / T + c3 * np.log(T) + (c4 * P) / T + (c5 * P**2) / T**2
+
+    m_co2_pure = np.exp(ln_m_co2_pure)
+
+    # Apply Salinity Correction (Setschenow equation)
+    # Convert salinity from ppm to molality (mol NaCl / kg H2O)
+    # 1 ppm NaCl ≈ 1 mg NaCl / 1 L H2O ≈ 1 mg NaCl / 1 kg H2O
+    m_nacl = salinity / (MOLECULAR_WEIGHT_NACL * 1000)
+
+    # Setschenow coefficient (k_s) for CO2-NaCl interaction, with T-dependence
+    # This is a common empirical fit.
+    k_s = 0.119 + 0.0003 * T
+
+    # Corrected molality in brine
+    m_co2_brine = m_co2_pure / (10 ** (k_s * m_nacl))
+
+    # Convert Molality to SCF/STB
+    # This is an approximate conversion that depends on water density and standard conditions.
+    # It combines molality -> mole fraction -> volume ratio.
+    # For many reservoir engineering applications, a factor around 315.4 is used.
+    rsw = m_co2_brine * MOLALITY_TO_SCF_STB_CO2
+    return rsw
 
 
 MOLAR_MASSES = {
@@ -2276,13 +2128,12 @@ def compute_gas_solubility_in_water(
 
     elif gas == "co2" and 32 <= temperature <= 572:
         # For CO2, we use Duan's correlation for higher accuracy
-        return _gas_solubility_in_water_duan_co2(pressure, temperature, salinity)
+        return _gas_solubility_in_water_duan_sun_co2(pressure, temperature, salinity)
 
     elif gas in {"methane", "co2", "n2"}:
         return _gas_solubility_in_water_henry_law(pressure, temperature, salinity, gas)
 
-    else:
-        raise NotImplementedError(f"No model for gas '{gas}'.")
+    raise NotImplementedError(f"No model for gas '{gas}'.")
 
 
 @numba.njit(cache=True)
@@ -2591,7 +2442,7 @@ def compute_water_density_batzle(
     P = pressure_MPa
 
     # Batzle & Wang correlation in g/cm³
-    brine_density_in_g_per_cm3 = 1.0 + 1e-3 * (
+    brine_density_g_per_cm3 = 1.0 + 1e-3 * (
         S
         * (
             0.668
@@ -2600,7 +2451,7 @@ def compute_water_density_batzle(
         )
     )
     # Convert to lb/ft³ (1 g/cm³ = 62.42796 lb/ft³)
-    water_density = brine_density_in_g_per_cm3 * 62.42796
+    water_density = brine_density_g_per_cm3 * 62.42796
     return water_density
 
 
@@ -2773,7 +2624,6 @@ def estimate_bubble_point_pressure_standing(
         return gor - observed_gas_to_oil_ratio
 
     solver = root_scalar(residual, bracket=[14.696, 10000], method="brentq")
-
     if not solver.converged:
         raise RuntimeError("Could not converge to a bubble point pressure.")
 

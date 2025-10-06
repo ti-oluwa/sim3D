@@ -1,9 +1,10 @@
-from sim3D.models import * # noqa
-from sim3D.simulation import * # noqa
+from sim3D.static import * # noqa
+from sim3D.dynamic import * # noqa
 from sim3D import constants # noqa
 from sim3D import grids # noqa
 from sim3D.factories import * # noqa
-from sim3D.boundary_conditions import *  # noqa
+from sim3D.boundaries import *  # noqa
 from sim3D.wells import *  # noqa
 from sim3D.types import * # noqa
+from sim3D.relperm import * # noqa
 from sim3D.visualization import * # noqa

@@ -14,16 +14,13 @@ import logging
 import typing
 
 from attrs import asdict
-from matplotlib import pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.colors import Normalize
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing_extensions import TypedDict
 
 from sim3D.grids import coarsen_grid
-from sim3D.simulation import ModelState
+from sim3D.dynamic import ModelState
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
@@ -121,7 +118,7 @@ class LightPosition(TypedDict):
 
 
 DEFAULT_CAMERA_POSITION = CameraPosition(
-    eye=dict(x=1.5, y=1.5, z=1.8),
+    eye=dict(x=1.5, y=1.5, z=1.0),
     center=dict(x=0, y=0, z=0),
     up=dict(x=0, y=0, z=1),
 )
@@ -837,14 +834,14 @@ class BaseRenderer(ABC):
         """
         pass
 
-    def get_colorscale(self, color_scheme: ColorScheme) -> str:
+    def get_colorscale(self, color_scheme: typing.Union[ColorScheme, str]) -> str:
         """
         Get plotly colorscale string from ColorScheme enum.
 
         :param color_scheme: The color scheme enum to convert
         :return: Plotly colorscale string
         """
-        return color_scheme.value
+        return ColorScheme(color_scheme).value
 
     @staticmethod
     def format_value(value: float, metadata: PropertyMetadata) -> str:
@@ -1268,7 +1265,9 @@ class VolumeRenderer(BaseRenderer):
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
-        colorscale = self.get_colorscale(metadata.color_scheme)
+        colorscale = self.get_colorscale(
+            kwargs.get("color_scheme", metadata.color_scheme)
+        )
         volume_opacity = opacity if opacity is not None else self.config.opacity
         opacity_scale = (
             self.config.opacity_scale_values if use_opacity_scaling else None
@@ -1546,7 +1545,9 @@ class IsosurfaceRenderer(BaseRenderer):
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
-        colorscale = self.get_colorscale(metadata.color_scheme)
+        colorscale = self.get_colorscale(
+            kwargs.get("color_scheme", metadata.color_scheme)
+        )
         isosurface_opacity = opacity if opacity is not None else self.config.opacity
         figure.add_trace(
             go.Isosurface(
@@ -1819,7 +1820,9 @@ class CellBlockRenderer(BaseRenderer):
             if original_cmax is not None
             else float(np.nanmax(display_data))
         )
-        colorscale = self.get_colorscale(metadata.color_scheme)
+        colorscale = self.get_colorscale(
+            kwargs.get("color_scheme", metadata.color_scheme)
+        )
 
         for i, j, k in itertools.product(i_indices, j_indices, k_indices):
             # Get cell boundaries
@@ -2324,7 +2327,9 @@ class Scatter3DRenderer(BaseRenderer):
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
-        colorscale = self.get_colorscale(metadata.color_scheme)
+        colorscale = self.get_colorscale(
+            kwargs.get("color_scheme", metadata.color_scheme)
+        )
         scatter_opacity = opacity if opacity is not None else self.config.opacity
         figure.add_trace(
             go.Scatter3d(
@@ -2638,16 +2643,17 @@ class ModelVisualizer3D:
         :param metadata: Property metadata
         :return: Final title to use
         """
-        if custom_title is not None:
+        # If the custom title is providd and it is not some kind of suffix (starts with "-"), use it directly
+        if custom_title is not None and not custom_title.strip().startswith("-"):
             return custom_title
         if self.config.title:
             # If config has a title, add plot type as subtitle info
             plot_name = PLOT_TYPE_NAMES.get(plot_type, "3D Plot")
-            return f"{self.config.title}<br><sub>{plot_name}: {metadata.display_name}</sub>"
+            return f"{self.config.title}{custom_title or ''}<br><sub>{plot_name}: {metadata.display_name}</sub>"
         plot_name = PLOT_TYPE_NAMES.get(plot_type, "3D Plot")
-        return f"{plot_name}: {metadata.display_name}<br><sub>Interactive 3D Visualization</sub>"
+        return f"{plot_name}{custom_title or ''}: {metadata.display_name}<br><sub>Interactive 3D Visualization</sub>"
 
-    def plot_property(
+    def make_plot(
         self,
         model_state: ModelState[ThreeDimensions],
         property: str,
@@ -2693,16 +2699,16 @@ class ModelVisualizer3D:
 
         ```python
             # Plot only cells 10-20 in X direction
-            viz.plot_property(state, "pressure", x_slice=(10, 20))
+            viz.make_plot(state, "pressure", x_slice=(10, 20))
 
             # Plot single layer at Z index 5
-            viz.plot_property(state, "oil_saturation", z_slice=5)
+            viz.make_plot(state, "oil_saturation", z_slice=5)
 
             # Plot corner section
-            viz.plot_property(state, "temperature", x_slice=(0, 25), y_slice=(0, 25), z_slice=(0, 10))
+            viz.make_plot(state, "temperature", x_slice=(0, 25), y_slice=(0, 25), z_slice=(0, 10))
 
             # Use slice objects for advanced slicing
-            viz.plot_property(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
+            viz.make_plot(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
         ```
         """
         metadata = self.registry[property]
@@ -2733,7 +2739,7 @@ class ModelVisualizer3D:
                     f"Z[{z_slice_obj.start or 0}:{z_slice_obj.stop or data.shape[2]}]"
                 )
 
-            slice_suffix = f" - Subset: {', '.join(slice_info)}"
+            slice_suffix = f" - Slice: {', '.join(slice_info)}"
             if title:
                 title += slice_suffix
             else:
@@ -2787,7 +2793,7 @@ class ModelVisualizer3D:
         fig.update_layout(**layout_updates)
         return fig
 
-    def plot_properties(
+    def make_plots(
         self,
         model_state: ModelState[ThreeDimensions],
         properties: typing.Sequence[str],
@@ -2852,7 +2858,7 @@ class ModelVisualizer3D:
             col = (i % subplot_columns) + 1
 
             # Get individual plot - no custom size here since it's a subplot
-            individual_fig = self.plot_property(
+            individual_fig = self.make_plot(
                 model_state,
                 prop,
                 plot_type=plot_type,
@@ -2878,7 +2884,7 @@ class ModelVisualizer3D:
         )
         return fig
 
-    def create_dashboard(
+    def make_dashboard(
         self,
         model_state: ModelState[ThreeDimensions],
         properties: typing.Sequence[str],
@@ -2918,7 +2924,7 @@ class ModelVisualizer3D:
         :param kwargs: Additional parameters for individual property plots.
         :return: Dashboard figure with multiple reservoir property visualizations
         """
-        return self.plot_properties(
+        return self.make_plots(
             model_state,
             properties=properties,
             plot_type=plot_type,
@@ -2933,7 +2939,7 @@ class ModelVisualizer3D:
             **kwargs,
         )
 
-    def animate_property(
+    def animate(
         self,
         model_states: typing.Sequence[ModelState[ThreeDimensions]],
         property: str,
@@ -2993,7 +2999,7 @@ class ModelVisualizer3D:
             print(f"Animation cmin: {cmin}, cmax: {cmax}")
 
         # Create base figure from first state
-        base_fig = self.plot_property(
+        base_fig = self.make_plot(
             model_states[0],
             property=property,
             plot_type=plot_type,
@@ -3009,7 +3015,7 @@ class ModelVisualizer3D:
         # Create frames for animation - ensure we get ALL states
         frames = []
         for i, state in enumerate(model_states):
-            frame_fig = self.plot_property(
+            frame_fig = self.make_plot(
                 state,
                 property=property,
                 plot_type=plot_type,
