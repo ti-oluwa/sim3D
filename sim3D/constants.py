@@ -119,6 +119,18 @@ FT_TO_METERS = 0.3048  # 1 foot = 0.3048 meters
 """Conversion factor from feet to meters (m)"""
 METERS_TO_FT = 1 / FT_TO_METERS
 """Conversion factor from meters to feet (m)"""
+ACRES_TO_FT2 = 43560  # 1 acre = 43560 ft²
+"""Conversion factor from acres to square feet (ft²)"""
+FT2_TO_ACRES = 1 / ACRES_TO_FT2
+"""Conversion factor from square feet to acres"""
+ACRE_FT_TO_FT3 = 43560  # 1 acre-foot = 43560 ft³
+"""Conversion factor from acre-feet to cubic feet (ft³)"""
+FT3_TO_ACRE_FT = 1 / ACRE_FT_TO_FT3
+"""Conversion factor from cubic feet to acre-feet"""
+ACRE_FT_TO_BBL = 7758  # 1 acre-foot = 7758 BBL
+"""Conversion factor from acre-feet to barrels (BBL)"""
+BBL_TO_ACRE_FT = 1 / ACRE_FT_TO_BBL
+"""Conversion factor from barrels to acre-feet"""
 M3_PER_SECOND_TO_STB_PER_DAY = 543168.384
 """Conversion factor from cubic meters per second to stock tank barrels per day (STB/day)"""
 STB_PER_DAY_TO_M3_PER_SECOND = 1 / M3_PER_SECOND_TO_STB_PER_DAY

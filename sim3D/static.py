@@ -239,8 +239,8 @@ class RockFluidProperties:
 class ReservoirModel(typing.Generic[NDimension]):
     """Models a reservoir in N-dimensional space for simulation."""
 
-    grid_dimension: NDimension
-    """Number of cells in the grid. A tuple of number of cells in x and y directions (cell_count_x, cell_count_y)."""
+    grid_shape: NDimension
+    """Shape of the reservoir grid (num_cells_x, num_cells_y, num_cells_z)."""
     cell_dimension: typing.Tuple[float, float]
     """Size of each cell in the grid (cell_size_x, cell_size_y) in ft."""
     thickness_grid: NDimensionalGrid[NDimension]
@@ -266,10 +266,10 @@ class ReservoirModel(typing.Generic[NDimension]):
         :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
         :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
         """
-        return build_elevation_grid(self.thickness_grid, direction)
+        return elevation_grid(self.thickness_grid, direction)
 
 
-def build_elevation_grid(
+def elevation_grid(
     thickness_grid: NDimensionalGrid[NDimension],
     direction: typing.Literal["downward", "upward"] = "downward",
 ) -> NDimensionalGrid[NDimension]:

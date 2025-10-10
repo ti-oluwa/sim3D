@@ -1,6 +1,6 @@
-import typing
 from dataclasses import dataclass
 from enum import Enum
+import typing
 
 
 __all__ = [
@@ -48,6 +48,9 @@ class PropertyMetadata:
     optimized for their typical value ranges and physical meaning (e.g., pressure uses 'viridis',
     temperature uses 'inferno' for heat-like appearance)."""
 
+    aliases: typing.Optional[typing.Sequence[str]] = None
+    """Alternative names that can be used to refer to this property (e.g., 'pressure' for 'oil_pressure')."""
+
     log_scale: bool = False
     """Whether to apply logarithmic scaling (base 10) to the data before visualization.
     
@@ -93,272 +96,315 @@ class PropertyRegistry:
 
     PROPERTIES = {
         # Pressure and Temperature
-        "pressure": PropertyMetadata(
-            name="fluid_properties.pressure_grid",
-            display_name="Pressure",
-            unit="psi",
-            color_scheme=ColorScheme.VIRIDIS,
-        ),
         "oil_pressure": PropertyMetadata(
-            name="fluid_properties.pressure_grid",
+            name="model.fluid_properties.pressure_grid",
             display_name="Oil Pressure",
             unit="psi",
             color_scheme=ColorScheme.VIRIDIS,
+            aliases=["pressure"],
         ),
         "temperature": PropertyMetadata(
-            name="fluid_properties.temperature_grid",
+            name="model.fluid_properties.temperature_grid",
             display_name="Temperature",
             unit="°F",
             color_scheme=ColorScheme.INFERNO,
         ),
         # Oil Properties
         "oil_saturation": PropertyMetadata(
-            name="fluid_properties.oil_saturation_grid",
+            name="model.fluid_properties.oil_saturation_grid",
             display_name="Oil Saturation",
             unit="fraction",
             color_scheme=ColorScheme.CIVIDIS,
             min_val=0,
             max_val=1,
+            aliases=["oil_sat"],
         ),
         "oil_viscosity": PropertyMetadata(
-            name="fluid_properties.oil_viscosity_grid",
+            name="model.fluid_properties.oil_viscosity_grid",
             display_name="Oil Viscosity",
             unit="cP",
             color_scheme=ColorScheme.INFERNO,
             log_scale=True,
         ),
         "oil_density": PropertyMetadata(
-            name="fluid_properties.oil_density_grid",
+            name="model.fluid_properties.oil_density_grid",
             display_name="Oil Density",
             unit="lbm/ft³",
             color_scheme=ColorScheme.PLASMA,
         ),
         "oil_compressibility": PropertyMetadata(
-            name="fluid_properties.oil_compressibility_grid",
+            name="model.fluid_properties.oil_compressibility_grid",
             display_name="Oil Compressibility",
             unit="psi⁻¹",
             color_scheme=ColorScheme.TURBO,
             log_scale=True,
         ),
         "oil_formation_volume_factor": PropertyMetadata(
-            name="fluid_properties.oil_formation_volume_factor_grid",
+            name="model.fluid_properties.oil_formation_volume_factor_grid",
             display_name="Oil FVF",
             unit="bbl/STB",
             color_scheme=ColorScheme.RdYlBu,
-        ),
-        "oil_fvf": PropertyMetadata(
-            name="fluid_properties.oil_formation_volume_factor_grid",
-            display_name="Oil FVF",
-            unit="bbl/STB",
-            color_scheme=ColorScheme.RdYlBu,
+            aliases=["oil_fvf"],
         ),
         "oil_bubble_point_pressure": PropertyMetadata(
-            name="fluid_properties.oil_bubble_point_pressure_grid",
+            name="model.fluid_properties.oil_bubble_point_pressure_grid",
             display_name="Oil Bubble Point Pressure",
             unit="psi",
             color_scheme=ColorScheme.SPECTRAL,
+            aliases=["oil_bpp"],
         ),
         # Water Properties
         "water_saturation": PropertyMetadata(
-            name="fluid_properties.water_saturation_grid",
+            name="model.fluid_properties.water_saturation_grid",
             display_name="Water Saturation",
             unit="fraction",
             color_scheme=ColorScheme.RdBu,
             min_val=0,
             max_val=1,
+            aliases=["water_sat"],
         ),
         "water_viscosity": PropertyMetadata(
-            name="fluid_properties.water_viscosity_grid",
+            name="model.fluid_properties.water_viscosity_grid",
             display_name="Water Viscosity",
             unit="cP",
             color_scheme=ColorScheme.BALANCE,
             log_scale=True,
         ),
         "water_density": PropertyMetadata(
-            name="fluid_properties.water_density_grid",
+            name="model.fluid_properties.water_density_grid",
             display_name="Water Density",
             unit="lbm/ft³",
             color_scheme=ColorScheme.EARTH,
         ),
         "water_compressibility": PropertyMetadata(
-            name="fluid_properties.water_compressibility_grid",
+            name="model.fluid_properties.water_compressibility_grid",
             display_name="Water Compressibility",
             unit="psi⁻¹",
             color_scheme=ColorScheme.VIRIDIS,
             log_scale=True,
         ),
         "water_formation_volume_factor": PropertyMetadata(
-            name="fluid_properties.water_formation_volume_factor_grid",
+            name="model.fluid_properties.water_formation_volume_factor_grid",
             display_name="Water FVF",
             unit="bbl/STB",
             color_scheme=ColorScheme.PLASMA,
-        ),
-        "water_fvf": PropertyMetadata(
-            name="fluid_properties.water_formation_volume_factor_grid",
-            display_name="Water FVF",
-            unit="bbl/STB",
-            color_scheme=ColorScheme.PLASMA,
+            aliases=["water_fvf"],
         ),
         "water_bubble_point_pressure": PropertyMetadata(
-            name="fluid_properties.water_bubble_point_pressure_grid",
+            name="model.fluid_properties.water_bubble_point_pressure_grid",
             display_name="Water Bubble Point Pressure",
             unit="psi",
             color_scheme=ColorScheme.INFERNO,
+            aliases=["water_bpp"],
         ),
         "water_salinity": PropertyMetadata(
-            name="fluid_properties.water_salinity_grid",
+            name="model.fluid_properties.water_salinity_grid",
             display_name="Water Salinity",
             unit="ppm NaCl",
             color_scheme=ColorScheme.CIVIDIS,
+            aliases=["salinity"],
         ),
         "gas_saturation": PropertyMetadata(
-            name="fluid_properties.gas_saturation_grid",
+            name="model.fluid_properties.gas_saturation_grid",
             display_name="Gas Saturation",
             unit="fraction",
             color_scheme=ColorScheme.MAGMA,
             min_val=0,
             max_val=1,
+            aliases=["gas_sat"],
         ),
         "gas_viscosity": PropertyMetadata(
-            name="fluid_properties.gas_viscosity_grid",
+            name="model.fluid_properties.gas_viscosity_grid",
             display_name="Gas Viscosity",
             unit="cP",
             color_scheme=ColorScheme.TURBO,
             log_scale=True,
         ),
         "gas_density": PropertyMetadata(
-            name="fluid_properties.gas_density_grid",
+            name="model.fluid_properties.gas_density_grid",
             display_name="Gas Density",
             unit="lbm/ft³",
             color_scheme=ColorScheme.RdYlBu,
         ),
         "gas_compressibility": PropertyMetadata(
-            name="fluid_properties.gas_compressibility_grid",
+            name="model.fluid_properties.gas_compressibility_grid",
             display_name="Gas Compressibility",
             unit="psi⁻¹",
             color_scheme=ColorScheme.SPECTRAL,
             log_scale=True,
         ),
         "gas_formation_volume_factor": PropertyMetadata(
-            name="fluid_properties.gas_formation_volume_factor_grid",
+            name="model.fluid_properties.gas_formation_volume_factor_grid",
             display_name="Gas FVF",
             unit="ft³/SCF",
             color_scheme=ColorScheme.RdBu,
-        ),
-        "gas_fvf": PropertyMetadata(
-            name="fluid_properties.gas_formation_volume_factor_grid",
-            display_name="Gas FVF",
-            unit="ft³/SCF",
-            color_scheme=ColorScheme.RdBu,
+            aliases=["gas_fvf"],
         ),
         "gas_to_oil_ratio": PropertyMetadata(
-            name="fluid_properties.gas_to_oil_ratio_grid",
+            name="model.fluid_properties.gas_to_oil_ratio_grid",
             display_name="Gas-Oil Ratio",
             unit="SCF/STB",
             color_scheme=ColorScheme.BALANCE,
-        ),
-        "gor": PropertyMetadata(
-            name="fluid_properties.gas_to_oil_ratio_grid",
-            display_name="Gas-Oil Ratio",
-            unit="SCF/STB",
-            color_scheme=ColorScheme.BALANCE,
+            aliases=[
+                "gor",
+                "gas_oil_ratio",
+                "solution_gas_oil_ratio",
+                "solution_gor",
+                "solution_gas_to_oil_ratio",
+            ],
         ),
         "gas_gravity": PropertyMetadata(
-            name="fluid_properties.gas_gravity_grid",
+            name="model.fluid_properties.gas_gravity_grid",
             display_name="Gas Gravity",
             unit="dimensionless",
             color_scheme=ColorScheme.EARTH,
+            aliases=["gas_specific_gravity", "gas_sg"],
         ),
         "gas_molecular_weight": PropertyMetadata(
-            name="fluid_properties.gas_molecular_weight_grid",
+            name="model.fluid_properties.gas_molecular_weight_grid",
             display_name="Gas Molecular Weight",
             unit="g/mol",
             color_scheme=ColorScheme.VIRIDIS,
+            aliases=["gas_mw"],
         ),
         # API Gravity
         "oil_api_gravity": PropertyMetadata(
-            name="fluid_properties.oil_api_gravity_grid",
+            name="model.fluid_properties.oil_api_gravity_grid",
             display_name="Oil API Gravity",
             unit="°API",
             color_scheme=ColorScheme.PLASMA,
-        ),
-        "api_gravity": PropertyMetadata(
-            name="fluid_properties.oil_api_gravity_grid",
-            display_name="Oil API Gravity",
-            unit="°API",
-            color_scheme=ColorScheme.PLASMA,
+            aliases=["api_gravity", "api"],
         ),
         "oil_specific_gravity": PropertyMetadata(
-            name="fluid_properties.oil_specific_gravity_grid",
+            name="model.fluid_properties.oil_specific_gravity_grid",
             display_name="Oil Specific Gravity",
             unit="dimensionless",
             color_scheme=ColorScheme.INFERNO,
+            aliases=["oil_sg", "oil_gravity"],
         ),
         "thickness": PropertyMetadata(
-            name="thickness_grid",
+            name="model.thickness_grid",
             display_name="Cell Thickness",
             unit="ft",
             color_scheme=ColorScheme.CIVIDIS,
         ),
         "permeability_x": PropertyMetadata(
-            name="rock_properties.absolute_permeability.x",
+            name="model.rock_properties.absolute_permeability.x",
             display_name="Permeability X",
             unit="mD",
             color_scheme=ColorScheme.MAGMA,
+            aliases=["kx", "perm_x"],
         ),
         "permeability_y": PropertyMetadata(
-            name="rock_properties.absolute_permeability.y",
+            name="model.rock_properties.absolute_permeability.y",
             display_name="Permeability Y",
             unit="mD",
             color_scheme=ColorScheme.TURBO,
+            aliases=["ky", "perm_y"],
         ),
         "permeability_z": PropertyMetadata(
-            name="rock_properties.absolute_permeability.z",
+            name="model.rock_properties.absolute_permeability.z",
             display_name="Permeability Z",
             unit="mD",
             color_scheme=ColorScheme.RdYlBu,
+            aliases=["kz", "perm_z"],
         ),
         "porosity": PropertyMetadata(
-            name="rock_properties.porosity_grid",
+            name="model.rock_properties.porosity_grid",
             display_name="Porosity",
             unit="fraction",
             color_scheme=ColorScheme.PLASMA,
         ),
         "net_to_gross_ratio": PropertyMetadata(
-            name="rock_properties.net_to_gross_ratio_grid",
+            name="model.rock_properties.net_to_gross_ratio_grid",
             display_name="Net to Gross Ratio",
             unit="fraction",
             color_scheme=ColorScheme.VIRIDIS,
+            aliases=["ngr", "ntg", "net_to_gross", "ntg_ratio"],
         ),
         "irreducible_water_saturation": PropertyMetadata(
-            name="rock_properties.irreducible_water_saturation_grid",
+            name="model.rock_properties.irreducible_water_saturation_grid",
             display_name="Irreducible Water Saturation",
             unit="fraction",
             color_scheme=ColorScheme.CIVIDIS,
-        ),
-        "residual_oil_saturation": PropertyMetadata(
-            name="rock_properties.residual_oil_saturation_water_grid",
-            display_name="Residual Oil Saturation (Water Flooded)",
-            unit="fraction",
-            color_scheme=ColorScheme.MAGMA,
+            aliases=["swc", "irreducible_water_sat"],
         ),
         "residual_oil_saturation_water": PropertyMetadata(
-            name="rock_properties.residual_oil_saturation_water_grid",
+            name="model.rock_properties.residual_oil_saturation_water_grid",
             display_name="Residual Oil Saturation (Water Flooded)",
             unit="fraction",
             color_scheme=ColorScheme.MAGMA,
+            aliases=["sorw", "sor", "residual_oil_sat", "residual_oil_saturation"],
         ),
         "residual_oil_saturation_gas": PropertyMetadata(
-            name="rock_properties.residual_oil_saturation_gas_grid",
+            name="model.rock_properties.residual_oil_saturation_gas_grid",
             display_name="Residual Oil Saturation (Gas Flooded)",
             unit="fraction",
             color_scheme=ColorScheme.MAGMA,
+            aliases=["sorg"],
         ),
         "residual_gas_saturation": PropertyMetadata(
-            name="rock_properties.residual_gas_saturation_grid",
+            name="model.rock_properties.residual_gas_saturation_grid",
             display_name="Residual Gas Saturation",
             unit="fraction",
             color_scheme=ColorScheme.MAGMA,
+            aliases=["sgr", "residual_gas_sat"],
+        ),
+        "oil_injection_rate": PropertyMetadata(
+            name="injection.oil",
+            display_name="Oil Injection Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["oil_injection"],
+        ),
+        "water_injection_rate": PropertyMetadata(
+            name="injection.water",
+            display_name="Water Injection Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["water_injection"],
+        ),
+        "gas_injection_rate": PropertyMetadata(
+            name="injection.gas",
+            display_name="Gas Injection Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["gas_injection"],
+        ),
+        "total_injection_rate": PropertyMetadata(
+            name="injection.total",
+            display_name="Total Injection Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["total_injection"],
+        ),
+        "oil_production_rate": PropertyMetadata(
+            name="production.oil",
+            display_name="Oil Production Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["oil_production"],
+        ),
+        "water_production_rate": PropertyMetadata(
+            name="production.water",
+            display_name="Water Production Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["water_production"],
+        ),
+        "gas_production_rate": PropertyMetadata(
+            name="production.gas",
+            display_name="Gas Production Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["gas_production"],
+        ),
+        "total_production_rate": PropertyMetadata(
+            name="production.total",
+            display_name="Total Production Rate",
+            unit="ft³/day",
+            color_scheme=ColorScheme.RdYlBu,
+            aliases=["total_production"],
         ),
     }
 
@@ -369,7 +415,7 @@ class PropertyRegistry:
         This class is a singleton and should not be instantiated directly.
         Use the class methods to access properties and metadata.
         """
-        self._properties = type(self).PROPERTIES.copy()
+        self._properties = _get_expanded_aliases(type(self).PROPERTIES)
 
     def get_available_properties(self) -> typing.List[str]:
         """
@@ -417,6 +463,24 @@ class PropertyRegistry:
     def __iter__(self) -> typing.Iterator[str]:
         """Iterate over the property names."""
         return iter(self._properties.keys())
+
+
+def _get_expanded_aliases(
+    properties: typing.Dict[str, PropertyMetadata],
+) -> typing.Dict[str, PropertyMetadata]:
+    """Return a new dict with all aliases expanded to point to the same metadata."""
+    expanded = {}
+    for prop_name, metadata in properties.items():
+        expanded[prop_name] = metadata
+        if metadata.aliases:
+            for alias in metadata.aliases:
+                alias_clean = PropertyRegistry.clean_property_name(alias)
+                if alias_clean in properties or alias_clean in expanded:
+                    raise ValueError(
+                        f"Alias '{alias}' for property '{prop_name}' conflicts with existing property or alias."
+                    )
+                expanded[alias_clean] = metadata
+    return expanded
 
 
 property_registry = PropertyRegistry()

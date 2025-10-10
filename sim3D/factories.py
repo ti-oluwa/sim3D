@@ -47,17 +47,18 @@ from sim3D.types import (
     WellLocation,
 )
 from sim3D.wells import InjectionWell, ProductionWell, WellFluid, Wells
+from sim3D.faults import Fault, apply_faults
 
 __all__ = [
-    "build_reservoir_model",
-    "build_injection_well",
-    "build_production_well",
-    "build_wells",
+    "reservoir_model",
+    "injection_well",
+    "production_well",
+    "wells",
 ]
 
 
-def build_reservoir_model(
-    grid_dimension: NDimension,
+def reservoir_model(
+    grid_shape: NDimension,
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: NDimensionalGrid[NDimension],
     pressure_grid: NDimensionalGrid[NDimension],
@@ -112,6 +113,7 @@ def build_reservoir_model(
     net_to_gross_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_salinity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
+    faults: typing.Optional[typing.Iterable[Fault]] = None,
     reservoir_gas_name: str = RESERVOIR_GAS_NAME,
 ) -> ReservoirModel[NDimension]:
     """
@@ -126,7 +128,7 @@ def build_reservoir_model(
     - All fluid property grids are estimated from pressure and temperature if not provided.
     - Provide consistent and physically realistic input grids to ensure stable simulations.
 
-    :param grid_dimension: Number of grid cells (rows, columns).
+    :param grid_shape: Number of grid cells (rows, columns).
     :param cell_dimension: Physical size of each cell (dx, dy) in feets.
     :param thickness_grid: Reservoir cells' thickness grid (ft).
     :param pressure_grid: Reservoir cells' pressure grid (psi).
@@ -164,12 +166,13 @@ def build_reservoir_model(
     :param net_to_gross_ratio_grid: Net-to-gross ratio grid (fraction), optional.
     :param water_salinity_grid: Water salinity grid (ppm), optional.
     :param boundary_conditions: Boundary conditions for the model, optional. Defaults to no-flow conditions.
+    :param faults: Iterable of faults to be applied to the reservoir model, optional.
     :param reservoir_gas_name: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`. Can also be the name of the gas injected into the reservoir.
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
-    if not 1 <= len(grid_dimension) <= 3:
+    if not 1 <= len(grid_shape) <= 3:
         raise ValueError(
-            "`grid_dimension` must be a tuple of one to three integers (rows, columns, [depth])."
+            "`grid_shape` must be a tuple of one to three integers (rows, columns, [depth])."
         )
     if len(cell_dimension) < 2:
         raise ValueError(
@@ -180,14 +183,14 @@ def build_reservoir_model(
 
     if water_salinity_grid is None:
         water_salinity_grid = build_uniform_grid(
-            grid_dimension=grid_dimension,
+            grid_shape=grid_shape,
             value=35_000,  # Default salinity in ppm (NaCl)
         )
 
     if net_to_gross_ratio_grid is None:
         # Assume uniform net-to-gross ratio of 1.0 (fully net)
         net_to_gross_ratio_grid = build_uniform_grid(
-            grid_dimension=grid_dimension,
+            grid_shape=grid_shape,
             value=1.0,
         )
 
@@ -487,8 +490,8 @@ def build_reservoir_model(
                 "water_saturation": GridBoundaryCondition(),
             }
         )
-    return ReservoirModel(
-        grid_dimension=grid_dimension,
+    model = ReservoirModel(
+        grid_shape=grid_shape,
         cell_dimension=cell_dimension,
         thickness_grid=thickness_grid,
         fluid_properties=fluid_properties,
@@ -496,14 +499,18 @@ def build_reservoir_model(
         rock_fluid_properties=rock_fluid_properties,
         boundary_conditions=boundary_conditions,
     )
+    if faults is not None:
+        model = apply_faults(model, *faults)
+    return model
 
 
-def build_injection_well(
+def injection_well(
     well_name: str,
     perforating_interval: typing.Tuple[WellLocation, WellLocation],
     radius: float,
     bottom_hole_pressure: float,
     injected_fluid: WellFluid,
+    **kwargs: typing.Any,
 ) -> InjectionWell[WellLocation]:
     """
     Constructs an injection well with the given parameters.
@@ -512,6 +519,8 @@ def build_injection_well(
     :param perforating_interval: Tuple representing the start and end locations of the well in the grid
     :param radius: Radius of the well (ft)
     :param injected_fluid: The fluid being injected into the well, represented as a `WellFluid` instance.
+    :param bottom_hole_pressure: Bottom hole pressure of the well (psi)
+    :param kwargs: Additional keyword arguments to be passed to the `InjectionWell` constructor
     :return: `InjectionWell` instance
     """
     return InjectionWell(
@@ -520,16 +529,18 @@ def build_injection_well(
         radius=radius,
         bottom_hole_pressure=bottom_hole_pressure,
         injected_fluid=injected_fluid,
+        **kwargs,
     )
 
 
-def build_production_well(
+def production_well(
     well_name: str,
     perforating_interval: typing.Tuple[WellLocation, WellLocation],
     radius: float,
     bottom_hole_pressure: float,
     produced_fluids: typing.Sequence[WellFluid],
     skin_factor: float = 0.0,
+    **kwargs: typing.Any,
 ) -> ProductionWell[WellLocation]:
     """
     Constructs a production well with the given parameters.
@@ -539,6 +550,8 @@ def build_production_well(
     :param radius: Radius of the well (ft)
     :param produced_fluids: List of fluids being produced by the well, represented as a sequence of `WellFluid` instances.
     :param skin_factor: Skin factor for the well, default is 0.0
+    :param bottom_hole_pressure: Bottom hole pressure of the well (psi)
+    :param kwargs: Additional keyword arguments to be passed to the `ProductionWell` constructor
     :return: `ProductionWell` instance
     """
     if not produced_fluids:
@@ -550,25 +563,23 @@ def build_production_well(
         skin_factor=skin_factor,
         bottom_hole_pressure=bottom_hole_pressure,
         produced_fluids=produced_fluids,
+        **kwargs,
     )
 
 
-def build_wells(
-    injection_wells: typing.Optional[
-        typing.Sequence[InjectionWell[WellLocation]]
-    ] = None,
-    production_wells: typing.Optional[
-        typing.Sequence[ProductionWell[WellLocation]]
-    ] = None,
+def wells(
+    injectors: typing.Optional[typing.Sequence[InjectionWell[WellLocation]]] = None,
+    producers: typing.Optional[typing.Sequence[ProductionWell[WellLocation]]] = None,
+    **kwargs: typing.Any,
 ) -> Wells[WellLocation]:
     """
     Constructs a Wells instance containing both injection and production wells.
 
-    :param injection_wells: Sequence of injection wells
-    :param production_wells: Sequence of production wells
+    :param injectors: Sequence of injection wells
+    :param producers: Sequence of production wells
+    :param kwargs: Additional keyword arguments to be passed to the `Wells` constructor
     :return: ``Wells`` instance
     """
     return Wells(
-        injection_wells=injection_wells or [],
-        production_wells=production_wells or [],
+        injection_wells=injectors or [], production_wells=producers or [], **kwargs
     )

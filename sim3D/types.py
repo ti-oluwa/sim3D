@@ -26,10 +26,19 @@ __all__ = [
     "Wettability",
     "WettabilityType",
     "Options",
+    "default_options",
+    "RateGrids",
 ]
 
 T = typing.TypeVar("T")
 Tco = typing.TypeVar("Tco", covariant=True)
+
+S = typing.TypeVar("S")
+
+HookFunc = typing.Callable[[S, T], bool]
+"""A function that takes two arguments of types S and T and returns a boolean value."""
+ActionFunc = typing.Callable[[S, T], None]
+"""A function that takes two arguments of types S and T and returns None."""
 
 NDimension = typing.TypeVar("NDimension", bound=typing.Tuple[int, ...])
 WellLocation = typing.TypeVar("WellLocation", bound=typing.Tuple[int, ...])
@@ -74,18 +83,14 @@ WellFluidType = typing.Literal["water", "oil", "gas"]
 
 EvolutionScheme = typing.Literal[
     "implicit_explicit",
-    "explicit_implicit",
     "fully_explicit",
-    "fully_implicit",
     "adaptive_explicit",
 ]
 """
 Discretization methods for numerical simulations
 
 - "implicit_explicit": Implicit pressure, Explicit saturation
-- "explicit_implicit": Explicit pressure, Implicit saturation
 - "fully_explicit": Both pressure and saturation are treated explicitly
-- "fully_implicit": Both pressure and saturation are treated implicitly
 - "adaptive_explicit": Adaptive method for pressure and explicit for saturation.
     Adaptive method dynamically switches between explicit and implicit
     based on stability criteria to optimize performance and accuracy.
@@ -235,3 +240,101 @@ class Options:
     Capillary gradients can become numerically dominant in fine meshes or sharp saturation fronts.
     Damping avoids overshoot/undershoot by reducing their contribution without removing them.
     """
+
+
+default_options = Options()
+
+K_con = typing.TypeVar("K_con", contravariant=True)
+V_con = typing.TypeVar("V_con", contravariant=True)
+
+
+class SupportsSetItem(typing.Generic[K_con, V_con], typing.Protocol):
+    """
+    Protocol for objects that support item assignment.
+    """
+
+    def __setitem__(self, key: K_con, value: V_con, /) -> None:
+        """Sets the item at the specified key to the given value."""
+        ...
+
+
+
+@attrs.define(frozen=True, slots=True)
+class RateGrids(typing.Generic[NDimension]):
+    """
+    Wrapper for n-dimensional grids representing fluid flow rates (oil, water, gas).
+    """
+
+    oil: typing.Optional[NDimensionalGrid[NDimension]] = None
+    """Grid representing oil flow rates."""
+    water: typing.Optional[NDimensionalGrid[NDimension]] = None
+    """Grid representing water flow rates."""
+    gas: typing.Optional[NDimensionalGrid[NDimension]] = None
+    """Grid representing gas flow rates."""
+
+    @property
+    def total(self) -> typing.Optional[NDimensionalGrid[NDimension]]:
+        """
+        Returns the total fluid flow rate (oil + water + gas) at each grid cell.
+
+        Ensure that at least one of the phase grids is defined before accessing this property.
+        Also, all defined phase grids should have the same shape and unit.
+
+        If none of the individual phase grids are defined, returns None.
+        """
+        total_grid = None
+        if self.oil is not None:
+            total_grid = self.oil.copy()
+        if self.water is not None:
+            if total_grid is None:
+                total_grid = self.water.copy()
+            else:
+                total_grid += self.water
+        if self.gas is not None:
+            if total_grid is None:
+                total_grid = self.gas.copy()
+            else:
+                total_grid += self.gas
+        return total_grid
+
+    def __getitem__(self, key: NDimension) -> typing.Tuple[float, float, float]:
+        """
+        Returns the oil, water, and gas flow rates at the specified grid cell.
+
+        If a phase grid is not defined, its flow rate is returned as 0.0.
+
+        :param key: The grid cell index (tuple of integers).
+        :return: A tuple containing the oil, water, and gas flow rates.
+        """
+        oil = self.oil[key] if self.oil is not None else 0.0
+        water = self.water[key] if self.water is not None else 0.0
+        gas = self.gas[key] if self.gas is not None else 0.0
+        return oil, water, gas
+
+
+@attrs.define(frozen=True, slots=True)
+class _RateGridsProxy(typing.Generic[NDimension]):
+    """
+    Proxy to allow (controlled) item assignment on an n-dimensional rate grids.
+    without exposing the grid itself
+    """
+
+    oil: NDimensionalGrid[NDimension]
+    water: NDimensionalGrid[NDimension]
+    gas: NDimensionalGrid[NDimension]
+
+    def __setitem__(
+        self, key: NDimension, value: typing.Tuple[float, float, float]
+    ) -> None:
+        """
+        Sets the oil, water, and gas production rates at the specified grid cell.
+
+        :param key: The grid cell index (tuple of integers).
+        :param value: A tuple containing the oil, water, and gas production rates.
+        """
+        oil, water, gas = value
+        self.oil[key] = oil
+        self.water[key] = water
+        self.gas[key] = gas
+
+

@@ -8,3 +8,6 @@ from sim3D.wells import *  # noqa
 from sim3D.types import * # noqa
 from sim3D.relperm import * # noqa
 from sim3D.visualization import * # noqa
+from sim3D.grids import * # noqa
+from sim3D.states import * # noqa
+from sim3D.faults import * # noqa

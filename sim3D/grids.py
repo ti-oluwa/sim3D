@@ -47,27 +47,50 @@ from sim3D.types import (
     RelativePermeabilityFunc,
 )
 
+__all__ = [
+    "uniform_grid",
+    "layered_grid",
+    "build_uniform_grid",
+    "build_layered_grid",
+    "build_fluid_viscosity_grid",
+    "build_fluid_compressibility_grid",
+    "build_fluid_density_grid",
+    "edge_pad_grid",
+    "coarsen_grid",
+    "build_gas_gravity_grid",
+    "build_gas_gravity_from_density_grid",
+    "build_mixed_fluid_property_grid",
+    "build_total_fluid_compressibility_grid",
+    "build_three_phase_capillary_pressure_grids",
+    "build_three_phase_relative_mobilities_grids",
+    "build_oil_api_gravity_grid",
+    "build_oil_specific_gravity_grid",
+    "build_gas_compressibility_factor_grid",
+    "build_oil_formation_volume_factor_grid",
+]
+
 
 @numba.njit(cache=True)
 def build_uniform_grid(
-    grid_dimension: NDimension,
+    grid_shape: NDimension,
     value: float = 0.0,
     dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
     Constructs a N-Dimensional uniform grid with the specified initial value.
 
-    :param grid_dimension: Tuple of number of cells in all directions (x, y, z).
+    :param grid_shape: Tuple of number of cells in all directions (x, y, z).
     :param value: Initial value to fill the grid with
     :param dtype: Data type of the grid elements (default: np.float64)
     :return: Numpy array representing the grid
     """
-    return np.full(grid_dimension, fill_value=value, dtype=dtype)
+    return np.full(grid_shape, fill_value=value, dtype=dtype)
 
+uniform_grid = build_uniform_grid  # Alias for convenience
 
 @numba.njit(cache=True)
 def build_layered_grid(
-    grid_dimension: NDimension,
+    grid_shape: NDimension,
     layer_values: ArrayLike[float],
     orientation: Orientation,
     dtype: DTypeLike = np.float64,
@@ -75,7 +98,7 @@ def build_layered_grid(
     """
     Constructs a N-Dimensional layered grid with specified layer values.
 
-    :param grid_dimension: Tuple of number of cells in x, y, and z directions (cell_count_x, cell_count_y, cell_count_z)
+    :param grid_shape: Tuple of number of cells in x, y, and z directions (cell_count_x, cell_count_y, cell_count_z)
     :param orientation: Direction or axis along which layers are defined ('x', 'y', or 'z')
     :param layer_values: Values for each layer (must match number of layers).
         The number of values should match the number of cells in that direction.
@@ -89,10 +112,10 @@ def build_layered_grid(
         raise ValueError("At least one layer value must be provided.")
 
     layered_grid = build_uniform_grid(
-        grid_dimension=grid_dimension, value=0.0, dtype=dtype
+        grid_shape=grid_shape, value=0.0, dtype=dtype
     )
     if orientation == Orientation.X:  # Layering along x-axis
-        if len(layer_values) != grid_dimension[0]:
+        if len(layer_values) != grid_shape[0]:
             raise ValueError(
                 "Number of layer values must match number of cells in x direction."
             )
@@ -102,7 +125,7 @@ def build_layered_grid(
         return layered_grid
 
     elif orientation == Orientation.Y:  # Layering along y-axis
-        if len(layer_values) != grid_dimension[1]:
+        if len(layer_values) != grid_shape[1]:
             raise ValueError(
                 "Number of layer values must match number of cells in y direction."
             )
@@ -112,12 +135,12 @@ def build_layered_grid(
         return layered_grid
 
     elif orientation == Orientation.Z:  # Layering along z-axis
-        if len(grid_dimension) != 3:
+        if len(grid_shape) != 3:
             raise ValueError(
                 "Grid dimension must be N-Dimensional for z-direction layering."
             )
 
-        if len(layer_values) != grid_dimension[2]:
+        if len(layer_values) != grid_shape[2]:
             raise ValueError(
                 "Number of layer values must match number of cells in z direction."
             )
@@ -128,6 +151,7 @@ def build_layered_grid(
 
     raise ValueError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
 
+layered_grid = build_layered_grid  # Alias for convenience
 
 def build_fluid_viscosity_grid(
     pressure_grid: NDimensionalGrid[NDimension],
@@ -396,101 +420,6 @@ def build_total_fluid_compressibility_grid(
     )
 
 
-def build_pressure_dependent_viscosity_grid(
-    pressure_grid: NDimensionalGrid[NDimension],
-    reference_pressure: float,
-    reference_viscosity: float,
-    pressure_decay_constant: float = 1e-8,
-) -> NDimensionalGrid[NDimension]:
-    """
-    Computes a N-Dimensional array of pressure-dependent displaced fluid (e.g oil) viscosities due to Injected fluid (e.g, CO₂) dissolution
-    using an exponential decay model.
-
-    Useful when simulating how the viscosity of the displaced fluid changes with pressure only (i.e, no miscibility effects).
-    If miscibility effects are to be considered, the saturation of the injected fluid should be taken into account.
-    use `build_pressure_and_saturation_dependent_viscosity_grid` instead.
-
-    The model is defined as:
-
-        μ(P) = μ_ref * exp(-k_p * (P - P_ref))
-
-    where:
-        - μ(P) is the viscosity at pressure, P
-        - μ_ref is the viscosity at reference pressure, P_ref
-        - k_p is a decay constant that controls how fast viscosity changes with pressure
-        - P_ref is the reference pressure where viscosity is known
-        - P is the current pressure
-
-    :param pressure_grid: N-Dimensional array of current reservoir pressures (psi)
-    :param reference_pressure: Initial reservoir pressure (psi) where viscosity is known.
-    :param reference_viscosity: Displaced fluid viscosity at reference pressure (cP).
-        Usually, this is the viscosity of the displaced fluid at initial conditions.
-
-    :param pressure_decay_constant: Empirical constant controlling how fast viscosity changes with pressure, exponentially
-    :return: N-Dimensional array of viscosity values (cP) for the displaced fluid
-    """
-    delta_p = pressure_grid - reference_pressure
-    pressure_decay = np.exp(-pressure_decay_constant * delta_p)
-    viscosity_grid = reference_viscosity * pressure_decay
-    return typing.cast(
-        NDimensionalGrid[NDimension],
-        np.clip(
-            viscosity_grid, 1e-5, reference_viscosity, dtype=np.float32
-        ),  # enforce lower bound
-    )
-
-
-def build_pressure_and_saturation_dependent_viscosity_grid(
-    pressure_grid: NDimensionalGrid[NDimension],
-    injected_fluid_saturation_grid: NDimensionalGrid[NDimension],
-    reference_pressure: float,
-    reference_viscosity: float,
-    pressure_decay_constant: float = 1e-8,
-    saturation_decay_constant: float = 1e-3,
-) -> NDimensionalGrid[NDimension]:
-    """
-    Computes a N-Dimensional array of pressure and saturation-dependent displaced fluid (e.g oil) viscosities
-    due to Injected fluid (e.g, CO₂) dissolution using an exponential decay model.
-
-    Useful when simulating how the viscosity of the displaced fluid changes with both pressure and saturation
-    of the injected fluid. Especially relevant in miscible displacement scenarios, where the dissolution of the injected fluid
-    into the displaced fluid affects its viscosity.
-
-    If only pressure effects are to be considered, use `build_pressure_dependent_viscosity_grid` instead.
-
-    The model is defined as:
-
-        μ(P, S_i) = μ_ref * exp(-k_p * (P - P_ref)) * (1 + k_s * S_i)
-
-    where:
-        - μ(P, S_i) is the viscosity at pressure, P and saturation, S_i of the injected fluid
-        - μ_ref is the viscosity at reference pressure, P_ref
-        - k_p is a decay constant that controls how fast viscosity changes with pressure
-        - k_s is a decay constant that controls how fast viscosity changes with saturation or miscibility
-        - S_i is the saturation of the injected fluid (fraction)
-        - P is the current pressure
-        - P_ref is the reference pressure where viscosity is known
-
-    :param pressure_grid: N-Dimensional array of current reservoir pressures (psi)
-    :param injected_fluid_saturation_grid: N-Dimensional array of saturation values of the injected fluid (fraction)
-    :param reference_pressure: Initial reservoir pressure (psi) where viscosity is known.
-    :param reference_viscosity: Displaced fluid viscosity at reference pressure (cP).
-        Usually, this is the viscosity of the displaced fluid at initial conditions.
-
-    :param pressure_decay_constant: Empirical constant controlling how fast viscosity changes with pressure, exponentially
-    :param saturation_decay_constant: Empirical constant controlling how fast viscosity changes with saturation or miscibility, exponentially
-    :return: N-Dimensional array of viscosity values (cP) for the displaced fluid
-    """
-    delta_p = pressure_grid - reference_pressure
-    pressure_decay = np.exp(-pressure_decay_constant * delta_p)
-    saturation_decay = 1 + (saturation_decay_constant * injected_fluid_saturation_grid)
-    viscosity_grid = (reference_viscosity * pressure_decay) * saturation_decay
-    return typing.cast(
-        NDimensionalGrid[NDimension],
-        np.clip(viscosity_grid, 1e-5, reference_viscosity),  # enforce lower bound
-    )
-
-
 def build_three_phase_capillary_pressure_grids(
     water_saturation_grid: NDimensionalGrid[NDimension],
     gas_saturation_grid: NDimensionalGrid[NDimension],
@@ -516,12 +445,12 @@ def build_three_phase_capillary_pressure_grids(
         where each grid is a N-Dimensional numpy array of capillary pressures (psi).
     """
     oil_water_capillary_pressure_grid = build_uniform_grid(
-        grid_dimension=water_saturation_grid.shape,
+        grid_shape=water_saturation_grid.shape,
         value=0.0,
         dtype=np.float32,
     )
     gas_oil_capillary_pressure_grid = build_uniform_grid(
-        grid_dimension=water_saturation_grid.shape,
+        grid_shape=water_saturation_grid.shape,
         value=0.0,
         dtype=np.float32,
     )
@@ -602,17 +531,17 @@ def build_three_phase_relative_mobilities_grids(
     :return: Tuple of (water_relative_mobility_grid, oil_relative_mobility_grid, gas_relative_mobility_grid) in 1/(cP).
     """
     water_relative_mobility_grid = build_uniform_grid(
-        grid_dimension=water_saturation_grid.shape,
+        grid_shape=water_saturation_grid.shape,
         value=0.0,
         dtype=np.float32,
     )
     oil_relative_mobility_grid = build_uniform_grid(
-        grid_dimension=water_saturation_grid.shape,
+        grid_shape=water_saturation_grid.shape,
         value=0.0,
         dtype=np.float32,
     )
     gas_relative_mobility_grid = build_uniform_grid(
-        grid_dimension=water_saturation_grid.shape,
+        grid_shape=water_saturation_grid.shape,
         value=0.0,
         dtype=np.float32,
     )

@@ -1,13 +1,13 @@
-import copy
 import functools
 import itertools
 import typing
+from typing_extensions import Self
 import attrs
 import numba
 import numpy as np
 from scipy.integrate import quad
 
-from sim3D.types import Orientation, WellLocation, FluidPhase
+from sim3D.types import Orientation, WellLocation, FluidPhase, HookFunc, ActionFunc
 from sim3D.properties import (
     compute_gas_density,
     compute_gas_viscosity,
@@ -20,9 +20,12 @@ __all__ = [
     "InjectionWell",
     "ProductionWell",
     "Wells",
-    "ScheduledEvent",
-    "InjectionWellScheduledEvent",
-    "ProductionWellScheduledEvent",
+    "WellEvent",
+    "well_time_hook",
+    "well_hooks",
+    "well_props_action",
+    "well_fluid_action",
+    "well_actions",
     "compute_well_index",
     "compute_3D_effective_drainage_radius",
     "compute_2D_effective_drainage_radius",
@@ -68,7 +71,7 @@ class Well(typing.Generic[WellLocation]):
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
-    schedule: typing.MutableMapping[int, "ScheduledEvent"] = attrs.field(factory=dict)
+    schedule: typing.Set["WellEvent[Self]"] = attrs.field(factory=set)
     """Schedule of events for the well, mapping time steps to scheduled events."""
     auto_clamp: bool = True
     """
@@ -122,24 +125,26 @@ class Well(typing.Generic[WellLocation]):
         axis = np.argmax(unit_vector)
         return Orientation(("x", "y", "z")[axis])
 
-    def update_schedule(self, event: "ScheduledEvent") -> None:
+    def update_schedule(self, event: "WellEvent[Self]", /) -> None:
         """
         Update the well schedule
 
-        :param event:
+        :param event: The event to be scheduled for the well. 
+            If the event has no hook, it will always be applied after each time step.
         """
-        self.schedule[event.time_step] = event
+        self.schedule.add(event)
 
-    def evolve(self, time_step: int) -> None:
+    def evolve(self, model_state: typing.Any) -> None:
         """
-        Evolve the well state to the next time step.
+        Evolve the well for the next time step.
 
-        :param time_step: The current time step in the simulation.
+        This method updates the state of the well based on its schedule.
+
+        :param model_state: The current model state in the simulation.
         """
-        if time_step in self.schedule:
-            event = self.schedule[time_step]
-            event.apply(self)
-        return None
+        for event in self.schedule:
+            if not event.hook or event.hook(self, model_state):
+                event.apply(self, model_state)
 
     def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
         """
@@ -338,8 +343,8 @@ class Well(typing.Generic[WellLocation]):
 WellT = typing.TypeVar("WellT", bound=Well)
 
 
-@attrs.define(slots=True)
-class ScheduledEvent(typing.Generic[WellT]):
+@attrs.define(slots=True, hash=True)
+class WellEvent(typing.Generic[WellT]):
     """
     Represents a scheduled event for a well at a specific time step.
 
@@ -348,28 +353,143 @@ class ScheduledEvent(typing.Generic[WellT]):
     The event is applied to the well at the specified time step.
     """
 
-    time_step: int
-    """The time step at which this schedule is applicable."""
-    bottom_hole_pressure: typing.Optional[float] = None
-    """Bottom-hole pressure for the well at this time step."""
-    skin_factor: typing.Optional[float] = None
-    """Skin factor for the well at this time step."""
-    is_active: typing.Optional[bool] = None
-    """Indicates whether the well is active at this time step."""
+    hook: typing.Optional[HookFunc[WellT, typing.Any]] = None
+    """A callable hook that takes the well and model state as arguments and returns a boolean indicating whether to apply the event."""
+    action: typing.Optional[ActionFunc[WellT, typing.Any]] = None
+    """A callable action that takes the well and model state as arguments and performs the event action."""
 
-    def apply(self, well: WellT) -> WellT:
+    def apply(self, well: WellT, model_state: typing.Any) -> WellT:
         """
         Apply this schedule to a well.
 
         :param well: The well to which this schedule will be applied.
+        :param model_state: The current model state in the simulation.
         """
-        if self.bottom_hole_pressure is not None:
-            well.bottom_hole_pressure = self.bottom_hole_pressure
-        if self.skin_factor is not None:
-            well.skin_factor = self.skin_factor
-        if self.is_active is not None:
-            well.is_active = self.is_active
+        if self.action is not None:
+            self.action(well, model_state)
         return well
+
+
+def well_time_hook(
+    time_step: typing.Optional[int] = None, time: typing.Optional[float] = None
+):
+    """
+    Create a hook function that triggers based on the simulation time step or time.
+
+    :param time_step: The specific time step at which to trigger the event.
+    :param time: The specific simulation time at which to trigger the event.
+    :return: A hook function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
+    """
+
+    if not (time_step or time):
+        raise ValueError("Either time_step or time must be provided.")
+
+    def hook(well: Well, model_state: typing.Any) -> bool:
+        if time_step is not None and model_state.time_step == time_step:
+            return True
+        if time is not None and model_state.time == time:
+            return True
+        return False
+
+    return hook
+
+
+def well_hooks(
+    *hooks: HookFunc[Well, typing.Any], on_any: bool = False
+) -> HookFunc[Well, typing.Any]:
+    """
+    Composes hook functions to be executed in sequence.
+
+    :param hooks: A sequence of hook functions to be chained.
+    :param on_any: If True, the composite hook returns True if any of the hooks return True.
+                   If False, it returns True only if all hooks return True.
+    :return: A composite hook function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
+    """
+
+    if not hooks:
+        raise ValueError("At least one hook must be provided to chain.")
+
+    def hook(well: Well, model_state: typing.Any) -> bool:
+        results = (h(well, model_state) for h in hooks)
+        return any(results) if on_any else all(results)
+
+    return hook
+
+
+def well_props_action(
+    bottom_hole_pressure: typing.Optional[float] = None,
+    skin_factor: typing.Optional[float] = None,
+    is_active: typing.Optional[bool] = None,
+) -> ActionFunc[Well, typing.Any]:
+    """
+    Create an action function that modifies well properties.
+
+    :param bottom_hole_pressure: New bottom-hole pressure for the well (psi).
+    :param skin_factor: New skin factor for the well.
+    :param is_active: New active status for the well (True for open, False for shut in).
+    :return: An action function that takes a well and model state as arguments and performs the property updates.
+    """
+
+    if not (bottom_hole_pressure or skin_factor or is_active is not None):
+        raise ValueError("At least one property must be provided to update.")
+
+    def action(well: Well, model_state: typing.Any) -> None:
+        if bottom_hole_pressure is not None:
+            if abs(bottom_hole_pressure) != bottom_hole_pressure:
+                raise ValueError(
+                    "Well bottom-hole flowing pressure must be a positive value."
+                )
+            well.bottom_hole_pressure = bottom_hole_pressure
+        if skin_factor is not None:
+            well.skin_factor = skin_factor
+        if is_active is not None:
+            well.is_active = is_active
+
+    return action
+
+
+def well_fluid_action(
+    injected_fluid: typing.Optional[WellFluid] = None,
+    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = None,
+) -> ActionFunc[Well, typing.Any]:
+    """
+    Create an action function that modifies well fluid properties.
+
+    :param injected_fluid: New fluid properties for injection wells.
+    :param produced_fluids: New fluid properties for production wells.
+    :return: An action function that takes a well and model state as arguments and performs the fluid property updates.
+    """
+
+    if not (injected_fluid or produced_fluids):
+        raise ValueError("At least one fluid property must be provided to update.")
+
+    def action(well: Well, model_state: typing.Any) -> None:
+        if isinstance(well, InjectionWell) and injected_fluid is not None:
+            well.injected_fluid = injected_fluid
+        if isinstance(well, ProductionWell) and produced_fluids is not None:
+            well.produced_fluids = produced_fluids
+
+    return action
+
+
+def well_actions(
+    *actions: ActionFunc[Well, typing.Any],
+) -> ActionFunc[Well, typing.Any]:
+    """
+    Composes action functions to be executed in sequence.
+
+    :param actions: A sequence of action functions to be chained.
+    :return: A composite action function that takes a well and model state as arguments and performs all the actions in sequence.
+    """
+
+    if not actions:
+        raise ValueError("At least one action must be provided to chain.")
+
+    def action(well: Well, model_state: typing.Any) -> None:
+        for act in actions:
+            act(well, model_state)
+
+    return action
 
 
 @attrs.define(slots=True)
@@ -476,62 +596,6 @@ class ProductionWell(Well[WellLocation]):
 
 InjectionWellT = typing.TypeVar("InjectionWellT", bound=InjectionWell)
 ProductionWellT = typing.TypeVar("ProductionWellT", bound=ProductionWell)
-
-
-@attrs.define(slots=True)
-class InjectionWellScheduledEvent(ScheduledEvent[InjectionWellT]):
-    """
-    Scheduled event for an injection well.
-
-    This includes the well's perforating interval, bottom-hole pressure, skin factor, and injected fluid.
-    """
-
-    injected_fluid: typing.Optional[WellFluid] = attrs.field(
-        default=None,
-        metadata={"description": "Injected fluid properties at this time step."},
-    )
-    """Injected fluid properties at this time step."""
-
-    def __attrs_post_init__(self) -> None:
-        """Ensure the injected fluid is properly initialized."""
-        self.injected_fluid = (
-            copy.deepcopy(self.injected_fluid) if self.injected_fluid else None
-        )
-
-    def apply(self, well: InjectionWellT) -> InjectionWellT:
-        """Apply this schedule to an injection well."""
-        well = super().apply(well)
-        if self.injected_fluid is not None:
-            well.injected_fluid = self.injected_fluid
-        return well
-
-
-@attrs.define(slots=True)
-class ProductionWellScheduledEvent(ScheduledEvent[ProductionWellT]):
-    """
-    Scheduled event for a production well.
-
-    This includes the well's perforating interval, bottom-hole pressure, skin factor, and produced fluids.
-    """
-
-    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = attrs.field(
-        default=None,
-        metadata={"description": "List of produced fluids at this time step."},
-    )
-    """Produced fluids properties at this time step."""
-
-    def __attrs_post_init__(self) -> None:
-        """Ensure the produced fluids are properly initialized."""
-        self.produced_fluids = (
-            copy.deepcopy(self.produced_fluids) if self.produced_fluids else None
-        )
-
-    def apply(self, well: ProductionWellT) -> ProductionWellT:
-        """Apply this schedule to a production well."""
-        well = super().apply(well)
-        if self.produced_fluids is not None:
-            well.produced_fluids = self.produced_fluids
-        return well
 
 
 def _expand_interval(
@@ -751,15 +815,16 @@ class Wells(typing.Generic[WellLocation]):
             [well.name for well in self.production_wells],
         )
 
-    def evolve(self, time_step: int) -> None:
+    def evolve(self, model_state) -> None:
         """
-        Evolve all wells in the reservoir model to the next time step.
+        Evolve all wells in the reservoir model for the next time step.
 
         This method updates the state of each well based on its schedule.
-        :param time_step: The current time step in the simulation.
+
+        :param model_state: The current model state in the simulation.
         """
         for well in itertools.chain(self.injection_wells, self.production_wells):
-            well.evolve(time_step)
+            well.evolve(model_state)
 
     def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
         """

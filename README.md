@@ -10,7 +10,7 @@ A simple 3D reservoir simulation tool for modeling multi-phase fluid flow in por
   - Adaptive time stepping
 - **Complex Boundary Conditions**: Flexible boundary condition system supporting various reservoir geometries
 - **Well Modeling**: Injection and production wells with proper phase mobility weighting
-- **Visualization**: Comprehensive plotting and analysis tools with plotly (pyvista in progress)
+- **Visualization**: Comprehensive plotting and analysis tools with plotly
 
 ## Project Structure
 

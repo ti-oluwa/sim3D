@@ -5,6 +5,7 @@ import logging
 import typing
 
 from attrs import define, evolve
+import attrs
 import numpy as np
 
 from sim3D.flow import (
@@ -12,7 +13,6 @@ from sim3D.flow import (
     evolve_pressure_explicitly,
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
-    evolve_saturation_implicitly,
 )
 from sim3D.grids import (
     build_gas_compressibility_factor_grid,
@@ -28,46 +28,22 @@ from sim3D.grids import (
     build_oil_compressibility_grid,
     build_oil_formation_volume_factor_grid,
     build_oil_viscosity_grid,
+    build_uniform_grid,
     build_water_bubble_point_pressure_grid,
     build_water_compressibility_grid,
     build_water_density_grid,
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
+from sim3D.states import ModelState
 from sim3D.static import FluidProperties, ReservoirModel
-from sim3D.types import NDimension, Options, ThreeDimensions
+from sim3D.types import Options, RateGrids, ThreeDimensions, _RateGridsProxy
 from sim3D.wells import Wells
 
 
-__all__ = [
-    "ModelState",
-    "run_simulation",
-]
+__all__ = ["run_simulation"]
 
 logger = logging.getLogger(__name__)
-
-
-@define(frozen=True, slots=True)
-class ModelState(typing.Generic[NDimension]):
-    """
-    Represents the state of the reservoir model at a specific time step during a simulation.
-    """
-
-    time_step: int
-    """The time step index of the model state."""
-    time_step_size: float
-    """The time step size in seconds."""
-    model: ReservoirModel[NDimension]
-    """The reservoir model at this state."""
-    wells: Wells[NDimension]
-    """The wells configuration at this state."""
-
-    @property
-    def time(self) -> float:
-        """
-        Returns the total simulation time at this state.
-        """
-        return self.time_step * self.time_step_size
 
 
 NEGATIVE_PRESSURE_ERROR = """
@@ -100,8 +76,20 @@ def run_simulation(
     wells: Wells[ThreeDimensions],
     options: Options,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
+    """
+    Runs a dynamic simulation on a 3D reservoir model with specified properties and wells.
+
+    The 3D simulation evolves pressure and saturation over time using the specified evolution scheme.
+    3D simulations are computationally intensive and may require significant memory and processing power.
+
+    :param model: The reservoir model containing grid, rock, and fluid properties.
+    :param wells: The wells configuration for the simulation.
+    :param options: Simulation run options and parameters.
+    :yield: Yields the model state at specified output intervals.
+    """
+    # Log initial simulation parameters
     logger.info("Starting 3D reservoir simulation")
-    logger.debug(f"Grid dimensions: {model.grid_dimension}")
+    logger.debug(f"Grid dimensions: {model.grid_shape}")
     logger.debug(f"Cell dimensions: {model.cell_dimension}")
     logger.debug(f"Evolution scheme: {options.evolution_scheme}")
     logger.debug(f"Time step size: {options.time_step_size} seconds")
@@ -115,7 +103,7 @@ def run_simulation(
     elevation_grid = model.get_elevation_grid(direction="downward")
 
     logger.debug("Checking well locations against grid dimensions")
-    wells.check_location(model.grid_dimension)
+    wells.check_location(model.grid_shape)
     wells = copy.deepcopy(wells)
 
     if (method := options.evolution_scheme.lower()) == "adaptive_explicit":
@@ -125,29 +113,23 @@ def run_simulation(
         logger.debug(
             f"Diffusion number threshold: {options.diffusion_number_threshold}"
         )
-    elif method == "explicit_implicit":
-        logger.debug("Using explicit pressure, implicit saturation evolution scheme")
-        evolve_pressure = evolve_pressure_explicitly
-        evolve_saturation = evolve_saturation_implicitly
     elif method == "implicit_explicit":
         logger.debug("Using implicit pressure, explicit saturation evolution scheme")
         evolve_pressure = evolve_pressure_implicitly
         evolve_saturation = evolve_saturation_explicitly
-    elif method == "fully_implicit":
-        logger.debug("Using fully implicit evolution scheme")
-        evolve_pressure = evolve_pressure_implicitly
-        evolve_saturation = evolve_saturation_implicitly
     else:
         logger.debug("Using fully explicit evolution scheme")
         evolve_pressure = evolve_pressure_explicitly
         evolve_saturation = evolve_saturation_explicitly
 
     time_step_size = options.time_step_size
-    initial_state = ModelState(
+    model_state = ModelState(
         time_step=0,
         time_step_size=time_step_size,
         model=model,
         wells=wells,
+        injection=None,
+        production=None,
     )
 
     boundary_conditions = model.boundary_conditions
@@ -162,7 +144,7 @@ def run_simulation(
 
     # Yield the Initial model state
     logger.debug("Yielding initial model state")
-    yield initial_state
+    yield model_state
 
     for time_step in range(1, int(num_of_time_steps + 1)):
         logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
@@ -233,6 +215,18 @@ def run_simulation(
 
         # Saturation evolution
         logger.debug("Computing saturation evolution...")
+        # Build grids to track production and injection at each time step
+        oil_injection_grid = build_uniform_grid(
+            model.grid_shape, value=0.0
+        )  # No initial injection
+        water_injection_grid = build_uniform_grid(model.grid_shape, value=0.0)
+        gas_injection_grid = build_uniform_grid(model.grid_shape, value=0.0)
+        oil_production_grid = build_uniform_grid(
+            model.grid_shape, value=0.0
+        )  # No initial production
+        water_production_grid = build_uniform_grid(model.grid_shape, value=0.0)
+        gas_production_grid = build_uniform_grid(model.grid_shape, value=0.0)
+        # Wrap the grids in a proxy to allow item assignment
         saturation_evolution_result = evolve_saturation(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -245,6 +239,16 @@ def run_simulation(
             rock_fluid_properties=rock_fluid_properties,
             wells=wells,
             options=options,
+            injection_grid=_RateGridsProxy(
+                oil=oil_injection_grid,
+                water=water_injection_grid,
+                gas=gas_injection_grid,
+            ),
+            production_grid=_RateGridsProxy(
+                oil=oil_production_grid,
+                water=water_production_grid,
+                gas=gas_production_grid,
+            ),
         )
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
             saturation_evolution_result.value
@@ -270,9 +274,21 @@ def run_simulation(
                 time_step=time_step,
                 time_step_size=time_step_size,
                 # Record the model state with updated fluid properties
-                model=evolve(model, fluid_properties=copy.deepcopy(fluid_properties)),
+                model=evolve(model, fluid_properties=fluid_properties),
                 # Capture the current state of the wells
                 wells=copy.deepcopy(wells),
+                injection=RateGrids(
+                    oil=oil_injection_grid,
+                    water=water_injection_grid,
+                    gas=gas_injection_grid,
+                ),
+                # The production rates are negative in the evolution
+                # so we negate them to report positive production values
+                production=RateGrids(
+                    oil=-oil_production_grid,
+                    water=-water_production_grid,
+                    gas=-gas_production_grid,
+                ),
             )
             yield model_state
 
@@ -283,7 +299,7 @@ def run_simulation(
             break
         # Update the wells for the next time step
         logger.debug("Updating wells for next time step")
-        wells.evolve(time_step=time_step)
+        wells.evolve(model_state)
 
     # Log completion outside the loop to avoid unbound variable issues
     final_time_step = min(int(num_of_time_steps), options.max_iterations)

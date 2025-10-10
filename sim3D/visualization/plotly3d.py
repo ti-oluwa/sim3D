@@ -1,8 +1,5 @@
 """
-Plotly-based 3D Visualization Suite for Reservoir Simulation
-
-This module provides a comprehensive visualization factory for 3D reservoir simulation data,
-including interactive 3D plots, volume rendering, cross-sections, and animations.
+Plotly-based 3D Visualization Suite for Reservoir Simulation Data and Results.
 """
 
 from abc import ABC, abstractmethod
@@ -16,11 +13,10 @@ import typing
 from attrs import asdict
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from typing_extensions import TypedDict
 
-from sim3D.grids import coarsen_grid
 from sim3D.dynamic import ModelState
+from sim3D.grids import coarsen_grid
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
@@ -36,24 +32,6 @@ from sim3D.visualization.base import (
 )
 
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "PlotType",
-    "PlotConfig",
-    "CameraPosition",
-    "Lighting",
-    "LightPosition",
-    "BaseRenderer",
-    "VolumeRenderer",
-    "IsosurfaceRenderer",
-    "CellBlockRenderer",
-    "Scatter3DRenderer",
-    "Label",
-    "LabelCoordinate",
-    "Labels",
-    "ModelVisualizer3D",
-    "viz",
-]
 
 
 class PlotType(str, Enum):
@@ -118,7 +96,7 @@ class LightPosition(TypedDict):
 
 
 DEFAULT_CAMERA_POSITION = CameraPosition(
-    eye=dict(x=1.5, y=1.5, z=1.0),
+    eye=dict(x=1.5, y=1.5, z=1.25),
     center=dict(x=0, y=0, z=0),
     up=dict(x=0, y=0, z=1),
 )
@@ -141,7 +119,7 @@ DEFAULT_LIGHTING = Lighting(
 
 @dataclass(frozen=True)
 class PlotConfig:
-    """Configuration for 3D plotting."""
+    """Configuration for 3D plots."""
 
     width: int = 1200
     """Plot width in pixels. Larger values provide higher resolution but may impact performance."""
@@ -2441,12 +2419,9 @@ PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
 _missing = object()
 
 
-class ModelVisualizer3D:
+class ModelVisualizer:
     """
-    3D visualizer for reservoir model simulation results/data.
-
-    This class provides a comprehensive suite of 3D rendering capabilities
-    specifically designed for reservoir engineering workflows.
+    3D visualizer for reservoir model state and properties.
     """
 
     default_dashboard_title: str = "Reservoir Model Properties"
@@ -2585,7 +2560,7 @@ class ModelVisualizer3D:
             z_slice_obj,
         )
 
-    def _get_property(
+    def _get_state(
         self, model_state: ModelState[ThreeDimensions], name: str
     ) -> ThreeDimensionalGrid:
         """
@@ -2593,18 +2568,18 @@ class ModelVisualizer3D:
 
         :param model_state: The model state containing reservoir model
         :param name: Name of the property to extract as defined by the `PropertyMetadata.name`
-        :return: A three-dimensional numpy array containing the property data
+        :return: A three-dimensional numpy array containing the state data
         :raises AttributeError: If property is not found in reservoir model properties
         :raises TypeError: If property is not a numpy array
         """
-        model_properties = asdict(model_state.model, recurse=False)
+        state = asdict(model_state, recurse=False)
         name_parts = name.split(".")
         data = None
         if len(name_parts) == 1:
-            data = model_properties.get(name_parts[0], _missing)
+            data = state.get(name_parts[0], _missing)
         else:
             # Nested property access (e.g., "permeability.x")
-            data = model_properties
+            data = state
             for part in name_parts:
                 if isinstance(data, Mapping):
                     value = data.get(part, _missing)
@@ -2614,13 +2589,11 @@ class ModelVisualizer3D:
                 if value is not _missing:
                     data = value
                     continue
-                raise AttributeError(
-                    f"Property '{name}' not found in model properties."
-                )
+                raise AttributeError(f"Property '{name}' not found in model state.")
 
         if data is None or data is _missing:
             raise AttributeError(
-                f"Property '{name}' not in model properties or Property value is invalid."
+                f"Property '{name}' not found on model state or property value is invalid."
             )
         elif isinstance(data, (list, tuple)):
             data = np.array(data, dtype=np.float32)
@@ -2640,7 +2613,7 @@ class ModelVisualizer3D:
 
         :param custom_title: Custom title provided by user
         :param plot_type: Type of plot being created
-        :param metadata: Property metadata
+        :param metadata: Data metadata
         :return: Final title to use
         """
         # If the custom title is providd and it is not some kind of suffix (starts with "-"), use it directly
@@ -2675,7 +2648,7 @@ class ModelVisualizer3D:
         **kwargs,
     ) -> go.Figure:
         """
-        Plot a specific fluid property in 3D with optional data slicing.
+        Plot a specific model property available on the model state in 3D with optional data slicing.
 
         :param model_state: The model state containing the reservoir model data
         :param property: Name of the property to plot (from `PropertyRegistry`)
@@ -2712,7 +2685,7 @@ class ModelVisualizer3D:
         ```
         """
         metadata = self.registry[property]
-        data = self._get_property(model_state, metadata.name)
+        data = self._get_state(model_state, metadata.name)
 
         # Get original cell dimensions and height grid
         cell_dimension = model_state.model.cell_dimension
@@ -2793,158 +2766,13 @@ class ModelVisualizer3D:
         fig.update_layout(**layout_updates)
         return fig
 
-    def make_plots(
-        self,
-        model_state: ModelState[ThreeDimensions],
-        properties: typing.Sequence[str],
-        plot_type: typing.Optional[PlotType] = None,
-        figure: typing.Optional[go.Figure] = None,
-        subplot_columns: int = 2,
-        width: typing.Optional[int] = None,
-        height: typing.Optional[int] = None,
-        title: typing.Optional[str] = None,
-        x_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        y_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        z_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        labels: typing.Optional["Labels"] = None,
-        **kwargs: typing.Any,
-    ) -> go.Figure:
-        """
-        Create a subplot figure with multiple properties.
-
-        :param model_state: The model state containing the reservoir data
-        :param properties: Sequence of property names to plot
-        :param plot_type: Type of 3D plot to create for each property
-        :param figure: Optional existing figure to add subplots to
-        :param subplot_columns: Number of columns in the subplot grid
-        :param width: Custom width for the entire subplot figure
-        :param height: Custom height for the entire subplot figure
-        :param title: Custom title for the entire subplot figure
-        :param x_slice: X dimension slice specification:
-            - int: Single index (e.g., 5 for cells[5:6, :, :])
-            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
-            - slice: Full slice object (e.g., slice(10, 20, 2))
-            - None: Use full dimension
-        :param y_slice: Y dimension slice specification (same format as x_slice)
-        :param z_slice: Z dimension slice specification (same format as x_slice)
-        :param labels: Optional collection of labels to add to each subplot
-        :param kwargs: Additional parameters for individual property plots. This will be
-            passed to the plotter's plot method, allowing customization of each subplot.
-        :return: Plotly figure with multiple property subplots
-        """
-        n_props = len(properties)
-        subplot_rows = (n_props + subplot_columns - 1) // subplot_columns
-
-        # Create subplots
-        fig = make_subplots(
-            rows=subplot_rows,
-            cols=subplot_columns,
-            specs=[
-                [{"type": "scene"} for _ in range(subplot_columns)]
-                for _ in range(subplot_rows)
-            ],
-            subplot_titles=[self.registry[prop].display_name for prop in properties],
-            figure=figure,
-        )
-
-        for i, prop in enumerate(properties):
-            row = (i // subplot_columns) + 1
-            col = (i % subplot_columns) + 1
-
-            # Get individual plot - no custom size here since it's a subplot
-            individual_fig = self.make_plot(
-                model_state,
-                prop,
-                plot_type=plot_type,
-                x_slice=x_slice,
-                y_slice=y_slice,
-                z_slice=z_slice,
-                labels=labels,
-                **kwargs,
-            )
-            # Add traces to subplot
-            for trace in individual_fig.data:
-                fig.add_trace(trace, row=row, col=col)
-
-        # Determine final dimensions and title
-        final_width = width or (self.config.width * subplot_columns)
-        final_height = height or (self.config.height * subplot_rows)
-        final_title = title or "Reservoir Properties"
-
-        fig.update_layout(
-            title=final_title,
-            width=final_width,
-            height=final_height,
-        )
-        return fig
-
-    def make_dashboard(
-        self,
-        model_state: ModelState[ThreeDimensions],
-        properties: typing.Sequence[str],
-        plot_type: typing.Optional[PlotType] = None,
-        width: typing.Optional[int] = None,
-        height: typing.Optional[int] = None,
-        title: typing.Optional[str] = None,
-        x_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        y_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        z_slice: typing.Optional[
-            typing.Union[int, slice, typing.Tuple[int, int]]
-        ] = None,
-        labels: typing.Optional["Labels"] = None,
-        **kwargs: typing.Any,
-    ) -> go.Figure:
-        """
-        Create a comprehensive dashboard with key reservoir properties.
-
-        :param model_state: The model state containing the reservoir data
-        :param properties: Sequence of key properties to display
-        :param plot_type: Type of 3D plot to create for each property
-        :param width: Custom width for the dashboard
-        :param height: Custom height for the dashboard
-        :param title: Custom title for the dashboard
-        :param x_slice: X dimension slice specification:
-            - int: Single index (e.g., 5 for cells[5:6, :, :])
-            - tuple: Range (e.g., (10, 20) for cells[10:20, :, :])
-            - slice: Full slice object (e.g., slice(10, 20, 2))
-            - None: Use full dimension
-        :param y_slice: Y dimension slice specification (same format as x_slice)
-        :param z_slice: Z dimension slice specification (same format as x_slice)
-        :param labels: Optional collection of labels to add to the dashboard
-        :param kwargs: Additional parameters for individual property plots.
-        :return: Dashboard figure with multiple reservoir property visualizations
-        """
-        return self.make_plots(
-            model_state,
-            properties=properties,
-            plot_type=plot_type,
-            subplot_columns=3,
-            width=width,
-            height=height,
-            title=title or type(self).default_dashboard_title,
-            x_slice=x_slice,
-            y_slice=y_slice,
-            z_slice=z_slice,
-            labels=labels,
-            **kwargs,
-        )
-
     def animate(
         self,
         model_states: typing.Sequence[ModelState[ThreeDimensions]],
         property: str,
         plot_type: typing.Optional[PlotType] = None,
         frame_duration: int = 200,
+        step_size: int = 1,
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
         title: typing.Optional[str] = None,
@@ -2967,6 +2795,7 @@ class ModelVisualizer3D:
         :param property: Name of the property to animate
         :param plot_type: Type of 3D plot for animation frames
         :param frame_duration: Duration of each frame in milliseconds
+        :param step_size: Step size to skip frames for performance (1 = every frame)
         :param width: Custom width for the animation
         :param height: Custom height for the animation
         :param title: Custom title for the animation
@@ -2990,13 +2819,13 @@ class ModelVisualizer3D:
         if "cmin" not in kwargs:
             # Add cmin/cmax to kwargs for consistent color mapping across frames
             data_list = [
-                self._get_property(state, metadata.name) for state in model_states
+                self._get_state(state, metadata.name) for state in model_states
             ]
             cmin = float(np.nanmin([np.nanmin(data) for data in data_list]))
             cmax = float(np.nanmax([np.nanmax(data) for data in data_list]))
             kwargs["cmin"] = cmin
             kwargs["cmax"] = cmax
-            print(f"Animation cmin: {cmin}, cmax: {cmax}")
+            logger.debug(f"Animation cmin: {cmin}, cmax: {cmax}")
 
         # Create base figure from first state
         base_fig = self.make_plot(
@@ -3014,7 +2843,9 @@ class ModelVisualizer3D:
 
         # Create frames for animation - ensure we get ALL states
         frames = []
-        for i, state in enumerate(model_states):
+        state_count = len(model_states)
+        for i in range(0, state_count, step_size):
+            state = model_states[i]
             frame_fig = self.make_plot(
                 state,
                 property=property,
@@ -3150,7 +2981,7 @@ class ModelVisualizer3D:
                         "visible": True,
                         "xanchor": "right",
                     },
-                    "transition": {"duration": 300, "easing": "cubic-in-out"},
+                    "transition": {"duration": 30, "easing": "cubic-in-out"},
                     "pad": {"b": 10, "t": 50},
                     "len": 0.9,
                     "x": 0.1,
@@ -3179,5 +3010,5 @@ class ModelVisualizer3D:
         return base_fig
 
 
-viz = ModelVisualizer3D()
-"""Default 3D visualizer instance for reservoir models."""
+viz = ModelVisualizer()
+"""Default 3D visualizer instance for reservoir model states."""

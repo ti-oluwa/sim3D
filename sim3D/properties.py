@@ -41,6 +41,8 @@ from sim3D.constants import (
     STANDARD_TEMPERATURE_IMPERIAL,
     STANDARD_WATER_DENSITY,
     STANDARD_WATER_DENSITY_IMPERIAL,
+    ACRE_FT_TO_BBL,
+    ACRE_FT_TO_FT3,
 )
 from sim3D.types import FluidMiscibility, NDimension, NDimensionalGrid, WettabilityType
 
@@ -2629,3 +2631,205 @@ def estimate_bubble_point_pressure_standing(
 
     bubble_point_pressure = solver.root
     return bubble_point_pressure
+
+
+@numba.njit(cache=True)
+def compute_hydrocarbon_in_place(
+    area: float,
+    thickness: float,
+    porosity: float,
+    phase_saturation: float,
+    gas_to_oil_ratio: float = 0.0,
+    water_saturation: float = 0.0,
+    formation_volume_factor: float = 1.0,
+    net_to_gross_ratio: float = 1.0,
+    hydrocarbon_type: typing.Literal["oil", "gas"] = "oil",
+) -> float:
+    """
+    Computes the hydrocarbon in place (HCP) in stock tank barrels (STB) or standard cubic feet (SCF)
+    using the volumetric method.
+
+    The formula for oil in place (OIP) is:
+        OIP = 7758 * A * h * φ * S_o * N/G / B_o
+
+    The formula for gas in place (GIP) is:
+        GIP = 43560 * A * h * φ * S_g * N/G / B_g + R_s * OIP
+
+    S_o = 1 - S_w - S_g (oil saturation)
+    S_g = 1 - S_w - S_o (gas saturation)
+
+    where:
+    - OIP is the oil in place in stock tank barrels (STB).
+    - GIP is the gas in place in standard cubic feet (SCF).
+    - A is the area in acres.
+    - h is the thickness in feet.
+    - φ is the porosity (fraction).
+    - S_o is the oil saturation (fraction).
+    - B_o is the formation volume factor for oil (RB/STB).
+    - S_g is the gas saturation (fraction).
+    - B_g is the formation volume factor for gas (RB/SCF).
+    - R_s is the solution gas-oil ratio (SCF/STB).
+    - N/G is the net-to-gross ratio (fraction).
+    - 7758 is the conversion factor from acre-feet to stock tank barrels.
+    - 43560 is the conversion factor from acre-feet to cubic feet.
+
+    :param area: Area in acres.
+    :param thickness: Thickness in feet.
+    :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
+    :param phase_saturation: Phase saturation as a fraction (e.g., 0.8 for 80%).
+    :param formation_volume_factor: Formation volume factor (RB/STB or RB/SCF).
+    :param gas_to_oil_ratio: Gas-to-oil ratio (SCF/STB) for gas in place calculation.
+    :param water_saturation: Water saturation as a fraction (e.g., 0.2 for 20%). For gas in place calculation.
+    :param hydrocarbon_type: Type of hydrocarbon ("oil" or "gas").
+    :return: Hydrocarbon in place (OIP in STB or GIP in SCF) if formation_volume_factor is not 1.0.
+        Else returns Hydrocarbon in Place (HCP) in bbl or ft³.
+    """
+    if area <= 0 or thickness <= 0:
+        raise ValueError("Area and thickness must be positive values.")
+    if not (0 < porosity < 1):
+        raise ValueError("Porosity must be a fraction between 0 and 1.")
+    if not (0 < phase_saturation < 1):
+        raise ValueError("Phase saturation must be a fraction between 0 and 1.")
+    if formation_volume_factor <= 0:
+        raise ValueError("Formation volume factor must be a positive value.")
+    if hydrocarbon_type not in {"oil", "gas"}:
+        raise ValueError("Hydrocarbon type must be either 'oil' or 'gas'.")
+
+    if hydrocarbon_type == "oil":
+        # Oil in Place (OIP) calculation
+        oip = (
+            ACRE_FT_TO_BBL
+            * area
+            * thickness
+            * porosity
+            * phase_saturation
+            * net_to_gross_ratio
+            / formation_volume_factor
+        )
+        return oip
+
+    elif hydrocarbon_type == "gas":
+        # Gas in Place (GIP) calculation
+        gip_dry = (
+            ACRE_FT_TO_FT3
+            * area
+            * thickness
+            * porosity
+            * phase_saturation
+            * net_to_gross_ratio
+            / formation_volume_factor
+        )
+        # Add dissolved gas contribution: R_s * OIP
+        oip_equivalent = (
+            ACRE_FT_TO_BBL
+            * area
+            * thickness
+            * porosity
+            * (
+                1 - phase_saturation - water_saturation
+            )  # Assuming oil saturation is (1 - S_w - S_g)
+            * net_to_gross_ratio
+            / formation_volume_factor
+        )
+        gip = gip_dry + (gas_to_oil_ratio * oip_equivalent)
+        return gip
+
+    raise ValueError("Invalid hydrocarbon type specified.")
+
+
+def compute_oil_in_place(
+    area: float,
+    thickness: float,
+    porosity: float,
+    oil_saturation: float,
+    oil_formation_volume_factor: float = 1.0,
+    net_to_gross_ratio: float = 1.0,
+) -> float:
+    """
+    Computes the oil in place (OIP) in stock tank barrels (STB)
+    using the volumetric method.
+
+    The formula for oil in place (OIP) is:
+        OIP = 7758 * A * h * φ * S_o * N/G / B_o
+
+    where:
+    - OIP is the oil in place in stock tank barrels (STB).
+    - A is the area in acres.
+    - h is the thickness in feet.
+    - φ is the porosity (fraction).
+    - S_o is the oil saturation (fraction).
+    - B_o is the formation volume factor for oil (RB/STB).
+    - N/G is the net-to-gross ratio (fraction).
+    - 7758 is the conversion factor from acre-feet to stock tank barrels.
+
+    :param area: Area in acres.
+    :param thickness: Thickness in feet.
+    :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
+    :param oil_saturation: Oil saturation as a fraction (e.g., 0.8 for 80%).
+    :param oil_formation_volume_factor: Formation volume factor for oil (RB/STB).
+    :param net_to_gross_ratio: Net-to-gross ratio as a fraction (e.g., 0.9 for 90%).
+    :return: Oil in place (OIP) in stock tank barrels (STB) if formation_volume_factor is not 1.0.
+        Else returns Oil in Place (OIP) in bbls.
+    """
+    return compute_hydrocarbon_in_place(
+        area=area,
+        thickness=thickness,
+        porosity=porosity,
+        phase_saturation=oil_saturation,
+        formation_volume_factor=oil_formation_volume_factor,
+        net_to_gross_ratio=net_to_gross_ratio,
+        hydrocarbon_type="oil",
+    )
+
+
+def compute_gas_in_place(
+    area: float,
+    thickness: float,
+    porosity: float,
+    gas_saturation: float,
+    gas_formation_volume_factor: float = 1.0,
+    gas_to_oil_ratio: float = 0.0,
+    water_saturation: float = 0.0,
+    net_to_gross_ratio: float = 1.0,
+) -> float:
+    """
+    Computes the gas in place (GIP) in standard cubic feet (SCF)
+    using the volumetric method.
+
+    The formula for gas in place (GIP) is:
+        GIP = 43560 * A * h * φ * S_g * N/G / B_g + R_s * OIP
+
+    where:
+    - GIP is the gas in place in standard cubic feet (SCF).
+    - A is the area in acres.
+    - h is the thickness in feet.
+    - φ is the porosity (fraction).
+    - S_g is the gas saturation (fraction).
+    - B_g is the formation volume factor for gas (RB/SCF).
+    - R_s is the solution gas-oil ratio (SCF/STB).
+    - N/G is the net-to-gross ratio (fraction).
+    - OIP is the oil in place (STB).
+    - 43560 is the conversion factor from acre-feet to cubic feet.
+
+    :param area: Area in acres.
+    :param thickness: Thickness in feet.
+    :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
+    :param gas_saturation: Gas saturation as a fraction (e.g., 0.8 for 80%).
+    :param gas_formation_volume_factor: Formation volume factor for gas (RB/SCF).
+    :param gas_to_oil_ratio: Gas-to-oil ratio (SCF/STB) for dissolved gas contribution.
+    :param water_saturation: Water saturation as a fraction (e.g., 0.2 for 20%).
+    :param net_to_gross_ratio: Net-to-gross ratio as a fraction (e.g., 0.9 for 90%).
+    :return: Gas in place (GIP) in standard cubic feet (SCF) if formation_volume_factor is not 1.0.
+        Else returns Gas in Place (GIP) in ft³.
+    """
+    return compute_hydrocarbon_in_place(
+        area=area,
+        thickness=thickness,
+        porosity=porosity,
+        phase_saturation=gas_saturation,
+        formation_volume_factor=gas_formation_volume_factor,
+        gas_to_oil_ratio=gas_to_oil_ratio,
+        water_saturation=water_saturation,
+        net_to_gross_ratio=net_to_gross_ratio,
+        hydrocarbon_type="gas",
+    )

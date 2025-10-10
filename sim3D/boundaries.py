@@ -1,8 +1,9 @@
-"""Utils for defining boundary conditions for a N-Dimensional reservoir model grid."""
+"""Boundary condition implementations for 2D/3D grids."""
 
 import typing
 import enum
 import attrs
+import copy
 from collections import defaultdict
 import numpy as np
 
@@ -297,6 +298,7 @@ class BoundaryCondition(typing.Protocol):
         :param metadata: Optional metadata for advanced boundary conditions
         """
         ...
+
 
 @attrs.define(slots=True, frozen=True)
 class NoFlowBoundary(typing.Generic[NDimension]):
@@ -898,13 +900,13 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
     x_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the right face (x+)."""
     y_minus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
-    """Boundary condition for the bottom face (y-)."""
+    """Boundary condition for the front face (y-)."""
     y_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
-    """Boundary condition for the top face (y+)."""
+    """Boundary condition for the back face (y+)."""
     z_minus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
-    """Boundary condition for the front face (z-)."""
+    """Boundary condition for the bottom face (z-)."""
     z_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
-    """Boundary condition for the back face (z+)."""
+    """Boundary condition for the top face (z+)."""
 
     def apply(
         self,
@@ -1083,4 +1085,48 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
 
         :param conditions: Optional mapping of property names to their respective boundary conditions.
         """
-        super().__init__(factory, conditions or {})
+        super().__init__(factory)
+        if conditions:
+            self.update(conditions)
+        self.factory = factory
+
+    def __reduce_ex__(self, protocol):
+        """
+        Support for pickling/copying.
+
+        :return tuple: (callable, args, state) for reconstruction
+        """
+        return (self.__class__, (dict(self), self.factory), None, None, None)
+
+    def __deepcopy__(self, memo):
+        """
+        Custom deep copy implementation for better control.
+
+        Ensures the factory and all boundary conditions are properly copied.
+        """
+        # Create new instance without calling __init__ yet
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+
+        # Try to deep copy the factory, fall back to shallow copy if not possible
+        try:
+            new_factory = copy.deepcopy(self.factory, memo)
+        except (TypeError, AttributeError):
+            # Factory might be a lambda or non-picklable function
+            new_factory = self.factory
+
+        # Deep copy all the boundary conditions
+        new_conditions = {k: copy.deepcopy(v, memo) for k, v in self.items()}
+
+        # Initialize the new instance
+        result.__init__(conditions=new_conditions, factory=new_factory)
+
+        # Deep copy any other instance attributes that might have been added
+        for k, v in self.__dict__.items():
+            if k not in ("factory", "default_factory"):
+                setattr(result, k, copy.deepcopy(v, memo))
+        return result
+
+    def __copy__(self):
+        return self.__class__(conditions=dict(self), factory=self.factory)
