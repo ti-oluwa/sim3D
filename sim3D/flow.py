@@ -234,9 +234,12 @@ def _compute_explicit_pressure_pseudo_flux_from_neighbour(
         oil_pressure_difference - oil_water_capillary_pressure_difference
     )
     # Gas pressure difference is calculated as:
+    gas_oil_capillary_pressure_difference = (
+        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
+    )
     gas_pressure_difference = (
-        neighbour_oil_pressure + neighbour_gas_oil_capillary_pressure
-    ) - (cell_oil_pressure + cell_gas_oil_capillary_pressure)
+        oil_pressure_difference + gas_oil_capillary_pressure_difference
+    )
 
     if elevation_grid is not None:
         # Calculate the elevation difference between the neighbour and current cell
@@ -514,7 +517,6 @@ def evolve_pressure_explicitly(
     )
 
     # Compute phase mobilities (kr / mu) for each cell
-    # `build_three_phase_relative_mobilities_grids` should handle `k_abs * kr / mu` for each phase.
     (
         water_relative_mobility_grid,
         oil_relative_mobility_grid,
@@ -535,14 +537,14 @@ def evolve_pressure_explicitly(
 
     # Clamp relative mobility grids to avoid numerical issues
     # This ensures mobilities are never zero or negative (for numerical stability)
-    water_relative_mobility_grid = np.maximum(
-        water_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
+        water_relative_mobility_grid
     )
-    oil_relative_mobility_grid = np.maximum(
-        oil_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
+        oil_relative_mobility_grid
     )
-    gas_relative_mobility_grid = np.maximum(
-        gas_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
+        gas_relative_mobility_grid
     )
 
     # Compute mobility grids for x, y, z directions
@@ -1071,8 +1073,8 @@ def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
     )
     # Gas pressure difference is calculated as:
     gas_pressure_difference = (
-        neighbour_oil_pressure + neighbour_gas_oil_capillary_pressure
-    ) - (cell_oil_pressure + cell_gas_oil_capillary_pressure)
+        oil_pressure_difference + gas_oil_capillary_pressure_difference
+    )
 
     if elevation_grid is not None:
         # Calculate the elevation difference between the neighbour and current cell
@@ -1335,14 +1337,14 @@ def evolve_pressure_implicitly(
 
     # Clamp relative mobility grids to avoid numerical issues
     # This ensures mobilities are never zero or negative (for numerical stability)
-    water_relative_mobility_grid = np.maximum(
-        water_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
+        water_relative_mobility_grid
     )
-    oil_relative_mobility_grid = np.maximum(
-        oil_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
+        oil_relative_mobility_grid
     )
-    gas_relative_mobility_grid = np.maximum(
-        gas_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
+        gas_relative_mobility_grid
     )
 
     # Compute mobility grids for x, y, z directions
@@ -1660,8 +1662,8 @@ def evolve_pressure_implicitly(
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
-                    phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
+                    phase_mobility = gas_relative_mobility_grid[i, j, k]
+                    fluid_compressibility = gas_compressibility_grid[i, j, k]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
                     fluid_compressibility = water_compressibility_grid[i, j, k]
@@ -1691,6 +1693,7 @@ def evolve_pressure_implicitly(
                     fluid_compressibility=fluid_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
                 )
+
                 if production_rate > 0.0:
                     if production_well.auto_clamp:
                         production_rate = 0.0
@@ -1731,6 +1734,13 @@ def evolve_pressure_implicitly(
     )
     new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
     return EvolutionResult(new_pressure_grid, scheme="implicit")
+
+
+v_compute_diffusion_number = np.vectorize(
+    compute_diffusion_number,
+    excluded=["time_step_size", "cell_size"],
+    otypes=[np.float32],
+)
 
 
 def evolve_pressure_adaptively(
@@ -1797,17 +1807,6 @@ def evolve_pressure_adaptively(
     oil_compressibility_grid = fluid_properties.oil_compressibility_grid
     gas_compressibility_grid = fluid_properties.gas_compressibility_grid
 
-    # Convert water and oil formation volume factors from bbl/STB to ft³/STB, since reservoir
-    # Volumes are treated in ft³ and flow rates are in ft³/day.
-    # From bbl/STB to ft³/STB: multiply by 5.615 (1 bbl = 5.615 ft³)
-    water_formation_volume_factor_grid = (
-        fluid_properties.water_formation_volume_factor_grid * BBL_TO_FT3
-    )
-    oil_formation_volume_factor_grid = (
-        fluid_properties.oil_formation_volume_factor_grid * BBL_TO_FT3
-    )
-    gas_formation_volume_factor_grid = fluid_properties.gas_formation_volume_factor_grid
-
     # Determine grid dimensions and cell sizes
     cell_size_x, cell_size_y = cell_dimension
     min_cell_thickness = typing.cast(float, np.min(thickness_grid))
@@ -1851,65 +1850,65 @@ def evolve_pressure_adaptively(
 
     # Clamp relative mobility grids to avoid numerical issues
     # This ensures mobilities are never zero or negative (for numerical stability)
-    water_relative_mobility_grid = np.maximum(
-        water_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
+        water_relative_mobility_grid
     )
-    oil_relative_mobility_grid = np.maximum(
-        oil_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
+        oil_relative_mobility_grid
     )
-    gas_relative_mobility_grid = np.maximum(
-        gas_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
+        gas_relative_mobility_grid
     )
 
     # Compute mobility grids for x, y, z directions
-    # λ_x = k_abs * (kr / mu) / B_x. Where B_x is the formation volume factor of the phase
+    # λ_x = k_abs * (kr / mu) * 0.001127 (mD/cP to ft²/psi.day)
     water_mobility_grid_x = (
         absolute_permeability.x
         * water_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / water_formation_volume_factor_grid
+    )
     oil_mobility_grid_x = (
         absolute_permeability.x
         * oil_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / oil_formation_volume_factor_grid
+    )
     gas_mobility_grid_x = (
         absolute_permeability.x
         * gas_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / gas_formation_volume_factor_grid
+    )
 
     water_mobility_grid_y = (
         absolute_permeability.y
         * water_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / water_formation_volume_factor_grid
+    )
     oil_mobility_grid_y = (
         absolute_permeability.y
         * oil_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / oil_formation_volume_factor_grid
+    )
     gas_mobility_grid_y = (
         absolute_permeability.y
         * gas_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / gas_formation_volume_factor_grid
+    )
 
     water_mobility_grid_z = (
         absolute_permeability.z
         * water_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / water_formation_volume_factor_grid
+    )
     oil_mobility_grid_z = (
         absolute_permeability.z
         * oil_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / oil_formation_volume_factor_grid
+    )
     gas_mobility_grid_z = (
         absolute_permeability.z
         * gas_relative_mobility_grid
         * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
-    ) / gas_formation_volume_factor_grid
+    )
 
     # Calculate total mobility for diffusion number calculation
     total_mobility_grid_x = (
@@ -1923,30 +1922,21 @@ def evolve_pressure_adaptively(
     )
 
     min_cell_size = min(cell_size_x, cell_size_y, min_cell_thickness)
-    diffusion_number_grid_x = np.vectorize(
-        compute_diffusion_number,
-        excluded=["time_step_size", "cell_size"],
-    )(
+    diffusion_number_grid_x = v_compute_diffusion_number(
         porosity=porosity_grid,
         total_mobility=total_mobility_grid_x,
         total_compressibility=total_compressibility_grid,
         time_step_size=time_step_size,
         cell_size=min_cell_size,
     )
-    diffusion_number_grid_y = np.vectorize(
-        compute_diffusion_number,
-        excluded=["time_step_size", "cell_size"],
-    )(
+    diffusion_number_grid_y = v_compute_diffusion_number(
         porosity=porosity_grid,
         total_mobility=total_mobility_grid_y,
         total_compressibility=total_compressibility_grid,
         time_step_size=time_step_size,
         cell_size=min_cell_size,
     )
-    diffusion_number_grid_z = np.vectorize(
-        compute_diffusion_number,
-        excluded=["time_step_size", "cell_size"],
-    )(
+    diffusion_number_grid_z = v_compute_diffusion_number(
         porosity=porosity_grid,
         total_mobility=total_mobility_grid_z,
         total_compressibility=total_compressibility_grid,
@@ -2522,14 +2512,14 @@ def evolve_saturation_explicitly(
 
     # Clamp relative mobility grids to avoid numerical issues
     # This ensures mobilities are never zero or negative (for numerical stability)
-    water_relative_mobility_grid = np.maximum(
-        water_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
+        water_relative_mobility_grid
     )
-    oil_relative_mobility_grid = np.maximum(
-        oil_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
+        oil_relative_mobility_grid
     )
-    gas_relative_mobility_grid = np.maximum(
-        gas_relative_mobility_grid, options.minimum_allowable_relative_mobility
+    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
+        gas_relative_mobility_grid
     )
 
     # Compute mobility grids for x, y, z directions
@@ -2755,16 +2745,6 @@ def evolve_saturation_explicitly(
             # Accumulate net fluxes from both neighbours
             # Net fluxes are the sum of positive and negative fluxes, as negative fluxes
             # are already negative (i.e., flow from the neighbour to the current cell).
-            # print(
-            #     f"Cell ({i}, {j}, {k}) - Direction {direction} - "
-            #     f"Postive water flux: {positive_water_flux:.4f} ft³/day, "
-            #     f"Negative water flux: {negative_water_flux:.4f} ft³/day; "
-            #     f"Positive oil flux: {positive_oil_flux:.4f} ft³/day, "
-            #     f"Negative oil flux: {negative_oil_flux:.4f} ft³/day; "
-            #     f"Positive gas flux: {positive_gas_flux:.4f} ft³/day, "
-            #     f"Negative gas flux: {negative_gas_flux:.4f} ft³/day"
-            #     "\n"
-            # )
             net_water_flux_from_neighbour = positive_water_flux + negative_water_flux
             net_oil_flux_from_neighbour = positive_oil_flux + negative_oil_flux
             net_gas_flux_from_neighbour = positive_gas_flux + negative_gas_flux
@@ -2783,14 +2763,6 @@ def evolve_saturation_explicitly(
             outgoing_gas_flux += sum(
                 min(f, 0.0) for f in (positive_gas_flux, negative_gas_flux)
             )
-
-        # print(
-        #     f"Cell ({i}, {j}, {k}) - Net Fluxes (ft³/day): "
-        #     f"Water: {net_water_flux_from_neighbours:.4f}, "
-        #     f"Oil: {net_oil_flux_from_neighbours:.4f}, "
-        #     f"Gas: {net_gas_flux_from_neighbours:.4f}"
-        #     "\n\n"
-        # )
 
         # Compute Source/Sink Term (WellParameters) - q * V (ft³/day)
         injection_well, production_well = wells[i, j, k]
@@ -2864,13 +2836,13 @@ def evolve_saturation_explicitly(
                 # Record gas injection rate for the cell
                 if injection_grid is not None:
                     injection_grid[i, j, k] = (0.0, 0.0, cell_gas_injection_rate)
-            
+
             elif injected_phase == FluidPhase.WATER:
                 cell_water_injection_rate = cell_injection_rate * BBL_TO_FT3
                 # Record water injection rate for the cell
                 if injection_grid is not None:
                     injection_grid[i, j, k] = (0.0, cell_water_injection_rate, 0.0)
-            
+
             else:
                 cell_oil_injection_rate = cell_injection_rate * BBL_TO_FT3
                 # Record oil injection rate for the cell
@@ -2947,14 +2919,6 @@ def evolve_saturation_explicitly(
 
         # CFL stability check: Outgoing volume flux should not exceed pore volume in the time step
         # Outflux * Δt <= φ * V_cell
-        # print(
-        #     f"Cell ({i}, {j}, {k}) - Outgoing Fluxes (ft³/day): "
-        #     f"Water: {outgoing_water_flux:.4f}, "
-        #     f"Oil: {outgoing_oil_flux:.4f}, "
-        #     f"Gas: {outgoing_gas_flux:.4f}, "
-        #     f"Time step in days: {time_step_in_days:.4f}, "
-        #     f"Cell pore volume (ft³): {cell_pore_volume:.4f}"
-        # )
         total_outgoing_flux = (
             abs(outgoing_water_flux) + abs(outgoing_oil_flux) + abs(outgoing_gas_flux)
         )
@@ -2981,32 +2945,20 @@ def evolve_saturation_explicitly(
         # ]
         # The change in saturation is (Net_Flux + Net_Well_Rate) * dt / Pore_Volume
         water_saturation_change = (
-            -(net_water_flux_from_neighbours + net_water_flow_rate_into_cell)
+            (net_water_flux_from_neighbours + net_water_flow_rate_into_cell)
             * time_step_in_days
             / cell_pore_volume
         )
         oil_saturation_change = (
-            -(net_oil_flux_from_neighbours + net_oil_flow_rate_into_cell)
+            (net_oil_flux_from_neighbours + net_oil_flow_rate_into_cell)
             * time_step_in_days
             / cell_pore_volume
         )
         gas_saturation_change = (
-            -(net_gas_flux_from_neighbours + net_gas_flow_rate_into_cell)
+            (net_gas_flux_from_neighbours + net_gas_flow_rate_into_cell)
             * time_step_in_days
             / cell_pore_volume
         )
-        # print(
-        #     f"Cell ({i}, {j}, {k}) - Current Saturations: "
-        #     f"Water: {cell_water_saturation:.6f}, "
-        #     f"Oil: {cell_oil_saturation:.6f}, "
-        #     f"Gas: {cell_gas_saturation:.6f}"
-        # )
-        # print(
-        #     f"Cell ({i}, {j}, {k}) - Saturation Changes: "
-        #     f"Water: {water_saturation_change:.6f}, "
-        #     f"Oil: {oil_saturation_change:.6f}, "
-        #     f"Gas: {gas_saturation_change:.6f}"
-        # )
 
         # Update phase saturations
         updated_water_saturation_grid[i, j, k] = (

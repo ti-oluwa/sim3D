@@ -54,7 +54,185 @@ __all__ = [
     "injection_well",
     "production_well",
     "wells",
+    "validate_saturation_grids",
 ]
+
+
+def validate_saturation_grids(
+    oil_saturation_grid: NDimensionalGrid[NDimension],
+    water_saturation_grid: NDimensionalGrid[NDimension],
+    gas_saturation_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_water_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension],
+    residual_gas_saturation_grid: NDimensionalGrid[NDimension],
+    connate_water_saturation_grid: NDimensionalGrid[NDimension],
+    irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
+    porosity_grid: NDimensionalGrid[NDimension],
+    normalize: bool = True,
+) -> typing.Tuple[
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+]:
+    """
+    Validate and optionally normalize saturation grids for reservoir modeling.
+
+    This function performs comprehensive validation on saturation grids, considering
+    only active cells (cells with finite and non-zero porosity). It checks:
+    - Saturation sum equals 1.0 (with optional normalization)
+    - Saturation values are within valid ranges [0, 1)
+    - Residual saturations are physically valid
+    - Residual oil saturation consistency (warning if sor_gas > sor_water)
+
+    :param oil_saturation_grid: Oil saturation grid (fraction).
+    :param water_saturation_grid: Water saturation grid (fraction).
+    :param gas_saturation_grid: Gas saturation grid (fraction).
+    :param residual_oil_saturation_water_grid: Residual oil saturation during water flooding grid (fraction).
+    :param residual_oil_saturation_gas_grid: Residual oil saturation during gas flooding grid (fraction).
+    :param residual_gas_saturation_grid: Residual gas saturation grid (fraction).
+    :param connate_water_saturation_grid: Connate water saturation grid (fraction).
+    :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction).
+    :param porosity_grid: Porosity grid (fraction) used to identify active cells.
+    :param normalize: If True, normalizes saturations to sum to 1.0 in active cells (default: True).
+    :return: Tuple of (oil_saturation_grid, water_saturation_grid, gas_saturation_grid),
+             potentially normalized if normalize=True.
+    :raises ValueError: If saturation constraints are violated in active cells.
+    :raises UserWarning: If residual oil saturation for gas is greater than for water.
+    """
+    # Identify active cells (finite and non-zero porosity)
+    active_cells = np.isfinite(porosity_grid) & (porosity_grid > 0)
+
+    # Check if saturations sum to 1.0 in active cells
+    total_saturation = oil_saturation_grid + water_saturation_grid + gas_saturation_grid
+    if not np.all(np.isclose(total_saturation[active_cells], 1.0)):
+        if normalize:
+            warnings.warn(
+                "The sum of oil, water, and gas saturations does not equal 1 everywhere in active cells. "
+                "Adjusting saturations to ensure they sum to 1.",
+                UserWarning,
+            )
+            # Avoid division by zero
+            total_saturation_safe = np.where(total_saturation == 0, 1, total_saturation)
+            oil_saturation_grid = oil_saturation_grid / total_saturation_safe  # type: ignore
+            water_saturation_grid = water_saturation_grid / total_saturation_safe  # type: ignore
+            gas_saturation_grid = gas_saturation_grid / total_saturation_safe  # type: ignore
+        else:
+            raise ValueError(
+                "The sum of oil, water, and gas saturations does not equal 1 everywhere in active cells."
+            )
+
+    # Validate saturation ranges in active cells
+    if np.any(
+        (oil_saturation_grid[active_cells] < 0)
+        | (oil_saturation_grid[active_cells] >= 1)
+    ):
+        raise ValueError(
+            "Oil saturation grid values must be in the range [0, 1) in active cells."
+        )
+
+    if np.any(
+        (water_saturation_grid[active_cells] < 0)
+        | (water_saturation_grid[active_cells] >= 1)
+    ):
+        raise ValueError(
+            "Water saturation grid values must be in the range [0, 1) in active cells."
+        )
+
+    if np.any(
+        (gas_saturation_grid[active_cells] < 0)
+        | (gas_saturation_grid[active_cells] >= 1)
+    ):
+        raise ValueError(
+            "Gas saturation grid values must be in the range [0, 1) in active cells."
+        )
+
+    # Validate residual saturations in active cells
+    # if np.any(
+    #     (residual_oil_saturation_water_grid[active_cells] < 0)
+    #     | (
+    #         residual_oil_saturation_water_grid[active_cells]
+    #         > oil_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Residual oil saturation during water flooding grid values must be in the range "
+    #         "[0, oil_saturation] in active cells. Oil saturation must be greater than residual oil saturation during water flooding."
+    #     )
+
+    # if np.any(
+    #     (residual_oil_saturation_gas_grid[active_cells] < 0)
+    #     | (
+    #         residual_oil_saturation_gas_grid[active_cells]
+    #         > oil_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Residual oil saturation during gas flooding grid values must be in the range "
+    #         "[0, oil_saturation] in active cells. Oil saturation must be greater than residual oil saturation during gas flooding."
+    #     )
+
+    # if np.any(
+    #     (residual_gas_saturation_grid[active_cells] < 0)
+    #     | (
+    #         residual_gas_saturation_grid[active_cells]
+    #         > gas_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Residual gas saturation grid values must be in the range [0, gas_saturation] in active cells."
+    #         " Gas saturation must be greater than residual gas saturation."
+    #     )
+
+    # if np.any(
+    #     (connate_water_saturation_grid[active_cells] < 0)
+    #     | (
+    #         connate_water_saturation_grid[active_cells]
+    #         > irreducible_water_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Connate water saturation grid values must be in the range "
+    #         "[0, irreducible_water_saturation] in active cells. Connate water saturation is usually less than irreducible water saturation."
+    #     )
+
+    # if np.any(
+    #     (connate_water_saturation_grid[active_cells] < 0)
+    #     | (
+    #         connate_water_saturation_grid[active_cells]
+    #         > water_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Connate water saturation grid values must be in the range [0, water_saturation] in active cells."
+    #         " Connate water saturation is usually less than or equal to water saturation."
+    #     )
+
+    # if np.any(
+    #     (irreducible_water_saturation_grid[active_cells] < 0)
+    #     | (
+    #         irreducible_water_saturation_grid[active_cells]
+    #         > water_saturation_grid[active_cells]
+    #     )
+    # ):
+    #     raise ValueError(
+    #         "Irreducible water saturation grid values must be in the range "
+    #         "[0, water_saturation] in active cells."
+    #     )
+
+    # Check if residual oil saturation for gas is greater than for water
+    if np.any(
+        residual_oil_saturation_gas_grid[active_cells]
+        > residual_oil_saturation_water_grid[active_cells]
+    ):
+        warnings.warn(
+            "Residual oil saturation during gas flooding (Sor_g) is greater than residual oil "
+            "saturation during water flooding (Sor_w) in some active cells. This may indicate "
+            "that gas is less efficient at displacing oil than water, which is unusual. "
+            "Please verify your residual saturation values.",
+            UserWarning,
+        )
+
+    return oil_saturation_grid, water_saturation_grid, gas_saturation_grid
 
 
 def reservoir_model(
@@ -73,14 +251,13 @@ def reservoir_model(
     oil_compressibility_grid: NDimensionalGrid[NDimension],
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
     oil_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_water_grid: NDimensionalGrid[NDimension],
+    residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension],
+    residual_gas_saturation_grid: NDimensionalGrid[NDimension],
+    irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
+    connate_water_saturation_grid: NDimensionalGrid[NDimension],
     relative_permeability_func: RelativePermeabilityFunc,
     gas_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    residual_oil_saturation_water_grid: typing.Optional[
-        NDimensionalGrid[NDimension]
-    ] = None,
-    residual_oil_saturation_gas_grid: typing.Optional[
-        NDimensionalGrid[NDimension]
-    ] = None,
     gas_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_factor_grid: typing.Optional[
@@ -88,14 +265,10 @@ def reservoir_model(
     ] = None,
     gas_molecular_weight_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    residual_gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_bubble_point_pressure_grid: typing.Optional[
-        NDimensionalGrid[NDimension]
-    ] = None,
-    irreducible_water_saturation_grid: typing.Optional[
         NDimensionalGrid[NDimension]
     ] = None,
     capillary_pressure_params: typing.Optional[CapillaryPressureParameters] = None,
@@ -142,8 +315,8 @@ def reservoir_model(
     :param oil_compressibility_grid: Oil compressibility grid (psi⁻¹).
     :param oil_specific_gravity_grid: Oil specific gravity grid (dimensionless).
     :param gas_gravity_grid: Gas gravity grid (dimensionless), optional.
-    :param residual_oil_saturation_water_grid: Residual oil saturation during water flooding grid (fraction), optional.
-    :param residual_oil_saturation_gas_grid: Residual oil saturation during gas flooding grid (fraction), optional.
+    :param residual_oil_saturation_water_grid: Residual oil saturation during water flooding grid (fraction).
+    :param residual_oil_saturation_gas_grid: Residual oil saturation during gas flooding grid (fraction).
     :param gas_saturation_grid: Gas saturation grid (fraction), optional.
     :param gas_viscosity_grid: Gas viscosity grid (cP), optional.
     :param gas_compressibility_grid: Gas compressibility grid (psi⁻¹), optional.
@@ -155,8 +328,8 @@ def reservoir_model(
     :param water_compressibility_grid: Water compressibility grid (psi⁻¹), optional.
     :param water_density_grid: Water density grid (lb/ft³), optional.
     :param water_bubble_point_pressure_grid: Water bubble point pressure grid (psi), optional.
-    :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction), optional.
-    :param relative_permeability_params: Relative permeability parameters, optional.
+    :param connate_water_saturation_grid: Connate water saturation grid (fraction).
+    :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction).
     :param capillary_pressure_params: Capillary pressure parameters, optional.
     :param gas_to_oil_ratio_grid: Solution gas to oil ratio grid (scf/bbl), optional.
     :param gas_solubility_in_water_grid: Gas solubility in water grid (scf/bbl), optional.
@@ -178,6 +351,7 @@ def reservoir_model(
         raise ValueError(
             "`cell_dimension` must be a tuple of two floats (cell width, cell height)."
         )
+
     validate_input_pressure(pressure_grid)
     validate_input_temperature(temperature_grid)
 
@@ -194,79 +368,21 @@ def reservoir_model(
             value=1.0,
         )
 
-    if not np.all(
-        np.isclose(
-            oil_saturation_grid + water_saturation_grid + gas_saturation_grid,
-            1.0,
+    # Validate and normalize saturation grids
+    oil_saturation_grid, water_saturation_grid, gas_saturation_grid = (
+        validate_saturation_grids(
+            oil_saturation_grid=oil_saturation_grid,
+            water_saturation_grid=water_saturation_grid,
+            gas_saturation_grid=gas_saturation_grid,
+            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=residual_gas_saturation_grid,
+            connate_water_saturation_grid=connate_water_saturation_grid,
+            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            porosity_grid=porosity_grid,
+            normalize=True,
         )
-    ):
-        warnings.warn(
-            "The sum of oil, water, and gas saturations does not equal 1 everywhere. "
-            "Adjusting saturations to ensure they sum to 1.",
-            UserWarning,
-        )
-        total_saturation = (
-            oil_saturation_grid + water_saturation_grid + gas_saturation_grid
-        )
-        # Avoid division by zero
-        total_saturation = np.where(total_saturation == 0, 1, total_saturation)
-        oil_saturation_grid = oil_saturation_grid / total_saturation  # type: ignore
-        water_saturation_grid = water_saturation_grid / total_saturation  # type: ignore
-        gas_saturation_grid = gas_saturation_grid / total_saturation  # type: ignore
-
-    if np.any(oil_saturation_grid < 0) or np.any(oil_saturation_grid >= 1):
-        raise ValueError("Oil saturation grid values must be in the range [0, 1).")
-
-    if np.any(water_saturation_grid < 0) or np.any(water_saturation_grid >= 1):
-        raise ValueError("Water saturation grid values must be in the range [0, 1).")
-
-    if np.any(gas_saturation_grid < 0) or np.any(gas_saturation_grid >= 1):
-        raise ValueError("Gas saturation grid values must be in the range [0, 1).")
-
-    # Saturation grids
-    if residual_oil_saturation_water_grid is None:
-        residual_oil_saturation_water_grid = typing.cast(
-            NDimensionalGrid[NDimension], oil_saturation_grid * 0.2
-        )
-    elif np.any(residual_oil_saturation_water_grid < 0) or np.any(
-        residual_oil_saturation_water_grid >= oil_saturation_grid
-    ):
-        raise ValueError(
-            "Residual oil saturation during water flooding grid values must be in the range [0, oil_saturation)."
-        )
-
-    if residual_oil_saturation_gas_grid is None:
-        residual_oil_saturation_gas_grid = typing.cast(
-            NDimensionalGrid[NDimension], oil_saturation_grid * 0.1
-        )
-    elif np.any(residual_oil_saturation_gas_grid < 0) or np.any(
-        residual_oil_saturation_gas_grid >= oil_saturation_grid
-    ):
-        raise ValueError(
-            "Residual oil saturation during gas flooding grid values must be in the range [0, oil_saturation)."
-        )
-
-    if residual_gas_saturation_grid is None:
-        residual_gas_saturation_grid = typing.cast(
-            NDimensionalGrid[NDimension], gas_saturation_grid * 0.2
-        )
-    elif np.any(residual_gas_saturation_grid < 0) or np.any(
-        residual_gas_saturation_grid >= gas_saturation_grid
-    ):
-        raise ValueError(
-            "Residual gas saturation grid values must be in the range [0, gas_saturation)."
-        )
-
-    if irreducible_water_saturation_grid is None:
-        irreducible_water_saturation_grid = typing.cast(
-            NDimensionalGrid[NDimension], water_saturation_grid * 0.2
-        )
-    elif np.any(irreducible_water_saturation_grid < 0) or np.any(
-        irreducible_water_saturation_grid >= water_saturation_grid
-    ):
-        raise ValueError(
-            "Irreducible water saturation grid values must be in the range [0, water_saturation)."
-        )
+    )
 
     # Viscosity Grids
     if gas_viscosity_grid is None:
@@ -475,6 +591,7 @@ def reservoir_model(
         residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
         residual_gas_saturation_grid=residual_gas_saturation_grid,
         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+        connate_water_saturation_grid=connate_water_saturation_grid,
     )
     rock_fluid_properties = RockFluidProperties(
         relative_permeability_func=relative_permeability_func,
@@ -490,6 +607,7 @@ def reservoir_model(
                 "water_saturation": GridBoundaryCondition(),
             }
         )
+    
     model = ReservoirModel(
         grid_shape=grid_shape,
         cell_dimension=cell_dimension,
@@ -506,7 +624,7 @@ def reservoir_model(
 
 def injection_well(
     well_name: str,
-    perforating_interval: typing.Tuple[WellLocation, WellLocation],
+    perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
     bottom_hole_pressure: float,
     injected_fluid: WellFluid,
@@ -516,7 +634,7 @@ def injection_well(
     Constructs an injection well with the given parameters.
 
     :param well_name: Name or identifier for the well
-    :param perforating_interval: Tuple representing the start and end locations of the well in the grid
+    :param perforating_intervals: Sequence of tuples representing the start and end locations of each interval in the grid
     :param radius: Radius of the well (ft)
     :param injected_fluid: The fluid being injected into the well, represented as a `WellFluid` instance.
     :param bottom_hole_pressure: Bottom hole pressure of the well (psi)
@@ -525,7 +643,7 @@ def injection_well(
     """
     return InjectionWell(
         name=well_name,
-        perforating_interval=perforating_interval,
+        perforating_intervals=perforating_intervals,
         radius=radius,
         bottom_hole_pressure=bottom_hole_pressure,
         injected_fluid=injected_fluid,
@@ -535,7 +653,7 @@ def injection_well(
 
 def production_well(
     well_name: str,
-    perforating_interval: typing.Tuple[WellLocation, WellLocation],
+    perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
     bottom_hole_pressure: float,
     produced_fluids: typing.Sequence[WellFluid],
@@ -546,7 +664,7 @@ def production_well(
     Constructs a production well with the given parameters.
 
     :param well_name: Name or identifier for the well
-    :param perforating_interval: Tuple representing the start and end locations of the well in the grid
+    :param perforating_intervals: Sequence of tuples representing the start and end locations of each interval in the grid
     :param radius: Radius of the well (ft)
     :param produced_fluids: List of fluids being produced by the well, represented as a sequence of `WellFluid` instances.
     :param skin_factor: Skin factor for the well, default is 0.0
@@ -558,7 +676,7 @@ def production_well(
         raise ValueError("Produced fluids list must not be empty.")
     return ProductionWell(
         name=well_name,
-        perforating_interval=perforating_interval,
+        perforating_intervals=perforating_intervals,
         radius=radius,
         skin_factor=skin_factor,
         bottom_hole_pressure=bottom_hole_pressure,

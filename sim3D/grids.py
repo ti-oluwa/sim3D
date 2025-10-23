@@ -86,7 +86,9 @@ def build_uniform_grid(
     """
     return np.full(grid_shape, fill_value=value, dtype=dtype)
 
+
 uniform_grid = build_uniform_grid  # Alias for convenience
+
 
 @numba.njit(cache=True)
 def build_layered_grid(
@@ -111,9 +113,7 @@ def build_layered_grid(
     if len(layer_values) < 1:
         raise ValueError("At least one layer value must be provided.")
 
-    layered_grid = build_uniform_grid(
-        grid_shape=grid_shape, value=0.0, dtype=dtype
-    )
+    layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0, dtype=dtype)
     if orientation == Orientation.X:  # Layering along x-axis
         if len(layer_values) != grid_shape[0]:
             raise ValueError(
@@ -151,7 +151,13 @@ def build_layered_grid(
 
     raise ValueError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
 
+
 layered_grid = build_layered_grid  # Alias for convenience
+
+v_compute_fluid_viscosity = np.vectorize(
+    compute_fluid_viscosity, otypes=[np.float64], excluded=["fluid"]
+)
+
 
 def build_fluid_viscosity_grid(
     pressure_grid: NDimensionalGrid[NDimension],
@@ -169,9 +175,12 @@ def build_fluid_viscosity_grid(
     :param fluid: Type of fluid for which to compute viscosity (e.g., "CO2", "water") supported by `CoolProp`.
     :return: N-Dimensional array of fluid viscosities (cP) corresponding to each grid cell.
     """
-    return np.vectorize(compute_fluid_viscosity, otypes=[dtype], excluded=["fluid"])(
-        pressure_grid, temperature_grid, fluid=fluid
-    )
+    return v_compute_fluid_viscosity(pressure_grid, temperature_grid, fluid=fluid)
+
+
+v_compute_fluid_compressibility = np.vectorize(
+    compute_fluid_compressibility, otypes=[np.float64], excluded=["fluid"]
+)
 
 
 def build_fluid_compressibility_grid(
@@ -190,9 +199,12 @@ def build_fluid_compressibility_grid(
     :param fluid: Type of fluid for which to compute compressibility (e.g., "CO2", "water") supported by `CoolProp`.
     :return: N-Dimensional array of fluid compressibilities (psi⁻¹) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_fluid_compressibility, otypes=[dtype], excluded=["fluid"]
-    )(pressure_grid, temperature_grid, fluid=fluid)
+    return v_compute_fluid_compressibility(pressure_grid, temperature_grid, fluid=fluid)
+
+
+v_compute_fluid_density = np.vectorize(
+    compute_fluid_density, otypes=[np.float64], excluded=["fluid"]
+)
 
 
 def build_fluid_density_grid(
@@ -211,9 +223,7 @@ def build_fluid_density_grid(
     :param fluid: Type of fluid for which to compute density (e.g., "CO2", "water") supported by `CoolProp`.
     :return: N-Dimensional array of fluid densities (lbm/ft³) corresponding to each grid cell.
     """
-    return np.vectorize(compute_fluid_density, otypes=[dtype], excluded=["fluid"])(
-        pressure_grid, temperature_grid, fluid=fluid
-    )
+    return v_compute_fluid_density(pressure_grid, temperature_grid, fluid=fluid)
 
 
 def edge_pad_grid(
@@ -316,6 +326,9 @@ def coarsen_grid(
     return typing.cast(NDimensionalGrid[NDimension], coarsened)
 
 
+v_compute_gas_gravity = np.vectorize(compute_gas_gravity, otypes=[np.float64])
+
+
 def build_gas_gravity_grid(gas: str) -> NDimensionalGrid[NDimension]:
     """
     Computes a N-Dimensional grid of gas gravity based gas type.
@@ -325,7 +338,12 @@ def build_gas_gravity_grid(gas: str) -> NDimensionalGrid[NDimension]:
     :param gas: Type of gas (e.g., "methane", "co2", "n2") for which to compute gas gravity.
     :return: N-Dimensional array of gas gravity values (dimensionless) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_gravity, otypes=[np.float64])(gas)
+    return v_compute_gas_gravity(gas)
+
+
+v_compute_gas_gravity_from_density = np.vectorize(
+    compute_gas_gravity_from_density, otypes=[np.float64]
+)
 
 
 def build_gas_gravity_from_density_grid(
@@ -345,7 +363,7 @@ def build_gas_gravity_from_density_grid(
     :param density_grid: N-Dimensional array of gas density values (lbm/ft³) corresponding to each grid cell.
     :return: N-Dimensional array of gas gravity values (dimensionless) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_gravity_from_density, otypes=[np.float64])(
+    return v_compute_gas_gravity_from_density(
         pressure_grid, temperature_grid, density_grid
     )
 
@@ -374,6 +392,11 @@ def build_mixed_fluid_property_grid(
         fluid2_saturation_grid,
         fluid2_property_grid,
     )
+
+
+v_compute_total_fluid_compressibility = np.vectorize(
+    compute_total_fluid_compressibility, otypes=[np.float64]
+)
 
 
 def build_total_fluid_compressibility_grid(
@@ -408,9 +431,7 @@ def build_total_fluid_compressibility_grid(
 
     :return: N-Dimensional array of total fluid compressibility values (psi⁻¹) corresponding to each grid cell
     """
-    return np.vectorize(
-        compute_total_fluid_compressibility, otypes=[water_saturation_grid.dtype]
-    )(
+    return v_compute_total_fluid_compressibility(
         water_saturation_grid,
         oil_saturation_grid,
         water_compressibility_grid,
@@ -603,6 +624,9 @@ def build_three_phase_relative_mobilities_grids(
     )
 
 
+v_compute_oil_api_gravity = np.vectorize(compute_oil_api_gravity, otypes=[np.float64])
+
+
 def build_oil_api_gravity_grid(
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
@@ -615,9 +639,12 @@ def build_oil_api_gravity_grid(
     :param oil_specific_gravity_grid: N-Dimensional array of oil specific gravity values (dimensionless).
     :return: N-Dimensional array of oil API gravity values (dimensionless) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_api_gravity, otypes=[np.float64])(
-        oil_specific_gravity_grid
-    )
+    return v_compute_oil_api_gravity(oil_specific_gravity_grid)
+
+
+v_compute_oil_specific_gravity_from_density = np.vectorize(
+    compute_oil_specific_gravity_from_density, otypes=[np.float64]
+)
 
 
 def build_oil_specific_gravity_grid(
@@ -639,9 +666,20 @@ def build_oil_specific_gravity_grid(
     :param oil_compressibility_grid: N-Dimensional array of oil compressibility values (psi⁻¹).
     :return: N-Dimensional array of oil specific gravity (dimensionless) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_specific_gravity_from_density, otypes=[np.float64])(
+    return v_compute_oil_specific_gravity_from_density(
         oil_density_grid, pressure_grid, temperature_grid, oil_compressibility_grid
     )
+
+
+v_compute_gas_compressibility_factor = np.vectorize(
+    compute_gas_compressibility_factor,
+    otypes=[np.float64],
+    excluded=[
+        "h2s_mole_fraction",
+        "co2_mole_fraction",
+        "n2_mole_fraction",
+    ],
+)
 
 
 def build_gas_compressibility_factor_grid(
@@ -667,11 +705,7 @@ def build_gas_compressibility_factor_grid(
     :param n2_mole_fraction: Mole fraction of N₂ in the gas mixture (default: 0.0).
     :return: N-Dimensional array of gas compressibility factors (dimensionless) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_gas_compressibility_factor,
-        otypes=[np.float64],
-        excluded=["h2s_mole_fraction", "co2_mole_fraction", "n2_mole_fraction"],
-    )(
+    return v_compute_gas_compressibility_factor(
         pressure_grid,
         temperature_grid,
         gas_gravity_grid,
@@ -679,6 +713,11 @@ def build_gas_compressibility_factor_grid(
         co2_mole_fraction=co2_mole_fraction,
         n2_mole_fraction=n2_mole_fraction,
     )
+
+
+v_compute_oil_formation_volume_factor = np.vectorize(
+    compute_oil_formation_volume_factor, otypes=[np.float64]
+)
 
 
 def build_oil_formation_volume_factor_grid(
@@ -704,7 +743,7 @@ def build_oil_formation_volume_factor_grid(
     :param oil_compressibility_grid: N-Dimensional array of oil compressibility values (psi⁻¹) representing the compressibility of oil.
     :return: N-Dimensional array of oil formation volume factors (bbl/STB) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_formation_volume_factor, otypes=[np.float64])(
+    return v_compute_oil_formation_volume_factor(
         pressure_grid,
         temperature_grid,
         bubble_point_pressure_grid,
@@ -713,6 +752,11 @@ def build_oil_formation_volume_factor_grid(
         gas_to_oil_ratio_grid,
         oil_compressibility_grid,
     )
+
+
+v_compute_water_formation_volume_factor = np.vectorize(
+    compute_water_formation_volume_factor, otypes=[np.float64]
+)
 
 
 def build_water_formation_volume_factor_grid(
@@ -726,9 +770,12 @@ def build_water_formation_volume_factor_grid(
     :param salinity_grid: N-Dimensional array of water salinity values (ppm of NaCl) representing the salinity of water at reservoir conditions.
     :return: N-Dimensional array of water formation volume factors (bbl/STB) corresponding to each grid cell.
     """
-    return np.vectorize(compute_water_formation_volume_factor, otypes=[np.float64])(
-        water_density_grid, salinity_grid
-    )
+    return v_compute_water_formation_volume_factor(water_density_grid, salinity_grid)
+
+
+v_compute_gas_formation_volume_factor = np.vectorize(
+    compute_gas_formation_volume_factor, otypes=[np.float64]
+)
 
 
 def build_gas_formation_volume_factor_grid(
@@ -746,9 +793,12 @@ def build_gas_formation_volume_factor_grid(
     :param gas_compressibility_factor_grid: N-Dimensional array of gas compressibility factor values (dimensionless) representing the compressibility of gas.
     :return: N-Dimensional array of gas formation volume factors (ft³/SCF) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_formation_volume_factor, otypes=[np.float64])(
+    return v_compute_gas_formation_volume_factor(
         pressure_grid, temperature_grid, gas_compressibility_factor_grid
     )
+
+
+v_compute_gas_to_oil_ratio = np.vectorize(compute_gas_to_oil_ratio, otypes=[np.float64])
 
 
 def build_gas_to_oil_ratio_grid(
@@ -775,10 +825,7 @@ def build_gas_to_oil_ratio_grid(
     :param gor_at_bubble_point_pressure_grid: Optional N-Dimensional array of gas-to-oil ratios at bubble point pressure (SCF/STB).
     :return: N-Dimensional array of solution gas-to-oil ratios (SCF/STB) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_gas_to_oil_ratio,
-        otypes=[np.float64],
-    )(
+    return v_compute_gas_to_oil_ratio(
         pressure_grid,
         temperature_grid,
         bubble_point_pressure_grid,
@@ -786,6 +833,11 @@ def build_gas_to_oil_ratio_grid(
         oil_api_gravity_grid,
         gor_at_bubble_point_pressure_grid,
     )
+
+
+v_compute_oil_bubble_point_pressure = np.vectorize(
+    compute_oil_bubble_point_pressure, otypes=[np.float64]
+)
 
 
 def build_oil_bubble_point_pressure_grid(
@@ -804,12 +856,17 @@ def build_oil_bubble_point_pressure_grid(
     :param gor_at_bubble_point_pressure_grid: N-Dimensional array of gas-to-oil ratios at bubble point pressure (SCF/STB).
     :return: N-Dimensional array of oil bubble point pressures (psi) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_bubble_point_pressure, otypes=[np.float64])(
+    return v_compute_oil_bubble_point_pressure(
         gas_gravity_grid,
         oil_api_gravity_grid,
         temperature_grid,
         gas_to_oil_ratio_grid,
     )
+
+
+v_compute_gas_solubility_in_water = np.vectorize(
+    compute_gas_solubility_in_water, otypes=[np.float64], excluded=["gas"]
+)
 
 
 def build_gas_solubility_in_water_grid(
@@ -831,9 +888,14 @@ def build_gas_solubility_in_water_grid(
     :param gas: Type of gas dissolved in water (default: "methane"). Can be CO₂, N₂, etc.
     :return: N-Dimensional array of gas solubility in water (SCF/STB) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_gas_solubility_in_water, otypes=[np.float64], excluded=["gas"]
-    )(pressure_grid, temperature_grid, salinity_grid, gas=gas)
+    return v_compute_gas_solubility_in_water(
+        pressure_grid, temperature_grid, salinity_grid, gas=gas
+    )
+
+
+v_compute_water_bubble_point_pressure = np.vectorize(
+    compute_water_bubble_point_pressure, otypes=[np.float64], excluded=["gas"]
+)
 
 
 def build_water_bubble_point_pressure_grid(
@@ -854,14 +916,12 @@ def build_water_bubble_point_pressure_grid(
     :param gas: Type of gas dissolved in water (default: "methane"). Can be CO₂, N₂, etc.
     :return: N-Dimensional array of water bubble point pressures (psi) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_water_bubble_point_pressure, otypes=[np.float64], excluded=["gas"]
-    )(
-        temperature_grid,
-        gas_solubility_in_water_grid,
-        salinity_grid,
-        gas=gas,
+    return v_compute_water_bubble_point_pressure(
+        temperature_grid, gas_solubility_in_water_grid, salinity_grid, gas=gas
     )
+
+
+v_compute_oil_viscosity = np.vectorize(compute_oil_viscosity, otypes=[np.float64])
 
 
 def build_oil_viscosity_grid(
@@ -887,7 +947,7 @@ def build_oil_viscosity_grid(
     :param gor_at_bubble_point_pressure_grid: Optional N-Dimensional array of gas-to-oil ratios at bubble point pressure (SCF/STB).
     :return: N-Dimensional array of oil viscosities (cP) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_viscosity, otypes=[np.float64])(
+    return v_compute_oil_viscosity(
         pressure_grid,
         temperature_grid,
         bubble_point_pressure_grid,
@@ -895,6 +955,11 @@ def build_oil_viscosity_grid(
         gas_to_oil_ratio_grid,
         gor_at_bubble_point_pressure_grid,
     )
+
+
+v_compute_gas_molecular_weight = np.vectorize(
+    compute_gas_molecular_weight, otypes=[np.float64]
+)
 
 
 def build_gas_molecular_weight_grid(
@@ -909,9 +974,10 @@ def build_gas_molecular_weight_grid(
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
     :return: N-Dimensional array of gas molecular weights (g/mol) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_molecular_weight, otypes=[np.float64])(
-        gas_gravity_grid
-    )
+    return v_compute_gas_molecular_weight(gas_gravity_grid)
+
+
+v_compute_gas_viscosity = np.vectorize(compute_gas_viscosity, otypes=[np.float64])
 
 
 def build_gas_viscosity_grid(
@@ -929,17 +995,18 @@ def build_gas_viscosity_grid(
     :param gas_molecular_weight_grid: N-Dimensional array of gas molecular weight values (g/mol) representing the molecular weight of gas in each grid cell.
     :return: N-Dimensional array of gas viscosities (cP) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_viscosity, otypes=[np.float64])(
-        temperature_grid,
-        gas_density_grid,
-        gas_molecular_weight_grid,
+    return v_compute_gas_viscosity(
+        temperature_grid, gas_density_grid, gas_molecular_weight_grid
     )
+
+
+v_compute_water_viscosity = np.vectorize(compute_water_viscosity, otypes=[np.float64])
 
 
 def build_water_viscosity_grid(
     temperature_grid: NDimensionalGrid[NDimension],
     salinity_grid: NDimensionalGrid[NDimension],
-    pressure_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    pressure_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
     Computes a N-Dimensional grid of water/brine viscosities.
@@ -949,13 +1016,16 @@ def build_water_viscosity_grid(
     :param temperature_grid: N-Dimensional array of temperature values (°F) representing the temperature distribution
         of the reservoir across the grid cells.
     :param salinity_grid: N-Dimensional array of salinity values (ppm) representing the salinity of water in each grid cell.
-    :param pressure_grid: Optional N-Dimensional array of pressure values (psi) representing the pressure distribution
+    :param pressure_grid: N-Dimensional array of pressure values (psi) representing the pressure distribution
         of the reservoir across the grid cells.
     :return: N-Dimensional array of water/brine viscosities (cP) corresponding to each grid cell.
     """
-    return np.vectorize(compute_water_viscosity, otypes=[np.float64])(
-        temperature_grid, salinity_grid, pressure_grid
-    )
+    return v_compute_water_viscosity(temperature_grid, salinity_grid, pressure_grid)
+
+
+v_compute_oil_compressibility = np.vectorize(
+    compute_oil_compressibility, otypes=[np.float64]
+)
 
 
 def build_oil_compressibility_grid(
@@ -983,7 +1053,7 @@ def build_oil_compressibility_grid(
     :param gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
     :return: N-Dimensional array of oil compressibilities (psi⁻¹) corresponding to each grid cell.
     """
-    return np.vectorize(compute_oil_compressibility, otypes=[np.float64])(
+    return v_compute_oil_compressibility(
         pressure_grid,
         temperature_grid,
         bubble_point_pressure_grid,
@@ -993,6 +1063,17 @@ def build_oil_compressibility_grid(
         gas_formation_volume_factor_grid,
         oil_formation_volume_factor_grid,
     )
+
+
+v_compute_gas_compressibility = np.vectorize(
+    compute_gas_compressibility,
+    otypes=[np.float64],
+    excluded=[
+        "h2s_mole_fraction",
+        "co2_mole_fraction",
+        "n2_mole_fraction",
+    ],
+)
 
 
 def build_gas_compressibility_grid(
@@ -1023,11 +1104,7 @@ def build_gas_compressibility_grid(
     :param n2_mole_fraction: Mole fraction of N₂ in the gas mixture (default: 0.0).
     :return: N-Dimensional array of gas compressibilities (psi⁻¹) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_gas_compressibility,
-        otypes=[np.float64],
-        excluded=["h2s_mole_fraction", "co2_mole_fraction", "n2_mole_fraction"],
-    )(
+    return v_compute_gas_compressibility(
         pressure_grid,
         temperature_grid,
         gas_gravity_grid,
@@ -1036,6 +1113,11 @@ def build_gas_compressibility_grid(
         co2_mole_fraction=co2_mole_fraction,
         n2_mole_fraction=n2_mole_fraction,
     )
+
+
+v_compute_gas_free_water_formation_volume_factor = np.vectorize(
+    compute_gas_free_water_formation_volume_factor, otypes=[np.float64]
+)
 
 
 def build_gas_free_water_formation_volume_factor_grid(
@@ -1053,9 +1135,14 @@ def build_gas_free_water_formation_volume_factor_grid(
         of the reservoir across the grid cells.
     :return: N-Dimensional array of gas free water formation volume factors (bbl/STB) corresponding to each grid cell.
     """
-    return np.vectorize(
-        compute_gas_free_water_formation_volume_factor, otypes=[np.float64]
-    )(pressure_grid, temperature_grid)
+    return v_compute_gas_free_water_formation_volume_factor(
+        pressure_grid, temperature_grid
+    )
+
+
+v_compute_water_compressibility = np.vectorize(
+    compute_water_compressibility, otypes=[np.float64]
+)
 
 
 def build_water_compressibility_grid(
@@ -1081,7 +1168,7 @@ def build_water_compressibility_grid(
     :param gas_free_water_formation_volume_factor_grid: N-Dimensional array of gas free water formation volume factors (bbl/STB).
     :return: N-Dimensional array of water compressibilities (psi⁻¹) corresponding to each grid cell.
     """
-    return np.vectorize(compute_water_compressibility, otypes=[np.float64])(
+    return v_compute_water_compressibility(
         pressure_grid,
         temperature_grid,
         bubble_point_pressure_grid,
@@ -1089,6 +1176,9 @@ def build_water_compressibility_grid(
         gas_solubility_in_water_grid,
         gas_free_water_formation_volume_factor_grid,
     )
+
+
+v_compute_live_oil_density = np.vectorize(compute_live_oil_density, otypes=[np.float64])
 
 
 def build_live_oil_density_grid(
@@ -1108,12 +1198,15 @@ def build_live_oil_density_grid(
     :param formation_volume_factor_grid: N-Dimensional array of formation volume factors (bbl/STB).
     :return: N-Dimensional array of oil densities (lbm/ft³) corresponding to each grid cell.
     """
-    return np.vectorize(compute_live_oil_density, otypes=[np.float64])(
+    return v_compute_live_oil_density(
         oil_api_gravity_grid,
         gas_gravity_grid,
         gas_to_oil_ratio_grid,
         formation_volume_factor_grid,
     )
+
+
+v_compute_gas_density = np.vectorize(compute_gas_density, otypes=[np.float64])
 
 
 def build_gas_density_grid(
@@ -1136,12 +1229,15 @@ def build_gas_density_grid(
         representing the compressibility of gas.
     :return: N-Dimensional array of gas densities (lbm/ft³) corresponding to each grid cell.
     """
-    return np.vectorize(compute_gas_density, otypes=[np.float64])(
+    return v_compute_gas_density(
         pressure_grid,
         temperature_grid,
         gas_gravity_grid,
         gas_compressibility_factor_grid,
     )
+
+
+v_compute_water_density = np.vectorize(compute_water_density, otypes=[np.float64])
 
 
 def build_water_density_grid(
@@ -1167,7 +1263,7 @@ def build_water_density_grid(
     :param gas_free_water_formation_volume_factor_grid: N-Dimensional array of gas free water formation volume factors (bbl/STB).
     :return: N-Dimensional array of water/brine densities (lbm/ft³) corresponding to each grid cell.
     """
-    return np.vectorize(compute_water_density, otypes=[np.float64])(
+    return v_compute_water_density(
         pressure_grid,
         temperature_grid,
         gas_gravity_grid,

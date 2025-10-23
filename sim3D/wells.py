@@ -30,6 +30,7 @@ __all__ = [
     "compute_3D_effective_drainage_radius",
     "compute_2D_effective_drainage_radius",
     "compute_well_rate",
+    "_expand_intervals",
 ]
 
 
@@ -53,14 +54,14 @@ class WellFluid:
     """Salinity of the fluid in (ppm NaCl)."""
 
 
-@attrs.define(slots=True)
+@attrs.define(slots=True, hash=True)
 class Well(typing.Generic[WellLocation]):
     """Models a well in the reservoir model."""
 
     name: str
     """Name of the well."""
-    perforating_interval: typing.Tuple[WellLocation, WellLocation]
-    """Perforating interval of the well."""
+    perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]]
+    """Perforating intervals of the well. Each interval is a tuple of (start_location, end_location)."""
     radius: float
     """Radius of the wellbore (ft)."""
     bottom_hole_pressure: float
@@ -105,10 +106,14 @@ class Well(typing.Generic[WellLocation]):
         """
         Determine the dominant orientation of a straight well (even if slanted)
         by estimating which axis the well is most aligned with.
+        Uses the first perforating interval to determine orientation.
 
         :returns: The dominant orientation of the well
         """
-        start, end = self.perforating_interval
+        if not self.perforating_intervals:
+            return Orientation.Z  # Default to Z if no intervals
+        
+        start, end = self.perforating_intervals[0]
 
         # Convert to numpy arrays and pad to 3D if needed
         start = np.array(start + (0,) * (3 - len(start)))
@@ -118,7 +123,7 @@ class Well(typing.Generic[WellLocation]):
         direction = end - start
         norm = np.linalg.norm(direction)
         if norm == 0:
-            raise ValueError("Start and end points are the same.")
+            return Orientation.Z  # Default to Z if start and end are the same
 
         # Normalize and take absolute value
         unit_vector = np.abs(direction / norm)
@@ -148,20 +153,20 @@ class Well(typing.Generic[WellLocation]):
 
     def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
         """
-        Check if the well's perforating interval is within the grid dimensions.
+        Check if the well's perforating intervals are within the grid dimensions.
 
         :param grid_dimensions: The dimensions of the reservoir grid (i, j, k).
-        :raises ValueError: If the well's perforating interval is out of bounds.
+        :raises ValueError: If any of the well's perforating intervals are out of bounds.
         """
-        start, end = self.perforating_interval
-        if not all(0 <= coord < dim for coord, dim in zip(start, grid_dimensions)):
-            raise ValueError(
-                f"Start location {start} for well {self.name!r} is out of bounds."
-            )
-        if not all(0 <= coord < dim for coord, dim in zip(end, grid_dimensions)):
-            raise ValueError(
-                f"End location {end} for well {self.name!r} is out of bounds."
-            )
+        for interval_idx, (start, end) in enumerate(self.perforating_intervals):
+            if not all(0 <= coord < dim for coord, dim in zip(start, grid_dimensions)):
+                raise ValueError(
+                    f"Start location {start} for interval {interval_idx} of well {self.name!r} is out of bounds."
+                )
+            if not all(0 <= coord < dim for coord, dim in zip(end, grid_dimensions)):
+                raise ValueError(
+                    f"End location {end} for interval {interval_idx} of well {self.name!r} is out of bounds."
+                )
 
     def get_effective_drainage_radius(
         self,
@@ -492,7 +497,7 @@ def well_actions(
     return action
 
 
-@attrs.define(slots=True)
+@attrs.define(slots=True, hash=True)
 class InjectionWell(Well[WellLocation]):
     """
     Models an injection well in the reservoir model.
@@ -542,7 +547,7 @@ class InjectionWell(Well[WellLocation]):
         )
 
 
-@attrs.define(slots=True)
+@attrs.define(slots=True, hash=True)
 class ProductionWell(Well[WellLocation]):
     """
     Models a production well in the reservoir model.
@@ -647,6 +652,17 @@ def _expand_interval(
     return typing.cast(typing.List[WellLocation], locations)
 
 
+def _expand_intervals(
+    intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]], 
+    orientation: Orientation
+) -> typing.List[WellLocation]:
+    """Expand multiple well perforating intervals into a list of grid locations."""
+    locations = []
+    for interval in intervals:
+        locations.extend(_expand_interval(interval=interval, orientation=orientation))
+    return locations
+
+
 def _prepare_wells_map(
     wells: typing.Sequence[WellT],
 ) -> typing.Dict[typing.Tuple[int, ...], WellT]:
@@ -654,8 +670,8 @@ def _prepare_wells_map(
     wells_map = {
         loc: well
         for well in wells
-        for loc in _expand_interval(
-            interval=well.perforating_interval,
+        for loc in _expand_intervals(
+            intervals=well.perforating_intervals,
             orientation=well.orientation,
         )
     }
@@ -685,7 +701,7 @@ class WellsProxy(typing.Generic[WellLocation, WellT]):
             return
         # Check for overlapping wells
         expected_location_count = sum(
-            len(_expand_interval(well.perforating_interval, well.orientation))
+            len(_expand_intervals(well.perforating_intervals, well.orientation))
             for well in self.wells
         )
         actual_location_count = len(self.wells_map)
@@ -788,16 +804,18 @@ class Wells(typing.Generic[WellLocation]):
 
         :return: A tuple of (injection_well_locations, production_well_locations).
         This returns a tuple containing two lists:
-            - A list of locations for injection wells.
-            - A list of locations for production wells.
+            - A list of locations for injection wells (starting location of first interval).
+            - A list of locations for production wells (starting location of first interval).
         """
         injection_well_heads = []
         production_well_heads = []
         for well in self.injection_wells:
-            injection_well_heads.append(well.perforating_interval[0])
+            if well.perforating_intervals:
+                injection_well_heads.append(well.perforating_intervals[0][0])
 
         for well in self.production_wells:
-            production_well_heads.append(well.perforating_interval[0])
+            if well.perforating_intervals:
+                production_well_heads.append(well.perforating_intervals[0][0])
         return injection_well_heads, production_well_heads
 
     @property

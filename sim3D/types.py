@@ -190,6 +190,70 @@ class RelativePermeabilityFunc(typing.Protocol):
 
 
 @attrs.define(slots=True, frozen=True)
+class MinMax:
+    """
+    Class representing minimum and maximum values.
+    """
+
+    min: float = attrs.field()
+    """Minimum value."""
+    max: float = attrs.field()
+    """Maximum value."""
+
+    def __attrs_post_init__(self) -> None:
+        if self.min > self.max:
+            raise ValueError("Minimum value cannot be greater than maximum value.")
+
+    def clip(self, value: float) -> float:
+        """
+        Clips the given value between the minimum and maximum values.
+
+        :param value: The value to be clipped.
+        :return: The clipped value.
+        """
+        return max(self.min, min(self.max, value))
+
+    def arrayclip(self, value: np.typing.NDArray) -> np.typing.NDArray:
+        """
+        Clips the given NumPy array between the minimum and maximum values.
+
+        :param value: The NumPy array to be clipped.
+        :return: The clipped NumPy array.
+        """
+        return np.clip(value, self.min, self.max)
+
+    def __len__(self) -> int:
+        return 2
+
+    def __iter__(self) -> typing.Iterator[float]:
+        yield self.min
+        yield self.max
+
+    def __contains__(self, item: float) -> bool:
+        return self.min <= item <= self.max
+
+    def __getitem__(self, index: int) -> float:
+        if index == 0:
+            return self.min
+        elif index == 1:
+            return self.max
+        else:
+            raise IndexError(
+                "Index out of range for MinMax. Valid indices are 0 and 1."
+            )
+
+
+class RelativeMobilityRange(TypedDict):
+    """
+    Dictionary holding relative mobility ranges for different phases.
+    """
+
+    oil: MinMax
+    water: MinMax
+    gas: MinMax
+
+
+@attrs.define(slots=True, frozen=True)
 class Options:
     """
     Simulation run options and parameters.
@@ -218,19 +282,17 @@ class Options:
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
     )
     """Threshold for the diffusion number to determine stability of the simulation (default is 0.24)."""
-    minimum_allowable_pressure: float = attrs.field(default=1.45)
-    """Minimum allowable pressure in psi to prevent negative pressures."""
-    maximum_allowable_pressure: float = attrs.field(
-        default=5000, validator=attrs.validators.ge(14.5)
-    )
-    """Maximum allowable pressure in psi to prevent unrealistic pressures."""
+    pressure_range: MinMax = attrs.field(default=MinMax(min=1.45, max=5000))
+    """Allowable pressure range in psi."""
     use_pseudo_pressure: bool = False
     """Whether to use pseudo-pressure for gas wells."""
-    minimum_allowable_relative_mobility: float = attrs.field(
-        default=1e-8,
-        validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
+    relative_mobility_range: RelativeMobilityRange = attrs.field(
+        default={
+            "oil": MinMax(min=1e-8, max=1.0),
+            "water": MinMax(min=1e-8, max=1.0),
+            "gas": MinMax(min=1e-8, max=1.0),
+        }
     )
-    """Minimum allowable relative mobility to prevent numerical issues."""
     capillary_pressure_stability_factor: float = attrs.field(
         default=1.0,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
@@ -256,7 +318,6 @@ class SupportsSetItem(typing.Generic[K_con, V_con], typing.Protocol):
     def __setitem__(self, key: K_con, value: V_con, /) -> None:
         """Sets the item at the specified key to the given value."""
         ...
-
 
 
 @attrs.define(frozen=True, slots=True)
@@ -336,5 +397,3 @@ class _RateGridsProxy(typing.Generic[NDimension]):
         self.oil[key] = oil
         self.water[key] = water
         self.gas[key] = gas
-
-

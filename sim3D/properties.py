@@ -15,7 +15,6 @@ from sim3D.constants import (
     DAYS_PER_SECOND,
     FT3_TO_BBL,
     FT3_TO_STB,
-    GRAMS_PER_MOLE_TO_POUNDS_PER_MOLE,
     IDEAL_GAS_CONSTANT_IMPERIAL,
     KG_PER_M3_TO_POUNDS_PER_FT3,
     M3_PER_M3_TO_SCF_PER_STB,
@@ -874,6 +873,52 @@ def compute_water_formation_volume_factor(
 
 
 @numba.njit(cache=True)
+def compute_water_formation_volume_factor_mccain(
+    pressure: float,
+    temperature: float,
+    salinity: float = 0.0,
+    gas_solubility: float = 0.0,
+) -> float:
+    """
+    McCain water FVF correlation (more commonly used in industry).
+
+    Valid for:
+    - T: 200-270°F
+    - P: 1000-20,000 psi
+    - Salinity: 0-200,000 ppm
+    """
+    # Convert temperature to Celsius for correlation
+    T_C = fahrenheit_to_celsius(temperature)
+
+    # Volume correction for temperature (ΔV_wT)
+    delta_V_wT = -1.0001e-2 + 1.33391e-4 * T_C + 5.50654e-7 * T_C**2
+
+    # Volume correction for pressure (ΔV_wp)
+    delta_V_wp = (
+        -1.95301e-9 * pressure * T_C
+        - 1.72834e-13 * pressure**2 * T_C
+        - 3.58922e-7 * pressure
+        - 2.25341e-10 * pressure**2
+    )
+
+    # Volume correction for salinity and pressure (ΔV_wsp)
+    salinity_wt_percent = salinity * 1e-4  # ppm to weight percent
+    delta_V_wsp = salinity_wt_percent * (
+        0.1249 + 1.1638e-4 * pressure - 1.1689e-6 * pressure**2
+    )
+
+    # Base FVF (gas-free)
+    B_w = (1 + delta_V_wT) * (1 + delta_V_wp) * (1 + delta_V_wsp)
+
+    # Correction for dissolved gas (if present)
+    if gas_solubility > 0:
+        # Rs_w in SCF/STB
+        B_w = B_w - (gas_solubility * 1.0e-6)  # Approximate correction
+
+    return B_w
+
+
+@numba.njit(cache=True)
 def compute_gas_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -1481,12 +1526,10 @@ def compute_gas_density(
     :return: Gas density in lbm/ft³.
     """
     temperature_in_rankine = temperature + 459.67
-    gas_molecular_weight_lbm_per_mole = (
-        compute_gas_molecular_weight(gas_gravity) * GRAMS_PER_MOLE_TO_POUNDS_PER_MOLE
-    )
-
+    # lbm/lbmol is the same numerical value as g/mol
+    gas_molecular_weight_lbm_per_lbmole = compute_gas_molecular_weight(gas_gravity)
     # Density in lbm/ft3
-    gas_density = (pressure * gas_molecular_weight_lbm_per_mole) / (
+    gas_density = (pressure * gas_molecular_weight_lbm_per_lbmole) / (
         gas_compressibility_factor
         * IDEAL_GAS_CONSTANT_IMPERIAL
         * temperature_in_rankine
@@ -1528,21 +1571,20 @@ def compute_gas_viscosity(
     :return: Gas viscosity in (cP)
     """
     temperature_in_rankine = temperature + 459.67
-    gas_molecular_weight_lbm_per_mole = (
-        gas_molecular_weight * GRAMS_PER_MOLE_TO_POUNDS_PER_MOLE
-    )
+    # NO CONVERSION NEEDED - g/mol is numerically equal to lb/lbmol
+    gas_molecular_weight_lbm_per_lbmole = gas_molecular_weight
     density_in_grams_per_cm3 = gas_density * POUNDS_PER_FT3_TO_GRAMS_PER_CM3
 
     k = (
-        (9.4 + (0.02 * gas_molecular_weight_lbm_per_mole))
+        (9.4 + (0.02 * gas_molecular_weight_lbm_per_lbmole))
         * (temperature_in_rankine**1.5)
-        / (209 + (19 * gas_molecular_weight_lbm_per_mole) + temperature_in_rankine)
+        / (209 + (19 * gas_molecular_weight_lbm_per_lbmole) + temperature_in_rankine)
     )
 
     x = (
         3.5
         + (986 / temperature_in_rankine)
-        + (0.01 * gas_molecular_weight_lbm_per_mole)
+        + (0.01 * gas_molecular_weight_lbm_per_lbmole)
     )
     y = 2.4 - (0.2 * x)
 
@@ -1573,7 +1615,7 @@ def fahrenheit_to_celsius(temp_F: float) -> float:
 
 @numba.njit(cache=True)
 def _compute_water_viscosity(
-    temperature: float, salinity: float, pressure: float, use_pressure: bool = True
+    temperature: float, salinity: float, pressure: float
 ) -> float:
     salinity_fraction = salinity * PPM_TO_WEIGHT_FRACTION
     A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
@@ -1581,10 +1623,6 @@ def _compute_water_viscosity(
     C = 2.94e-6
 
     viscosity_at_standard_pressure = A - (B * temperature) + (C * temperature**2)
-
-    if not use_pressure:
-        return max(1e-6, viscosity_at_standard_pressure)
-
     pressure_correction_factor = (
         0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)
     )
@@ -1595,7 +1633,7 @@ def _compute_water_viscosity(
 def compute_water_viscosity(
     temperature: float,
     salinity: float = 0.0,
-    pressure: typing.Optional[float] = None,
+    pressure: float = 14.7,
 ) -> float:
     """
     Computes water viscosity using McCain's corrected correlation for reservoir conditions.
@@ -1627,7 +1665,7 @@ def compute_water_viscosity(
 
     :param temperature: Temperature in Fahrenheit (°F)
     :param salinity: Salinity in parts per million (ppm), default is 0 (fresh water)
-    :param pressure: Pressure in psi, optional. If not provided, assumes standard pressure (14.7 psia)
+    :param pressure: Pressure in psi, default is 14.7 psi (atmospheric pressure)
     :return: Water viscosity in centipoise (cP)
     """
     if salinity < 0:
@@ -1636,9 +1674,9 @@ def compute_water_viscosity(
     if pressure is not None and pressure < 0:
         raise ValueError("Pressure must be non-negative.")
 
-    if not (86 <= temperature <= 350):
+    if not (60 <= temperature <= 400):
         warnings.warn(
-            f"Temperature {temperature:.2f}°F is outside the valid range for McCain's water viscosity correlation."
+            f"Temperature {temperature:.2f}°F is outside the valid range for McCain's water viscosity correlation (60°F to 400°F)."
         )
 
     if salinity > 300_000:
@@ -1651,10 +1689,7 @@ def compute_water_viscosity(
             f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
         )
     return _compute_water_viscosity(
-        temperature=temperature,
-        salinity=salinity,
-        pressure=pressure or 0.0,
-        use_pressure=pressure is not None,
+        temperature=temperature, salinity=salinity, pressure=pressure
     )
 
 
@@ -1695,27 +1730,32 @@ def _compute_oil_compressibility_liberation_correction_term(
     :return: Correction term for oil compressibility.
     """
     delta_p = max(0.01, 1e-4 * pressure)
-    gor_plus_delta = compute_gas_to_oil_ratio(
-        pressure=pressure + delta_p,
-        temperature=temperature,
-        bubble_point_pressure=bubble_point_pressure,
-        gas_gravity=gas_gravity,
-        oil_api_gravity=oil_api_gravity,
-        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
-    )
-    gor_minus_delta = compute_gas_to_oil_ratio(
-        pressure=pressure - delta_p,
-        temperature=temperature,
-        bubble_point_pressure=bubble_point_pressure,
-        gas_gravity=gas_gravity,
-        oil_api_gravity=oil_api_gravity,
-        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
-    )
-    dRs_dp = (gor_plus_delta - gor_minus_delta) / (2 * delta_p)
+    if (pressure_plus := (pressure + delta_p)) > 0:
+        gor_plus_delta = compute_gas_to_oil_ratio(
+            pressure=pressure_plus,
+            temperature=temperature,
+            bubble_point_pressure=bubble_point_pressure,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+        )
+    else:
+        gor_plus_delta = 0.0
 
-    return (gas_formation_volume_factor / oil_formation_volume_factor) * (
-        dRs_dp / 5.615
-    )
+    if (pressure_minus := (pressure - delta_p)) > 0:
+        gor_minus_delta = compute_gas_to_oil_ratio(
+            pressure=pressure_minus,
+            temperature=temperature,
+            bubble_point_pressure=bubble_point_pressure,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+        )
+    else:
+        gor_minus_delta = 0.0
+
+    dRs_dp = (gor_plus_delta - gor_minus_delta) / (2 * delta_p)
+    return (gas_formation_volume_factor / oil_formation_volume_factor) * dRs_dp / 5.615
 
 
 def compute_oil_compressibility(
@@ -1749,6 +1789,7 @@ def compute_oil_compressibility(
         C_o = C_o(P) + (Bg/Bo * dRs/dp) / 5.615
 
     where:
+
     - C_o is the oil compressibility (psi⁻¹)
     - R_s is the solution Gas-Oil Ratio (GOR) at current pressure and temperature
       in standard cubic feet per stock tank barrel (scf/stb).
@@ -1783,9 +1824,17 @@ def compute_oil_compressibility(
         )
 
     def compute_base_compressibility(pressure: float) -> float:
+        current_gor = compute_gas_to_oil_ratio(
+            pressure=pressure,
+            temperature=temperature,
+            bubble_point_pressure=bubble_point_pressure,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+        )
         val = (
             -1433
-            + 5 * gor_at_bubble_point_pressure
+            + 5 * current_gor
             + 17.2 * temperature
             - 1180 * gas_gravity
             + 12.61 * oil_api_gravity
@@ -2639,28 +2688,26 @@ def compute_hydrocarbon_in_place(
     thickness: float,
     porosity: float,
     phase_saturation: float,
-    gas_to_oil_ratio: float = 0.0,
-    water_saturation: float = 0.0,
-    formation_volume_factor: float = 1.0,
+    formation_volume_factor: float,
     net_to_gross_ratio: float = 1.0,
-    hydrocarbon_type: typing.Literal["oil", "gas"] = "oil",
+    hydrocarbon_type: typing.Literal["oil", "gas", "water"] = "oil",
 ) -> float:
     """
-    Computes the hydrocarbon in place (HCP) in stock tank barrels (STB) or standard cubic feet (SCF)
+    Computes the (free) hydrocarbon (or free water) in place (HCIP or FWIP) in stock tank barrels (STB) or standard cubic feet (SCF)
     using the volumetric method.
 
     The formula for oil in place (OIP) is:
         OIP = 7758 * A * h * φ * S_o * N/G / B_o
 
     The formula for gas in place (GIP) is:
-        GIP = 43560 * A * h * φ * S_g * N/G / B_g + R_s * OIP
+        GIP = 43560 * A * h * φ * S_g * N/G / B_g
 
     S_o = 1 - S_w - S_g (oil saturation)
     S_g = 1 - S_w - S_o (gas saturation)
 
     where:
     - OIP is the oil in place in stock tank barrels (STB).
-    - GIP is the gas in place in standard cubic feet (SCF).
+    - GIP is the free gas in place in standard cubic feet (SCF).
     - A is the area in acres.
     - h is the thickness in feet.
     - φ is the porosity (fraction).
@@ -2668,35 +2715,39 @@ def compute_hydrocarbon_in_place(
     - B_o is the formation volume factor for oil (RB/STB).
     - S_g is the gas saturation (fraction).
     - B_g is the formation volume factor for gas (RB/SCF).
-    - R_s is the solution gas-oil ratio (SCF/STB).
     - N/G is the net-to-gross ratio (fraction).
     - 7758 is the conversion factor from acre-feet to stock tank barrels.
     - 43560 is the conversion factor from acre-feet to cubic feet.
+
+    Note: This calculates **free** phase volumes:
+    - Free oil (excludes dissolved gas)
+    - Free gas (excludes solution gas in oil)
+    - Free water
+
+    Total gas = Free gas + (Oil volume x Rs)
+    where Rs is the solution gas-oil ratio.
 
     :param area: Area in acres.
     :param thickness: Thickness in feet.
     :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
     :param phase_saturation: Phase saturation as a fraction (e.g., 0.8 for 80%).
     :param formation_volume_factor: Formation volume factor (RB/STB or RB/SCF).
-    :param gas_to_oil_ratio: Gas-to-oil ratio (SCF/STB) for gas in place calculation.
-    :param water_saturation: Water saturation as a fraction (e.g., 0.2 for 20%). For gas in place calculation.
     :param hydrocarbon_type: Type of hydrocarbon ("oil" or "gas").
-    :return: Hydrocarbon in place (OIP in STB or GIP in SCF) if formation_volume_factor is not 1.0.
-        Else returns Hydrocarbon in Place (HCP) in bbl or ft³.
+    :return: Free hydrocarbon/water in place (OIP/WIP in STB, and GIP in SCF).
     """
+    if hydrocarbon_type not in {"oil", "gas", "water"}:
+        raise ValueError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
     if area <= 0 or thickness <= 0:
         raise ValueError("Area and thickness must be positive values.")
-    if not (0 < porosity < 1):
+    if not (0 <= porosity <= 1):
         raise ValueError("Porosity must be a fraction between 0 and 1.")
-    if not (0 < phase_saturation < 1):
+    if not (0 <= phase_saturation <= 1):
         raise ValueError("Phase saturation must be a fraction between 0 and 1.")
     if formation_volume_factor <= 0:
         raise ValueError("Formation volume factor must be a positive value.")
-    if hydrocarbon_type not in {"oil", "gas"}:
-        raise ValueError("Hydrocarbon type must be either 'oil' or 'gas'.")
 
-    if hydrocarbon_type == "oil":
-        # Oil in Place (OIP) calculation
+    if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
+        # Oil in Place (OIP) calculation (May include dissolved gas in undersaturated reservoirs)
         oip = (
             ACRE_FT_TO_BBL
             * area
@@ -2708,128 +2759,14 @@ def compute_hydrocarbon_in_place(
         )
         return oip
 
-    elif hydrocarbon_type == "gas":
-        # Gas in Place (GIP) calculation
-        gip_dry = (
-            ACRE_FT_TO_FT3
-            * area
-            * thickness
-            * porosity
-            * phase_saturation
-            * net_to_gross_ratio
-            / formation_volume_factor
-        )
-        # Add dissolved gas contribution: R_s * OIP
-        oip_equivalent = (
-            ACRE_FT_TO_BBL
-            * area
-            * thickness
-            * porosity
-            * (
-                1 - phase_saturation - water_saturation
-            )  # Assuming oil saturation is (1 - S_w - S_g)
-            * net_to_gross_ratio
-            / formation_volume_factor
-        )
-        gip = gip_dry + (gas_to_oil_ratio * oip_equivalent)
-        return gip
-
-    raise ValueError("Invalid hydrocarbon type specified.")
-
-
-def compute_oil_in_place(
-    area: float,
-    thickness: float,
-    porosity: float,
-    oil_saturation: float,
-    oil_formation_volume_factor: float = 1.0,
-    net_to_gross_ratio: float = 1.0,
-) -> float:
-    """
-    Computes the oil in place (OIP) in stock tank barrels (STB)
-    using the volumetric method.
-
-    The formula for oil in place (OIP) is:
-        OIP = 7758 * A * h * φ * S_o * N/G / B_o
-
-    where:
-    - OIP is the oil in place in stock tank barrels (STB).
-    - A is the area in acres.
-    - h is the thickness in feet.
-    - φ is the porosity (fraction).
-    - S_o is the oil saturation (fraction).
-    - B_o is the formation volume factor for oil (RB/STB).
-    - N/G is the net-to-gross ratio (fraction).
-    - 7758 is the conversion factor from acre-feet to stock tank barrels.
-
-    :param area: Area in acres.
-    :param thickness: Thickness in feet.
-    :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
-    :param oil_saturation: Oil saturation as a fraction (e.g., 0.8 for 80%).
-    :param oil_formation_volume_factor: Formation volume factor for oil (RB/STB).
-    :param net_to_gross_ratio: Net-to-gross ratio as a fraction (e.g., 0.9 for 90%).
-    :return: Oil in place (OIP) in stock tank barrels (STB) if formation_volume_factor is not 1.0.
-        Else returns Oil in Place (OIP) in bbls.
-    """
-    return compute_hydrocarbon_in_place(
-        area=area,
-        thickness=thickness,
-        porosity=porosity,
-        phase_saturation=oil_saturation,
-        formation_volume_factor=oil_formation_volume_factor,
-        net_to_gross_ratio=net_to_gross_ratio,
-        hydrocarbon_type="oil",
+    # Free Gas in Place (GIP) calculation
+    free_gip = (
+        ACRE_FT_TO_FT3
+        * area
+        * thickness
+        * porosity
+        * phase_saturation
+        * net_to_gross_ratio
+        / formation_volume_factor
     )
-
-
-def compute_gas_in_place(
-    area: float,
-    thickness: float,
-    porosity: float,
-    gas_saturation: float,
-    gas_formation_volume_factor: float = 1.0,
-    gas_to_oil_ratio: float = 0.0,
-    water_saturation: float = 0.0,
-    net_to_gross_ratio: float = 1.0,
-) -> float:
-    """
-    Computes the gas in place (GIP) in standard cubic feet (SCF)
-    using the volumetric method.
-
-    The formula for gas in place (GIP) is:
-        GIP = 43560 * A * h * φ * S_g * N/G / B_g + R_s * OIP
-
-    where:
-    - GIP is the gas in place in standard cubic feet (SCF).
-    - A is the area in acres.
-    - h is the thickness in feet.
-    - φ is the porosity (fraction).
-    - S_g is the gas saturation (fraction).
-    - B_g is the formation volume factor for gas (RB/SCF).
-    - R_s is the solution gas-oil ratio (SCF/STB).
-    - N/G is the net-to-gross ratio (fraction).
-    - OIP is the oil in place (STB).
-    - 43560 is the conversion factor from acre-feet to cubic feet.
-
-    :param area: Area in acres.
-    :param thickness: Thickness in feet.
-    :param porosity: Porosity as a fraction (e.g., 0.2 for 20%).
-    :param gas_saturation: Gas saturation as a fraction (e.g., 0.8 for 80%).
-    :param gas_formation_volume_factor: Formation volume factor for gas (RB/SCF).
-    :param gas_to_oil_ratio: Gas-to-oil ratio (SCF/STB) for dissolved gas contribution.
-    :param water_saturation: Water saturation as a fraction (e.g., 0.2 for 20%).
-    :param net_to_gross_ratio: Net-to-gross ratio as a fraction (e.g., 0.9 for 90%).
-    :return: Gas in place (GIP) in standard cubic feet (SCF) if formation_volume_factor is not 1.0.
-        Else returns Gas in Place (GIP) in ft³.
-    """
-    return compute_hydrocarbon_in_place(
-        area=area,
-        thickness=thickness,
-        porosity=porosity,
-        phase_saturation=gas_saturation,
-        formation_volume_factor=gas_formation_volume_factor,
-        gas_to_oil_ratio=gas_to_oil_ratio,
-        water_saturation=water_saturation,
-        net_to_gross_ratio=net_to_gross_ratio,
-        hydrocarbon_type="gas",
-    )
+    return free_gip

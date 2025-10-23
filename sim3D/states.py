@@ -11,12 +11,12 @@ from sim3D.grids import uniform_grid
 from sim3D.properties import compute_hydrocarbon_in_place
 from sim3D.static import ReservoirModel
 from sim3D.types import NDimension, RateGrids
-from sim3D.wells import Wells
+from sim3D.wells import Wells, _expand_intervals
 
 logger = logging.getLogger(__name__)
 
 
-__all__ = ["ModelState", "ModelAnalysis"]
+__all__ = ["ModelState", "ModelAnalyst"]
 
 
 @attrs.define(frozen=True, slots=True)
@@ -164,9 +164,9 @@ class ModelState(typing.Generic[NDimension]):
     wells: Wells[NDimension]
     """The wells configuration at this state."""
     injection: typing.Optional[RateGrids[NDimension]] = None
-    """Fluids injection rates at this state."""
+    """Fluids injection rates at this state in ft³/day."""
     production: typing.Optional[RateGrids[NDimension]] = None
-    """Fluids production rates at this state."""
+    """Fluids production rates at this state in ft³/day."""
 
     @property
     def time(self) -> float:
@@ -176,14 +176,31 @@ class ModelState(typing.Generic[NDimension]):
         return self.time_step * self.time_step_size
 
 
-class ModelAnalysis(typing.Generic[NDimension]):
+hcip_vectorized = np.vectorize(
+    compute_hydrocarbon_in_place, excluded=["hydrocarbon_type"], cache=True
+)
+
+
+class ModelAnalyst(typing.Generic[NDimension]):
     """
     Analysis tools for evaluating reservoir performance over a series of model states.
     """
 
     def __init__(self, states: typing.Iterable[ModelState[NDimension]]) -> None:
+        """
+        Initializes the model analyst with a series of model states.
+
+        :param states: An iterable of `ModelState` instances representing the simulation states.
+        """
         self._states = sorted(states, key=lambda s: s.time_step)
-        """A list of `ModelState` objects sorted by time step."""
+        self._max_time_step = self._states[-1].time_step
+        self._state_count = len(self._states)
+        if self._max_time_step != (self._state_count - 1):
+            logger.debug(
+                "Model states have non-sequential time steps. Max time step: %d, State count: %d",
+                self._max_time_step,
+                self._state_count,
+            )
 
     def get_state(self, time_step: int) -> ModelState[NDimension]:
         """
@@ -218,15 +235,15 @@ class ModelAnalysis(typing.Generic[NDimension]):
     @property
     def cumulative_oil_produced(self) -> float:
         """The cumulative oil produced in stock tank barrels (STB) from the start of the simulation to the current time step."""
-        return self.oil_produced(0, -1)
+        return self.net_oil_produced(0, -1)
 
     No = cumulative_oil_produced
     """Cumulative oil produced in stock tank barrels (STB)."""
 
     @property
     def cumulative_gas_produced(self) -> float:
-        """Return the cumulative gas produced in standard cubic feet (scf)."""
-        return self.gas_produced(0, -1)
+        """Return the cumulative gas produced in standard cubic feet (SCF)."""
+        return self.net_gas_produced(0, -1)
 
     Ng = cumulative_gas_produced
     """Cumulative gas produced in standard cubic feet (scf)."""
@@ -234,7 +251,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
     @property
     def cumulative_water_produced(self) -> float:
         """Return the cumulative water produced in stock tank barrels (STB)."""
-        return self.water_produced(0, -1)
+        return self.net_water_produced(0, -1)
 
     Nw = cumulative_water_produced
     """Cumulative water produced in stock tank barrels (STB)."""
@@ -291,9 +308,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
             value=cell_area_in_acres,
             dtype=np.float32,
         )
-        stoiip_grid = np.vectorize(
-            compute_hydrocarbon_in_place, excluded=["hydrocarbon_type"]
-        )(
+        stoiip_grid = hcip_vectorized(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
@@ -307,10 +322,10 @@ class ModelAnalysis(typing.Generic[NDimension]):
     @functools.cache
     def gas_in_place(self, time_step: int = -1) -> float:
         """
-        Computes the total gas in place at a specific time step.
+        Computes the total free gas in place at a specific time step.
 
         :param time_step: The time step index to compute gas in place for.
-        :return: The total gas in place in scf
+        :return: The total free gas in place in SCF
         """
         state = self.get_state(time_step)
         model = state.model
@@ -320,14 +335,11 @@ class ModelAnalysis(typing.Generic[NDimension]):
             value=cell_area_in_acres,
             dtype=np.float32,
         )
-        stgiip_grid = np.vectorize(
-            compute_hydrocarbon_in_place, excluded=["hydrocarbon_type"]
-        )(
+        stgiip_grid = hcip_vectorized(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
             phase_saturation=model.fluid_properties.gas_saturation_grid,
-            gas_to_oil_ratio=model.fluid_properties.gas_to_oil_ratio_grid,
             formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="gas",
@@ -350,9 +362,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
             value=cell_area_in_acres,
             dtype=np.float32,
         )
-        water_in_place_grid = np.vectorize(
-            compute_hydrocarbon_in_place, excluded=["hydrocarbon_type"]
-        )(
+        water_in_place_grid = hcip_vectorized(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
@@ -367,14 +377,14 @@ class ModelAnalysis(typing.Generic[NDimension]):
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
-        Computes the oil in place history between two time steps.
+        Get the oil in place history between two time steps.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
-        :return: A generator yielding tuples of time step and oil in place.
+        :return: A generator yielding tuples of time step and oil in place in (STB).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.oil_in_place(t))
@@ -383,14 +393,14 @@ class ModelAnalysis(typing.Generic[NDimension]):
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
-        Computes the gas in place history between two time steps.
+        Computes the free gas in place history between two time steps.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
-        :return: A generator yielding tuples of time step and gas in place.
+        :return: A generator yielding tuples of time step and gas in place in (SCF).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.gas_in_place(t))
@@ -403,151 +413,389 @@ class ModelAnalysis(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
-        :return: A generator yielding tuples of time step and water in place.
+        :return: A generator yielding tuples of time step and water in place in (STB).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.water_in_place(t))
 
     @functools.cache
-    def oil_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def net_oil_produced(self, from_time_step: int, to_time_step: int) -> float:
         """
-        Computes the cumulative oil produced between two time steps.
+        Computes the cumulative net oil produced between two time steps.
+
+        If:
+        - production rates are present, they contribute positively to production.
+        - injection rates are present, they contribute negatively to production.
+        - `from_time_step` equals `to_time_step`, the production at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative production is returned.
+
+        Negative production values indicate net injection.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :return: The cumulative oil produced in STB
         """
-        if from_time_step == to_time_step:
-            return 0.0
-        initial_oil_in_place = self.oil_in_place(from_time_step)
-        final_oil_in_place = self.oil_in_place(to_time_step)
-        return initial_oil_in_place - final_oil_in_place
+        total_production = 0.0
+        for t in range(from_time_step, to_time_step + 1):
+            state = self.get_state(t)
+            # Production is in ft³/day, convert to STB using FVF
+            oil_production = (
+                state.production.oil if state.production is not None else None
+            )
+            oil_injection = state.injection.oil if state.injection is not None else None
+            time_step_in_days = (
+                state.time_step_size / 86400.0
+            )  # Convert seconds to days
+            oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
+
+            time_step_production = 0.0
+            if oil_production is not None:
+                oil_production_stb_day = oil_production * FT3_TO_BBL / oil_fvf_grid
+                time_step_production += np.nansum(
+                    oil_production_stb_day * time_step_in_days
+                )
+
+            if oil_injection is not None:
+                oil_injection_stb_day = oil_injection * FT3_TO_BBL / oil_fvf_grid
+                time_step_production -= np.nansum(
+                    oil_injection_stb_day * time_step_in_days
+                )
+
+            total_production += time_step_production
+            print(f"Time Step {t}: Total Oil Production STB = {time_step_production}")
+        return float(total_production)
 
     @functools.cache
-    def gas_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def net_gas_produced(self, from_time_step: int, to_time_step: int) -> float:
         """
-        Computes the cumulative gas produced between two time steps.
+        Computes the cumulative net gas produced between two time steps.
+
+        If:
+        - production rates are present, they contribute positively to production.
+        - injection rates are present, they contribute negatively to production.
+        - `from_time_step` equals `to_time_step`, the production at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative production is returned.
+
+        Negative production values indicate net injection.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :return: The cumulative gas produced in scf
         """
-        if from_time_step == to_time_step:
-            return 0.0
-        initial_gas_in_place = self.gas_in_place(from_time_step)
-        final_gas_in_place = self.gas_in_place(to_time_step)
-        return initial_gas_in_place - final_gas_in_place
+        total_production = 0.0
+        for t in range(from_time_step, to_time_step + 1):
+            state = self.get_state(t)
+            # Production is in ft³/day, convert to scf using FVF
+            gas_production = (
+                state.production.gas if state.production is not None else None
+            )
+            gas_injection = state.injection.gas if state.injection is not None else None
+            time_step_in_days = (
+                state.time_step_size / 86400.0
+            )  # Convert seconds to days
+            gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
+
+            time_step_production = 0.0
+            if gas_production is not None:
+                gas_production_scf_day = gas_production / gas_fvf_grid
+                time_step_production += np.nansum(
+                    gas_production_scf_day * time_step_in_days
+                )
+
+            if gas_injection is not None:
+                gas_injection_scf_day = gas_injection / gas_fvf_grid
+                time_step_production -= np.nansum(
+                    gas_injection_scf_day * time_step_in_days
+                )
+
+            total_production += time_step_production
+            print(f"Time Step {t}: Total Gas Production SCF = {time_step_production}")
+
+        return float(total_production)
 
     @functools.cache
-    def water_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def net_water_produced(self, from_time_step: int, to_time_step: int) -> float:
         """
-        Computes the cumulative water produced between two time steps.
+        Computes the cumulative net water produced between two time steps.
+
+        If:
+        - production rates are present, they contribute positively to production.
+        - injection rates are present, they contribute negatively to production.
+        - `from_time_step` equals `to_time_step`, the production at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative production is returned.
+
+        Negative production values indicate net injection.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :return: The cumulative water produced in STB
         """
-        if from_time_step == to_time_step:
-            return 0.0
-        initial_water_in_place = self.water_in_place(from_time_step)
-        final_water_in_place = self.water_in_place(to_time_step)
-        return initial_water_in_place - final_water_in_place
+        total_production = 0.0
+        for t in range(from_time_step, to_time_step + 1):
+            state = self.get_state(t)
+            # Production is in ft³/day, convert to STB using FVF
+            water_production = (
+                state.production.water if state.production is not None else None
+            )
+            water_injection = (
+                state.injection.water if state.injection is not None else None
+            )
+            time_step_in_days = (
+                state.time_step_size / 86400.0
+            )  # Convert seconds to days
+            water_fvf_grid = (
+                state.model.fluid_properties.water_formation_volume_factor_grid
+            )
+
+            time_step_production = 0.0
+            if water_production is not None:
+                water_production_stb_day = (
+                    water_production * FT3_TO_BBL / water_fvf_grid
+                )
+                time_step_production += np.nansum(
+                    water_production_stb_day * time_step_in_days
+                )
+
+            if water_injection is not None:
+                water_injection_stb_day = water_injection * FT3_TO_BBL / water_fvf_grid
+                time_step_production -= np.nansum(
+                    water_injection_stb_day * time_step_in_days
+                )
+
+            total_production += time_step_production
+            print(f"Time Step {t}: Total Water Production STB = {time_step_production}")
+        return float(total_production)
+
+    def net_oil_injected(self, from_time_step: int, to_time_step: int) -> float:
+        """
+        Computes the cumulative net oil injected between two time steps.
+
+        If:
+        - injection rates are present, they contribute positively to injection.
+        - production rates are present, they contribute negatively to injection.
+        - `from_time_step` equals `to_time_step`, the injection at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative injection is returned.
+
+        Negative injection values indicate net production.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :return: The cumulative oil injected in STB
+        """
+        # Negate net oil production to get net injection
+        oil_injected = -self.net_oil_produced(from_time_step, to_time_step)
+        return oil_injected
+
+    def net_gas_injected(self, from_time_step: int, to_time_step: int) -> float:
+        """
+        Computes the cumulative net gas injected between two time steps.
+
+        If:
+        - injection rates are present, they contribute positively to injection.
+        - production rates are present, they contribute negatively to injection.
+        - `from_time_step` equals `to_time_step`, the injection at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative injection is returned.
+
+        Negative injection values indicate net production.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :return: The cumulative gas injected in scf
+        """
+        # Negate net gas production to get net injection
+        gas_injected = -self.net_gas_produced(from_time_step, to_time_step)
+        return gas_injected
+
+    def net_water_injected(self, from_time_step: int, to_time_step: int) -> float:
+        """
+        Computes the cumulative net water injected between two time steps.
+
+        If:
+        - injection rates are present, they contribute positively to injection.
+        - production rates are present, they contribute negatively to injection.
+        - `from_time_step` equals `to_time_step`, the injection at that time step is returned.
+        - `from_time_step` is 0 and `to_time_step` is -1, the total cumulative injection is returned.
+
+        Negative injection values indicate net production.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :return: The cumulative water injected in STB
+        """
+        # Negate net water production to get net injection
+        water_injected = -self.net_water_produced(from_time_step, to_time_step)
+        return water_injected
 
     def oil_production_history(
         self,
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
-        incremental: bool = False,
+        cumulative: bool = False,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
-        Computes the oil production history between two time steps.
+        Get the oil production history between two time steps.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
-        :param incremental: If True, returns production between adjacent time steps. If False (default), returns cumulative production from start.
-        :return: A generator yielding tuples of time step and oil produced (cumulative or incremental).
+        :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :return: A generator yielding tuples of time step and oil produced (cumulative or exclusive).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
-            if incremental and t > from_time_step:
-                # Calculate production between previous time step and current time step
-                prev_t = max(from_time_step, t - interval)
-                yield (t, self.oil_produced(prev_t, t))
-            elif incremental and t == from_time_step:
-                # For the first time step in incremental mode, production is 0
-                yield (t, 0.0)
+            if cumulative:
+                # Cumulative production from start of simulation to time step t
+                yield (t, self.net_oil_produced(0, t))
             else:
-                # Cumulative production from start of simulation
-                yield (t, self.oil_produced(0, t))
+                # Calculate production at time step t (exclusive)
+                # Use time step t for both from and to to get production at that step
+                yield (t, self.net_oil_produced(t, t))
 
     def gas_production_history(
         self,
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
-        incremental: bool = False,
+        cumulative: bool = False,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
-        Computes the gas production history between two time steps.
+        Get the gas production history between two time steps.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
-        :param incremental: If True, returns production between adjacent time steps. If False (default), returns cumulative production from start.
-        :return: A generator yielding tuples of time step and gas produced (cumulative or incremental).
+        :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :return: A generator yielding tuples of time step and gas produced (cumulative or exclusive).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
-            if incremental and t > from_time_step:
-                # Calculate production between previous time step and current time step
-                prev_t = max(from_time_step, t - interval)
-                yield (t, self.gas_produced(prev_t, t))
-            elif incremental and t == from_time_step:
-                # For the first time step in incremental mode, production is 0
-                yield (t, 0.0)
-            else:
+            if cumulative:
                 # Cumulative production from start of simulation
-                yield (t, self.gas_produced(0, t))
+                yield (t, self.net_gas_produced(0, t))
+            else:
+                # Calculate production at time step t (exclusive)
+                # Use time step t for both from and to to get production at that step
+                yield (t, self.net_gas_produced(t, t))
 
     def water_production_history(
         self,
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
-        incremental: bool = False,
+        cumulative: bool = False,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
-        Computes the water production history between two time steps.
+        Get the water production history between two time steps.
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
-        :param incremental: If True, returns production between adjacent time steps. If False (default), returns cumulative production from start.
-        :return: A generator yielding tuples of time step and water produced (cumulative or incremental).
+        :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :return: A generator yielding tuples of time step and water produced (cumulative or exclusive).
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
-            if incremental and t > from_time_step:
-                # Calculate production between previous time step and current time step
-                prev_t = max(from_time_step, t - interval)
-                yield (t, self.water_produced(prev_t, t))
-            elif incremental and t == from_time_step:
-                # For the first time step in incremental mode, production is 0
-                yield (t, 0.0)
-            else:
+            if cumulative:
                 # Cumulative production from start of simulation
-                yield (t, self.water_produced(0, t))
+                yield (t, self.net_water_produced(0, t))
+            else:
+                # Calculate production at time step t (exclusive)
+                # Use time step t for both from and to to get production at that step
+                yield (t, self.net_water_produced(t, t))
+
+    def oil_injection_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+        cumulative: bool = False,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the oil injection history between two time steps.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :param interval: Time step interval for sampling.
+        :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :return: A generator yielding tuples of time step and oil injected (cumulative or exclusive).
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        for t in range(from_time_step, to_time_step + 1, interval):
+            if cumulative:
+                # Cumulative injection from start of simulation
+                yield (t, self.net_oil_injected(0, t))
+            else:
+                # Calculate injection at time step t (exclusive)
+                # Use time step t for both from and to to get injection at that step
+                yield (t, self.net_oil_injected(t, t))
+
+    def gas_injection_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+        cumulative: bool = False,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the gas injection history between two time steps.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :param interval: Time step interval for sampling.
+        :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :return: A generator yielding tuples of time step and gas injected (cumulative or exclusive).
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        for t in range(from_time_step, to_time_step + 1, interval):
+            if cumulative:
+                # Cumulative injection from start of simulation
+                yield (t, self.net_gas_injected(0, t))
+            else:
+                # Calculate injection at time step t (exclusive)
+                # Use time step t for both from and to to get injection at that step
+                yield (t, self.net_gas_injected(t, t))
+
+    def water_injection_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+        cumulative: bool = False,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the water injection history between two time steps.
+
+        :param from_time_step: The starting time step index (inclusive).
+        :param to_time_step: The ending time step index (inclusive).
+        :param interval: Time step interval for sampling.
+        :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :return: A generator yielding tuples of time step and water injected (cumulative or exclusive).
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        for t in range(from_time_step, to_time_step + 1, interval):
+            if cumulative:
+                # Cumulative injection from start of simulation
+                yield (t, self.net_water_injected(0, t))
+            else:
+                # Calculate injection at time step t (exclusive)
+                # Use time step t for both from and to to get injection at that step
+                yield (t, self.net_water_injected(t, t))
 
     def reservoir_volumetrics_analysis(
         self, time_step: int = -1
@@ -698,9 +946,9 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :param time_step: The time step index to analyze cumulative production for.
         :return: `CumulativeProduction` containing detailed cumulative analysis.
         """
-        cumulative_oil = self.oil_produced(0, time_step)
-        cumulative_gas = self.gas_produced(0, time_step)
-        cumulative_water = self.water_produced(0, time_step)
+        cumulative_oil = self.net_oil_produced(0, time_step)
+        cumulative_gas = self.net_gas_produced(0, time_step)
+        cumulative_water = self.net_water_produced(0, time_step)
         return CumulativeProduction(
             cumulative_oil=cumulative_oil,
             cumulative_gas=cumulative_gas,
@@ -792,8 +1040,8 @@ class ModelAnalysis(typing.Generic[NDimension]):
             state.model.fluid_properties.gas_compressibility_grid
         )
         # Cumulative production
-        cumulative_oil = self.oil_produced(0, time_step)
-        cumulative_water = self.water_produced(0, time_step)
+        cumulative_oil = self.net_oil_produced(0, time_step)
+        cumulative_water = self.net_water_produced(0, time_step)
 
         # Initial volumes in place
         initial_oil = self.oil_in_place(0)
@@ -1019,7 +1267,10 @@ class ModelAnalysis(typing.Generic[NDimension]):
             well_ipr_flow_rate = 0.0
             well_reservoir_pressure = 0.0
 
-            for cell_location in well.perforating_interval:
+            cell_locations = _expand_intervals(
+                well.perforating_intervals, orientation=well.orientation
+            )
+            for cell_location in cell_locations:
                 i, j, k = cell_location
                 cell_pressure = float(
                     state.model.fluid_properties.pressure_grid[i, j, k]
@@ -1056,9 +1307,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
                     reservoir_pressure=float(cell_pressure),
                     bottom_hole_pressure=float(bottom_hole_pressure),
                     current_rate=float(
-                        rates.oil_rate
-                        / len(production_wells)
-                        / len(well.perforating_interval)
+                        rates.oil_rate / len(production_wells) / len(cell_locations)
                     ),
                     productivity_index=float(cell_productivity_index),
                     state=state,
@@ -1066,6 +1315,9 @@ class ModelAnalysis(typing.Generic[NDimension]):
                 )
 
                 # Accumulate cell values for this well
+                well_productivity_index += cell_productivity_index
+                well_ipr_flow_rate += cell_ipr_flow_rate
+                well_reservoir_pressure += cell_pressure
                 well_productivity_index += cell_productivity_index
                 well_ipr_flow_rate += cell_ipr_flow_rate
                 well_reservoir_pressure += cell_pressure
@@ -1319,7 +1571,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: DeclineCurveResult containing decline curve parameters and forecasts.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         # Collect production rate data over specified time range
         time_steps_list = []
@@ -1547,7 +1799,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `ReservoirVolumetrics`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.reservoir_volumetrics_analysis(t))
@@ -1569,7 +1821,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `InstantaneousRates`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         rate_method = (
             self.instantaneous_production_rates
@@ -1592,7 +1844,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `CumulativeProduction`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.cumulative_production_analysis(t))
@@ -1609,7 +1861,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `MaterialBalanceAnalysis`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.material_balance_analysis(t))
@@ -1626,7 +1878,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `SweepEfficiencyAnalysis`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.sweep_efficiency_analysis(t))
@@ -1649,7 +1901,7 @@ class ModelAnalysis(typing.Generic[NDimension]):
         :return: Generator yielding (time_step, `ProductivityAnalysis`) tuples.
         """
         if to_time_step < 0:
-            to_time_step = self._states[-1].time_step + 1 + to_time_step
+            to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.productivity_analysis(t, ipr_method=ipr_method, phase=phase))

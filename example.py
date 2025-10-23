@@ -6,7 +6,6 @@ import sim3D
 from sim3D.properties import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
-    compute_gas_formation_volume_factor,
     compute_gas_gravity,
     compute_gas_molecular_weight,
 )
@@ -16,11 +15,11 @@ np.set_printoptions(threshold=np.inf)  # type: ignore
 
 def main():
     cell_dimension = (300.0, 300.0)
-    grid_dimension = typing.cast(
+    grid_shape = typing.cast(
         sim3D.ThreeDimensions, (10, 10, 7)
     )  # (x, y, z) dimensions of the grid in cells
     # Height of each cell in the z-direction (in feet)
-    thickness_grid = sim3D.uniform_grid(grid_dimension=grid_dimension, value=150.0)
+    thickness_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=150.0)
     thickness_grid[:, :, 2] = 90.0  # Making the top layer thinner
     pressure_range = (500.0, 800.0)
     oil_viscosity_range = (5.0, 10.0)
@@ -29,70 +28,84 @@ def main():
 
     # pressures in psi, viscosities in cP, compressibilities in 1/psi, densities in lb/ft^3
     pressure_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
+        grid_shape=grid_shape,
         layer_values=np.random.uniform(
-            low=pressure_range[0], high=pressure_range[1], size=grid_dimension[2]
+            low=pressure_range[0], high=pressure_range[1], size=grid_shape[2]
         ),
         orientation=sim3D.Orientation.Z,
     )
     oil_bubble_point_pressure_grid = sim3D.uniform_grid(
-        grid_dimension=grid_dimension, value=800.0
-    )
-    oil_saturation_grid = sim3D.uniform_grid(grid_dimension=grid_dimension, value=0.64)
-    water_saturation_grid = sim3D.uniform_grid(
-        grid_dimension=grid_dimension, value=0.23
-    )
-    gas_saturation_grid = typing.cast(
-        sim3D.ThreeDimensionalGrid, 1.0 - oil_saturation_grid - water_saturation_grid
+        grid_shape=grid_shape, value=800.0
     )
     residual_oil_saturation_water_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(0.05, 0.2, grid_dimension[2]),
+        grid_shape=grid_shape,
+        layer_values=np.linspace(0.05, 0.2, grid_shape[2]),
         orientation=sim3D.Orientation.Z,
     )
     residual_oil_saturation_gas_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(0.1, 0.25, grid_dimension[2]),
+        grid_shape=grid_shape,
+        layer_values=np.linspace(0.1, 0.25, grid_shape[2]),
         orientation=sim3D.Orientation.Z,
     )
     irreducible_water_saturation_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(0.05, 0.14, grid_dimension[2]),
+        grid_shape=grid_shape,
+        layer_values=np.linspace(0.05, 0.14, grid_shape[2]),
         orientation=sim3D.Orientation.Z,
     )
     residual_gas_saturation_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(0.05, 0.1, grid_dimension[2]),
+        grid_shape=grid_shape,
+        layer_values=np.linspace(0.05, 0.1, grid_shape[2]),
         orientation=sim3D.Orientation.Z,
     )
+    porosity_grid = sim3D.layered_grid(
+        grid_shape=grid_shape,
+        layer_values=np.linspace(0.1, 0.3, grid_shape[2]),  # Porosity in fraction
+        orientation=sim3D.Orientation.Z,
+    )
+    water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
+        sim3D.build_saturation_grids(
+            thickness_grid=thickness_grid,
+            gas_oil_contact=1000.0,
+            oil_water_contact=1500.0,
+            connate_water_saturation_grid=irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=residual_gas_saturation_grid,
+            porosity_grid=porosity_grid,
+            use_transition_zones=True,
+            oil_water_transition_thickness=50.0,
+            gas_oil_transition_thickness=50.0,
+            transition_curvature_exponent=2.0,
+        )
+    )
     oil_viscosity_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
+        grid_shape=grid_shape,
         layer_values=np.linspace(
-            oil_viscosity_range[0], oil_viscosity_range[1], grid_dimension[2]
+            oil_viscosity_range[0], oil_viscosity_range[1], grid_shape[2]
         ),
         orientation=sim3D.Orientation.Z,
     )
     oil_compressibility_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
+        grid_shape=grid_shape,
         layer_values=np.linspace(
             oil_compressibility_range[0],
             oil_compressibility_range[1],
-            grid_dimension[2],
+            grid_shape[2],
         ),
         orientation=sim3D.Orientation.Z,
     )
     oil_specific_gravity_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
+        grid_shape=grid_shape,
         layer_values=np.linspace(
             oil_specific_gravity_range[0],
             oil_specific_gravity_range[1],
-            grid_dimension[2],
+            grid_shape[2],
         ),
         orientation=sim3D.Orientation.Z,
     )
     # Permeabilities in mD
-    x_permeability_grid = sim3D.uniform_grid(grid_dimension=grid_dimension, value=50)
-    y_permeability_grid = sim3D.uniform_grid(grid_dimension=grid_dimension, value=30)
+    x_permeability_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=50)
+    y_permeability_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=30)
     z_permeability_grid = typing.cast(
         sim3D.ThreeDimensionalGrid, x_permeability_grid * 0.2
     )
@@ -136,14 +149,9 @@ def main():
         gas_oil_entry_pressure=0.5,  # in psi
         gas_oil_pore_size_distribution_index=2.0,
     )
-    porosity_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(0.1, 0.3, grid_dimension[2]),  # Porosity in fraction
-        orientation=sim3D.Orientation.Z,
-    )
     temperature_grid = sim3D.layered_grid(
-        grid_dimension=grid_dimension,
-        layer_values=np.linspace(100, 300, grid_dimension[2]),  # Temperature in °F
+        grid_shape=grid_shape,
+        layer_values=np.linspace(100, 300, grid_shape[2]),  # Temperature in °F
         orientation=sim3D.Orientation.Z,
     )
     rock_compressibility = 1.45e-13  # Rock compressibility in 1/psi
@@ -159,11 +167,9 @@ def main():
         }
     )
     methane_gravity = compute_gas_gravity(gas="Methane")
-    gas_gravity_grid = sim3D.uniform_grid(
-        grid_dimension=grid_dimension, value=methane_gravity
-    )
+    gas_gravity_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=methane_gravity)
     model = sim3D.reservoir_model(
-        grid_dimension=grid_dimension,
+        grid_shape=grid_shape,
         cell_dimension=cell_dimension,
         thickness_grid=thickness_grid,
         pressure_grid=pressure_grid,
@@ -205,10 +211,12 @@ def main():
     )
     injector_A = sim3D.injection_well(
         well_name="Injector A",
-        perforating_interval=(
-            (4, 3, 3),
-            (4, 3, 6),
-        ),  # Perforating interval in grid coordinates
+        perforating_intervals=[
+            (
+                (4, 3, 3),
+                (4, 3, 6),
+            )
+        ],  # Perforating intervals in grid coordinates
         radius=0.9281,
         bottom_hole_pressure=1200.0,  # Bottom hole pressure in psi
         injected_fluid=sim3D.WellFluid(
@@ -222,10 +230,12 @@ def main():
 
     injector_B = sim3D.injection_well(
         well_name="Injector B",
-        perforating_interval=(
-            (2, 7, 3),
-            (2, 7, 6),
-        ),  # Perforating interval in grid coordinates
+        perforating_intervals=[
+            (
+                (2, 7, 3),
+                (2, 7, 6),
+            )
+        ],  # Perforating intervals in grid coordinates
         radius=0.9281,
         bottom_hole_pressure=1000.0,  # Bottom hole pressure in psi
         injected_fluid=sim3D.WellFluid(
@@ -239,10 +249,12 @@ def main():
 
     producer_A = sim3D.production_well(
         well_name="Producer A",
-        perforating_interval=(
-            (7, 7, 3),
-            (7, 7, 6),
-        ),  # Perforating interval in grid coordinates
+        perforating_intervals=[
+            (
+                (7, 7, 3),
+                (7, 7, 6),
+            )
+        ],  # Perforating intervals in grid coordinates
         radius=0.5281,
         bottom_hole_pressure=425.0,  # Bottom hole pressure in psi
         produced_fluids=(

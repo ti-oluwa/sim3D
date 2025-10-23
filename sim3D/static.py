@@ -2,7 +2,7 @@
 
 import typing
 
-from attrs import define, field
+import attrs
 import numpy as np
 
 from sim3D.boundaries import BoundaryConditions
@@ -12,6 +12,7 @@ from sim3D.types import (
     WettabilityType,
     RelativePermeabilityFunc,
 )
+from sim3D.fluid_contacts import build_elevation_grid
 
 
 __all__ = [
@@ -23,7 +24,7 @@ __all__ = [
 ]
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class CapillaryPressureParameters:
     """Parameters defining the capillary pressure curve (e.g., Brooks-Corey)."""
 
@@ -77,7 +78,7 @@ class CapillaryPressureParameters:
     """
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class FluidProperties(typing.Generic[NDimension]):
     """
     Fluid properties of a reservoir model.
@@ -171,7 +172,7 @@ class FluidProperties(typing.Generic[NDimension]):
     """Name of the reservoir gas (e.g., Methane, Ethane, CO2, N2). Can also be the name of the gas injected into the reservoir."""
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class RockPermeability(typing.Generic[NDimension]):
     """
     Rock permeability in the reservoir, in milliDarcy (mD).
@@ -182,9 +183,9 @@ class RockPermeability(typing.Generic[NDimension]):
 
     x: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the permeability distribution in the x-direction (mD)."""
-    y: NDimensionalGrid[NDimension] = field(factory=lambda: np.empty((0, 0)))  # type: ignore[assignment]
+    y: NDimensionalGrid[NDimension] = attrs.field(factory=lambda: np.empty((0, 0)))  # type: ignore[assignment]
     """N-dimensional numpy array representing the permeability distribution in the y-direction (mD)."""
-    z: NDimensionalGrid[NDimension] = field(factory=lambda: np.empty((0, 0)))  # type: ignore[assignment]
+    z: NDimensionalGrid[NDimension] = attrs.field(factory=lambda: np.empty((0, 0)))  # type: ignore[assignment]
     """N-dimensional numpy array representing the permeability distribution in the z-direction (mD)."""
 
     def __attrs_post_init__(self) -> None:
@@ -194,7 +195,7 @@ class RockPermeability(typing.Generic[NDimension]):
             object.__setattr__(self, "z", self.x)
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class RockProperties(typing.Generic[NDimension]):
     """
     Rock properties of a reservoir model.
@@ -210,6 +211,8 @@ class RockProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the net-to-gross ratio distribution across the reservoir rock (fraction)."""
     porosity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the porosity distribution across the reservoir rock (fraction)."""
+    connate_water_saturation_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the connate water saturation distribution (fraction)."""
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the irreducible water saturation distribution (fraction)."""
     residual_oil_saturation_water_grid: NDimensionalGrid[NDimension]
@@ -220,7 +223,7 @@ class RockProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the residual gas saturation distribution (fraction)."""
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class RockFluidProperties:
     """
     Combined rock and fluid properties of a reservoir model.
@@ -229,13 +232,13 @@ class RockFluidProperties:
 
     relative_permeability_func: RelativePermeabilityFunc
     """Callable that evaluates the relative permeability curves based on fluid saturations."""
-    capillary_pressure_params: CapillaryPressureParameters = field(
+    capillary_pressure_params: CapillaryPressureParameters = attrs.field(
         factory=CapillaryPressureParameters
     )
     """Parameters for capillary pressure curve."""
 
 
-@define(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class ReservoirModel(typing.Generic[NDimension]):
     """Models a reservoir in N-dimensional space for simulation."""
 
@@ -251,7 +254,7 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock properties of the reservoir model."""
     rock_fluid_properties: RockFluidProperties
     """Rock-fluid properties of the reservoir model."""
-    boundary_conditions: BoundaryConditions = field(factory=BoundaryConditions)
+    boundary_conditions: BoundaryConditions = attrs.field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
 
     def get_elevation_grid(
@@ -266,46 +269,4 @@ class ReservoirModel(typing.Generic[NDimension]):
         :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
         :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
         """
-        return elevation_grid(self.thickness_grid, direction)
-
-
-def elevation_grid(
-    thickness_grid: NDimensionalGrid[NDimension],
-    direction: typing.Literal["downward", "upward"] = "downward",
-) -> NDimensionalGrid[NDimension]:
-    """
-    Convert a cell thickness (height) grid into an absolute elevation grid (cell center z-coordinates).
-
-    The elevation grid is generated based on the thickness of each cell, starting from the top or bottom
-    of the reservoir, depending on the specified direction.
-
-    :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft).
-    :param direction: Direction to generate the elevation grid.
-        Can be "downward" (from top to bottom) or "upward" (from bottom to top).
-    :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
-    """
-    if direction not in {"downward", "upward"}:
-        raise ValueError("direction must be 'downward' or 'upward'")
-
-    nz, _, _ = thickness_grid.shape
-    elevation_grid = np.zeros_like(thickness_grid, dtype=float)
-
-    if direction == "downward":
-        # Start from top layer, move downward
-        elevation_grid[0] = thickness_grid[0] / 2
-        for k in range(1, nz):
-            elevation_grid[k] = (
-                elevation_grid[k - 1]
-                + thickness_grid[k - 1] / 2
-                + thickness_grid[k] / 2
-            )
-    else:
-        # Start from bottom layer, move upward
-        elevation_grid[-1] = thickness_grid[-1] / 2
-        for k in range(nz - 2, -1, -1):
-            elevation_grid[k] = (
-                elevation_grid[k + 1]
-                + thickness_grid[k + 1] / 2
-                + thickness_grid[k] / 2
-            )
-    return typing.cast(NDimensionalGrid[NDimension], elevation_grid)
+        return build_elevation_grid(self.thickness_grid, direction)

@@ -101,10 +101,6 @@ POUNDS_PER_FT3_TO_KG_PER_M3 = 16.0185  # 1 lb/ft³ = 16.0185 kg/m³
 KG_PER_M3_TO_POUNDS_PER_FT3 = 1 / POUNDS_PER_FT3_TO_KG_PER_M3
 """Conversion factor from kilograms per cubic meter to pounds per cubic foot (lb/ft³)"""
 POUNDS_PER_FT3_TO_GRAMS_PER_CM3 = 0.01601846  # 1 lb/ft³ = 0.01601846 g/cm³
-POUNDS_PER_MOLE_TO_GRAMS_PER_MOLE = 453.59237  # 1 lb/mol = 453.59237 g/mol
-"""Conversion factor from pounds per pound-mole to grams per mole (g/mol)"""
-GRAMS_PER_MOLE_TO_POUNDS_PER_MOLE = 1 / POUNDS_PER_MOLE_TO_GRAMS_PER_MOLE
-"""Conversion factor from grams per mole to pounds per pound-mole (lb/mol)"""
 PPM_TO_GRAMS_PER_LITER = 1e-3  # 1 ppm = 1 gram per liter
 """Conversion factor from parts per million to grams per liter (g/L)"""
 GRAMS_PER_LITER_TO_PPM = 1 / PPM_TO_GRAMS_PER_LITER
