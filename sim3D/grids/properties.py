@@ -3,11 +3,10 @@
 import itertools
 import typing
 
-import numba
 import numpy as np
 from numpy.typing import DTypeLike
 
-from sim3D.static import CapillaryPressureParameters
+from sim3D.statics import CapillaryPressureParameters
 from sim3D.properties import (
     compute_fluid_compressibility,
     compute_fluid_density,
@@ -39,24 +38,13 @@ from sim3D.properties import (
     compute_water_viscosity,
     mix_fluid_property,
 )
-from sim3D.types import (
-    ArrayLike,
-    NDimension,
-    NDimensionalGrid,
-    Orientation,
-    RelativePermeabilityFunc,
-)
+from sim3D.types import NDimension, NDimensionalGrid, RelativePermeabilityFunc
+from sim3D.grids.base import build_uniform_grid
 
 __all__ = [
-    "uniform_grid",
-    "layered_grid",
-    "build_uniform_grid",
-    "build_layered_grid",
     "build_fluid_viscosity_grid",
     "build_fluid_compressibility_grid",
     "build_fluid_density_grid",
-    "edge_pad_grid",
-    "coarsen_grid",
     "build_gas_gravity_grid",
     "build_gas_gravity_from_density_grid",
     "build_mixed_fluid_property_grid",
@@ -69,90 +57,6 @@ __all__ = [
     "build_oil_formation_volume_factor_grid",
 ]
 
-
-@numba.njit(cache=True)
-def build_uniform_grid(
-    grid_shape: NDimension,
-    value: float = 0.0,
-    dtype: DTypeLike = np.float64,
-) -> NDimensionalGrid[NDimension]:
-    """
-    Constructs a N-Dimensional uniform grid with the specified initial value.
-
-    :param grid_shape: Tuple of number of cells in all directions (x, y, z).
-    :param value: Initial value to fill the grid with
-    :param dtype: Data type of the grid elements (default: np.float64)
-    :return: Numpy array representing the grid
-    """
-    return np.full(grid_shape, fill_value=value, dtype=dtype)
-
-
-uniform_grid = build_uniform_grid  # Alias for convenience
-
-
-@numba.njit(cache=True)
-def build_layered_grid(
-    grid_shape: NDimension,
-    layer_values: ArrayLike[float],
-    orientation: Orientation,
-    dtype: DTypeLike = np.float64,
-) -> NDimensionalGrid[NDimension]:
-    """
-    Constructs a N-Dimensional layered grid with specified layer values.
-
-    :param grid_shape: Tuple of number of cells in x, y, and z directions (cell_count_x, cell_count_y, cell_count_z)
-    :param orientation: Direction or axis along which layers are defined ('x', 'y', or 'z')
-    :param layer_values: Values for each layer (must match number of layers).
-        The number of values should match the number of cells in that direction.
-        If the grid NDimension is (50, 30, 10) and orientation is 'horizontal',
-        then values should have exactly 50 values.
-        If orientation is 'vertical', then values should have exactly 30 values.
-
-    :return: N-Dimensional numpy array representing the grid
-    """
-    if len(layer_values) < 1:
-        raise ValueError("At least one layer value must be provided.")
-
-    layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0, dtype=dtype)
-    if orientation == Orientation.X:  # Layering along x-axis
-        if len(layer_values) != grid_shape[0]:
-            raise ValueError(
-                "Number of layer values must match number of cells in x direction."
-            )
-
-        for i, layer_value in enumerate(layer_values):
-            layered_grid[i, :, :] = layer_value
-        return layered_grid
-
-    elif orientation == Orientation.Y:  # Layering along y-axis
-        if len(layer_values) != grid_shape[1]:
-            raise ValueError(
-                "Number of layer values must match number of cells in y direction."
-            )
-
-        for j, layer_value in enumerate(layer_values):
-            layered_grid[:, j, :] = layer_value
-        return layered_grid
-
-    elif orientation == Orientation.Z:  # Layering along z-axis
-        if len(grid_shape) != 3:
-            raise ValueError(
-                "Grid dimension must be N-Dimensional for z-direction layering."
-            )
-
-        if len(layer_values) != grid_shape[2]:
-            raise ValueError(
-                "Number of layer values must match number of cells in z direction."
-            )
-
-        for k, layer_value in enumerate(layer_values):
-            layered_grid[:, :, k] = layer_value
-        return layered_grid
-
-    raise ValueError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
-
-
-layered_grid = build_layered_grid  # Alias for convenience
 
 v_compute_fluid_viscosity = np.vectorize(
     compute_fluid_viscosity, otypes=[np.float64], excluded=["fluid"]
@@ -224,106 +128,6 @@ def build_fluid_density_grid(
     :return: N-Dimensional array of fluid densities (lbm/ft³) corresponding to each grid cell.
     """
     return v_compute_fluid_density(pressure_grid, temperature_grid, fluid=fluid)
-
-
-def edge_pad_grid(
-    grid: NDimensionalGrid[NDimension], pad_width: int = 1
-) -> NDimensionalGrid[NDimension]:
-    """
-    Pads a N-Dimensional grid with the edge values to create a border around the grid.
-
-    This is useful for finite difference methods where boundary conditions are applied.
-
-    :param grid: N-Dimensional numpy array representing the grid to be padded
-    :param pad_width: Width of the padding to be applied on all sides of the grid
-    :return: Padded N-Dimensional numpy array
-    """
-    padded_grid = np.pad(grid, pad_width=pad_width, mode="edge")
-    padded_grid = typing.cast(NDimensionalGrid[NDimension], padded_grid)
-    return padded_grid
-
-
-def coarsen_grid(
-    data: NDimensionalGrid[NDimension],
-    batch_size: NDimension,
-    method: typing.Literal["mean", "sum", "max", "min"] = "mean",
-) -> NDimensionalGrid[NDimension]:
-    """
-    Coarsen (downsample) a 2D or 3D grid by aggregating blocks of adjacent cells.
-
-    Pads the grid if necessary to make dimensions divisible by batch_size, so no cells are lost.
-
-    :param data: 2D or 3D numpy array to coarsen. Shape can be (nx, ny) or (nx, ny, nz).
-    :param batch_size: Tuple of ints representing the coarsening factor along each dimension.
-                       Length must match data.ndim.
-                       Example: (2,2) for 2D, (2,2,2) for 3D.
-    :param method: Aggregation method to use on each block. One of 'mean', 'sum', 'max', 'min'.
-                   Default is 'mean'.
-    :return: Coarsened numpy array.
-    :raises ValueError: if batch_size length does not match data.ndim or if method is unsupported.
-
-    :example:
-    >>> data2d = np.arange(16).reshape(4,4)
-    >>> coarsen_grid(data2d, batch_size=(2,2))
-    array([[2.5, 4.5],
-           [10.5, 12.5]])
-
-    >>> data3d = np.arange(64).reshape(4,4,4)
-    >>> coarsen_grid(data3d, batch_size=(2,2,2), method='max')
-    array([[[ 5,  7],
-            [13, 15]],
-           [[21, 23],
-            [29, 31]]])
-    """
-    if len(batch_size) != data.ndim:
-        raise ValueError(
-            f"batch_size length {len(batch_size)} must match data.ndim {data.ndim}"
-        )
-
-    pad_width = []
-    for dim, b in zip(data.shape, batch_size):
-        remainder = dim % b
-        if remainder == 0:
-            pad_width.append((0, 0))
-        else:
-            pad_width.append((0, b - remainder))
-
-    # Pad with NaNs for mean, zeros for sum, -inf for max, +inf for min
-    if method == "mean":
-        pad_value = np.nan
-    elif method == "sum":
-        pad_value = 0
-    elif method == "max":
-        pad_value = -np.inf
-    elif method == "min":
-        pad_value = np.inf
-    else:
-        raise ValueError(f"Unsupported method '{method}'")
-
-    data_padded = np.pad(
-        data, pad_width=pad_width, mode="constant", constant_values=pad_value
-    )
-
-    # Reshape to group blocks along each dimension
-    reshape_shape = []
-    for dim, b in zip(data_padded.shape, batch_size):
-        reshape_shape.extend([dim // b, b])
-    data_reshaped = data_padded.reshape(reshape_shape)
-
-    # Axes to aggregate over: every second axis (the 'b' axes)
-    agg_axes = tuple(range(1, data_reshaped.ndim, 2))
-
-    # Apply aggregation
-    if method == "mean":
-        coarsened = np.nanmean(data_reshaped, axis=agg_axes)
-    elif method == "sum":
-        coarsened = data_reshaped.sum(axis=agg_axes)
-    elif method == "max":
-        coarsened = data_reshaped.max(axis=agg_axes)
-    elif method == "min":
-        coarsened = data_reshaped.min(axis=agg_axes)
-
-    return typing.cast(NDimensionalGrid[NDimension], coarsened)
 
 
 v_compute_gas_gravity = np.vectorize(compute_gas_gravity, otypes=[np.float64])
@@ -411,10 +215,10 @@ def build_total_fluid_compressibility_grid(
     Computes a N-Dimensional array of total fluid compressibilities.
 
     The total fluid compressibility is defined as:
-        C_total = (S_w * C_w) + (S_o * C_o) +( S_g * C_g)
+        C_f_total = (S_w * C_w) + (S_o * C_o) + (S_g * C_g)
 
     where:
-        - C_total is the total fluid compressibility (psi⁻¹)
+        - C_f_total is the total fluid compressibility (psi⁻¹)
         - S_w is the saturation of water (fraction)
         - C_w is the compressibility of water (psi⁻¹)
         - S_o is the saturation of oil (fraction)
@@ -468,12 +272,12 @@ def build_three_phase_capillary_pressure_grids(
     oil_water_capillary_pressure_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float32,
+        dtype=np.float64,
     )
     gas_oil_capillary_pressure_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float32,
+        dtype=np.float64,
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):
@@ -554,17 +358,17 @@ def build_three_phase_relative_mobilities_grids(
     water_relative_mobility_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float32,
+        dtype=np.float64,
     )
     oil_relative_mobility_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float32,
+        dtype=np.float64,
     )
     gas_relative_mobility_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape,
         value=0.0,
-        dtype=np.float32,
+        dtype=np.float64,
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):

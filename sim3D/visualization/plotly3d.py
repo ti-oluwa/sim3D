@@ -15,8 +15,8 @@ import numpy as np
 import plotly.graph_objects as go
 from typing_extensions import TypedDict
 
-from sim3D.dynamic import ModelState
-from sim3D.grids import coarsen_grid
+from sim3D.dynamics import ModelState
+from sim3D.grids.base import coarsen_grid
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
@@ -868,10 +868,10 @@ class BaseRenderer(ABC):
         :return: Tuple of (processed_data_for_plotting, original_data_for_display)
         """
         # Keep original data for display purposes (hover text, colorbar)
-        display_data = data.astype(np.float32)
+        display_data = data.astype(np.float64)
 
         # Process data for plotting
-        processed_data = data.astype(np.float32)
+        processed_data = data.astype(np.float64)
 
         if metadata.log_scale:
             # Handle zero/negative values for log scale
@@ -971,7 +971,7 @@ class BaseRenderer(ABC):
         # Create base coordinate grids with offsets
         x_coords = x_offset + np.arange(nx + 1) * dx  # Cell boundaries
         y_coords = y_offset + np.arange(ny + 1) * dy  # Cell boundaries
-        z_coords = np.zeros((nx, ny, nz + 1), dtype=np.float32)
+        z_coords = np.zeros((nx, ny, nz + 1), dtype=np.float64)
 
         # Build coordinates downward - each layer is lower in Z, starting from z_offset
         z_coords[:, :, 0] = z_offset  # Start from the Z offset
@@ -1632,7 +1632,7 @@ class IsosurfaceRenderer(BaseRenderer):
 
 def interpolate_opacity(
     x: np.ndarray, scale_values: typing.Sequence[typing.Sequence[float]]
-) -> np.typing.NDArray[np.float64]:
+) -> np.typing.NDArray[np.floating]:
     # scale_values: list of [fraction, opacity]
     fractions, opacities = zip(*scale_values)
     return np.interp(x, fractions, opacities)
@@ -2596,7 +2596,7 @@ class ModelVisualizer:
                 f"Property '{name}' not found on model state or property value is invalid."
             )
         elif isinstance(data, (list, tuple)):
-            data = np.array(data, dtype=np.float32)
+            data = np.array(data, dtype=np.float64)
 
         if not isinstance(data, np.ndarray) or data.ndim != 3:
             raise TypeError(f"Property '{name}' is not a 3 dimensional array.")

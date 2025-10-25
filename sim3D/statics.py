@@ -12,7 +12,11 @@ from sim3D.types import (
     WettabilityType,
     RelativePermeabilityFunc,
 )
-from sim3D.fluid_contacts import build_elevation_grid
+from sim3D.grids.base import (
+    build_elevation_grid,
+    build_depth_grid,
+    apply_structural_dip,
+)
 
 
 __all__ = [
@@ -256,17 +260,81 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock-fluid properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = attrs.field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
+    dip_angle: float = 0.0
+    """Dip angle of the reservoir in degrees (0 = horizontal, positive = dipping downward in dip_direction)."""
+    dip_direction: typing.Literal["N", "S", "E", "W"] = "N"
+    """
+    Dip direction of the reservoir:
+    - 'N': Reservoir dips toward North (positive y-direction)
+    - 'S': Reservoir dips toward South (negative y-direction)
+    - 'E': Reservoir dips toward East (positive x-direction)
+    - 'W': Reservoir dips toward West (negative x-direction)
+    """
 
     def get_elevation_grid(
-        self, direction: typing.Literal["downward", "upward"] = "downward"
+        self, apply_dip: bool = False
     ) -> NDimensionalGrid[NDimension]:
         """
-        Generate an elevation grid based on the thickness grid and specified direction.
+        Generate an elevation grid of the reservoir cells.
 
-        The elevation grid is generated based on the thickness of each cell, starting from the top or bottom
-        of the reservoir, depending on the specified direction.
+        The elevation grid is generated based on the thickness of each cell, starting from the base elevation (0 ft).
 
-        :param direction: Direction to generate the elevation grid. Can be "downward" (from top to bottom) or "upward" (from bottom to top).
+        :param apply_dip: If True, applies the reservoir dip angle and direction to create
+            a tilted elevation grid. If False, generates a flat (horizontal) elevation grid.
         :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
+
+        Example:
+        ```python
+        # Flat reservoir
+        elevation = model.get_elevation_grid(apply_dip=False)
+
+        # Dipping reservoir (5° toward North)
+        model = ReservoirModel(dip_angle=5.0, dip_direction="N", ...)
+        elevation = model.get_elevation_grid(apply_dip=True)
+        ```
         """
-        return build_elevation_grid(self.thickness_grid, direction)
+        base_elevation_grid = build_elevation_grid(self.thickness_grid)
+        # If no dip is requested or dip angle is zero, return flat grid
+        if not apply_dip or self.dip_angle == 0.0:
+            return base_elevation_grid
+
+        return apply_structural_dip(
+            elevation_grid=base_elevation_grid,
+            cell_dimension=self.cell_dimension,
+            elevation_direction="upward",
+            dip_angle=self.dip_angle,
+            dip_direction=self.dip_direction,
+        )
+
+    def get_depth_grid(self, apply_dip: bool = False) -> NDimensionalGrid[NDimension]:
+        """
+        Generate a depth grid of the reservoir cells.
+
+        The depth grid is generated based on the thickness of each cell, starting from the surface (0 ft).
+
+        :param apply_dip: If True, applies the reservoir dip angle and direction to create
+            a tilted depth grid. If False, generates a flat (horizontal) depth grid.
+        :return: N-dimensional numpy array representing the depth of each cell in the reservoir (ft).
+
+        Example:
+        ```python
+        # Flat reservoir
+        depth = model.get_depth_grid(apply_dip=False)
+
+        # Dipping reservoir (5° toward North)
+        model = ReservoirModel(dip_angle=5.0, dip_direction="N", ...)
+        depth = model.get_depth_grid(apply_dip=True)
+        ```
+        """
+        base_depth_grid = build_depth_grid(self.thickness_grid)
+        # If no dip is requested or dip angle is zero, return flat grid
+        if not apply_dip or self.dip_angle == 0.0:
+            return base_depth_grid
+
+        return apply_structural_dip(
+            elevation_grid=base_depth_grid,
+            cell_dimension=self.cell_dimension,
+            elevation_direction="downward",
+            dip_angle=self.dip_angle,
+            dip_direction=self.dip_direction,
+        )

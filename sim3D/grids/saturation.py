@@ -6,61 +6,11 @@ import numpy as np
 from sim3D.types import NDimension, NDimensionalGrid
 
 
-__all__ = [
-    "build_elevation_grid",
-    "elevation_grid",
-    "build_saturation_grids",
-]
-
-
-def build_elevation_grid(
-    thickness_grid: NDimensionalGrid[NDimension],
-    direction: typing.Literal["downward", "upward"] = "downward",
-) -> NDimensionalGrid[NDimension]:
-    """
-    Convert a cell thickness (height) grid into an absolute elevation grid (cell center z-coordinates).
-
-    The elevation grid is generated based on the thickness of each cell, starting from the top or bottom
-    of the reservoir, depending on the specified direction.
-
-    :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft).
-    :param direction: Direction to generate the elevation grid.
-        Can be "downward" (from top to bottom) or "upward" (from bottom to top).
-        "downward" basically gives a depth grid from the top of the reservoir.
-    :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
-    """
-    if direction not in {"downward", "upward"}:
-        raise ValueError("direction must be 'downward' or 'upward'")
-
-    nx, ny, nz = thickness_grid.shape  # Now Z is LAST
-    elevation_grid = np.zeros_like(thickness_grid, dtype=float)
-
-    if direction == "downward":
-        # Iterate over Z in the LAST dimension
-        elevation_grid[:, :, 0] = thickness_grid[:, :, 0] / 2
-        for k in range(1, nz):
-            elevation_grid[:, :, k] = (
-                elevation_grid[:, :, k - 1]
-                + thickness_grid[:, :, k - 1] / 2
-                + thickness_grid[:, :, k] / 2
-            )
-    else:
-        # Start from bottom layer
-        elevation_grid[:, :, -1] = thickness_grid[:, :, -1] / 2
-        for k in range(nz - 2, -1, -1):
-            elevation_grid[:, :, k] = (
-                elevation_grid[:, :, k + 1]
-                + thickness_grid[:, :, k + 1] / 2
-                + thickness_grid[:, :, k] / 2
-            )
-    return typing.cast(NDimensionalGrid[NDimension], elevation_grid)
-
-
-elevation_grid = build_elevation_grid  # Alias for convenience
+__all__ = ["build_saturation_grids"]
 
 
 def build_saturation_grids(
-    thickness_grid: NDimensionalGrid[NDimension],
+    depth_grid: NDimensionalGrid[NDimension],
     gas_oil_contact: float,
     oil_water_contact: float,
     connate_water_saturation_grid: NDimensionalGrid[NDimension],
@@ -119,7 +69,7 @@ def build_saturation_grids(
     )
     ```
 
-    :param thickness_grid: 2D/3D array of cell thicknesses. Will be used to build depth grid.
+    :param depth_grid: Depth grid for each cell (ft).
     :param gas_oil_contact: Depth separating gas and oil (ft).
     :param oil_water_contact: Depth separating oil and water (ft).
     :param connate_water_saturation_grid: Connate water saturation (Swc) - immobile water.
@@ -136,11 +86,6 @@ def build_saturation_grids(
     :return: Tuple of (water_saturation, oil_saturation, gas_saturation) grids.
     :raises ValueError: If contact depths are invalid or transitions overlap.
     """
-    # Build depth grid from thickness grid
-    depth_grid = build_elevation_grid(
-        thickness_grid=thickness_grid, direction="downward"
-    )
-
     # Input validation
     _validate_inputs(
         depth_grid=depth_grid,

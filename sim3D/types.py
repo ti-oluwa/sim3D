@@ -276,21 +276,19 @@ class Options:
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
     evolution_scheme: EvolutionScheme = "implicit_explicit"
-    """Evolution scheme to use for the simulation ('implicit_explicit', 'fully_explicit', 'fully_implicit', 'adaptive_explicit')."""
+    """Evolution scheme to use for the simulation ('implicit_explicit', 'fully_explicit', 'adaptive_explicit')."""
     diffusion_number_threshold: float = attrs.field(
         default=0.24,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
     )
     """Threshold for the diffusion number to determine stability of the simulation (default is 0.24)."""
-    pressure_range: MinMax = attrs.field(default=MinMax(min=1.45, max=5000))
-    """Allowable pressure range in psi."""
     use_pseudo_pressure: bool = False
     """Whether to use pseudo-pressure for gas wells."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default={
-            "oil": MinMax(min=1e-8, max=1.0),
-            "water": MinMax(min=1e-8, max=1.0),
-            "gas": MinMax(min=1e-8, max=1.0),
+            "oil": MinMax(min=0.0, max=1.0),
+            "water": MinMax(min=0.0, max=1.0),
+            "gas": MinMax(min=0.0, max=1.0),
         }
     )
     capillary_pressure_stability_factor: float = attrs.field(
@@ -302,6 +300,8 @@ class Options:
     Capillary gradients can become numerically dominant in fine meshes or sharp saturation fronts.
     Damping avoids overshoot/undershoot by reducing their contribution without removing them.
     """
+    apply_dip: bool = attrs.field(default=True)
+    """Whether to apply reservoir dip effects in the simulation."""
 
 
 default_options = Options()

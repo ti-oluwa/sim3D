@@ -2,12 +2,17 @@ from dataclasses import dataclass
 from enum import Enum
 import typing
 
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 
 __all__ = [
     "property_registry",
     "PropertyRegistry",
     "PropertyMetadata",
     "ColorScheme",
+    "merge_plots",
 ]
 
 
@@ -484,3 +489,366 @@ def _get_expanded_aliases(
 
 
 property_registry = PropertyRegistry()
+
+
+def merge_plots(
+    *figures: go.Figure,
+    rows: typing.Optional[int] = None,
+    cols: typing.Optional[int] = None,
+    subplot_titles: typing.Optional[typing.Sequence[str]] = None,
+    shared_xaxes: bool = False,
+    shared_yaxes: bool = False,
+    vertical_spacing: typing.Optional[float] = None,
+    horizontal_spacing: typing.Optional[float] = None,
+    height: typing.Optional[int] = None,
+    width: typing.Optional[int] = None,
+    title: typing.Optional[str] = None,
+    show_legend: bool = True,
+) -> go.Figure:
+    """
+    Display multiple Plotly figures in a single unified plot with subplots.
+
+    This function combines multiple independent Plotly figures into a single figure
+    with subplots arranged in a grid layout. It intelligently handles figure layout,
+    traces, annotations, and preserves original styling while creating a cohesive
+    multi-panel visualization.
+
+    **Layout Strategy:**
+    - If `rows` and `cols` are not specified, automatically calculates optimal grid dimensions
+    - Arranges figures left-to-right, top-to-bottom in the subplot grid
+    - Preserves individual figure properties (colorbars, annotations, axes labels)
+    - Adjusts spacing based on number of subplots for optimal viewing
+
+    **Use Cases:**
+    - Compare multiple reservoir properties side-by-side
+    - Create multi-panel diagnostic plots
+    - Combine pressure, saturation, and production rate visualizations
+    - Build comprehensive reservoir analysis dashboards
+
+    :param figures: Variable number of Plotly Figure objects to display together.
+        Each figure is treated as an independent subplot. Empty figures are skipped.
+    :param rows: Number of rows in the subplot grid. If None, automatically calculated
+        based on number of figures and cols parameter.
+    :param cols: Number of columns in the subplot grid. If None, automatically calculated
+        to create a roughly square grid layout.
+    :param subplot_titles: Sequence of titles for each subplot. Length must match number
+        of figures. If None, uses original figure titles if available.
+    :param shared_xaxes: If True, all subplots share the same x-axis range. Useful for
+        comparing data over the same spatial or temporal domain (default: False).
+    :param shared_yaxes: If True, all subplots share the same y-axis range. Useful for
+        comparing magnitudes across different properties (default: False).
+    :param vertical_spacing: Vertical spacing between subplot rows as a fraction of
+        plot height (0 to 1). If None, automatically calculated based on grid size.
+        Smaller values create tighter layouts.
+    :param horizontal_spacing: Horizontal spacing between subplot columns as a fraction
+        of plot width (0 to 1). If None, automatically calculated based on grid size.
+        Smaller values create tighter layouts.
+    :param height: Total height of the combined figure in pixels. If None, scales
+        automatically based on number of rows (default: 400 * rows).
+    :param width: Total width of the combined figure in pixels. If None, scales
+        automatically based on number of columns (default: 600 * cols).
+    :param title: Main title for the entire combined figure. Displayed at the top
+        of the visualization. If None, no main title is shown.
+    :param show_legend: If True, displays legends for all traces. If False, hides
+        all legends to reduce clutter (default: True).
+    :return: Combined Plotly Figure object with all input figures as subplots.
+        Can be displayed with .show() or saved with .write_html() / .write_image().
+    :raises ValueError: If subplot_titles length doesn't match number of figures,
+        or if rows * cols is insufficient for the number of figures.
+    :raises TypeError: If any input is not a valid Plotly Figure object.
+
+    **Example Usage:**
+
+    ```python
+    # Basic usage with automatic layout:
+    fig1 = create_pressure_plot(...)
+    fig2 = create_saturation_plot(...)
+    combined = merge_plots(fig1, fig2)
+    combined.show()
+
+    # Custom grid with titles:
+    merge_plots(
+        pressure_fig,
+        oil_sat_fig,
+        water_sat_fig,
+        gas_sat_fig,
+        rows=2,
+        cols=2,
+        subplot_titles=["Pressure", "Oil Sat", "Water Sat", "Gas Sat"],
+        title="Reservoir Properties at Time Step 100",
+        height=800,
+        width=1200,
+    )
+
+    # Shared axes for comparison:
+    merge_plots(
+        timestep_0_fig,
+        timestep_50_fig,
+        timestep_100_fig,
+        cols=3,
+        shared_xaxes=True,
+        shared_yaxes=True,
+        subplot_titles=["Initial", "Mid", "Final"],
+    )
+    ```
+    """
+    # Validate inputs
+    if not figures:
+        raise ValueError("At least one figure must be provided")
+
+    # Filter out None values and validate figure types
+    valid_figures = []
+    for idx, fig in enumerate(figures):
+        if fig is None:
+            continue
+        if not isinstance(fig, go.Figure):
+            raise TypeError(
+                f"Argument at position {idx} is not a Plotly Figure object. "
+                f"Got type: {type(fig).__name__}"
+            )
+        # Skip empty figures (no traces)
+        if len(fig.data) > 0:  # type: ignore
+            valid_figures.append(fig)
+
+    if not valid_figures:
+        raise ValueError("No valid figures with data to display")
+
+    num_figures = len(valid_figures)
+
+    # Calculate optimal grid dimensions if not specified
+    if rows is None and cols is None:
+        # Create roughly square grid, slightly favoring more columns
+        cols = int(np.ceil(np.sqrt(num_figures)))
+        rows = int(np.ceil(num_figures / cols))
+    elif rows is None:
+        if cols is None or cols <= 0:
+            raise ValueError("cols must be a positive integer")
+        rows = int(np.ceil(num_figures / cols))
+    elif cols is None:
+        if rows <= 0:
+            raise ValueError("rows must be a positive integer")
+        cols = int(np.ceil(num_figures / rows))
+
+    # Validate grid can accommodate all figures
+    if rows * cols < num_figures:
+        raise ValueError(
+            f"Grid size ({rows} rows x {cols} cols = {rows * cols} subplots) "
+            f"is insufficient for {num_figures} figures. "
+            f"Need at least {num_figures} subplot positions."
+        )
+
+    # Validate subplot_titles if provided
+    if subplot_titles is not None:
+        if len(subplot_titles) != num_figures:
+            raise ValueError(
+                f"Length of subplot_titles ({len(subplot_titles)}) must match "
+                f"number of valid figures ({num_figures})"
+            )
+    else:
+        # Try to extract titles from original figures
+        subplot_titles = []
+        for fig in valid_figures:
+            fig_title = ""
+            if hasattr(fig, "layout") and hasattr(fig.layout, "title"):
+                if isinstance(fig.layout.title, dict):
+                    fig_title = fig.layout.title.get("text", "")
+                elif hasattr(fig.layout.title, "text"):
+                    fig_title = fig.layout.title.text or ""
+                else:
+                    fig_title = str(fig.layout.title) if fig.layout.title else ""
+            subplot_titles.append(fig_title)
+
+    # Calculate automatic spacing if not specified
+    if vertical_spacing is None:
+        # More spacing for fewer rows, less for many rows
+        vertical_spacing = max(0.05, min(0.15, 0.3 / rows))
+
+    if horizontal_spacing is None:
+        # More spacing for fewer columns, less for many columns
+        horizontal_spacing = max(0.05, min(0.15, 0.3 / cols))
+
+    # Calculate automatic dimensions if not specified
+    if height is None:
+        height = int(400 * rows)
+
+    if width is None:
+        width = int(600 * cols)
+
+    # Determine subplot types - check if any figures have 3D traces
+    specs = [[{"type": "xy"} for _ in range(cols)] for _ in range(rows)]
+    for idx, fig in enumerate(valid_figures):
+        row = idx // cols
+        col = idx % cols
+
+        # Check if figure contains 3D traces (volume, isosurface, scatter3d, surface, mesh3d, cone)
+        has_3d = any(
+            hasattr(trace, "type")
+            and str(trace.type).lower()
+            in (
+                "volume",
+                "isosurface",
+                "scatter3d",
+                "surface",
+                "mesh3d",
+                "cone",
+                "streamtube",
+            )
+            for trace in fig.data
+        )
+        if has_3d:
+            specs[row][col] = {"type": "scene"}
+
+    # Create subplot figure
+    try:
+        combined_fig = make_subplots(
+            rows=rows,
+            cols=cols,
+            subplot_titles=list(subplot_titles),
+            shared_xaxes=shared_xaxes,
+            shared_yaxes=shared_yaxes,
+            vertical_spacing=vertical_spacing,
+            horizontal_spacing=horizontal_spacing,
+            specs=specs,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to create subplot layout: {exc}. "
+            f"Check that your grid dimensions ({rows}x{cols}) and spacing parameters are valid."
+        ) from exc
+
+    # Add traces from each figure to the combined figure
+    for idx, fig in enumerate(valid_figures):
+        row = idx // cols + 1
+        col = idx % cols + 1
+
+        # Add all traces from the figure
+        for trace in fig.data:
+            # Create a copy to avoid modifying original
+            trace_copy = trace.__class__(trace)
+
+            # Preserve legend group if it exists
+            if not show_legend:
+                trace_copy.showlegend = False
+            elif hasattr(trace, "legendgroup") and trace.legendgroup:
+                # Append subplot index to legend group to avoid conflicts
+                trace_copy.legendgroup = f"{trace.legendgroup}_subplot{idx}"
+
+            combined_fig.add_trace(trace_copy, row=row, col=col)
+
+        # Copy axis properties from original figure
+        if hasattr(fig, "layout"):
+            # Check if this subplot is a 3D scene
+            is_scene = specs[row - 1][col - 1].get("type") == "scene"
+
+            if is_scene:
+                # Handle 3D scene properties
+                scene_key = (
+                    "scene"
+                    if row == 1 and col == 1
+                    else f"scene{(row - 1) * cols + col}"
+                )
+                if hasattr(fig.layout, "scene") and fig.layout.scene:
+                    # Copy scene camera, axis properties, etc.
+                    if hasattr(fig.layout.scene, "camera"):
+                        combined_fig.layout[scene_key].camera = fig.layout.scene.camera
+                    if hasattr(fig.layout.scene, "xaxis"):
+                        combined_fig.layout[scene_key].xaxis = fig.layout.scene.xaxis
+                    if hasattr(fig.layout.scene, "yaxis"):
+                        combined_fig.layout[scene_key].yaxis = fig.layout.scene.yaxis
+                    if hasattr(fig.layout.scene, "zaxis"):
+                        combined_fig.layout[scene_key].zaxis = fig.layout.scene.zaxis
+                    if hasattr(fig.layout.scene, "aspectmode"):
+                        combined_fig.layout[
+                            scene_key
+                        ].aspectmode = fig.layout.scene.aspectmode
+                    if hasattr(fig.layout.scene, "dragmode"):
+                        combined_fig.layout[
+                            scene_key
+                        ].dragmode = fig.layout.scene.dragmode
+            else:
+                # Handle 2D x-axis and y-axis properties
+                if hasattr(fig.layout, "xaxis") and fig.layout.xaxis:
+                    xaxis_key = (
+                        "xaxis"
+                        if row == 1 and col == 1
+                        else f"xaxis{(row - 1) * cols + col}"
+                    )
+                    if hasattr(fig.layout.xaxis, "title") and fig.layout.xaxis.title:
+                        combined_fig.layout[xaxis_key].title = fig.layout.xaxis.title
+                    if hasattr(fig.layout.xaxis, "type"):
+                        combined_fig.layout[xaxis_key].type = fig.layout.xaxis.type
+
+                if hasattr(fig.layout, "yaxis") and fig.layout.yaxis:
+                    yaxis_key = (
+                        "yaxis"
+                        if row == 1 and col == 1
+                        else f"yaxis{(row - 1) * cols + col}"
+                    )
+                    if hasattr(fig.layout.yaxis, "title") and fig.layout.yaxis.title:
+                        combined_fig.layout[yaxis_key].title = fig.layout.yaxis.title
+                    if hasattr(fig.layout.yaxis, "type"):
+                        combined_fig.layout[yaxis_key].type = fig.layout.yaxis.type
+
+            # Copy colorbar settings for heatmaps/contours with smart positioning
+            for trace_idx, trace in enumerate(fig.data):
+                if hasattr(trace, "colorbar") and trace.colorbar:
+                    # Find corresponding trace in combined figure
+                    combined_trace_idx = (
+                        sum(len(valid_figures[i].data) for i in range(idx)) + trace_idx
+                    )
+                    if combined_trace_idx < len(combined_fig.data):  # type: ignore
+                        # Create a copy of colorbar to avoid modifying original
+                        colorbar_dict = (
+                            dict(trace.colorbar)
+                            if isinstance(trace.colorbar, dict)
+                            else {}
+                        )
+
+                        # Position colorbar to the right of its specific subplot with gaps
+                        # Calculate horizontal position based on column
+                        col_fraction = col / cols
+                        colorbar_x_position = col_fraction - 0.5 / cols + 0.95 / cols
+
+                        # Calculate vertical position based on row (for multi-row layouts)
+                        row_fraction = (
+                            rows - row + 1
+                        ) / rows  # Inverted because plotly counts from bottom
+                        subplot_height = 1.0 / rows
+                        colorbar_y_position = row_fraction - subplot_height / 2
+
+                        # Add vertical padding to create gaps between colorbars
+                        vertical_padding = 0.05  # 5% padding on each side
+                        colorbar_length = max(
+                            0.3, (0.8 / rows) - (2 * vertical_padding)
+                        )
+
+                        # Set colorbar position and size to fit within subplot bounds with gaps
+                        colorbar_dict.update(
+                            {
+                                "x": colorbar_x_position,
+                                "y": colorbar_y_position,
+                                "len": colorbar_length,  # Reduced length to create vertical gaps
+                                "thickness": 15,  # Consistent thickness
+                                "xanchor": "left",
+                                "yanchor": "middle",
+                            }
+                        )
+                        combined_fig.data[combined_trace_idx].colorbar = colorbar_dict
+
+    # Apply global layout settings
+    combined_fig.update_layout(
+        height=height,
+        width=width,
+        showlegend=show_legend,
+    )
+    # Add main title if provided
+    if title:
+        combined_fig.update_layout(
+            title={
+                "text": title,
+                "x": 0.5,
+                "xanchor": "center",
+                "yanchor": "top",
+            }
+        )
+    return combined_fig

@@ -5,7 +5,8 @@ import numpy as np
 
 from sim3D.boundaries import BoundaryConditions, GridBoundaryCondition
 from sim3D.constants import RESERVOIR_GAS_NAME
-from sim3D.grids import (
+from sim3D.grids.base import build_uniform_grid
+from sim3D.grids.properties import (
     build_fluid_viscosity_grid,
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -20,14 +21,13 @@ from sim3D.grids import (
     build_oil_api_gravity_grid,
     build_oil_bubble_point_pressure_grid,
     build_oil_formation_volume_factor_grid,
-    build_uniform_grid,
     build_water_bubble_point_pressure_grid,
     build_water_compressibility_grid,
     build_water_density_grid,
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from sim3D.static import (
+from sim3D.statics import (
     CapillaryPressureParameters,
     FluidProperties,
     ReservoirModel,
@@ -607,7 +607,7 @@ def reservoir_model(
                 "water_saturation": GridBoundaryCondition(),
             }
         )
-    
+
     model = ReservoirModel(
         grid_shape=grid_shape,
         cell_dimension=cell_dimension,

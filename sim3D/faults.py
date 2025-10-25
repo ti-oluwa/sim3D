@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 import attrs
 import numpy as np
 
-from sim3D.static import ReservoirModel
+from sim3D.statics import ReservoirModel
 from sim3D.types import NDimension, ThreeDimensions
 
 __all__ = ["Fault", "apply_fault", "apply_faults"]

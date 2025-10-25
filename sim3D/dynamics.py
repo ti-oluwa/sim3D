@@ -7,13 +7,14 @@ import typing
 from attrs import evolve
 import numpy as np
 
-from sim3D.flow import (
+from sim3D.diffusivity import (
     evolve_pressure_adaptively,
     evolve_pressure_explicitly,
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
-from sim3D.grids import (
+from sim3D.grids.base import build_uniform_grid
+from sim3D.grids.properties import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
     build_gas_density_grid,
@@ -27,7 +28,6 @@ from sim3D.grids import (
     build_oil_compressibility_grid,
     build_oil_formation_volume_factor_grid,
     build_oil_viscosity_grid,
-    build_uniform_grid,
     build_water_bubble_point_pressure_grid,
     build_water_compressibility_grid,
     build_water_density_grid,
@@ -35,7 +35,7 @@ from sim3D.grids import (
     build_water_viscosity_grid,
 )
 from sim3D.states import ModelState
-from sim3D.static import FluidProperties, ReservoirModel
+from sim3D.statics import FluidProperties, ReservoirModel
 from sim3D.types import (
     NDimensionalGrid,
     Options,
@@ -108,7 +108,7 @@ def run_simulation(
     rock_properties = model.rock_properties
     rock_fluid_properties = model.rock_fluid_properties
     thickness_grid = model.thickness_grid
-    elevation_grid = model.get_elevation_grid(direction="downward")
+    elevation_grid = model.get_elevation_grid(apply_dip=options.apply_dip)
 
     # print("After copying model properties...")
     # print(
@@ -136,6 +136,11 @@ def run_simulation(
         evolve_saturation = evolve_saturation_explicitly
 
     time_step_size = options.time_step_size
+    # Initialize fluid properties before starting the simulation
+    # To ensure all dependent properties are consistent with initial pressure/saturation
+    logger.debug("Initializing PVT fluid properties for simulation start")
+    fluid_properties = update_pvt_properties(fluid_properties)
+    model = evolve(model, fluid_properties=fluid_properties)
     model_state = ModelState(
         time_step=0,
         time_step_size=time_step_size,
@@ -203,16 +208,16 @@ def run_simulation(
                 + f"\nAt Time Step {time_step}."
             )
         # Update fluid properties with new pressure grid
-        logger.debug("Updating fluid properties with new pressure grid...")
-        fluid_properties = evolve(fluid_properties, pressure_grid=pressure_grid)
         if pressure_evolution_result.scheme == "implicit":
+            logger.debug("Updating fluid properties with new pressure grid...")
+            fluid_properties = evolve(fluid_properties, pressure_grid=pressure_grid)
             # For implicit schemes, we need to update the fluid properties
             # before proceeding to saturation evolution.
             # Explicit pressure is strongly coupled with saturation update.
             logger.debug(
                 "Updating PVT fluid properties for saturation evolution (implicit scheme)"
             )
-            fluid_properties = update_pvt_fluid_properties(fluid_properties)
+            fluid_properties = update_pvt_properties(fluid_properties)
         else:
             # For explicit schemes, we can re-use the current fluid properties
             # in the saturation evolution step.
@@ -259,6 +264,16 @@ def run_simulation(
             ),
         )
         logger.debug("Saturation evolution completed!")
+
+        # Update fluid properties with new pressure after saturation update, for explicit-explicit scheme
+        if (
+            pressure_evolution_result.scheme == "explicit"
+            and saturation_evolution_result.scheme == "explicit"
+        ):
+            logger.debug(
+                "Updating fluid properties with new pressure grid (explicit scheme)..."
+            )
+            fluid_properties = evolve(fluid_properties, pressure_grid=pressure_grid)
 
         logger.debug("Updating fluid properties with new saturation grids...")
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
@@ -317,10 +332,13 @@ def run_simulation(
             )
             break
 
-        # PVT update for next time step (or only update for explicit)
-        if pressure_evolution_result.scheme == "explicit":
+        # PVT update for next time step (or only update for explicit-explicit scheme)
+        if (
+            pressure_evolution_result.scheme == "explicit"
+            and saturation_evolution_result.scheme == "explicit"
+        ):
             logger.debug("Updating PVT fluid properties for next time step")
-            fluid_properties = update_pvt_fluid_properties(fluid_properties)
+            fluid_properties = update_pvt_properties(fluid_properties)
 
         # Update the wells for the next time step
         logger.debug("Updating wells for next time step")
@@ -331,7 +349,7 @@ def run_simulation(
     logger.info(f"Simulation completed successfully after {final_time_step} time steps")
 
 
-def update_pvt_fluid_properties(
+def update_pvt_properties(
     fluid_properties: FluidProperties[ThreeDimensions],
 ) -> FluidProperties[ThreeDimensions]:
     """

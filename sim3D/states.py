@@ -9,7 +9,7 @@ from scipy.optimize import curve_fit
 from sim3D.constants import ACRE_FT_TO_FT3, FT2_TO_ACRES, FT3_TO_BBL
 from sim3D.grids import uniform_grid
 from sim3D.properties import compute_hydrocarbon_in_place
-from sim3D.static import ReservoirModel
+from sim3D.statics import ReservoirModel
 from sim3D.types import NDimension, RateGrids
 from sim3D.wells import Wells, _expand_intervals
 
@@ -306,7 +306,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float32,
+            dtype=np.float64,
         )
         stoiip_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -333,7 +333,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float32,
+            dtype=np.float64,
         )
         stgiip_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -360,7 +360,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float32,
+            dtype=np.float64,
         )
         water_in_place_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -813,7 +813,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float32,
+            dtype=np.float64,
         )
         pore_volume_grid = (
             cell_area_grid
@@ -1192,7 +1192,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=state.model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float32,
+            dtype=np.float64,
         )
         oil_volume_grid = (
             cell_area_grid
