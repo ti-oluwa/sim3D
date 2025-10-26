@@ -481,6 +481,7 @@ def compute_three_phase_capillary_pressures(
     oil_water_pore_size_distribution_index_oil_wet: float,
     gas_oil_entry_pressure: float,
     gas_oil_pore_size_distribution_index: float,
+    mixed_wet_water_fraction: float = 0.5,
 ) -> typing.Tuple[float, float]:
     """
     Computes capillary pressures (Pcow, Pcgo) for a given set of saturations
@@ -489,13 +490,14 @@ def compute_three_phase_capillary_pressures(
     Pcow is defined as Po - Pw.
     Pcgo is defined as Pg - Po.
 
-    If water-wet: Pcow > 0, Pcgo > 0
-    If oil-wet:   Pcow < 0, Pcgo > 0 (as Po < Pw)
+    Wettability behavior:
+    - WATER_WET: Pcow > 0, Pcgo > 0 (water preferentially wets rock)
+    - OIL_WET:   Pcow < 0, Pcgo > 0 (oil preferentially wets rock)
+    - MIXED_WET: Pcow varies with saturation (fraction of pore space is water-wet, rest is oil-wet)
 
     The capillary pressures are calculated based on the effective saturations
     relative to the mobile pore space, which is defined as:
     total_mobile_pore_space = 1.0 - irreducible_water_saturation - residual_oil_saturation - residual_gas_saturation
-    This function handles both water-wet and oil-wet systems, returning the capillary pressures
 
     :param water_saturation: Current water saturation (fraction, between 0 and 1).
     :param gas_saturation: Current gas saturation (fraction, between 0 and 1).
@@ -503,12 +505,15 @@ def compute_three_phase_capillary_pressures(
     :param residual_oil_saturation_water: Residual oil saturation during water flooding (fraction).
     :param residual_oil_saturation_gas: Residual oil saturation during gas flooding (fraction).
     :param residual_gas_saturation: Residual gas saturation (fraction).
+    :param wettability: Wettability type (WATER_WET, OIL_WET, or MIXED_WET).
     :param oil_water_entry_pressure_water_wet: Entry pressure for oil-water in water-wet system (psi).
     :param oil_water_entry_pressure_oil_wet: Entry pressure for oil-water in oil-wet system (psi).
     :param oil_water_pore_size_distribution_index_water_wet: Pore size distribution index for oil-water in water-wet system.
     :param oil_water_pore_size_distribution_index_oil_wet: Pore size distribution index for oil-water in oil-wet system.
     :param gas_oil_entry_pressure: Entry pressure for gas-oil (psi).
     :param gas_oil_pore_size_distribution_index: Pore size distribution index for gas-oil.
+    :param mixed_wet_water_fraction: Fraction of pore space that is water-wet in mixed-wet systems (0 to 1).
+        0.0 = fully oil-wet, 1.0 = fully water-wet, 0.5 = neutral/balanced mixed-wet (default).
     :return: A tuple (oil_water_capillary_pressure, gas_oil_capillary_pressure) (psi).
     """
     # Clip saturations
@@ -541,17 +546,41 @@ def compute_three_phase_capillary_pressures(
 
         if effective_water_saturation < 1.0 - 1e-6:
             if wettability == WettabilityType.WATER_WET:
+                # Pure water-wet: Pcow > 0
                 oil_water_capillary_pressure = oil_water_entry_pressure_water_wet * (
                     effective_water_saturation
                 ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
+
             elif wettability == WettabilityType.OIL_WET:
+                # Pure oil-wet: Pcow < 0
                 oil_water_capillary_pressure = -(
                     oil_water_entry_pressure_oil_wet
                     * effective_water_saturation
                     ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
                 )
 
+            elif wettability == WettabilityType.MIXED_WET:
+                # Mixed-wet: Weighted average of water-wet and oil-wet contributions
+                # Approach 1: Linear interpolation (simple)
+                pcow_water_wet = oil_water_entry_pressure_water_wet * (
+                    effective_water_saturation
+                ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
+
+                pcow_oil_wet = -(
+                    oil_water_entry_pressure_oil_wet
+                    * effective_water_saturation
+                    ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
+                )
+
+                # Weighted by fraction of water-wet pore space
+                oil_water_capillary_pressure = (
+                    mixed_wet_water_fraction * pcow_water_wet
+                    + (1.0 - mixed_wet_water_fraction) * pcow_oil_wet
+                )
+
     # ---------------- Pcgo (Pg - Po) ----------------
+    # Gas-oil capillary pressure is typically positive regardless of wettability
+    # (gas is non-wetting to both oil and water)
     gas_oil_capillary_pressure = 0.0
     if total_mobile_pore_space_gas > 1e-9:
         effective_gas_saturation = (

@@ -491,6 +491,77 @@ def _get_expanded_aliases(
 property_registry = PropertyRegistry()
 
 
+def _copy_scene_properties(
+    source_fig: go.Figure,
+    target_fig: go.Figure,
+    scene_key: str,
+) -> None:
+    """
+    Copy all 3D scene properties from source figure to target figure.
+
+    This function performs a comprehensive copy of all scene-related properties including
+    camera settings, axis configurations, annotations, backgrounds, and interaction modes.
+
+    :param source_fig: Source Plotly Figure to copy scene properties from
+    :param target_fig: Target Plotly Figure to copy scene properties to
+    :param scene_key: Scene key in the target layout (e.g., 'scene', 'scene2', 'scene3')
+    """
+    if not hasattr(source_fig, "layout") or not hasattr(source_fig.layout, "scene"):
+        return
+
+    source_scene = source_fig.layout.scene  # type: ignore[attr-defined]
+    if not source_scene:
+        return
+
+    target_scene = target_fig.layout[scene_key]
+
+    # Camera settings (viewpoint, projection)
+    if hasattr(source_scene, "camera") and source_scene.camera:
+        target_scene.camera = source_scene.camera
+
+    # Axis properties (labels, ranges, gridlines, etc.)
+    if hasattr(source_scene, "xaxis") and source_scene.xaxis:
+        target_scene.xaxis = source_scene.xaxis
+
+    if hasattr(source_scene, "yaxis") and source_scene.yaxis:
+        target_scene.yaxis = source_scene.yaxis
+
+    if hasattr(source_scene, "zaxis") and source_scene.zaxis:
+        target_scene.zaxis = source_scene.zaxis
+
+    # Aspect ratio and scaling
+    if hasattr(source_scene, "aspectmode") and source_scene.aspectmode:
+        target_scene.aspectmode = source_scene.aspectmode
+
+    if hasattr(source_scene, "aspectratio") and source_scene.aspectratio:
+        target_scene.aspectratio = source_scene.aspectratio
+
+    # Background and grid settings
+    if hasattr(source_scene, "bgcolor") and source_scene.bgcolor:
+        target_scene.bgcolor = source_scene.bgcolor
+
+    # Interaction modes
+    if hasattr(source_scene, "dragmode") and source_scene.dragmode:
+        target_scene.dragmode = source_scene.dragmode
+
+    if hasattr(source_scene, "hovermode") and source_scene.hovermode:
+        target_scene.hovermode = source_scene.hovermode
+
+    # Domain (position in the layout)
+    if hasattr(source_scene, "domain") and source_scene.domain:
+        # Note: Domain is usually managed by make_subplots, so we may skip this
+        # to avoid conflicts, but include it for completeness
+        pass
+
+    # Annotations specific to this scene
+    if hasattr(source_scene, "annotations") and source_scene.annotations:
+        target_scene.annotations = source_scene.annotations
+
+    # Uirevision (for preserving user interactions)
+    if hasattr(source_scene, "uirevision") and source_scene.uirevision:
+        target_scene.uirevision = source_scene.uirevision
+
+
 def merge_plots(
     *figures: go.Figure,
     rows: typing.Optional[int] = None,
@@ -741,30 +812,13 @@ def merge_plots(
             is_scene = specs[row - 1][col - 1].get("type") == "scene"
 
             if is_scene:
-                # Handle 3D scene properties
+                # Handle 3D scene properties - comprehensive copy of all scene settings
                 scene_key = (
                     "scene"
                     if row == 1 and col == 1
                     else f"scene{(row - 1) * cols + col}"
                 )
-                if hasattr(fig.layout, "scene") and fig.layout.scene:
-                    # Copy scene camera, axis properties, etc.
-                    if hasattr(fig.layout.scene, "camera"):
-                        combined_fig.layout[scene_key].camera = fig.layout.scene.camera
-                    if hasattr(fig.layout.scene, "xaxis"):
-                        combined_fig.layout[scene_key].xaxis = fig.layout.scene.xaxis
-                    if hasattr(fig.layout.scene, "yaxis"):
-                        combined_fig.layout[scene_key].yaxis = fig.layout.scene.yaxis
-                    if hasattr(fig.layout.scene, "zaxis"):
-                        combined_fig.layout[scene_key].zaxis = fig.layout.scene.zaxis
-                    if hasattr(fig.layout.scene, "aspectmode"):
-                        combined_fig.layout[
-                            scene_key
-                        ].aspectmode = fig.layout.scene.aspectmode
-                    if hasattr(fig.layout.scene, "dragmode"):
-                        combined_fig.layout[
-                            scene_key
-                        ].dragmode = fig.layout.scene.dragmode
+                _copy_scene_properties(fig, combined_fig, scene_key)
             else:
                 # Handle 2D x-axis and y-axis properties
                 if hasattr(fig.layout, "xaxis") and fig.layout.xaxis:

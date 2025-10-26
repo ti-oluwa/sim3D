@@ -309,6 +309,7 @@ def build_three_phase_capillary_pressure_grids(
             oil_water_pore_size_distribution_index_oil_wet=capillary_pressure_params.oil_water_pore_size_distribution_index_oil_wet,
             oil_water_pore_size_distribution_index_water_wet=capillary_pressure_params.oil_water_pore_size_distribution_index_water_wet,
             gas_oil_pore_size_distribution_index=capillary_pressure_params.gas_oil_pore_size_distribution_index,
+            mixed_wet_water_fraction=capillary_pressure_params.mixed_wet_water_fraction,
         )
 
     return (

@@ -1506,7 +1506,10 @@ class IsosurfaceRenderer(BaseRenderer):
             # Apply index offsets to show original dataset positions
             absolute_i = x_index_offset + i_3d
             absolute_j = y_index_offset + j_3d
-            absolute_k = z_index_offset + k_3d
+            # For k, we need to reverse the index since we reversed Z for visualization
+            # k_3d=0 corresponds to the highest Z (top layer in original data)
+            # k_3d=nz-1 corresponds to the lowest Z (bottom layer in original data)
+            absolute_k = z_index_offset + (data.shape[2] - 1 - k_3d)
 
             hover_text.append(
                 f"Cell: ({absolute_i}, {absolute_j}, {absolute_k})<br>"  # Show absolute indices

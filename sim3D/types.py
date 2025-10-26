@@ -167,6 +167,7 @@ class WettabilityType(str, enum.Enum):
 
     WATER_WET = "water_wet"
     OIL_WET = "oil_wet"
+    MIXED_WET = "mixed_wet"
 
 
 Wettability = WettabilityType  # Alias for backward compatibility
@@ -291,14 +292,24 @@ class Options:
             "gas": MinMax(min=0.0, max=1.0),
         }
     )
+    """
+    Relative mobility ranges for oil, water, and gas phases.
+
+    Each phase has a `MinMax` object defining its minimum and maximum relative mobility.
+    Adjust minimum or maximum values to constrain phase mobilities during simulation.
+    """
     capillary_pressure_stability_factor: float = attrs.field(
         default=1.0,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
     )
     """
-    Factor to scale capillary flow for numerical stability.
+    Factor to scale capillary flow for numerical stability. Reduce to dampen capillary effects.
+    Increase to enhance capillary effects.
+
     Capillary gradients can become numerically dominant in fine meshes or sharp saturation fronts.
     Damping avoids overshoot/undershoot by reducing their contribution without removing them.
+
+    Set to 0 to disable capillary effects entirely (not recommended).
     """
     apply_dip: bool = attrs.field(default=True)
     """Whether to apply reservoir dip effects in the simulation."""

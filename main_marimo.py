@@ -4,8 +4,8 @@ __generated_with = "0.15.0"
 app = marimo.App(width="full", app_title="SIM3D")
 
 
-@app.cell
-def _():
+app._unparsable_cell(
+    r"""
     import logging
     import typing
     from rich import print as pprint
@@ -22,6 +22,7 @@ def _():
     )
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
+
 
     def main():
         # More realistic grid dimensions - typical field scale
@@ -60,7 +61,8 @@ def _():
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
         oil_bubble_point_pressure_grid = sim3D.layered_grid(
             grid_shape=grid_shape,
-            layer_values=layer_pressures - 200.0,  # 200 psi below formation pressure
+            layer_values=layer_pressures
+            - 200.0,  # 200 psi below formation pressure
             orientation=sim3D.Orientation.Z,
         )
 
@@ -104,7 +106,8 @@ def _():
             sim3D.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
-                oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
+                oil_water_contact=owc_depth
+                - reservoir_top_depth,  # 150 ft below top
                 connate_water_saturation_grid=connate_water_saturation_grid,
                 residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
                 residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
@@ -192,11 +195,11 @@ def _():
 
         # Realistic capillary pressure parameters
         capillary_pressure_params = sim3D.CapillaryPressureParameters(
-            wettability=sim3D.Wettability.WATER_WET,
-            oil_water_entry_pressure_oil_wet=2.5,  # psi
-            oil_water_pore_size_distribution_index_oil_wet=2.5,
-            gas_oil_entry_pressure=0.8,  # psi
-            gas_oil_pore_size_distribution_index=2.2,
+            wettability=sim3D.WettabilityType.WATER_WET,
+            oil_water_entry_pressure_water_wet=5.0,    # psi
+            oil_water_pore_size_distribution_index_water_wet=1.8,
+            gas_oil_entry_pressure=2.0,                # psi
+            gas_oil_pore_size_distribution_index=1.8,
         )
 
         # Realistic temperature gradient (~1.5°F per 100 ft)
@@ -218,23 +221,35 @@ def _():
         # Realistic boundary conditions - aquifer support from bottom
         boundary_conditions = sim3D.BoundaryConditions(
             conditions={
-                "pressure": sim3D.GridBoundaryCondition(
+                \"pressure\": sim3D.GridBoundaryCondition(
                     z_minus=sim3D.DirichletBoundary(
                         layer_pressures[-1] + 50
                     ),  # Aquifer pressure
-                )
+                ),
+                # \"water_saturation\": sim3D.GridBoundaryCondition(
+                #     z_minus=sim3D.DirichletBoundary(1.0),  # Aquifer is 100% water ✓
+                #     # Other boundaries: no-flow (default)
+                # ),
+                # \"oil_saturation\": sim3D.GridBoundaryCondition(
+                #     z_minus=sim3D.DirichletBoundary(0.0),  # No oil in aquifer ✓
+                # ),
+                # \"gas_saturation\": sim3D.GridBoundaryCondition(
+                #     z_minus=sim3D.DirichletBoundary(0.0),  # No gas in aquifer ✓
+                # ),
             }
         )
 
         # Natural gas (associated gas) properties
         gas_gravity = 0.65  # Typical for associated gas
-        gas_gravity_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=gas_gravity)
+        gas_gravity_grid = sim3D.uniform_grid(
+            grid_shape=grid_shape, value=gas_gravity
+        )
 
         # Realistic fault network - simplified
         fault_network = [
             sim3D.Fault(
-                id="sealing_fault",
-                orientation="x",
+                id=\"sealing_fault\",
+                orientation=\"x\",
                 fault_index=7,
                 slope=0.05,
                 transmissibility_scale=1e-5,  # Nearly sealing
@@ -271,19 +286,20 @@ def _():
             # faults=fault_network,
             relative_permeability_func=relative_permeability_func,
             capillary_pressure_params=capillary_pressure_params,
-            reservoir_gas_name="Methane",
+            reservoir_gas_name=\"Methane\",
         )
 
         # Water injection well (realistic waterflood scenario)
         water_injector = sim3D.injection_well(
-            well_name="Water Injector 1",
+            well_name=\"Water Injector 1\",
             perforating_intervals=[
                 ((3, 3, 2), (3, 3, 3))  # Perforated in high perm layers
             ],
             radius=0.3542,  # 8.5 inch wellbore
-            bottom_hole_pressure=layer_pressures[2] + 500,  # 500 psi above formation
+            bottom_hole_pressure=layer_pressures[2]
+            + 500,  # 500 psi above formation
             injected_fluid=sim3D.WellFluid(
-                name="Water",
+                name=\"Water\",
                 phase=sim3D.FluidPhase.WATER,
                 specific_gravity=1.05,  # Slightly saline
                 molecular_weight=18.015,
@@ -294,7 +310,7 @@ def _():
 
         # Producer well
         producer = sim3D.production_well(
-            well_name="Producer 1",
+            well_name=\"Producer 1\",
             perforating_intervals=[
                 ((7, 7, 2), (7, 7, 3))  # Multiple layers
             ],
@@ -302,19 +318,19 @@ def _():
             bottom_hole_pressure=1200.0,  # ~500 psi drawdown
             produced_fluids=(
                 sim3D.WellFluid(
-                    name="Oil",
+                    name=\"Oil\",
                     phase=sim3D.FluidPhase.OIL,
                     specific_gravity=0.845,
                     molecular_weight=180.0,
                 ),
                 sim3D.WellFluid(
-                    name="Gas",
+                    name=\"Gas\",
                     phase=sim3D.FluidPhase.GAS,
                     specific_gravity=0.65,
                     molecular_weight=20.0,
                 ),
                 sim3D.WellFluid(
-                    name="Water",
+                    name=\"Water\",
                     phase=sim3D.FluidPhase.WATER,
                     specific_gravity=1.05,
                     molecular_weight=18.015,
@@ -336,19 +352,20 @@ def _():
         options = sim3D.Options(
             time_step_size=3600 * 20,  # 1 day
             total_time=3600 * 24 * 600,
-            max_iterations=5000,
+            max_iterations=1000,
             convergence_tolerance=1e-4,
             output_frequency=1,  # Monthly output
-            evolution_scheme="implicit_explicit",
+            evolution_scheme=\"implicit_explicit\",
         )
         model_states = sim3D.run_simulation(
             model=model,
             wells=wells,
             options=options,
-        )
+        )`g
         return list(model_states)
-
-    return main, np, sim3D
+    """,
+    name="_"
+)
 
 
 @app.cell
@@ -404,12 +421,12 @@ def _(model_states, np, sim3D):
 
     sim3D.plotly2d.make_series_plot(
         data={
-            # "Oil Production": np.array(list(oil_production_history)),
-            # "Water Injection": np.array(list(water_injection_history)),
-            # "Gas Production": np.array(list(gas_production_history)),
-            "Avg. Oil Saturation": np.array(oil_saturation_history),
-            "Avg. Water Saturation": np.array(water_saturation_history),
-            "Avg. Gas Saturation": np.array(gas_saturation_history),
+            "Oil Production": np.array(list(oil_production_history)),
+            "Water Injection": np.array(list(water_injection_history)),
+            "Gas Production": np.array(list(gas_production_history)),
+            # "Avg. Oil Saturation": np.array(oil_saturation_history),
+            # "Avg. Water Saturation": np.array(water_saturation_history),
+            # "Avg. Gas Saturation": np.array(gas_saturation_history),
             # "IPR": np.array(ipr_data),
             # "Oil In Place": np.array(list(oil_in_place_history)),
             # "Water In Place": np.array(list(water_in_place_history)),
@@ -433,7 +450,7 @@ def _(model_states, sim3D):
     well_names = [*injector_names, *producer_names]
     labels = sim3D.plotly3d.Labels()
     labels.add_well_labels(well_positions, well_names)
-    data = model_states[360]
+    data = model_states[480]
     shared_kwargs = dict(
         plot_type=sim3D.plotly3d.PlotType.ISOSURFACE,
         width=960,
@@ -454,13 +471,17 @@ def _(model_states, sim3D):
         # notebook=True,
     )
     # Oil Plot
-    oil_fig = sim3D.plotly3d.viz.make_plot(data, property="oil-sat", **shared_kwargs)
+    oil_fig = sim3D.plotly3d.viz.make_plot(
+        data, property="oil-sat", **shared_kwargs
+    )
     # Water Plot
     water_fig = sim3D.plotly3d.viz.make_plot(
         data, property="water-sat", **shared_kwargs
     )
     # Gas Plot
-    gas_fig = sim3D.plotly3d.viz.make_plot(data, property="gas-sat", **shared_kwargs)
+    gas_fig = sim3D.plotly3d.viz.make_plot(
+        data, property="gas-sat", **shared_kwargs
+    )
     fig = sim3D.merge_plots(
         oil_fig, water_fig, gas_fig, cols=1, rows=3, width=1080, height=1080
     )
