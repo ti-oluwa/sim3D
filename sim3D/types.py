@@ -1,3 +1,4 @@
+from datetime import timedelta
 import enum
 import typing
 
@@ -28,6 +29,7 @@ __all__ = [
     "Options",
     "default_options",
     "RateGrids",
+    "Time",
 ]
 
 T = typing.TypeVar("T")
@@ -260,12 +262,12 @@ class Options:
     Simulation run options and parameters.
     """
 
-    time_step_size: float = attrs.field(default=10, validator=attrs.validators.ge(1))
-    """Time step for the simulation in seconds (default is 1 hour)."""
     total_time: float = attrs.field(default=86400.0, validator=attrs.validators.ge(1))
     """Total simulation time in seconds (default is 1 day - 86400.0)."""
-    max_iterations: int = attrs.field(default=1000, validator=attrs.validators.ge(1))
-    """Maximum number of iterations for the simulation."""
+    time_step_size: float = attrs.field(default=10, validator=attrs.validators.ge(1))
+    """Time step for the simulation in seconds (default is 1 hour)."""
+    max_time_steps: int = attrs.field(default=1000, validator=attrs.validators.ge(1))
+    """Maximum number of time steps to run for in the simulation."""
     convergence_tolerance: float = attrs.field(
         default=1e-3, validator=attrs.validators.le(1e-2)
     )
@@ -313,6 +315,36 @@ class Options:
     """
     apply_dip: bool = attrs.field(default=True)
     """Whether to apply reservoir dip effects in the simulation."""
+
+
+def Time(
+    milliseconds: int = 0,
+    seconds: int = 0,
+    minutes: int = 0,
+    hours: int = 0,
+    days: int = 0,
+    weeks: int = 0,
+) -> float:
+    """
+    Expresses time components as total seconds.
+
+    :param milliseconds: Number of milliseconds.
+    :param seconds: Number of seconds.
+    :param minutes: Number of minutes.
+    :param hours: Number of hours.
+    :param days: Number of days.
+    :param weeks: Number of weeks.
+    :return: Total time in seconds.
+    """
+    delta = timedelta(
+        weeks=weeks,
+        days=days,
+        hours=hours,
+        minutes=minutes,
+        seconds=seconds,
+        milliseconds=milliseconds,
+    )
+    return delta.total_seconds()
 
 
 default_options = Options()

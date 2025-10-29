@@ -712,8 +712,8 @@ def _apply_geometric_throw(
         throw=throw,
         preserve_grid_data=fault.preserve_grid_data,
     )
-    displaced_gas_to_oil_ratio_grid = _displace_grid(
-        grid=fluid_props.gas_to_oil_ratio_grid,
+    displaced_solution_gas_to_oil_ratio_grid = _displace_grid(
+        grid=fluid_props.solution_gas_to_oil_ratio_grid,
         displacement_mask=displacement_mask,
         throw=throw,
         preserve_grid_data=fault.preserve_grid_data,
@@ -772,7 +772,7 @@ def _apply_geometric_throw(
         gas_gravity_grid=displaced_gas_gravity_grid,
         gas_molecular_weight_grid=displaced_gas_molecular_weight_grid,
         gas_density_grid=displaced_gas_density_grid,
-        gas_to_oil_ratio_grid=displaced_gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=displaced_solution_gas_to_oil_ratio_grid,
         gas_solubility_in_water_grid=displaced_gas_solubility_in_water_grid,
         oil_formation_volume_factor_grid=displaced_oil_formation_volume_factor_grid,
         gas_formation_volume_factor_grid=displaced_gas_formation_volume_factor_grid,

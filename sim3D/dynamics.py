@@ -2,6 +2,7 @@
 
 import copy
 import logging
+import math
 import typing
 
 from attrs import evolve
@@ -21,7 +22,7 @@ from sim3D.grids.properties import (
     build_gas_formation_volume_factor_grid,
     build_gas_free_water_formation_volume_factor_grid,
     build_gas_solubility_in_water_grid,
-    build_gas_to_oil_ratio_grid,
+    build_solution_gas_to_oil_ratio_grid,
     build_gas_viscosity_grid,
     build_live_oil_density_grid,
     build_oil_bubble_point_pressure_grid,
@@ -141,19 +142,36 @@ def run_simulation(
     logger.debug("Initializing PVT fluid properties for simulation start")
     fluid_properties = update_pvt_properties(fluid_properties)
     model = evolve(model, fluid_properties=fluid_properties)
+
+    zeros_grid = build_uniform_grid(model.grid_shape, value=0.0)
+    oil_injection_grid = zeros_grid
+    water_injection_grid = zeros_grid.copy()
+    gas_injection_grid = zeros_grid.copy()
+    oil_production_grid = zeros_grid.copy()
+    water_production_grid = zeros_grid.copy()
+    gas_production_grid = zeros_grid.copy()
     model_state = ModelState(
         time_step=0,
         time_step_size=time_step_size,
         model=model,
         wells=wells,
-        injection=None,
-        production=None,
+        injection=RateGrids(
+            oil=oil_injection_grid,
+            water=water_injection_grid,
+            gas=gas_injection_grid,
+        ),
+        production=RateGrids(
+            oil=oil_production_grid,
+            water=water_production_grid,
+            gas=gas_production_grid,
+        ),
     )
 
     boundary_conditions = model.boundary_conditions
     num_of_time_steps = min(
-        (options.total_time // time_step_size), options.max_iterations
+        math.ceil(options.total_time // time_step_size), options.max_time_steps
     )
+    logger.debug(f"Simulating for {num_of_time_steps} time steps")
     output_frequency = options.output_frequency
 
     logger.debug(f"Number of time steps to simulate: {int(num_of_time_steps)}")
@@ -164,7 +182,7 @@ def run_simulation(
     logger.debug("Yielding initial model state")
     yield model_state
 
-    for time_step in range(1, int(num_of_time_steps + 1)):
+    for time_step in range(1, num_of_time_steps + 1):
         logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
 
         # Log simulation progress at regular intervals
@@ -228,17 +246,13 @@ def run_simulation(
 
         # Saturation evolution
         logger.debug("Evolving saturation...")
-        # Build grids to track production and injection at each time step
-        oil_injection_grid = build_uniform_grid(
-            model.grid_shape, value=0.0
-        )  # No initial injection
-        water_injection_grid = build_uniform_grid(model.grid_shape, value=0.0)
-        gas_injection_grid = build_uniform_grid(model.grid_shape, value=0.0)
-        oil_production_grid = build_uniform_grid(
-            model.grid_shape, value=0.0
-        )  # No initial production
-        water_production_grid = build_uniform_grid(model.grid_shape, value=0.0)
-        gas_production_grid = build_uniform_grid(model.grid_shape, value=0.0)
+        # Build zeros grids to track production and injection at each time step
+        oil_injection_grid = zeros_grid.copy()  # No initial injection
+        water_injection_grid = zeros_grid.copy()
+        gas_injection_grid = zeros_grid.copy()
+        oil_production_grid = zeros_grid.copy()  # No initial production
+        water_production_grid = zeros_grid.copy()
+        gas_production_grid = zeros_grid.copy()
         saturation_evolution_result = evolve_saturation(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -326,12 +340,6 @@ def run_simulation(
             )
             yield model_state
 
-        if time_step > options.max_iterations:
-            logger.warning(
-                f"Reached maximum number of iterations: {options.max_iterations}. Stopping simulation."
-            )
-            break
-
         # PVT update for next time step (or only update for explicit-explicit scheme)
         if (
             pressure_evolution_result.scheme == "explicit"
@@ -345,8 +353,9 @@ def run_simulation(
         wells.evolve(model_state)
 
     # Log completion outside the loop to avoid unbound variable issues
-    final_time_step = min(int(num_of_time_steps), options.max_iterations)
-    logger.info(f"Simulation completed successfully after {final_time_step} time steps")
+    logger.info(
+        f"Simulation completed successfully after {num_of_time_steps} time steps"
+    )
 
 
 def update_pvt_properties(
@@ -361,7 +370,7 @@ def update_pvt_properties(
     │  PRESSURE  │
     └────┬───────┘
          ▼
-    ┌────────────┐
+    ┌─────────────┐
     │  TEMPERATURE│
     └────┬───────┘
          ▼
@@ -369,9 +378,9 @@ def update_pvt_properties(
     │ GAS PROPERTIES│
     └────┬─────────┘
          ▼
-    ┌─────────────────────┐
-    │ WATER PROPERTIES     │
-    └────┬────────────────┘
+    ┌──────────────────┐
+    │ WATER PROPERTIES │
+    └────┬─────────────┘
          ▼
     ┌────────────────────────────────────────────────────────────┐
     │ OIL PROPERTIES                                             │
@@ -500,11 +509,11 @@ def update_pvt_properties(
         gas_gravity_grid=fluid_properties.gas_gravity_grid,
         oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
         temperature_grid=fluid_properties.temperature_grid,
-        gas_to_oil_ratio_grid=fluid_properties.gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
     )
 
     # Step 2: Compute Rs at NEW bubble point
-    gor_at_bubble_point_pressure_grid = build_gas_to_oil_ratio_grid(
+    gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
         pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
         temperature_grid=fluid_properties.temperature_grid,
         bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # Use same NEW bubble point here
@@ -512,7 +521,7 @@ def update_pvt_properties(
         oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
     )
     # Step 3: Compute NEW Rs at current pressure
-    new_gas_to_oil_ratio_grid = build_gas_to_oil_ratio_grid(
+    new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
         pressure_grid=fluid_properties.pressure_grid,
         temperature_grid=fluid_properties.temperature_grid,
         bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
@@ -531,7 +540,7 @@ def update_pvt_properties(
         bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
         oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
         gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
         oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
     )
     # Step 5: Compute oil compressibility
@@ -549,7 +558,7 @@ def update_pvt_properties(
     new_oil_density_grid = build_live_oil_density_grid(
         oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
         gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
         formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
     )
     new_oil_viscosity_grid = build_oil_viscosity_grid(
@@ -557,14 +566,14 @@ def update_pvt_properties(
         temperature_grid=fluid_properties.temperature_grid,
         bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
         oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
-        gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
         gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
     )
 
     # Finally, update the fluid properties with all the new grids
     updated_fluid_properties = evolve(
         fluid_properties,
-        gas_to_oil_ratio_grid=new_gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
         gas_solubility_in_water_grid=gas_solubility_in_water_grid,
         oil_bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
         water_bubble_point_pressure_grid=new_water_bubble_point_pressure_grid,

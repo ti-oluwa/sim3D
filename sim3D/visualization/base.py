@@ -246,7 +246,7 @@ class PropertyRegistry:
             aliases=["gas_fvf"],
         ),
         "gas_to_oil_ratio": PropertyMetadata(
-            name="model.fluid_properties.gas_to_oil_ratio_grid",
+            name="model.fluid_properties.solution_gas_to_oil_ratio_grid",
             display_name="Gas-Oil Ratio",
             unit="SCF/STB",
             color_scheme=ColorScheme.BALANCE,

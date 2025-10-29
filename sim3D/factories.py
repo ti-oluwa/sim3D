@@ -16,7 +16,7 @@ from sim3D.grids.properties import (
     build_gas_gravity_grid,
     build_gas_molecular_weight_grid,
     build_gas_solubility_in_water_grid,
-    build_gas_to_oil_ratio_grid,
+    build_solution_gas_to_oil_ratio_grid,
     build_live_oil_density_grid,
     build_oil_api_gravity_grid,
     build_oil_bubble_point_pressure_grid,
@@ -272,7 +272,7 @@ def reservoir_model(
         NDimensionalGrid[NDimension]
     ] = None,
     capillary_pressure_params: typing.Optional[CapillaryPressureParameters] = None,
-    gas_to_oil_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    solution_gas_to_oil_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_solubility_in_water_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_formation_volume_factor_grid: typing.Optional[
         NDimensionalGrid[NDimension]
@@ -294,7 +294,7 @@ def reservoir_model(
 
     Notes:
     ------
-    - If both `oil_bubble_point_pressure_grid` and `gas_to_oil_ratio_grid` are omitted,
+    - If both `oil_bubble_point_pressure_grid` and `solution_gas_to_oil_ratio_grid` are omitted,
       the function attempts to estimate these based on pressure, temperature, and oil properties,
       but this may lead to less accurate results.
     - Saturation grids will be adjusted internally to ensure saturation sums to 1.
@@ -331,7 +331,7 @@ def reservoir_model(
     :param connate_water_saturation_grid: Connate water saturation grid (fraction).
     :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction).
     :param capillary_pressure_params: Capillary pressure parameters, optional.
-    :param gas_to_oil_ratio_grid: Solution gas to oil ratio grid (scf/bbl), optional.
+    :param solution_gas_to_oil_ratio_grid: Solution gas to oil ratio grid (scf/bbl), optional.
     :param gas_solubility_in_water_grid: Gas solubility in water grid (scf/bbl), optional.
     :param oil_formation_volume_factor_grid: Oil formation volume factor grid (bbl/scf), optional.
     :param gas_formation_volume_factor_grid: Gas formation volume factor grid (bbl/scf), optional.
@@ -433,24 +433,24 @@ def reservoir_model(
         )
 
     oil_api_gravity_grid = build_oil_api_gravity_grid(oil_specific_gravity_grid)
-    if gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is not None:
-        gas_to_oil_ratio_grid = build_gas_to_oil_ratio_grid(
+    if solution_gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is not None:
+        solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
             bubble_point_pressure_grid=oil_bubble_point_pressure_grid,
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
         )
-    elif gas_to_oil_ratio_grid is not None and oil_bubble_point_pressure_grid is None:
+    elif solution_gas_to_oil_ratio_grid is not None and oil_bubble_point_pressure_grid is None:
         oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
             temperature_grid=temperature_grid,
-            gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+            solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_grid,
         )
-    elif gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is None:
+    elif solution_gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is None:
         warnings.warn(
-            "Both `oil_bubble_point_pressure_grid` and `gas_to_oil_ratio_grid` are not provided. "
+            "Both `oil_bubble_point_pressure_grid` and `solution_gas_to_oil_ratio_grid` are not provided. "
             "Attempting to estimate the bubble point pressure and GOR. If estimation fails, "
             "please provide at least one of them. Note, estimating the bubble point pressure "
             "and GOR may not yield accurate results.",
@@ -469,12 +469,12 @@ def reservoir_model(
             temperature_grid=temperature_grid,
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
-            gas_to_oil_ratio_grid=estimated_gor_grid,
+            solution_gas_to_oil_ratio_grid=estimated_gor_grid,
         )
-        gas_to_oil_ratio_grid = estimated_gor_grid
+        solution_gas_to_oil_ratio_grid = estimated_gor_grid
 
-    gas_to_oil_ratio_grid = typing.cast(
-        NDimensionalGrid[NDimension], gas_to_oil_ratio_grid
+    solution_gas_to_oil_ratio_grid = typing.cast(
+        NDimensionalGrid[NDimension], solution_gas_to_oil_ratio_grid
     )
     oil_bubble_point_pressure_grid = typing.cast(
         NDimensionalGrid[NDimension], oil_bubble_point_pressure_grid
@@ -496,7 +496,7 @@ def reservoir_model(
             bubble_point_pressure_grid=oil_bubble_point_pressure_grid,
             oil_specific_gravity_grid=oil_specific_gravity_grid,
             gas_gravity_grid=gas_gravity_grid,
-            gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+            solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_grid,
             oil_compressibility_grid=oil_compressibility_grid,
         )
 
@@ -549,7 +549,7 @@ def reservoir_model(
     oil_density_grid = build_live_oil_density_grid(
         oil_api_gravity_grid=oil_api_gravity_grid,
         gas_gravity_grid=gas_gravity_grid,
-        gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_grid,
         formation_volume_factor_grid=oil_formation_volume_factor_grid,
     )
 
@@ -574,7 +574,7 @@ def reservoir_model(
         water_compressibility_grid=water_compressibility_grid,
         water_density_grid=water_density_grid,
         water_bubble_point_pressure_grid=water_bubble_point_pressure_grid,
-        gas_to_oil_ratio_grid=gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_grid,
         gas_solubility_in_water_grid=gas_solubility_in_water_grid,
         oil_formation_volume_factor_grid=oil_formation_volume_factor_grid,
         gas_formation_volume_factor_grid=gas_formation_volume_factor_grid,

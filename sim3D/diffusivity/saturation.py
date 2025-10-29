@@ -456,7 +456,7 @@ def evolve_saturation_explicitly(
     ) + rock_compressibility
 
     # Ensure total compressibility is never zero or negative (for numerical stability)
-    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
+    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
 
     # Pad all necessary grids for boundary conditions and neighbour access
     padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)

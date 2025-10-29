@@ -1,6 +1,5 @@
 import typing
 
-import numba
 import numpy as np
 from numpy.typing import DTypeLike
 
@@ -21,7 +20,6 @@ __all__ = [
 ]
 
 
-@numba.njit(cache=True)
 def build_uniform_grid(
     grid_shape: NDimension,
     value: float = 0.0,
@@ -41,7 +39,6 @@ def build_uniform_grid(
 uniform_grid = build_uniform_grid  # Alias for convenience
 
 
-@numba.njit(cache=True)
 def build_layered_grid(
     grid_shape: NDimension,
     layer_values: ArrayLike[float],

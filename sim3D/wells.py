@@ -3,7 +3,6 @@ import itertools
 import typing
 from typing_extensions import Self
 import attrs
-import numba
 import numpy as np
 from scipy.integrate import quad
 
@@ -23,8 +22,7 @@ __all__ = [
     "WellEvent",
     "well_time_hook",
     "well_hooks",
-    "well_props_action",
-    "well_fluid_action",
+    "update_well_action",
     "well_actions",
     "compute_well_index",
     "compute_3D_effective_drainage_radius",
@@ -112,7 +110,7 @@ class Well(typing.Generic[WellLocation]):
         """
         if not self.perforating_intervals:
             return Orientation.Z  # Default to Z if no intervals
-        
+
         start, end = self.perforating_intervals[0]
 
         # Convert to numpy arrays and pad to 3D if needed
@@ -130,11 +128,11 @@ class Well(typing.Generic[WellLocation]):
         axis = np.argmax(unit_vector)
         return Orientation(("x", "y", "z")[axis])
 
-    def update_schedule(self, event: "WellEvent[Self]", /) -> None:
+    def schedule_event(self, event: "WellEvent[Self]", /) -> None:
         """
-        Update the well schedule
+        Add a new `WellEvent` to the well schedule.
 
-        :param event: The event to be scheduled for the well. 
+        :param event: The event to be scheduled for the well.
             If the event has no hook, it will always be applied after each time step.
         """
         self.schedule.add(event)
@@ -379,7 +377,7 @@ def well_time_hook(
     time_step: typing.Optional[int] = None, time: typing.Optional[float] = None
 ):
     """
-    Create a hook function that triggers based on the simulation time step or time.
+    Returns a hook function that triggers based on the simulation time step or time.
 
     :param time_step: The specific time step at which to trigger the event.
     :param time: The specific simulation time at which to trigger the event.
@@ -421,21 +419,34 @@ def well_hooks(
     return hook
 
 
-def well_props_action(
+def update_well_action(
     bottom_hole_pressure: typing.Optional[float] = None,
     skin_factor: typing.Optional[float] = None,
     is_active: typing.Optional[bool] = None,
+    injected_fluid: typing.Optional[WellFluid] = None,
+    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = None,
 ) -> ActionFunc[Well, typing.Any]:
     """
-    Create an action function that modifies well properties.
+    Returns an action function that modifies well configuration.
 
     :param bottom_hole_pressure: New bottom-hole pressure for the well (psi).
     :param skin_factor: New skin factor for the well.
     :param is_active: New active status for the well (True for open, False for shut in).
+    :param injected_fluid: New fluid properties for injection wells.
+    :param produced_fluids: New fluid properties for production wells.
     :return: An action function that takes a well and model state as arguments and performs the property updates.
     """
-
-    if not (bottom_hole_pressure or skin_factor or is_active is not None):
+    valid = any(
+        param is not None
+        for param in [
+            bottom_hole_pressure,
+            skin_factor,
+            is_active,
+            injected_fluid,
+            produced_fluids,
+        ]
+    )
+    if not valid:
         raise ValueError("At least one property must be provided to update.")
 
     def action(well: Well, model_state: typing.Any) -> None:
@@ -450,29 +461,11 @@ def well_props_action(
         if is_active is not None:
             well.is_active = is_active
 
-    return action
-
-
-def well_fluid_action(
-    injected_fluid: typing.Optional[WellFluid] = None,
-    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = None,
-) -> ActionFunc[Well, typing.Any]:
-    """
-    Create an action function that modifies well fluid properties.
-
-    :param injected_fluid: New fluid properties for injection wells.
-    :param produced_fluids: New fluid properties for production wells.
-    :return: An action function that takes a well and model state as arguments and performs the fluid property updates.
-    """
-
-    if not (injected_fluid or produced_fluids):
-        raise ValueError("At least one fluid property must be provided to update.")
-
-    def action(well: Well, model_state: typing.Any) -> None:
-        if isinstance(well, InjectionWell) and injected_fluid is not None:
+        if injected_fluid is not None and isinstance(well, InjectionWell):
             well.injected_fluid = injected_fluid
-        if isinstance(well, ProductionWell) and produced_fluids is not None:
+        if produced_fluids is not None and isinstance(well, ProductionWell):
             well.produced_fluids = produced_fluids
+        return
 
     return action
 
@@ -653,8 +646,8 @@ def _expand_interval(
 
 
 def _expand_intervals(
-    intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]], 
-    orientation: Orientation
+    intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
+    orientation: Orientation,
 ) -> typing.List[WellLocation]:
     """Expand multiple well perforating intervals into a list of grid locations."""
     locations = []
@@ -855,7 +848,6 @@ class Wells(typing.Generic[WellLocation]):
             well.check_location(grid_dimensions)
 
 
-@numba.njit(cache=True)
 def compute_well_index(
     permeability: float,
     interval_thickness: float,
@@ -893,7 +885,6 @@ def compute_well_index(
     return well_index
 
 
-@numba.njit(cache=True)
 def compute_3D_effective_drainage_radius(
     interval_thickness: typing.Tuple[float, float, float],
     permeability: typing.Tuple[float, float, float],

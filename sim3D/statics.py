@@ -267,7 +267,7 @@ class FluidProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the gas molecular weight distribution in the reservoir (g/mol). Should be constant for a given gas, e.g., Methane = 16.04 g/mol)."""
     gas_density_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas density distribution in the reservoir (lbm/ft³)."""
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension]
+    solution_gas_to_oil_ratio_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the solution gas-to-oil ratio distribution at standard conditions (SCF/STB)."""
     gas_solubility_in_water_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas solubility in water distribution at standard conditions (SCF/STB)."""

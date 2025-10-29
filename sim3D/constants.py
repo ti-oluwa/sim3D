@@ -135,7 +135,7 @@ M3_PER_SECOND_TO_SCF_PER_DAY = 3049492.8
 """Conversion factor from cubic meters per second to standard cubic feet per day (scf/day)"""
 SCF_PER_DAY_TO_M3_PER_SECOND = 1 / M3_PER_SECOND_TO_SCF_PER_DAY
 """Conversion factor from standard cubic feet per day to cubic meters per second (m³/s)"""
-SECONDS_PER_DAY = 3600 * 24
+SECONDS_PER_DAY = 86400.0
 """Conversion factor from days to seconds"""
 DAYS_PER_SECOND = 1 / SECONDS_PER_DAY
 """Conversion factor from seconds to days"""
@@ -158,6 +158,10 @@ ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2 = (
     ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * SECONDS_PER_DAY**2
 )  # ft/day²
 """Standard acceleration due to gravity in feet per day squared (ft/day²)"""
+DAYS_PER_YEAR = 365.25
+"""Conversion factor from years to days"""
+SECONDS_PER_YEAR = DAYS_PER_YEAR * SECONDS_PER_DAY
+"""Conversion factor from years to seconds"""
 
 RESERVOIR_OIL_NAME = (
     "n-Dodecane"  # Heavy oil, can be changed to any fluid supported by CoolProp

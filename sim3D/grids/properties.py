@@ -531,7 +531,7 @@ def build_oil_formation_volume_factor_grid(
     bubble_point_pressure_grid: NDimensionalGrid[NDimension],
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
     gas_gravity_grid: NDimensionalGrid[NDimension],
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
+    solution_gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
     oil_compressibility_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
@@ -544,7 +544,7 @@ def build_oil_formation_volume_factor_grid(
     :param bubble_point_pressure_grid: N-Dimensional array of oil bubble point pressures (psi) corresponding to each grid cell.
     :param oil_specific_gravity_grid: N-Dimensional array of oil specific gravity values (dimensionless),
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
-    :param gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
+    :param solution_gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
     :param oil_compressibility_grid: N-Dimensional array of oil compressibility values (psi⁻¹) representing the compressibility of oil.
     :return: N-Dimensional array of oil formation volume factors (bbl/STB) corresponding to each grid cell.
     """
@@ -554,7 +554,7 @@ def build_oil_formation_volume_factor_grid(
         bubble_point_pressure_grid,
         oil_specific_gravity_grid,
         gas_gravity_grid,
-        gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid,
         oil_compressibility_grid,
     )
 
@@ -606,7 +606,7 @@ def build_gas_formation_volume_factor_grid(
 v_compute_gas_to_oil_ratio = np.vectorize(compute_gas_to_oil_ratio, otypes=[np.float64])
 
 
-def build_gas_to_oil_ratio_grid(
+def build_solution_gas_to_oil_ratio_grid(
     pressure_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
     bubble_point_pressure_grid: NDimensionalGrid[NDimension],
@@ -649,7 +649,7 @@ def build_oil_bubble_point_pressure_grid(
     gas_gravity_grid: NDimensionalGrid[NDimension],
     oil_api_gravity_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
+    solution_gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
     Computes a N-Dimensional grid of oil bubble point pressures.
@@ -665,7 +665,7 @@ def build_oil_bubble_point_pressure_grid(
         gas_gravity_grid,
         oil_api_gravity_grid,
         temperature_grid,
-        gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid,
     )
 
 
@@ -734,7 +734,7 @@ def build_oil_viscosity_grid(
     temperature_grid: NDimensionalGrid[NDimension],
     bubble_point_pressure_grid: NDimensionalGrid[NDimension],
     oil_specific_gravity_grid: NDimensionalGrid[NDimension],
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
+    solution_gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
     gor_at_bubble_point_pressure_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
@@ -748,7 +748,7 @@ def build_oil_viscosity_grid(
         of the reservoir across the grid cells.
     :param bubble_point_pressure_grid: N-Dimensional array of bubble point pressures (psi) corresponding to each grid cell.
     :param oil_specific_gravity_grid: N-Dimensional array of oil specific gravity values (dimensionless).
-    :param gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
+    :param solution_gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
     :param gor_at_bubble_point_pressure_grid: Optional N-Dimensional array of gas-to-oil ratios at bubble point pressure (SCF/STB).
     :return: N-Dimensional array of oil viscosities (cP) corresponding to each grid cell.
     """
@@ -757,7 +757,7 @@ def build_oil_viscosity_grid(
         temperature_grid,
         bubble_point_pressure_grid,
         oil_specific_gravity_grid,
-        gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid,
         gor_at_bubble_point_pressure_grid,
     )
 
@@ -855,7 +855,7 @@ def build_oil_compressibility_grid(
     :param bubble_point_pressure_grid: N-Dimensional array of bubble point pressures (psi) corresponding to each grid cell.
     :param oil_api_gravity_grid: N-Dimensional array of oil API gravity values (dimensionless).
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
-    :param gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
+    :param solution_gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
     :return: N-Dimensional array of oil compressibilities (psi⁻¹) corresponding to each grid cell.
     """
     return v_compute_oil_compressibility(
@@ -989,7 +989,7 @@ v_compute_live_oil_density = np.vectorize(compute_live_oil_density, otypes=[np.f
 def build_live_oil_density_grid(
     oil_api_gravity_grid: NDimensionalGrid[NDimension],
     gas_gravity_grid: NDimensionalGrid[NDimension],
-    gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
+    solution_gas_to_oil_ratio_grid: NDimensionalGrid[NDimension],
     formation_volume_factor_grid: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
@@ -999,14 +999,14 @@ def build_live_oil_density_grid(
 
     :param oil_api_gravity_grid: N-Dimensional array of oil API gravity values (dimensionless).
     :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless) representing the density of gas relative to air.
-    :param gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
+    :param solution_gas_to_oil_ratio_grid: N-Dimensional array of gas-to-oil ratio values (SCF/STB) representing the ratio of gas to oil in the reservoir.
     :param formation_volume_factor_grid: N-Dimensional array of formation volume factors (bbl/STB).
     :return: N-Dimensional array of oil densities (lbm/ft³) corresponding to each grid cell.
     """
     return v_compute_live_oil_density(
         oil_api_gravity_grid,
         gas_gravity_grid,
-        gas_to_oil_ratio_grid,
+        solution_gas_to_oil_ratio_grid,
         formation_volume_factor_grid,
     )
 

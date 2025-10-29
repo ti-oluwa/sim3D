@@ -6,7 +6,6 @@ import typing
 import warnings
 
 from CoolProp.CoolProp import PropsSI
-import numba
 import numpy as np
 from scipy.optimize import brentq, root_scalar
 
@@ -127,7 +126,6 @@ def clip_temperature(temperature: float, fluid: str) -> float:
     return min(max(temperature, t_min + 0.1), t_max - 0.1)  # Add small buffer
 
 
-@numba.njit(cache=True)
 def clip_scalar(value: float, min_val: float, max_val: float) -> float:
     if value < min_val:
         return min_val
@@ -288,7 +286,6 @@ def compute_gas_gravity_from_density(
     return density / (air_density * KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
-@numba.njit(cache=True)
 def mix_fluid_property(
     fluid1_saturation: float,
     fluid1_property: float,
@@ -336,7 +333,6 @@ def mix_fluid_property(
     raise ValueError("Unknown mixing method.")
 
 
-@numba.njit(cache=True)
 def compute_total_fluid_compressibility(
     water_saturation: float,
     oil_saturation: float,
@@ -366,7 +362,6 @@ def compute_total_fluid_compressibility(
     return total_fluid_compressibility
 
 
-@numba.njit(cache=True)
 def linear_decay_factor_to_exponential_decay_constant(
     linear_decay_factor: float,
 ) -> float:
@@ -384,7 +379,6 @@ def linear_decay_factor_to_exponential_decay_constant(
     return -np.log(1 - linear_decay_factor)
 
 
-@numba.njit(cache=True)
 def compute_diffusion_number(
     porosity: float,
     total_mobility: float,
@@ -429,7 +423,6 @@ def compute_diffusion_number(
     return diffusion_number
 
 
-@numba.njit(cache=True)
 def compute_harmonic_mean(value1: float, value2: float) -> float:
     """
     Computes the harmonic mean of two values.
@@ -443,7 +436,6 @@ def compute_harmonic_mean(value1: float, value2: float) -> float:
     return (2 * value1 * value2) / (value1 + value2)
 
 
-@numba.njit(cache=True)
 def compute_harmonic_mobility(
     index1: NDimension,
     index2: NDimension,
@@ -466,7 +458,6 @@ def compute_harmonic_mobility(
     return λ_harmonic
 
 
-@numba.njit(cache=True)
 def compute_three_phase_capillary_pressures(
     water_saturation: float,
     gas_saturation: float,
@@ -596,7 +587,6 @@ def compute_three_phase_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@numba.njit(cache=True)
 def compute_oil_specific_gravity_from_density(
     oil_density: float,
     pressure: float,
@@ -646,7 +636,6 @@ def compute_oil_specific_gravity_from_density(
     return oil_density_at_stp / STANDARD_WATER_DENSITY_IMPERIAL
 
 
-@numba.njit(cache=True)
 def convert_surface_rate_to_reservoir(
     surface_rate: float, formation_volume_factor: float
 ) -> float:
@@ -685,7 +674,6 @@ def convert_reservoir_rate_to_surface(
     )  # Production surface volume is larger than reservoir volume
 
 
-@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_standing(
     temperature: float,
     oil_specific_gravity: float,
@@ -731,7 +719,6 @@ def compute_oil_formation_volume_factor_standing(
     return oil_fvf
 
 
-@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_fvf_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -740,7 +727,6 @@ def _get_vazquez_beggs_oil_fvf_coefficients(
     return 4.670e-4, 1.100e-5, 1.337e-9
 
 
-@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_vazquez_and_beggs(
     temperature: float,
     oil_specific_gravity: float,
@@ -785,7 +771,6 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
     return oil_fvf
 
 
-@numba.njit(cache=True)
 def correct_oil_fvf_for_pressure(
     saturated_oil_fvf: float,
     oil_compressibility: float,
@@ -814,7 +799,6 @@ def correct_oil_fvf_for_pressure(
     return saturated_oil_fvf * correction_factor
 
 
-@numba.njit(cache=True)
 def compute_oil_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -865,7 +849,6 @@ def compute_oil_formation_volume_factor(
     )
 
 
-@numba.njit(cache=True)
 def compute_water_formation_volume_factor(
     water_density: float,
     salinity: float,
@@ -901,7 +884,6 @@ def compute_water_formation_volume_factor(
     return water_fvf
 
 
-@numba.njit(cache=True)
 def compute_water_formation_volume_factor_mccain(
     pressure: float,
     temperature: float,
@@ -947,7 +929,6 @@ def compute_water_formation_volume_factor_mccain(
     return B_w
 
 
-@numba.njit(cache=True)
 def compute_gas_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -988,7 +969,6 @@ def compute_gas_formation_volume_factor(
     )
 
 
-@numba.njit(cache=True)
 def compute_gas_compressibility_factor(
     pressure: float,
     temperature: float,
@@ -1072,7 +1052,6 @@ def compute_gas_compressibility_factor(
     )  # Ensure Z-factor is not less than 0.1 as Papay's correlation may under-predict at times
 
 
-@numba.njit(cache=True)
 def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     """
     Computes the API gravity (in degrees) from oil specific gravity.
@@ -1094,7 +1073,6 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     return (141.5 / oil_specific_gravity) - 131.5
 
 
-@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -1118,7 +1096,6 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         return 0.0178, 1.1870, 23.9310
 
 
-@numba.njit(cache=True)
 def compute_oil_bubble_point_pressure(
     gas_gravity: float,
     oil_api_gravity: float,
@@ -1315,7 +1292,6 @@ def compute_gas_to_oil_ratio(
     return max(0.0, gor)
 
 
-@numba.njit(cache=True)
 def _compute_dead_oil_viscosity_modified_beggs(
     temperature: float, oil_api_gravity: float
 ) -> float:
@@ -1362,7 +1338,6 @@ def compute_dead_oil_viscosity_modified_beggs(
     return _compute_dead_oil_viscosity_modified_beggs(temperature, oil_api_gravity)
 
 
-@numba.njit(cache=True)
 def _compute_oil_viscosity(
     pressure: float,
     bubble_point_pressure: float,
@@ -1455,7 +1430,6 @@ def compute_oil_viscosity(
     )
 
 
-@numba.njit(cache=True)
 def compute_gas_molecular_weight(gas_gravity: float) -> float:
     """
     Computes the apparent molecular weight of a gas (g/mol) from its specific gravity relative to air.
@@ -1476,7 +1450,6 @@ def compute_gas_molecular_weight(gas_gravity: float) -> float:
     return gas_gravity * MOLECULAR_WEIGHT_AIR
 
 
-@numba.njit(cache=True)
 def compute_gas_pseudocritical_properties(
     gas_gravity: float,
     h2s_mole_fraction: float = 0.0,
@@ -1624,25 +1597,21 @@ def compute_gas_viscosity(
     return max(0.0, gas_viscosity)
 
 
-@numba.njit(cache=True)
 def kelvin_to_fahrenheit(temp_K: float) -> float:
     """Converts temperature from Kelvin to Fahrenheit."""
     return (temp_K - 273.15) * 9 / 5 + 32
 
 
-@numba.njit(cache=True)
 def fahrenheit_to_kelvin(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Kelvin."""
     return (temp_F - 32) * 5 / 9 + 273.15
 
 
-@numba.njit(cache=True)
 def fahrenheit_to_celsius(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Celsius."""
     return (temp_F - 32) * 5 / 9
 
 
-@numba.njit(cache=True)
 def _compute_water_viscosity(
     temperature: float, salinity: float, pressure: float
 ) -> float:
@@ -1886,7 +1855,6 @@ def compute_oil_compressibility(
     return compute_base_compressibility(pressure) + correction_term
 
 
-@numba.njit(cache=True)
 def compute_gas_compressibility(
     pressure: float,
     temperature: float,
@@ -1965,7 +1933,6 @@ def compute_gas_compressibility(
     return max(0.0, gas_compressibility)  # Compressibility must be non-negative
 
 
-@numba.njit(cache=True)
 def _gas_solubility_in_water_mccain_methane(
     pressure: float,
     temperature: float,
@@ -2216,7 +2183,6 @@ def compute_gas_solubility_in_water(
     raise NotImplementedError(f"No model for gas '{gas}'.")
 
 
-@numba.njit(cache=True)
 def compute_gas_free_water_formation_volume_factor(
     pressure: float, temperature: float
 ) -> float:
@@ -2253,7 +2219,6 @@ def compute_gas_free_water_formation_volume_factor(
     return max(0.9, gas_free_water_fvf)  # Bw_gas_free is typically close to 1.0
 
 
-@numba.njit(cache=True)
 def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     """
     Calculates the derivative of gas solubility in water (Rsw) with respect to pressure,
@@ -2271,7 +2236,6 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     return derivative_pure_water * salinity_correction_factor
 
 
-@numba.njit(cache=True)
 def _compute_dBw_gas_free_dp_mccain(
     pressure: float,
     temperature: float,
@@ -2298,7 +2262,6 @@ def _compute_dBw_gas_free_dp_mccain(
     return thermal_expansion_term * isothermal_compressibility_derivative
 
 
-@numba.njit(cache=True)
 def compute_water_compressibility(
     pressure: float,
     temperature: float,
@@ -2386,7 +2349,6 @@ def compute_water_compressibility(
     return max(0.0, water_compressibility)  # Ensure non-negative compressibility
 
 
-@numba.njit(cache=True)
 def compute_live_oil_density(
     api_gravity: float,
     gas_gravity: float,
@@ -2434,7 +2396,6 @@ def compute_live_oil_density(
     return live_oil_density_lb_per_ft3
 
 
-@numba.njit(cache=True)
 def compute_water_density_mccain(
     pressure: float, temperature: float, salinity: float = 0.0
 ) -> float:
@@ -2477,7 +2438,6 @@ def compute_water_density_mccain(
     return water_density
 
 
-@numba.njit(cache=True)
 def compute_water_density_batzle(
     pressure: float, temperature: float, salinity: float
 ) -> float:
@@ -2535,7 +2495,6 @@ def compute_water_density_batzle(
     return water_density
 
 
-@numba.njit(cache=True)
 def compute_water_density(
     pressure: float,
     temperature: float,
@@ -2618,7 +2577,6 @@ def compute_water_density(
     return max(0.0, live_water_density_in_lb_per_ft3)
 
 
-@numba.njit(cache=True)
 def compute_gas_to_oil_ratio_standing(
     pressure: float,
     oil_api_gravity: float,
@@ -2662,7 +2620,6 @@ def compute_gas_to_oil_ratio_standing(
     return gor
 
 
-@numba.njit(cache=True)
 def estimate_bubble_point_pressure_standing(
     oil_api_gravity: float,
     gas_gravity: float,
@@ -2711,7 +2668,6 @@ def estimate_bubble_point_pressure_standing(
     return bubble_point_pressure
 
 
-@numba.njit(cache=True)
 def compute_hydrocarbon_in_place(
     area: float,
     thickness: float,

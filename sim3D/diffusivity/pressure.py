@@ -2,7 +2,6 @@ import functools
 import itertools
 import typing
 
-import numba
 import numpy as np
 from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
@@ -109,7 +108,6 @@ Notes:
 """
 
 
-@numba.njit(cache=True)
 def _compute_explicit_pressure_pseudo_flux_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
@@ -421,7 +419,7 @@ def evolve_pressure_explicitly(
     ) + rock_compressibility
 
     # Ensure total compressibility is never zero or negative (for numerical stability)
-    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
+    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
 
     # Pad all necessary grids for boundary conditions and neighbour access
     padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
@@ -923,7 +921,6 @@ Stability:
 """
 
 
-@numba.njit(cache=True)
 def to_1D_index(
     i: int,
     j: int,
@@ -949,7 +946,6 @@ def to_1D_index(
     return i * (cell_count_y * cell_count_z) + j * cell_count_z + k
 
 
-@numba.njit(cache=True)
 def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
@@ -1203,7 +1199,7 @@ def evolve_pressure_implicitly(
     ) + rock_compressibility
 
     # Ensure total compressibility is never zero or negative (for numerical stability)
-    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
+    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
 
     # Pad all necessary grids for boundary conditions and neighbour access
     padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
@@ -1755,7 +1751,7 @@ def evolve_pressure_adaptively(
     ) + rock_compressibility
 
     # Ensure total compressibility is never zero or negative (for numerical stability)
-    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-18)
+    total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
 
     # Compute phase mobilities (kr / mu) for each cell
     # `build_three_phase_relative_mobilities_grids` should handle `k_abs * kr / mu` for each phase.
