@@ -1,28 +1,36 @@
 import functools
 import itertools
+import math
 import typing
-from typing_extensions import Self
+
 import attrs
 import numpy as np
 from scipy.integrate import quad
+from typing_extensions import Self
 
-from sim3D.types import Orientation, WellLocation, FluidPhase, HookFunc, ActionFunc
 from sim3D.properties import (
-    compute_gas_density,
-    compute_gas_viscosity,
+    compute_gas_compressibility,
     compute_gas_compressibility_factor,
+    compute_gas_density,
+    compute_gas_free_water_formation_volume_factor,
+    compute_gas_viscosity,
+    compute_water_compressibility,
+    compute_water_viscosity,
 )
+from sim3D.types import ActionFunc, FluidPhase, HookFunc, Orientation, WellLocation
 
 
 __all__ = [
     "WellFluid",
+    "InjectedFluid",
+    "ProducedFluid",
     "InjectionWell",
     "ProductionWell",
     "Wells",
     "WellEvent",
     "well_time_hook",
     "well_hooks",
-    "update_well_action",
+    "well_update_action",
     "well_actions",
     "compute_well_index",
     "compute_3D_effective_drainage_radius",
@@ -34,26 +42,182 @@ __all__ = [
 
 @attrs.define(slots=True, frozen=True)
 class WellFluid:
-    """Properties of the fluid being injected into or produced by a well."""
+    """Base class for fluid properties in wells."""
 
     name: str
     """Name of the fluid. Examples: Methane, CO2, Water, Oil."""
     phase: FluidPhase
     """Phase of the fluid. Examples: WATER, GAS, OIL."""
-    specific_gravity: float
+    specific_gravity: float = attrs.field(validator=attrs.validators.ge(0))
     """Specific gravity of the fluid in (lbm/ft³)."""
-    molecular_weight: float
+    molecular_weight: float = attrs.field(validator=attrs.validators.ge(0))
     """Molecular weight of the fluid in (g/mol)."""
-    compressibility: typing.Optional[float] = None
-    """Compressibility of the fluid in (psi⁻¹)."""
-    formation_volume_factor: typing.Optional[float] = None
-    """Formation volume factor of the fluid in (bbl/STB) or (ft³/SCF), depending on the phase of the fluid."""
+
+
+@attrs.define(slots=True, frozen=True)
+class InjectedFluid(WellFluid):
+    """Properties of the fluid being injected into or produced by a well."""
+
     salinity: typing.Optional[float] = None
-    """Salinity of the fluid in (ppm NaCl)."""
+    """Salinity of the fluid (if water) in (ppm NaCl)."""
+    is_miscible: bool = False
+    """Whether this fluid is miscible with oil (e.g., CO2, N2)"""
+    todd_longstaff_omega: float = attrs.field(
+        validator=attrs.validators.and_(
+            attrs.validators.ge(0.0), attrs.validators.le(1.0)
+        ),
+        default=0.0,
+    )
+    """Todd-Longstaff mixing parameter for miscible displacement (0 to 1)."""
+    minimum_miscibility_pressure: typing.Optional[float] = None
+    """Minimum miscibility pressure for this fluid-oil system (psi)"""
+    miscibility_transition_width: float = attrs.field(
+        default=500.0, validator=attrs.validators.ge(0)
+    )
+    """Pressure range over which miscibility transitions from immiscible to miscible (psi)"""
+    concentration: float = attrs.field(
+        default=1.0,
+        validator=attrs.validators.and_(
+            attrs.validators.ge(0.0), attrs.validators.le(1.0)
+        ),
+    )
+    """Concentration of the fluid in the mixture (0 to 1). Relevant for miscible fluids."""
+
+    def __attrs_post_init__(self) -> None:
+        """Validate the fluid properties."""
+        if self.phase not in (FluidPhase.GAS, FluidPhase.WATER):
+            raise ValueError(
+                "Only gas and water phase fluids are supported for injection."
+            )
+
+        if self.is_miscible:
+            if self.phase != FluidPhase.GAS:
+                raise ValueError("Only gas phase fluids can be miscible.")
+            elif (
+                not self.minimum_miscibility_pressure and not self.todd_longstaff_omega
+            ):
+                raise ValueError(
+                    "Miscible fluids must have either `minimum_miscibility_pressure` or `todd_longstaff_omega` defined."
+                )
+
+    def get_viscosity(self, pressure: float, temperature: float) -> float:
+        """
+        Get the viscosity of the fluid at given pressure and temperature.
+
+        :param pressure: The pressure at which to evaluate the viscosity (psi).
+        :param temperature: The temperature at which to evaluate the viscosity (°F).
+        :return: The viscosity of the fluid (cP).
+        """
+        if self.phase == FluidPhase.WATER:
+            return compute_water_viscosity(
+                pressure=pressure,
+                temperature=temperature,
+                salinity=self.salinity or 0.0,
+            )
+        gas_z_factor = compute_gas_compressibility_factor(
+            pressure=pressure,
+            temperature=temperature,
+            gas_gravity=self.specific_gravity,
+        )
+        gas_density = compute_gas_density(
+            pressure=pressure,
+            temperature=temperature,
+            gas_gravity=self.specific_gravity,
+            gas_compressibility_factor=gas_z_factor,
+        )
+        return compute_gas_viscosity(
+            temperature=temperature,
+            gas_density=gas_density,
+            gas_molecular_weight=self.molecular_weight,
+        )
+
+    def get_compressibility(
+        self, pressure: float, temperature: float, **kwargs: typing.Any
+    ) -> float:
+        """
+        Get the compressibility of the fluid at given pressure and temperature.
+
+        :param pressure: The pressure at which to evaluate the compressibility (psi).
+        :param temperature: The temperature at which to evaluate the compressibility (°F).
+        :kwargs: Additional parameters for compressibility calculations.
+        For water:
+            :kwarg bubble_point_pressure: The bubble point pressure (psi).
+            :kwarg gas_formation_volume_factor: The gas formation volume factor (ft³/scf).
+            :kwarg gas_solubility_in_water: The gas solubility in water (scf/stb).
+
+        For gas:
+            :kwarg gas_gravity: The specific gravity of the gas (dimensionless). Optional
+                Uses the fluid's specific gravity if not provided.
+            :kwarg gas_compressibility_factor: The gas compressibility factor (dimensionless).
+
+        :return: The compressibility of the fluid (psi⁻¹).
+        """
+        if self.phase == FluidPhase.WATER:
+            gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
+                pressure=pressure, temperature=temperature
+            )
+            kwargs.setdefault(
+                "gas_free_water_formation_volume_factor", gas_free_water_fvf
+            )
+            return compute_water_compressibility(
+                pressure=pressure,
+                temperature=temperature,
+                **kwargs,
+                salinity=self.salinity or 0.0,
+            )
+
+        kwargs.setdefault("gas_gravity", self.specific_gravity)
+        return compute_gas_compressibility(
+            pressure=pressure, temperature=temperature, **kwargs
+        )
+
+
+@attrs.define(slots=True, frozen=True)
+class ProducedFluid(WellFluid):
+    """Properties of the fluid being produced by a well."""
+
+    pass
+
+
+WellFluidT = typing.TypeVar("WellFluidT", bound=WellFluid)
+
+
+def _geometric_mean(values: typing.Sequence[float]) -> float:
+    prod = 1.0
+    n = 0
+    for v in values:
+        prod *= max(v, 0.0)  # ensure non-negative
+        n += 1
+    if n == 0:
+        raise ValueError("No permeability values provided")
+    return prod ** (1.0 / n)
+
+
+def compute_effective_permeability_for_well(
+    permeability: typing.Sequence[float], orientation: Orientation
+) -> float:
+    """
+    Compute k_eff for Peaceman WI using geometric mean of the two permeabilities
+    perpendicular to the well axis. `permeability` is (kx, ky, kz).
+    orientation is one of Orientation.X/Y/Z (or a string equivalent).
+    """
+    if len(permeability) != 3:
+        # If 2D, fall back to geometric mean of available components:
+        return _geometric_mean(permeability)
+
+    kx, ky, kz = permeability
+    if orientation == Orientation.Z:  # vertical well: transverse are x,y
+        return math.sqrt(max(kx, 0.0) * max(ky, 0.0))
+    elif orientation == Orientation.X:  # well along x: transverse are y,z
+        return math.sqrt(max(ky, 0.0) * max(kz, 0.0))
+    elif orientation == Orientation.Y:  # well along y: transverse are x,z
+        return math.sqrt(max(kx, 0.0) * max(kz, 0.0))
+    # Oblique/unknown orientation: conservative fallback = geometric mean of all three
+    return _geometric_mean((kx, ky, kz))
 
 
 @attrs.define(slots=True, hash=True)
-class Well(typing.Generic[WellLocation]):
+class Well(typing.Generic[WellLocation, WellFluidT]):
     """Models a well in the reservoir model."""
 
     name: str
@@ -229,22 +393,21 @@ class Well(typing.Generic[WellLocation]):
         )
         skin_factor = skin_factor if skin_factor is not None else self.skin_factor
         radius = self.radius
+        effective_permeability = compute_effective_permeability_for_well(
+            permeability=permeability, orientation=orientation
+        )
+
         if orientation == Orientation.X:
-            directional_permeability = permeability[0]
             directional_thickness = interval_thickness[0]
-
         elif orientation == Orientation.Y:
-            directional_permeability = permeability[1]
             directional_thickness = interval_thickness[1]
-
         elif dimensions == 3 and orientation == Orientation.Z:
-            directional_permeability = permeability[2]
             directional_thickness = interval_thickness[2]
-
         else:  # dimensions == 2 and orientation == Orientation.Z:
             raise ValueError("Z-oriented wells are not supported in 2D models")
+
         return compute_well_index(
-            permeability=directional_permeability,
+            permeability=effective_permeability,
             interval_thickness=directional_thickness,
             wellbore_radius=radius,
             effective_drainage_radius=effective_drainage_radius,
@@ -257,7 +420,7 @@ class Well(typing.Generic[WellLocation]):
         temperature: float,
         phase_mobility: float,
         well_index: float,
-        fluid: typing.Optional[WellFluid] = None,
+        fluid: typing.Optional[WellFluidT] = None,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
@@ -419,12 +582,12 @@ def well_hooks(
     return hook
 
 
-def update_well_action(
+def well_update_action(
     bottom_hole_pressure: typing.Optional[float] = None,
     skin_factor: typing.Optional[float] = None,
     is_active: typing.Optional[bool] = None,
-    injected_fluid: typing.Optional[WellFluid] = None,
-    produced_fluids: typing.Optional[typing.Sequence[WellFluid]] = None,
+    injected_fluid: typing.Optional[InjectedFluid] = None,
+    produced_fluids: typing.Optional[typing.Sequence[ProducedFluid]] = None,
 ) -> ActionFunc[Well, typing.Any]:
     """
     Returns an action function that modifies well configuration.
@@ -458,8 +621,10 @@ def update_well_action(
             well.bottom_hole_pressure = bottom_hole_pressure
         if skin_factor is not None:
             well.skin_factor = skin_factor
-        if is_active is not None:
-            well.is_active = is_active
+        if is_active is True:
+            well.open()
+        elif is_active is False:
+            well.shut_in()
 
         if injected_fluid is not None and isinstance(well, InjectionWell):
             well.injected_fluid = injected_fluid
@@ -491,14 +656,14 @@ def well_actions(
 
 
 @attrs.define(slots=True, hash=True)
-class InjectionWell(Well[WellLocation]):
+class InjectionWell(Well[WellLocation, InjectedFluid]):
     """
     Models an injection well in the reservoir model.
 
     This well injects fluids into the reservoir.
     """
 
-    injected_fluid: typing.Optional[WellFluid] = None
+    injected_fluid: typing.Optional[InjectedFluid] = None
     """Properties of the fluid being injected into the well."""
 
     def get_flow_rate(
@@ -507,7 +672,7 @@ class InjectionWell(Well[WellLocation]):
         temperature: float,
         phase_mobility: float,
         well_index: float,
-        fluid: typing.Optional[WellFluid] = None,
+        fluid: typing.Optional[InjectedFluid] = None,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
@@ -541,14 +706,14 @@ class InjectionWell(Well[WellLocation]):
 
 
 @attrs.define(slots=True, hash=True)
-class ProductionWell(Well[WellLocation]):
+class ProductionWell(Well[WellLocation, ProducedFluid]):
     """
     Models a production well in the reservoir model.
 
     This well produces fluids from the reservoir.
     """
 
-    produced_fluids: typing.Sequence[WellFluid] = attrs.field(factory=list)
+    produced_fluids: typing.Sequence[ProducedFluid] = attrs.field(factory=list)
     """List of fluids produced by the well. This can include multiple phases (e.g., oil, gas, water)."""
 
     def get_flow_rates(

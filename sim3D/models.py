@@ -1,6 +1,7 @@
 """Static data models and schemas for the N-dimensional reservoir."""
 
 import typing
+from typing_extensions import Self
 
 import attrs
 import numpy as np
@@ -16,6 +17,8 @@ from sim3D.grids.base import (
     build_elevation_grid,
     build_depth_grid,
     apply_structural_dip,
+    pad_grid,
+    unpad_grid,
 )
 
 
@@ -26,6 +29,108 @@ __all__ = [
     "ReservoirModel",
     "RockPermeability",
 ]
+
+
+class PadMixin(typing.Generic[NDimension]):
+    """Mixin class to add padding functionality to attrs classes with numpy array fields."""
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        """Return iterable of attrs fields that can be padded."""
+        raise NotImplementedError
+
+    def pad(
+        self,
+        pad_width: int,
+        hook: typing.Optional[
+            typing.Callable[
+                [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
+            ]
+        ] = None,
+        exclude: typing.Optional[typing.Iterable[str]] = None,
+    ) -> Self:
+        """
+        Pad all numpy array fields in the attrs class.
+
+        :param pad_width: Number of cells to pad on each side of each dimension.
+        :param hook: Optional callable to apply additional processing to each padded grid.
+        :param exclude: Optional iterable of field names to exclude from hooking.
+        :return: New instance of the attrs class with padded numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        target_fields = self.get_paddable_fields()
+        padded_fields = {}
+        for field in target_fields:
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            padded_value = pad_grid(grid=value, pad_width=pad_width)
+            if hook and (not exclude or field.name not in exclude):
+                padded_value = hook(padded_value)
+            padded_fields[field.name] = padded_value
+        return attrs.evolve(self, **padded_fields)
+
+    def unpad(self, pad_width: int) -> Self:
+        """
+        Remove padding from all numpy array fields in the attrs class.
+
+        :param pad_width: Number of cells to remove from each side of each dimension.
+        :return: New instance of the attrs class with unpadded numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        target_fields = self.get_paddable_fields()
+        unpadded_fields = {}
+        for field in target_fields:
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            padded_value = unpad_grid(grid=value, pad_width=pad_width)
+            unpadded_fields[field.name] = padded_value
+        return attrs.evolve(self, **unpadded_fields)
+
+    def apply_hook(
+        self,
+        hook: typing.Callable[
+            [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
+        ],
+        exclude: typing.Optional[typing.Iterable[str]] = None,
+    ) -> Self:
+        """
+        Apply a hook function to all numpy array fields in the attrs class.
+
+        :param hook: Callable to apply to each numpy array field.
+        :param exclude: Optional iterable of field names to exclude from hooking.
+        :return: New instance of the attrs class with hooked numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        target_fields = self.get_paddable_fields()
+        hooked_fields = {}
+        for field in target_fields:
+            if exclude and field.name in exclude:
+                continue
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            hooked_value = hook(value)
+            hooked_fields[field.name] = hooked_value
+        return attrs.evolve(self, **hooked_fields)
 
 
 @attrs.define(slots=True, frozen=True)
@@ -190,7 +295,7 @@ class CapillaryPressureParameters:
 
 
 @attrs.define(slots=True, frozen=True)
-class FluidProperties(typing.Generic[NDimension]):
+class FluidProperties(PadMixin[NDimension]):
     """
     Fluid properties of a reservoir model.
 
@@ -279,12 +384,28 @@ class FluidProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the water formation volume factor distribution (bbl/STB)."""
     water_salinity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the water salinity distribution (ppm NaCl). Should be constant for a given water type, e.g., seawater = 35,000 ppm NaCl)."""
-    reservoir_gas_name: str = "Methane"
+    solvent_concentration_grid: NDimensionalGrid[NDimension]
+    """Solvent concentration in oil phase (0=pure oil, 1=pure solvent)"""
+    oil_effective_viscosity_grid: NDimensionalGrid[NDimension]
+    """
+    Effective oil-solvent mixture viscosity using miscible model (e.g Todd Longstaff) (cP).
+
+    This will be same as `oil_viscosity_grid` for immiscible flow.
+    """
+    reservoir_gas: str = "Methane"
     """Name of the reservoir gas (e.g., Methane, Ethane, CO2, N2). Can also be the name of the gas injected into the reservoir."""
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        excluded_fields = ("reservoir_gas",)
+        return (
+            field
+            for field in attrs.fields(type(self))
+            if field.name not in excluded_fields
+        )
 
 
 @attrs.define(slots=True, frozen=True)
-class RockPermeability(typing.Generic[NDimension]):
+class RockPermeability(PadMixin[NDimension]):
     """
     Rock permeability in the reservoir, in milliDarcy (mD).
 
@@ -305,9 +426,12 @@ class RockPermeability(typing.Generic[NDimension]):
         if self.z.size == 0:
             object.__setattr__(self, "z", self.x)
 
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(type(self))
+
 
 @attrs.define(slots=True, frozen=True)
-class RockProperties(typing.Generic[NDimension]):
+class RockProperties(PadMixin[NDimension]):
     """
     Rock properties of a reservoir model.
 
@@ -332,6 +456,30 @@ class RockProperties(typing.Generic[NDimension]):
     """N-dimensional numpy array representing the residual oil saturation distribution during gas flooding (fraction)."""
     residual_gas_saturation_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the residual gas saturation distribution (fraction)."""
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        excluded_fields = ("compressibility", "absolute_permeability")
+        return (
+            field
+            for field in attrs.fields(type(self))
+            if field.name not in excluded_fields
+        )
+
+    def pad(
+        self,
+        pad_width: int,
+        hook: typing.Optional[
+            typing.Callable[
+                [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
+            ]
+        ] = None,
+        exclude: typing.Optional[typing.Iterable[str]] = None,
+    ) -> Self:
+        padded = super().pad(pad_width=pad_width, hook=hook, exclude=exclude)
+        padded_absolute_permeability = self.absolute_permeability.pad(
+            pad_width=pad_width, hook=hook, exclude=exclude
+        )
+        return attrs.evolve(padded, absolute_permeability=padded_absolute_permeability)
 
 
 @attrs.define(slots=True, frozen=True)

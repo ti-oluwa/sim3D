@@ -4,9 +4,9 @@
 3D black-oil reservoir modelling and simulation library - 3D Cartesian grid | Linear flow.
 """
 
-from sim3D.statics import *  # noqa
-from sim3D.dynamics import *  # noqa
-from sim3D import constants  # noqa
+from sim3D.models import *  # noqa
+from sim3D.simulation import *  # noqa
+from sim3D.constants import *  # noqa
 from sim3D.grids import *  # noqa
 from sim3D.factories import *  # noqa
 from sim3D.boundaries import *  # noqa

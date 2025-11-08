@@ -6,7 +6,7 @@ import typing
 import numpy as np
 from numpy.typing import DTypeLike
 
-from sim3D.statics import CapillaryPressureParameters
+from sim3D.models import CapillaryPressureParameters
 from sim3D.properties import (
     compute_fluid_compressibility,
     compute_fluid_density,
@@ -36,7 +36,8 @@ from sim3D.properties import (
     compute_water_density,
     compute_water_formation_volume_factor,
     compute_water_viscosity,
-    mix_fluid_property,
+    compute_miscibility_function,
+    compute_todd_longstaff_effective_viscosity,
 )
 from sim3D.types import NDimension, NDimensionalGrid, RelativePermeabilityFunc
 from sim3D.grids.base import build_uniform_grid
@@ -47,7 +48,6 @@ __all__ = [
     "build_fluid_density_grid",
     "build_gas_gravity_grid",
     "build_gas_gravity_from_density_grid",
-    "build_mixed_fluid_property_grid",
     "build_total_fluid_compressibility_grid",
     "build_three_phase_capillary_pressure_grids",
     "build_three_phase_relative_mobilities_grids",
@@ -169,32 +169,6 @@ def build_gas_gravity_from_density_grid(
     """
     return v_compute_gas_gravity_from_density(
         pressure_grid, temperature_grid, density_grid
-    )
-
-
-def build_mixed_fluid_property_grid(
-    fluid1_saturation_grid: NDimensionalGrid[NDimension],
-    fluid1_property_grid: NDimensionalGrid[NDimension],
-    fluid2_saturation_grid: NDimensionalGrid[NDimension],
-    fluid2_property_grid: NDimensionalGrid[NDimension],
-) -> NDimensionalGrid[NDimension]:
-    """
-    Builds a N-Dimensional grid of mixed fluid properties based on the saturation of two fluids
-    and their respective properties.
-
-    The mixed property is computed as a weighted average based on the saturations of the two fluids.
-
-    :param fluid1_saturation_grid: N-Dimensional array of saturation values of the first fluid (fraction)
-    :param fluid1_property_grid: N-Dimensional array of property values of the first fluid (e.g., viscosity, compressibility)
-    :param fluid2_saturation_grid: N-Dimensional array of saturation values of the second fluid (fraction)
-    :param fluid2_property_grid: N-Dimensional array of property values of the second fluid (e.g., viscosity, compressibility)
-    :return: N-Dimensional array of mixed fluid properties corresponding to each grid cell
-    """
-    return np.vectorize(mix_fluid_property, otypes=[fluid1_property_grid.dtype])(
-        fluid1_saturation_grid,
-        fluid1_property_grid,
-        fluid2_saturation_grid,
-        fluid2_property_grid,
     )
 
 
@@ -380,9 +354,9 @@ def build_three_phase_relative_mobilities_grids(
 
         # Get viscosities for the cell
         # Ensure viscosities are not zero to avoid division by zero
-        water_viscosity = np.maximum(water_viscosity_grid[indices], 1e-7)
-        oil_viscosity = np.maximum(oil_viscosity_grid[indices], 1e-7)
-        gas_viscosity = np.maximum(gas_viscosity_grid[indices], 1e-7)
+        water_viscosity = water_viscosity_grid[indices]
+        oil_viscosity = oil_viscosity_grid[indices]
+        gas_viscosity = gas_viscosity_grid[indices]
 
         # Get cell-specific rock properties
         irreducible_water_saturation = irreducible_water_saturation_grid[indices]
@@ -1075,4 +1049,49 @@ def build_water_density_grid(
         salinity_grid,
         gas_solubility_in_water_grid,
         gas_free_water_formation_volume_factor_grid,
+    )
+
+
+# Vectorized version for grid operations
+compute_todd_longstaff_effective_viscosity_vectorized = np.vectorize(
+    compute_todd_longstaff_effective_viscosity, otypes=[np.float64]
+)
+
+compute_miscibility_function_vectorized = np.vectorize(
+    compute_miscibility_function, otypes=[np.float64]
+)
+
+
+def build_oil_effective_viscosity_grid(
+    oil_viscosity_grid: NDimensionalGrid[NDimension],
+    solvent_viscosity_grid: NDimensionalGrid[NDimension],
+    solvent_concentration_grid: NDimensionalGrid[NDimension],
+    omega: float = 0.0,
+    pressure_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    minimum_miscibility_pressure: typing.Optional[float] = None,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Build effective oil-solvent mixture viscosity grid using Todd-Longstaff.
+
+    :param oil_viscosity_grid: Pure oil viscosity grid (cP)
+    :param solvent_viscosity_grid: Pure solvent viscosity grid (cP)
+    :param solvent_concentration_grid: Solvent concentration grid (fraction)
+    :param omega: Base Todd-Longstaff mixing parameter
+    :param pressure_grid: Optional pressure grid for pressure-dependent miscibility
+    :param minimum_miscibility_pressure: Optional MMP for transition
+    :return: Effective mixture viscosity grid (cP)
+    """
+    # If pressure-dependent miscibility is enabled
+    if pressure_grid is not None and minimum_miscibility_pressure is not None:
+        omega_grid = compute_miscibility_function_vectorized(
+            pressure_grid, minimum_miscibility_pressure
+        )
+    else:
+        omega_grid = np.full_like(oil_viscosity_grid, omega)
+
+    return compute_todd_longstaff_effective_viscosity_vectorized(
+        oil_viscosity_grid,
+        solvent_viscosity_grid,
+        solvent_concentration_grid,
+        omega_grid,
     )

@@ -17,6 +17,7 @@ dependencies = [
     "numba>=0.61.2",
     "numpy>=2.0.0",
     "plotly>=6.2.0",
+    "pyamg>=5.3.0",
     "scikit-image>=0.25.2",
     "scipy>=1.15.3",
     "thermo>=0.4.2",

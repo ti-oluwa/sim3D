@@ -15,7 +15,9 @@ __all__ = [
     "build_elevation_grid",
     "build_depth_grid",
     "apply_structural_dip",
-    "edge_pad_grid",
+    "pad_grid",
+    "get_pad_mask",
+    "unpad_grid",
     "coarsen_grid",
 ]
 
@@ -277,7 +279,7 @@ def apply_structural_dip(
     return typing.cast(NDimensionalGrid[NDimension], dipped_elevation_grid)
 
 
-def edge_pad_grid(
+def pad_grid(
     grid: NDimensionalGrid[NDimension], pad_width: int = 1
 ) -> NDimensionalGrid[NDimension]:
     """
@@ -292,6 +294,45 @@ def edge_pad_grid(
     padded_grid = np.pad(grid, pad_width=pad_width, mode="edge")
     padded_grid = typing.cast(NDimensionalGrid[NDimension], padded_grid)
     return padded_grid
+
+
+def get_pad_mask(grid_shape: typing.Tuple[int, ...], pad_width: int = 1) -> np.ndarray:
+    """
+    Generate a boolean mask for the padded grid indicating the padded regions.
+
+    :param grid_shape: Shape of the original grid before padding
+    :param pad_width: Width of the padding applied on all sides of the grid
+    :return: Boolean mask numpy array where True indicates padded regions
+    """
+    padded_shape = tuple(dim + 2 * pad_width for dim in grid_shape)
+    mask = np.zeros(padded_shape, dtype=bool)
+
+    # Set padded regions to True
+    slices = tuple(
+        slice(0, pad_width)
+        if i == 0
+        else slice(-pad_width, None)
+        if i == 1
+        else slice(pad_width, -pad_width)
+        for i, dim in enumerate(padded_shape)
+    )
+    mask[slices] = True
+    return mask
+
+
+def unpad_grid(
+    grid: NDimensionalGrid[NDimension], pad_width: int = 1
+) -> NDimensionalGrid[NDimension]:
+    """
+    Remove padding from a N-Dimensional grid.
+
+    :param grid: Padded N-Dimensional numpy array representing the grid
+    :param pad_width: Width of the padding to be removed from all sides of the grid
+    :return: N-Dimensional numpy array with padding removed
+    """
+    slices = tuple(slice(pad_width, -pad_width) for _ in range(grid.ndim))
+    unpadded_grid = grid[slices]
+    return typing.cast(NDimensionalGrid[NDimension], unpadded_grid)
 
 
 def coarsen_grid(

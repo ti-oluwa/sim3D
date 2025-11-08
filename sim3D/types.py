@@ -6,6 +6,8 @@ import attrs
 import numpy as np
 from typing_extensions import TypeAlias, TypedDict
 
+from sim3D.constants import Constants
+
 __all__ = [
     "NDimension",
     "WellLocation",
@@ -83,22 +85,21 @@ class FluidPhase(enum.Enum):
 WellFluidType = typing.Literal["water", "oil", "gas"]
 """Types of fluids that can be injected in the simulation"""
 
-EvolutionScheme = typing.Literal[
-    "implicit_explicit",
-    "fully_explicit",
-    "adaptive_explicit",
-]
+EvolutionScheme = typing.Literal["impes", "expes", "adaptive"]
 """
 Discretization methods for numerical simulations
 
-- "implicit_explicit": Implicit pressure, Explicit saturation
-- "fully_explicit": Both pressure and saturation are treated explicitly
-- "adaptive_explicit": Adaptive method for pressure and explicit for saturation.
+- "impes": Implicit pressure, Explicit saturation
+- "expes": Both pressure and saturation are treated explicitly
+- "adaptive": Adaptive method for pressure and explicit for saturation.
     Adaptive method dynamically switches between explicit and implicit
     based on stability criteria to optimize performance and accuracy.
 """
 
 FluidMiscibility = typing.Literal["logarithmic", "linear", "harmonic"]
+"""Miscibility models for fluid interactions in the simulation"""
+
+MiscibilityModel = typing.Literal["immiscible", "todd_longstaff"]
 """Miscibility models for fluid interactions in the simulation"""
 
 
@@ -193,14 +194,14 @@ class RelativePermeabilityFunc(typing.Protocol):
 
 
 @attrs.define(slots=True, frozen=True)
-class MinMax:
+class Range:
     """
     Class representing minimum and maximum values.
     """
 
-    min: float = attrs.field()
+    min: float
     """Minimum value."""
-    max: float = attrs.field()
+    max: float
     """Maximum value."""
 
     def __attrs_post_init__(self) -> None:
@@ -242,7 +243,7 @@ class MinMax:
             return self.max
         else:
             raise IndexError(
-                "Index out of range for MinMax. Valid indices are 0 and 1."
+                "Index out of range for Range. Valid indices are 0 and 1."
             )
 
 
@@ -251,9 +252,9 @@ class RelativeMobilityRange(TypedDict):
     Dictionary holding relative mobility ranges for different phases.
     """
 
-    oil: MinMax
-    water: MinMax
-    gas: MinMax
+    oil: Range
+    water: Range
+    gas: Range
 
 
 @attrs.define(slots=True, frozen=True)
@@ -278,8 +279,8 @@ class Options:
     """Maximum number of iterations allowed per time step for iterative solvers."""
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
-    evolution_scheme: EvolutionScheme = "implicit_explicit"
-    """Evolution scheme to use for the simulation ('implicit_explicit', 'fully_explicit', 'adaptive_explicit')."""
+    scheme: EvolutionScheme = "impes"
+    """Evolution scheme to use for the simulation ('impes', 'expes', 'adaptive')."""
     diffusion_number_threshold: float = attrs.field(
         default=0.24,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
@@ -289,15 +290,15 @@ class Options:
     """Whether to use pseudo-pressure for gas wells."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default={
-            "oil": MinMax(min=0.0, max=1.0),
-            "water": MinMax(min=0.0, max=1.0),
-            "gas": MinMax(min=0.0, max=1.0),
+            "oil": Range(min=1e-10, max=1e6),
+            "water": Range(min=1e-11, max=1e6),
+            "gas": Range(min=1e-9, max=1e6),
         }
     )
     """
     Relative mobility ranges for oil, water, and gas phases.
 
-    Each phase has a `MinMax` object defining its minimum and maximum relative mobility.
+    Each phase has a `Range` object defining its minimum and maximum relative mobility.
     Adjust minimum or maximum values to constrain phase mobilities during simulation.
     """
     capillary_pressure_stability_factor: float = attrs.field(
@@ -315,6 +316,28 @@ class Options:
     """
     apply_dip: bool = attrs.field(default=True)
     """Whether to apply reservoir dip effects in the simulation."""
+    miscibility_model: MiscibilityModel = "immiscible"
+    """Miscibility model: 'immiscible', 'todd_longstaff'"""
+    max_cfl_number: typing.Dict[EvolutionScheme, float] = attrs.field(
+        factory=lambda: {
+            "impes": 10.0,
+            "expes": 1.0,
+            "adaptive": 5.0,
+        }
+    )
+    """
+    Maximum CFL numbers for different evolution schemes to ensure numerical stability.
+
+    Adjust these values based on the chosen evolution scheme:
+    - 'impes': Higher CFL number allowed due to implicit pressure treatment.
+    - 'expes': Lower CFL number required due to explicit treatment of both pressure and saturation.
+    - 'adaptive': Moderate CFL number balancing stability and performance.
+
+    Lowering these values increases stability but may require smaller time steps.
+    Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
+    """
+    constants: Constants = attrs.field(factory=Constants)
+    """Physical and conversion constants used in the simulation."""
 
 
 def Time(

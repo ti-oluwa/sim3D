@@ -4,30 +4,24 @@ import typing
 
 import numpy as np
 from scipy.sparse import lil_matrix
-from scipy.sparse.linalg import spsolve
+import pyamg
+from scipy.sparse.linalg import gmres
 
-from sim3D.boundaries import BoundaryConditions, BoundaryMetadata
-from sim3D.constants import (
-    ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
-    BBL_TO_FT3,
-    DAYS_PER_SECOND,
-    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
-)
+from sim3D.constants import c
 from sim3D.diffusivity.base import (
     EvolutionResult,
     _warn_injector_is_producing,
     _warn_producer_is_injecting,
 )
-from sim3D.grids.base import edge_pad_grid
 from sim3D.grids.properties import (
     build_three_phase_capillary_pressure_grids,
     build_three_phase_relative_mobilities_grids,
     build_total_fluid_compressibility_grid,
 )
 from sim3D.properties import compute_diffusion_number, compute_harmonic_mobility
-from sim3D.statics import FluidProperties, RockFluidProperties, RockProperties
+from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
 from sim3D.types import FluidPhase, Options, ThreeDimensionalGrid, ThreeDimensions
-from sim3D.wells import Wells
+from sim3D.wells import Wells, compute_effective_permeability_for_well
 
 __all__ = [
     "evolve_pressure_explicitly",
@@ -262,7 +256,7 @@ def _compute_explicit_pressure_pseudo_flux_from_neighbour(
     # q = λ * (∆P + Gravity Potential) (ft³/day)
     # Calculate the water gravity potential (hydrostatic/gravity head)
     water_gravity_potential = (
-        upwind_water_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     # Calculate the total water phase potential
     water_phase_potential = water_pressure_difference + water_gravity_potential
@@ -274,7 +268,7 @@ def _compute_explicit_pressure_pseudo_flux_from_neighbour(
     # For Oil:
     # Calculate the oil gravity potential (gravity head)
     oil_gravity_potential = (
-        upwind_oil_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     # Calculate the total oil phase potential
     oil_phase_potential = oil_pressure_difference + oil_gravity_potential
@@ -287,7 +281,7 @@ def _compute_explicit_pressure_pseudo_flux_from_neighbour(
     # q = λ * ∆P (ft²/day)
     # Calculate the gas gravity potential (gravity head)
     gas_gravity_potential = (
-        upwind_gas_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     # Calculate the total gas phase potential
     gas_phase_potential = gas_pressure_difference + gas_gravity_potential
@@ -311,7 +305,6 @@ def evolve_pressure_explicitly(
     elevation_grid: ThreeDimensionalGrid,
     time_step: int,
     time_step_size: float,
-    boundary_conditions: BoundaryConditions[ThreeDimensions],
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
@@ -351,7 +344,6 @@ def evolve_pressure_explicitly(
     :param elevation_grid: N-Dimensional numpy array representing the elevation of each cell in the reservoir (ft).
     :param time_step: Current time step number (starting from 0).
     :param time_step_size: Time step size (s) for each iteration.
-    :param boundary_conditions: Boundary conditions for pressure and saturation grids.
     :param rock_properties: `RockProperties` object containing rock physical properties including
         absolute permeability, porosity, residual saturations.
 
@@ -392,8 +384,8 @@ def evolve_pressure_explicitly(
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
 
+    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
     water_viscosity_grid = fluid_properties.water_viscosity_grid
-    oil_viscosity_grid = fluid_properties.oil_viscosity_grid
     gas_viscosity_grid = fluid_properties.gas_viscosity_grid
 
     water_compressibility_grid = fluid_properties.water_compressibility_grid
@@ -417,60 +409,8 @@ def evolve_pressure_explicitly(
     total_compressibility_grid = (
         total_fluid_compressibility_grid * porosity_grid
     ) + rock_compressibility
-
     # Ensure total compressibility is never zero or negative (for numerical stability)
     total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
-
-    # Pad all necessary grids for boundary conditions and neighbour access
-    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
-    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid)
-    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid)
-    padded_irreducible_water_saturation_grid = edge_pad_grid(
-        irreducible_water_saturation_grid
-    )
-    padded_residual_oil_saturation_water_grid = edge_pad_grid(
-        residual_oil_saturation_water_grid
-    )
-    padded_residual_oil_saturation_gas_grid = edge_pad_grid(
-        residual_oil_saturation_gas_grid
-    )
-    padded_residual_gas_saturation_grid = edge_pad_grid(residual_gas_saturation_grid)
-    padded_oil_density_grid = edge_pad_grid(oil_density_grid)
-    padded_water_density_grid = edge_pad_grid(water_density_grid)
-    padded_gas_density_grid = edge_pad_grid(gas_density_grid)
-    padded_elevation_grid = edge_pad_grid(elevation_grid)
-
-    # Apply boundary conditions to relevant padded grids
-    boundary_conditions["pressure"].apply(
-        padded_oil_pressure_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_oil_pressure_grid.shape,
-            property_name="pressure",
-        ),
-    )
-    boundary_conditions["water_saturation"].apply(
-        padded_water_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_water_saturation_grid.shape,
-            property_name="water_saturation",
-        ),
-    )
-    boundary_conditions["gas_saturation"].apply(
-        padded_gas_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_gas_saturation_grid.shape,
-            property_name="gas_saturation",
-        ),
-    )
 
     # Compute phase mobilities (kr / mu) for each cell
     (
@@ -508,85 +448,74 @@ def evolve_pressure_explicitly(
     water_mobility_grid_x = (
         absolute_permeability.x
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_x = (
         absolute_permeability.x
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_x = (
         absolute_permeability.x
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_y = (
         absolute_permeability.y
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_y = (
         absolute_permeability.y
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_y = (
         absolute_permeability.y
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_z = (
         absolute_permeability.z
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_z = (
         absolute_permeability.z
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_z = (
         absolute_permeability.z
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
-    # Pad mobility grids for neighbour access
-    padded_water_mobility_grid_x = edge_pad_grid(water_mobility_grid_x)
-    padded_oil_mobility_grid_x = edge_pad_grid(oil_mobility_grid_x)
-    padded_gas_mobility_grid_x = edge_pad_grid(gas_mobility_grid_x)
-    padded_water_mobility_grid_y = edge_pad_grid(water_mobility_grid_y)
-    padded_oil_mobility_grid_y = edge_pad_grid(oil_mobility_grid_y)
-    padded_gas_mobility_grid_y = edge_pad_grid(gas_mobility_grid_y)
-    padded_water_mobility_grid_z = edge_pad_grid(water_mobility_grid_z)
-    padded_oil_mobility_grid_z = edge_pad_grid(oil_mobility_grid_z)
-    padded_gas_mobility_grid_z = edge_pad_grid(gas_mobility_grid_z)
-
     # Compute Capillary Pressures Grids (local to each cell, based on current saturations)
-    # P_cow = P_oil - P_water (can be negative for oil-wet systems)
-    # P_cgo = P_gas - P_oil (generally positive)
-    padded_oil_water_capillary_pressure_grid, padded_gas_oil_capillary_pressure_grid = (
+    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
         build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=padded_water_saturation_grid,
-            gas_saturation_grid=padded_gas_saturation_grid,
-            irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=padded_residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=padded_residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
+            water_saturation_grid=current_water_saturation_grid,
+            gas_saturation_grid=current_gas_saturation_grid,
+            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=residual_gas_saturation_grid,
             capillary_pressure_params=capillary_pressure_params,
         )
     )
 
     # Initialize a new grid to store the updated pressures for the current time step
     updated_oil_pressure_grid = current_oil_pressure_grid.copy()
-
-    # ITERATE OVER INTERIOR CELLS FOR EXPLICIT PRESSURE UPDATE
+    # Iterate over internal cells only (excluding boundary cells)
+    # Assume boundary cells are added via padding for boundary conditions application purposes
+    # Thus, we iterate from 1 to N-1 in each dimension
     for i, j, k in itertools.product(
-        range(cell_count_x), range(cell_count_y), range(cell_count_z)
+        range(1, cell_count_x - 1),
+        range(1, cell_count_y - 1),
+        range(1, cell_count_z - 1),
     ):
-        ip, jp, kp = (i + 1, j + 1, k + 1)  # Padded indices for current cell (i, j, k)
         cell_thickness = thickness_grid[i, j, k]  # Same as `cell_size_z`
         cell_volume = cell_size_x * cell_size_y * cell_thickness
         cell_porosity = porosity_grid[i, j, k]
@@ -597,32 +526,32 @@ def evolve_pressure_explicitly(
         flux_configurations = {
             "x": {
                 "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_x,
-                    "oil_mobility_grid": padded_oil_mobility_grid_x,
-                    "gas_mobility_grid": padded_gas_mobility_grid_x,
+                    "water_mobility_grid": water_mobility_grid_x,
+                    "oil_mobility_grid": oil_mobility_grid_x,
+                    "gas_mobility_grid": gas_mobility_grid_x,
                 },
-                "positive_neighbour": (ip + 1, jp, kp),
-                "negative_neighbour": (ip - 1, jp, kp),
+                "positive_neighbour": (i + 1, j, k),
+                "negative_neighbour": (i - 1, j, k),
                 "geometric_factor": (cell_size_y * cell_thickness / cell_size_x),
             },
             "y": {
                 "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_y,
-                    "oil_mobility_grid": padded_oil_mobility_grid_y,
-                    "gas_mobility_grid": padded_gas_mobility_grid_y,
+                    "water_mobility_grid": water_mobility_grid_y,
+                    "oil_mobility_grid": oil_mobility_grid_y,
+                    "gas_mobility_grid": gas_mobility_grid_y,
                 },
-                "positive_neighbour": (ip, jp + 1, kp),
-                "negative_neighbour": (ip, jp - 1, kp),
+                "positive_neighbour": (i, j + 1, k),
+                "negative_neighbour": (i, j - 1, k),
                 "geometric_factor": (cell_size_x * cell_thickness / cell_size_y),
             },
             "z": {
                 "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_z,
-                    "oil_mobility_grid": padded_oil_mobility_grid_z,
-                    "gas_mobility_grid": padded_gas_mobility_grid_z,
+                    "water_mobility_grid": water_mobility_grid_z,
+                    "oil_mobility_grid": oil_mobility_grid_z,
+                    "gas_mobility_grid": gas_mobility_grid_z,
                 },
-                "positive_neighbour": (ip, jp, kp + 1),
-                "negative_neighbour": (ip, jp, kp - 1),
+                "positive_neighbour": (i, j, k + 1),
+                "negative_neighbour": (i, j, k - 1),
                 "geometric_factor": (cell_size_x * cell_size_y / cell_thickness),
             },
         }
@@ -632,43 +561,48 @@ def evolve_pressure_explicitly(
         # A_y * (λ_{i,j+1/2,k}(pⁿ_{i,j+1,k} - pⁿ_{i,j,k}) - λ_{i,j-1/2,k}(pⁿ_{i,j,k} - pⁿ_{i,j-1,k})) / Δy +
         # A_z * (λ_{i,j,k+1/2}(pⁿ_{i,j,k+1} - pⁿ_{i,j,k}) - λ_{i,j,k-1/2}(pⁿ_{i,j,k} - pⁿ_{i,j,k-1})) / Δz
         net_volumetric_flow_rate_into_cell = 0.0
-        for direction, configuration in flux_configurations.items():
+        for _, configuration in flux_configurations.items():
             mobility_grids = configuration["mobility_grids"]
             positive_neighbour_indices = configuration["positive_neighbour"]
             negative_neighbour_indices = configuration["negative_neighbour"]
+            geometric_factor = configuration["geometric_factor"]
 
             # Compute the total flux from positive and negative neighbours
-            positive_pseudo_flux = _compute_explicit_pressure_pseudo_flux_from_neighbour(
-                cell_indices=(ip, jp, kp),
-                neighbour_indices=positive_neighbour_indices,
-                oil_pressure_grid=padded_oil_pressure_grid,
-                **mobility_grids,
-                oil_water_capillary_pressure_grid=padded_oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=padded_gas_oil_capillary_pressure_grid,
-                oil_density_grid=padded_oil_density_grid,
-                water_density_grid=padded_water_density_grid,
-                gas_density_grid=padded_gas_density_grid,
-                elevation_grid=padded_elevation_grid,
+            positive_pseudo_flux = (
+                _compute_explicit_pressure_pseudo_flux_from_neighbour(
+                    cell_indices=(i, j, k),
+                    neighbour_indices=positive_neighbour_indices,
+                    oil_pressure_grid=current_oil_pressure_grid,
+                    **mobility_grids,
+                    oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                    gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                    oil_density_grid=oil_density_grid,
+                    water_density_grid=water_density_grid,
+                    gas_density_grid=gas_density_grid,
+                    elevation_grid=elevation_grid,
+                )
             )
             # This already incorporates the outer negative sign in the function
             # as it does (P_negative_neighbour - P_cell) instead of (P_cell - P_negative_neighbour)
-            negative_pseudo_flux = _compute_explicit_pressure_pseudo_flux_from_neighbour(
-                cell_indices=(ip, jp, kp),
-                neighbour_indices=negative_neighbour_indices,
-                oil_pressure_grid=padded_oil_pressure_grid,
-                **mobility_grids,
-                oil_water_capillary_pressure_grid=padded_oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=padded_gas_oil_capillary_pressure_grid,
-                oil_density_grid=padded_oil_density_grid,
-                water_density_grid=padded_water_density_grid,
-                gas_density_grid=padded_gas_density_grid,
-                elevation_grid=padded_elevation_grid,
+            negative_pseudo_flux = (
+                _compute_explicit_pressure_pseudo_flux_from_neighbour(
+                    cell_indices=(i, j, k),
+                    neighbour_indices=negative_neighbour_indices,
+                    oil_pressure_grid=current_oil_pressure_grid,
+                    **mobility_grids,
+                    oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                    gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                    oil_density_grid=oil_density_grid,
+                    water_density_grid=water_density_grid,
+                    gas_density_grid=gas_density_grid,
+                    elevation_grid=elevation_grid,
+                )
             )
             # So we just add directly here instead of subtracting
             net_pseudo_flux_into_cell = positive_pseudo_flux + negative_pseudo_flux
             net_flux_into_cell = (
-                net_pseudo_flux_into_cell * configuration["geometric_factor"]
-            )
+                net_pseudo_flux_into_cell * geometric_factor
+            )  # (ft³/day)
             net_volumetric_flow_rate_into_cell += net_flux_into_cell
 
         # Add Source/Sink Term (WellParameters) - q * V (ft³/day)
@@ -689,13 +623,25 @@ def evolve_pressure_explicitly(
             injected_phase = injected_fluid.phase
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
-                fluid_compressibility = gas_compressibility_grid[i, j, k]
-            elif injected_phase == FluidPhase.WATER:
-                phase_mobility = water_relative_mobility_grid[i, j, k]
-                fluid_compressibility = water_compressibility_grid[i, j, k]
+                compressibility_kwargs = {}
             else:
-                phase_mobility = oil_relative_mobility_grid[i, j, k]
-                fluid_compressibility = oil_compressibility_grid[i, j, k]
+                phase_mobility = water_relative_mobility_grid[i, j, k]
+                compressibility_kwargs = {
+                    "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
+                        i, j, k
+                    ],
+                    "gas_formation_volume_factor": fluid_properties.gas_formation_volume_factor_grid[
+                        i, j, k
+                    ],
+                    "gas_solubility_in_water": fluid_properties.gas_solubility_in_water_grid[
+                        i, j, k
+                    ],
+                }
+            fluid_compressibility = injected_fluid.get_compressibility(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+                **compressibility_kwargs,
+            )
 
             # Use pseudo pressure if the phase is GAS, if it is set in the options, and the pressure is high
             use_pseudo_pressure = (
@@ -734,7 +680,7 @@ def evolve_pressure_explicitly(
                     )
 
             if injected_phase != FluidPhase.GAS:
-                cell_injection_rate *= BBL_TO_FT3  # Convert bbls/day to ft³/day
+                cell_injection_rate *= c.BBL_TO_FT3  # Convert bbls/day to ft³/day
 
         if production_well is not None and production_well.is_open:
             # If there is a production well, subtract its flow rate from the cell
@@ -787,7 +733,7 @@ def evolve_pressure_explicitly(
                         )
 
                 if produced_fluid.phase != FluidPhase.GAS:
-                    production_rate *= BBL_TO_FT3  # Convert bbls/day to ft³/day
+                    production_rate *= c.BBL_TO_FT3  # Convert bbls/day to ft³/day
 
                 cell_production_rate += production_rate
 
@@ -811,7 +757,7 @@ def evolve_pressure_explicitly(
         #     A_z * (λ_{i,j,k+1/2}(pⁿ_{i,j,k+1} - pⁿ_{i,j,k}) - λ_{i,j,k-1/2}(pⁿ_{i,j,k} - pⁿ_{i,j,k-1})) / Δz +
         #     q_{i,j,k} * V
         # ]
-        time_step_size_in_days = time_step_size * DAYS_PER_SECOND
+        time_step_size_in_days = time_step_size * c.DAYS_PER_SECOND
         change_in_pressure = (
             time_step_size_in_days
             / (cell_porosity * cell_total_compressibility * cell_volume)
@@ -921,7 +867,7 @@ Stability:
 """
 
 
-def to_1D_index(
+def to_1D_index_interior_only(
     i: int,
     j: int,
     k: int,
@@ -930,20 +876,28 @@ def to_1D_index(
     cell_count_z: int,
 ) -> int:
     """
-    Converts 3D grid indices (i, j, k) to a 1D index for the sparse matrix.
-    The indexing is done in z-fastest order: (i, j, k) -> i * (Ny * Nz) + j * Nz + k
-
-    :param i: Index along x-axis
-    :param j: Index along y-axis
-    :param k: Index along z-axis
-    :param cell_count_x: Total number of cells in x-direction
-    :param cell_count_y: Total number of cells in y-direction
-    :param cell_count_z: Total number of cells in z-direction
-    :return: Flattened 1D index
+    Converts 3D grid indices to 1D index for interior cells only.
+    Padding cells (i=0, i=Nx-1, etc.) return -1.
+    Interior cells are mapped to [0, (Nx-2)*(Ny-2)*(Nz-2))
     """
-    if not (0 <= i < cell_count_x and 0 <= j < cell_count_y and 0 <= k < cell_count_z):
-        return -1  # Out of bounds
-    return i * (cell_count_y * cell_count_z) + j * cell_count_z + k
+    if not (
+        0 < i < cell_count_x - 1
+        and 0 < j < cell_count_y - 1
+        and 0 < k < cell_count_z - 1
+    ):
+        return -1  # Padding cell
+
+    # Adjust indices to 0-based for interior grid
+    i_interior = i - 1
+    j_interior = j - 1
+    k_interior = k - 1
+
+    # Interior dimensions
+    ny_interior = cell_count_y - 2
+    nz_interior = cell_count_z - 2
+    return (
+        i_interior * (ny_interior * nz_interior) + j_interior * nz_interior + k_interior
+    )
 
 
 def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
@@ -1069,6 +1023,9 @@ def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
     total_harmonic_mobility = (
         water_harmonic_mobility + oil_harmonic_mobility + gas_harmonic_mobility
     )
+    if total_harmonic_mobility <= 0.0:
+        # No flow can occur if there is no mobility
+        return 0.0, 0.0, 0.0
 
     # λ_w * (P_cow_{n+1} - P_cow_{n}) (ft²/psi.day * psi = ft²/day)
     water_capillary_pseudo_flux = (
@@ -1085,13 +1042,13 @@ def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
 
     # Calculate the phase gravity potentials (hydrostatic/gravity head)
     water_gravity_potential = (
-        upwind_water_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     oil_gravity_potential = (
-        upwind_oil_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     gas_gravity_potential = (
-        upwind_gas_density * ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+        upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     # Total gravity pseudo flux (ft²/day)
     water_gravity_pseudo_flux = water_harmonic_mobility * water_gravity_potential
@@ -1113,7 +1070,6 @@ def evolve_pressure_implicitly(
     elevation_grid: ThreeDimensionalGrid,
     time_step: int,
     time_step_size: float,
-    boundary_conditions: BoundaryConditions[ThreeDimensions],
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
@@ -1127,23 +1083,6 @@ def evolve_pressure_implicitly(
     Constructs and solves the linear system A·Pⁿ⁺¹ = b using backward Euler time integration.
     The coefficient matrix A includes accumulation and transmissibility terms. The right-hand side
     vector b includes contributions from accumulation, well source/sink terms, and capillary pressure gradients.
-
-    :param cell_dimension: Cell dimensions (Δx, Δy) used to compute transmissibility and volume.
-    :param thickness_grid: Grid of cell heights (Δz) defining vertical thickness per cell.
-    :param elevation_grid: Grid of cell elevations (ft) defining the top of each cell.
-    :param time_step: Current time step number (for logging/debugging purposes).
-    :param time_step_size: Time step size in seconds for the implicit update.
-    :param boundary_conditions: Dictionary of callable boundary conditions applied to pressure and saturations.
-    :param rock_properties: Rock data including porosity, permeability, compressibility, saturation endpoints,
-        and relative permeability/capillary pressure parameters.
-    :param fluid_properties: Current pressure and saturation fields along with viscosity, compressibility,
-        and formation volume factors for each phase.
-    :param rock_fluid_properties: Relative permeability and capillary pressure functions and parameters.
-        This includes wettability information and other relevant PVT properties.
-    :param wells: Well configuration and parameters for injectors and producers including phase, location,
-        orientation, radius, skin factor, and BHP.
-
-    :return: Updated 3D oil pressure grid at the new time level (Pⁿ⁺¹).
     """
     # Extract properties from provided objects for clarity and convenience
     absolute_permeability = rock_properties.absolute_permeability
@@ -1161,19 +1100,15 @@ def evolve_pressure_implicitly(
     residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
     residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
     relative_permeability_func = rock_fluid_properties.relative_permeability_func
-    capillary_pressure_params = (
-        rock_fluid_properties.capillary_pressure_params
-    )  # Contains wettability type
+    capillary_pressure_params = rock_fluid_properties.capillary_pressure_params
 
-    current_oil_pressure_grid = (
-        fluid_properties.pressure_grid
-    )  # This is P_oil or Pⁿ_{i,j,k}
+    current_oil_pressure_grid = fluid_properties.pressure_grid
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
 
+    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
     water_viscosity_grid = fluid_properties.water_viscosity_grid
-    oil_viscosity_grid = fluid_properties.oil_viscosity_grid
     gas_viscosity_grid = fluid_properties.gas_viscosity_grid
 
     water_compressibility_grid = fluid_properties.water_compressibility_grid
@@ -1193,67 +1128,12 @@ def evolve_pressure_implicitly(
         gas_saturation_grid=current_gas_saturation_grid,
         gas_compressibility_grid=gas_compressibility_grid,
     )
-    # Total compressibility (psi⁻¹) = (fluid compressibility * porosity) + rock compressibility
     total_compressibility_grid = (
         total_fluid_compressibility_grid * porosity_grid
     ) + rock_compressibility
-
-    # Ensure total compressibility is never zero or negative (for numerical stability)
     total_compressibility_grid = np.maximum(total_compressibility_grid, 1e-24)
 
-    # Pad all necessary grids for boundary conditions and neighbour access
-    padded_oil_pressure_grid = edge_pad_grid(current_oil_pressure_grid)
-    padded_water_saturation_grid = edge_pad_grid(current_water_saturation_grid)
-    padded_gas_saturation_grid = edge_pad_grid(current_gas_saturation_grid)
-    padded_irreducible_water_saturation_grid = edge_pad_grid(
-        irreducible_water_saturation_grid
-    )
-    padded_residual_oil_saturation_water_grid = edge_pad_grid(
-        residual_oil_saturation_water_grid
-    )
-    padded_residual_oil_saturation_gas_grid = edge_pad_grid(
-        residual_oil_saturation_gas_grid
-    )
-    padded_residual_gas_saturation_grid = edge_pad_grid(residual_gas_saturation_grid)
-    padded_oil_density_grid = edge_pad_grid(oil_density_grid)
-    padded_water_density_grid = edge_pad_grid(water_density_grid)
-    padded_gas_density_grid = edge_pad_grid(gas_density_grid)
-    padded_elevation_grid = edge_pad_grid(elevation_grid)
-
-    # Apply boundary conditions to relevant padded grids
-    boundary_conditions["pressure"].apply(
-        padded_oil_pressure_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_oil_pressure_grid.shape,
-            property_name="pressure",
-        ),
-    )
-    boundary_conditions["water_saturation"].apply(
-        padded_water_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_water_saturation_grid.shape,
-            property_name="water_saturation",
-        ),
-    )
-    boundary_conditions["gas_saturation"].apply(
-        padded_gas_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time_step_size * time_step,
-            grid_shape=current_gas_saturation_grid.shape,
-            property_name="gas_saturation",
-        ),
-    )
-
-    # Compute phase mobilities (kr / mu) for each cell
-    # `build_three_phase_relative_mobilities_grids` should handle `kr / mu` for each phase.
+    # Compute phase mobilities
     (
         water_relative_mobility_grid,
         oil_relative_mobility_grid,
@@ -1272,8 +1152,6 @@ def evolve_pressure_implicitly(
         relative_permeability_func=relative_permeability_func,
     )
 
-    # Clamp relative mobility grids to avoid numerical issues
-    # This ensures mobilities are never zero or negative (for numerical stability)
     water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
         water_relative_mobility_grid
     )
@@ -1285,378 +1163,285 @@ def evolve_pressure_implicitly(
     )
 
     # Compute mobility grids for x, y, z directions
-    # λ_x = 0.001127 * k_abs * (kr / mu) (mD/cP to ft²/psi.day)
     water_mobility_grid_x = (
         absolute_permeability.x
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_x = (
         absolute_permeability.x
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_x = (
         absolute_permeability.x
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_y = (
         absolute_permeability.y
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_y = (
         absolute_permeability.y
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_y = (
         absolute_permeability.y
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_z = (
         absolute_permeability.z
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_z = (
         absolute_permeability.z
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_z = (
         absolute_permeability.z
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
-    # Pad mobility grids for neighbour access
-    padded_water_mobility_grid_x = edge_pad_grid(water_mobility_grid_x)
-    padded_oil_mobility_grid_x = edge_pad_grid(oil_mobility_grid_x)
-    padded_gas_mobility_grid_x = edge_pad_grid(gas_mobility_grid_x)
-    padded_water_mobility_grid_y = edge_pad_grid(water_mobility_grid_y)
-    padded_oil_mobility_grid_y = edge_pad_grid(oil_mobility_grid_y)
-    padded_gas_mobility_grid_y = edge_pad_grid(gas_mobility_grid_y)
-    padded_water_mobility_grid_z = edge_pad_grid(water_mobility_grid_z)
-    padded_oil_mobility_grid_z = edge_pad_grid(oil_mobility_grid_z)
-    padded_gas_mobility_grid_z = edge_pad_grid(gas_mobility_grid_z)
-
-    # Compute Capillary Pressures Grids (local to each cell, based on current saturations)
-    # P_cow = P_oil - P_water (can be negative for oil-wet systems)
-    # P_cgo = P_gas - P_oil (generally positive)
-    padded_oil_water_capillary_pressure_grid, padded_gas_oil_capillary_pressure_grid = (
+    # Compute Capillary Pressures Grids
+    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
         build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=padded_water_saturation_grid,
-            gas_saturation_grid=padded_gas_saturation_grid,
-            irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=padded_residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=padded_residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
+            water_saturation_grid=current_water_saturation_grid,
+            gas_saturation_grid=current_gas_saturation_grid,
+            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=residual_gas_saturation_grid,
             capillary_pressure_params=capillary_pressure_params,
         )
     )
 
-    # Initialize sparse coefficient matrix (A * P_o_new = b)
-    total_cell_count = cell_count_x * cell_count_y * cell_count_z
-    A = lil_matrix((total_cell_count, total_cell_count), dtype=np.float64)
-    # Initialize RHS source vector
-    b = np.zeros(total_cell_count)
+    # Initialize sparse coefficient matrix and RHS vector
+    interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
+    A = lil_matrix((interior_cell_count, interior_cell_count), dtype=np.float64)
+    b = np.zeros(interior_cell_count)
+
     _to_1D_index = functools.partial(
-        to_1D_index,
+        to_1D_index_interior_only,
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
     )
-    temperature_grid = fluid_properties.temperature_grid
-    # Iterate over interior cells to populate the linear system
+    time_step_size_in_days = time_step_size * c.DAYS_PER_SECOND
+
+    # FIRST PASS: Initialize accumulation terms for all cells
     for i, j, k in itertools.product(
-        range(cell_count_x), range(cell_count_y), range(cell_count_z)
+        range(1, cell_count_x - 1),
+        range(1, cell_count_y - 1),
+        range(1, cell_count_z - 1),
     ):
-        ip, jp, kp = (i + 1, j + 1, k + 1)  # Padded indices for current cell (i, j, k)
         cell_1D_index = _to_1D_index(i, j, k)
         cell_thickness = thickness_grid[i, j, k]
         cell_volume = cell_size_x * cell_size_y * cell_thickness
         cell_porosity = porosity_grid[i, j, k]
         cell_total_compressibility = total_compressibility_grid[i, j, k]
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
-        cell_temperature = temperature_grid[i, j, k]
-        time_step_size_in_days = time_step_size * DAYS_PER_SECOND
 
-        # Accumulation term coefficient for the diagonal of A
-        # β = φ·c_t·V / Δt
+        # Accumulation term coefficient
         accumulation_coefficient = (
             cell_porosity * cell_total_compressibility * cell_volume
         ) / time_step_size_in_days
 
-        # Diagonal entry for the current cell (i, j, k)
-        # A[i, j, k] = β + ∑(transimissibility_terms)
+        # Initialize matrix diagonal and RHS with accumulation
         A[cell_1D_index, cell_1D_index] = accumulation_coefficient
+        b[cell_1D_index] = accumulation_coefficient * cell_oil_pressure
 
-        flux_configurations = {
-            "x": {
-                "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_x,
-                    "oil_mobility_grid": padded_oil_mobility_grid_x,
-                    "gas_mobility_grid": padded_gas_mobility_grid_x,
-                },
-                "positive_neighbour": (ip + 1, jp, kp),
-                "negative_neighbour": (ip - 1, jp, kp),
-                "geometric_factor": (
-                    cell_size_y * cell_thickness / cell_size_x
-                ),  # A_x / Δx
-            },
-            "y": {
-                "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_y,
-                    "oil_mobility_grid": padded_oil_mobility_grid_y,
-                    "gas_mobility_grid": padded_gas_mobility_grid_y,
-                },
-                "positive_neighbour": (ip, jp + 1, kp),
-                "negative_neighbour": (ip, jp - 1, kp),
-                "geometric_factor": (
-                    cell_size_x * cell_thickness / cell_size_y
-                ),  # A_y / Δy
-            },
-            "z": {
-                "mobility_grids": {
-                    "water_mobility_grid": padded_water_mobility_grid_z,
-                    "oil_mobility_grid": padded_oil_mobility_grid_z,
-                    "gas_mobility_grid": padded_gas_mobility_grid_z,
-                },
-                "positive_neighbour": (ip, jp, kp + 1),
-                "negative_neighbour": (ip, jp, kp - 1),
-                "geometric_factor": (
-                    cell_size_x * cell_size_y / cell_thickness
-                ),  # A_z / Δz
-            },
-        }
+    # SECOND PASS: Add face transmissibilities and fluxes
+    for i, j, k in itertools.product(
+        range(1, cell_count_x - 1),
+        range(1, cell_count_y - 1),
+        range(1, cell_count_z - 1),
+    ):
+        cell_1D_index = _to_1D_index(i, j, k)
+        cell_thickness = thickness_grid[i, j, k]
 
-        total_capillary_flow = 0.0
-        total_gravity_flow = 0.0
-        for direction, configuration in flux_configurations.items():
-            mobility_grids = configuration["mobility_grids"]
-            positive_neighbour_indices = configuration["positive_neighbour"]
-            negative_neighbour_indices = configuration["negative_neighbour"]
+        # Process inter-cell fluxes - iterate only positive offsets
+        neighbor_offsets = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
+        for di, dj, dk in neighbor_offsets:
+            neighbour_indices = (i + di, j + dj, k + dk)
+            neighbour_1D = _to_1D_index(*neighbour_indices)
+            if neighbour_1D == -1:
+                continue
 
-            (
-                positive_harmonic_mobility,
-                positive_capillary_flux,
-                positive_gravity_flux,
-            ) = _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
-                cell_indices=(ip, jp, kp),
-                neighbour_indices=positive_neighbour_indices,
-                oil_pressure_grid=padded_oil_pressure_grid,
-                **mobility_grids,
-                oil_water_capillary_pressure_grid=padded_oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=padded_gas_oil_capillary_pressure_grid,
-                oil_density_grid=padded_oil_density_grid,
-                water_density_grid=padded_water_density_grid,
-                gas_density_grid=padded_gas_density_grid,
-                elevation_grid=padded_elevation_grid,
-            )
-            (
-                negative_harmonic_mobility,
-                negative_capillary_flux,
-                negative_gravity_flux,
-            ) = _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
-                cell_indices=(ip, jp, kp),
-                neighbour_indices=negative_neighbour_indices,
-                oil_pressure_grid=padded_oil_pressure_grid,
-                **mobility_grids,
-                oil_water_capillary_pressure_grid=padded_oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=padded_gas_oil_capillary_pressure_grid,
-                oil_density_grid=padded_oil_density_grid,
-                water_density_grid=padded_water_density_grid,
-                gas_density_grid=padded_gas_density_grid,
-                elevation_grid=padded_elevation_grid,
+            # Choose geometric factor and mobility grids for this offset
+            if (di, dj, dk) == (1, 0, 0):
+                geometric_factor = cell_size_y * cell_thickness / cell_size_x
+                mobility_grids = {
+                    "water_mobility_grid": water_mobility_grid_x,
+                    "oil_mobility_grid": oil_mobility_grid_x,
+                    "gas_mobility_grid": gas_mobility_grid_x,
+                }
+            elif (di, dj, dk) == (0, 1, 0):
+                geometric_factor = cell_size_x * cell_thickness / cell_size_y
+                mobility_grids = {
+                    "water_mobility_grid": water_mobility_grid_y,
+                    "oil_mobility_grid": oil_mobility_grid_y,
+                    "gas_mobility_grid": gas_mobility_grid_y,
+                }
+            else:  # (0, 0, 1)
+                geometric_factor = cell_size_x * cell_size_y / cell_thickness
+                mobility_grids = {
+                    "water_mobility_grid": water_mobility_grid_z,
+                    "oil_mobility_grid": oil_mobility_grid_z,
+                    "gas_mobility_grid": gas_mobility_grid_z,
+                }
+
+            # Compute pseudo flux from neighbour to cell
+            harmonic_mobility, cap_flux, grav_flux = (
+                _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
+                    cell_indices=(i, j, k),
+                    neighbour_indices=neighbour_indices,
+                    oil_pressure_grid=current_oil_pressure_grid,
+                    **mobility_grids,  # type: ignore
+                    oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                    gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                    oil_density_grid=oil_density_grid,
+                    water_density_grid=water_density_grid,
+                    gas_density_grid=gas_density_grid,
+                    elevation_grid=elevation_grid,
+                )
             )
 
-            positive_transmissibility = (
-                positive_harmonic_mobility * configuration["geometric_factor"]
-            )
-            negative_transmissibility = (
-                negative_harmonic_mobility * configuration["geometric_factor"]
-            )
+            # Face transmissibility
+            T_face = harmonic_mobility * geometric_factor
 
-            # Add the transmissibility term to the diagonal entry
-            A[cell_1D_index, cell_1D_index] += (
-                positive_transmissibility + negative_transmissibility
-            )
-            # Add the off-diagonal entries for the positive and negative neighbours
-            positive_neighbour_1D_index = _to_1D_index(*positive_neighbour_indices)
-            negative_neighbour_1D_index = _to_1D_index(*negative_neighbour_indices)
-            if positive_neighbour_1D_index != -1:
-                A[
-                    cell_1D_index, positive_neighbour_1D_index
-                ] = -positive_transmissibility
-            if negative_neighbour_1D_index != -1:
-                A[
-                    cell_1D_index, negative_neighbour_1D_index
-                ] = -negative_transmissibility
+            # Add transmissibility to both cells' diagonals
+            A[cell_1D_index, cell_1D_index] += T_face
+            A[neighbour_1D, neighbour_1D] += T_face
 
-            # Calculate the net capillary flow (rate)
-            # The negative sign is already accounted for in the negative capillary flux term
-            # contributions based on the implementation of function used to calculate
-            # it. Hence, we can directly sum the positive and negative contributions.
-            net_capillary_flux = positive_capillary_flux + negative_capillary_flux
-            net_capillary_flow = (
-                net_capillary_flux
-                * configuration["geometric_factor"]
+            # Set off-diagonals (each face processed once, so use =)
+            A[cell_1D_index, neighbour_1D] = -T_face
+            A[neighbour_1D, cell_1D_index] = -T_face
+
+            # Add capillary/gravity contributions to RHS
+            cap_face = (
+                cap_flux
+                * geometric_factor
                 * options.capillary_pressure_stability_factor
             )
-            # Add the net capillary flow to the total capillary flow
-            total_capillary_flow += net_capillary_flow
+            grav_face = grav_flux * geometric_factor
 
-            # Calculate the net gravity flow (rate)
-            net_gravity_flux = positive_gravity_flux + negative_gravity_flux
-            net_gravity_flow = net_gravity_flux * configuration["geometric_factor"]
-            # Add the net gravity flow to the total gravity flow
-            total_gravity_flow += net_gravity_flow
+            b[cell_1D_index] += cap_face + grav_face
+            b[neighbour_1D] += -(cap_face + grav_face)
 
-        # Compute Source/Sink Term (WellParameters) - q * V (ft³/day)
+    # THIRD PASS: Add well terms
+    for i, j, k in itertools.product(
+        range(1, cell_count_x - 1),
+        range(1, cell_count_y - 1),
+        range(1, cell_count_z - 1),
+    ):
+        cell_1D_index = _to_1D_index(i, j, k)
+        cell_thickness = thickness_grid[i, j, k]
+
         injection_well, production_well = wells[i, j, k]
-        cell_injection_rate = 0.0
-        cell_production_rate = 0.0
+        well_coefficient = 0.0
+        well_source_term = 0.0
+
         permeability = (
             absolute_permeability.x[i, j, k],
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
+
+        # Process injection wells
         if (
             injection_well is not None
             and injection_well.is_open
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
-            # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
             if injected_phase == FluidPhase.GAS:
-                phase_mobility = gas_relative_mobility_grid[i, j, k]
-                fluid_compressibility = gas_compressibility_grid[i, j, k]
-            elif injected_phase == FluidPhase.WATER:
-                phase_mobility = water_relative_mobility_grid[i, j, k]
-                fluid_compressibility = water_compressibility_grid[i, j, k]
+                phase_relative_mobility = gas_relative_mobility_grid[i, j, k]
             else:
-                phase_mobility = oil_relative_mobility_grid[i, j, k]
-                fluid_compressibility = oil_compressibility_grid[i, j, k]
+                phase_relative_mobility = water_relative_mobility_grid[i, j, k]
 
-            # Use pseudo pressure if the phase is GAS, if it is set in the options, and the pressure is high
-            use_pseudo_pressure = (
-                injected_phase == FluidPhase.GAS
-                and options.use_pseudo_pressure
-                and cell_oil_pressure >= 1500.0
+            avg_permeability = compute_effective_permeability_for_well(
+                permeability=permeability,
+                orientation=injection_well.orientation,
+            )
+            phase_absolute_mobility = (
+                avg_permeability
+                * phase_relative_mobility
+                * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                 permeability=permeability,
                 skin_factor=injection_well.skin_factor,
             )
-            # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
-            # Since phase relative mobility does not include formation volume factor
-            cell_injection_rate = injection_well.get_flow_rate(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                well_index=well_index,
-                phase_mobility=phase_mobility,
-                fluid=injected_fluid,
-                fluid_compressibility=fluid_compressibility,
-                use_pseudo_pressure=use_pseudo_pressure,
-            )
-            if cell_injection_rate < 0.0:
-                if injection_well.auto_clamp:
-                    cell_injection_rate = 0.0
-                else:
-                    _warn_injector_is_producing(
-                        injection_rate=cell_injection_rate,
-                        well_name=injection_well.name,
-                        cell=(i, j, k),
-                        time=time_step * time_step_size,
-                        rate_unit="ft³/day"
-                        if injected_phase == FluidPhase.GAS
-                        else "bbls/day",
-                    )
+            wi_lambda = well_index * phase_absolute_mobility
+            well_coefficient += wi_lambda
+            well_source_term += wi_lambda * injection_well.bottom_hole_pressure
 
-            if injected_phase != FluidPhase.GAS:
-                cell_injection_rate *= BBL_TO_FT3
-
+        # Process production wells
         if production_well is not None and production_well.is_open:
-            # If there is a production well, subtract its flow rate from the cell
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
-                    phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = gas_compressibility_grid[i, j, k]
+                    phase_relative_mobility = gas_relative_mobility_grid[i, j, k]
                 elif produced_phase == FluidPhase.WATER:
-                    phase_mobility = water_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = water_compressibility_grid[i, j, k]
+                    phase_relative_mobility = water_relative_mobility_grid[i, j, k]
                 else:
-                    phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
+                    phase_relative_mobility = oil_relative_mobility_grid[i, j, k]
 
-                # Use pseudo pressure if the phase is GAS, if it is set in the options, and the pressure is high
-                use_pseudo_pressure = (
-                    produced_phase == FluidPhase.GAS
-                    and options.use_pseudo_pressure
-                    and cell_oil_pressure >= 1500.0
+                avg_permeability = compute_effective_permeability_for_well(
+                    permeability=permeability,
+                    orientation=production_well.orientation,
+                )
+                phase_absolute_mobility = (
+                    avg_permeability
+                    * phase_relative_mobility
+                    * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
                     permeability=permeability,
                     skin_factor=production_well.skin_factor,
                 )
-                # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
-                # Since phase relative mobility does not include formation volume factor
-                production_rate = production_well.get_flow_rate(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    well_index=well_index,
-                    phase_mobility=phase_mobility,
-                    fluid=produced_fluid,
-                    fluid_compressibility=fluid_compressibility,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                )
+                wi_lambda = well_index * phase_absolute_mobility
+                well_coefficient += wi_lambda
+                well_source_term += wi_lambda * production_well.bottom_hole_pressure
 
-                if production_rate > 0.0:
-                    if production_well.auto_clamp:
-                        production_rate = 0.0
-                    else:
-                        _warn_producer_is_injecting(
-                            production_rate=production_rate,
-                            well_name=production_well.name,
-                            cell=(i, j, k),
-                            time=time_step * time_step_size,
-                            rate_unit="ft³/day"
-                            if produced_phase == FluidPhase.GAS
-                            else "bbls/day",
-                        )
+        # Add well contributions
+        A[cell_1D_index, cell_1D_index] += well_coefficient
+        b[cell_1D_index] += well_source_term
 
-                if produced_fluid.phase != FluidPhase.GAS:
-                    production_rate *= BBL_TO_FT3
-
-                cell_production_rate += production_rate
-
-        # Calculate the net well flow rate into the cell. Just add injection and production rates (since production rates are negative)
-        # q_{i,j,k} * V = (q_{i,j,k}_injection - q_{i,j,k}_production)
-        net_well_flow_rate_into_cell = cell_injection_rate + cell_production_rate
-
-        # Compute the right-hand side source term vector b
-        # b[i, j, k] = (β * P_{ijk}) + (q * V) + (capillary driven flow) + (gravity driven flow/segregation)
-        b[cell_1D_index] = (
-            (accumulation_coefficient * cell_oil_pressure)
-            + net_well_flow_rate_into_cell
-            + total_capillary_flow
-            + total_gravity_flow
-        )
-
-    # Solve the linear system A * P_oilⁿ⁺¹ = b
-    new_1D_pressure_grid = spsolve(A.tocsr(), b)
-    # Reshape the 1D solution back to a 3 Dimensional grid
-    new_pressure_grid = new_1D_pressure_grid.reshape(
-        (cell_count_x, cell_count_y, cell_count_z)
+    # Solve the linear system
+    A_csr = A.tocsr()
+    ml = pyamg.ruge_stuben_solver(A_csr)
+    M = ml.aspreconditioner(cycle="V")
+    new_1D_pressure_grid, info = gmres(
+        A_csr, b, M=M, rtol=1e-6, atol=1e-12, restart=50, maxiter=500
     )
+    if info != 0:
+        raise RuntimeError(f"GMRES did not converge, info={info}")
+
+    # Initialize with current pressure (preserves boundary values)
+    new_pressure_grid = current_oil_pressure_grid.copy()
+
+    # Fill interior cells with solution
+    idx = 0
+    for i, j, k in itertools.product(
+        range(1, cell_count_x - 1),
+        range(1, cell_count_y - 1),
+        range(1, cell_count_z - 1),
+    ):
+        new_pressure_grid[i, j, k] = new_1D_pressure_grid[idx]
+        idx += 1
+
     new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
     return EvolutionResult(new_pressure_grid, scheme="implicit")
 
@@ -1674,7 +1459,6 @@ def evolve_pressure_adaptively(
     elevation_grid: ThreeDimensionalGrid,
     time_step: int,
     time_step_size: float,
-    boundary_conditions: BoundaryConditions[ThreeDimensions],
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
@@ -1694,7 +1478,6 @@ def evolve_pressure_adaptively(
     :param elevation_grid: N-Dimensional numpy array representing the elevation of each cell in the grid (ft).
     :param time_step: Current time step number (for logging/debugging purposes).
     :param time_step_size: Time step size (s) used in pressure update and stability criterion.
-    :param boundary_conditions: Boundary conditions for pressure, saturation, etc, grids.
     :param rock_properties: RockProperties object containing rock physical properties.
     :param fluid_properties: FluidProperties object containing fluid physical properties.
     :param rock_fluid_properties: RockFluidProperties object containing relative permeability
@@ -1724,8 +1507,8 @@ def evolve_pressure_adaptively(
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
 
+    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
     water_viscosity_grid = fluid_properties.water_viscosity_grid
-    oil_viscosity_grid = fluid_properties.oil_viscosity_grid
     gas_viscosity_grid = fluid_properties.gas_viscosity_grid
 
     water_compressibility_grid = fluid_properties.water_compressibility_grid
@@ -1790,49 +1573,49 @@ def evolve_pressure_adaptively(
     water_mobility_grid_x = (
         absolute_permeability.x
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_x = (
         absolute_permeability.x
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_x = (
         absolute_permeability.x
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_y = (
         absolute_permeability.y
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_y = (
         absolute_permeability.y
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_y = (
         absolute_permeability.y
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     water_mobility_grid_z = (
         absolute_permeability.z
         * water_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     oil_mobility_grid_z = (
         absolute_permeability.z
         * oil_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     gas_mobility_grid_z = (
         absolute_permeability.z
         * gas_relative_mobility_grid
-        * MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
+        * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
     # Calculate total mobility for diffusion number calculation
@@ -1885,7 +1668,6 @@ def evolve_pressure_adaptively(
             elevation_grid=elevation_grid,
             time_step=time_step,
             time_step_size=time_step_size,
-            boundary_conditions=boundary_conditions,
             rock_properties=rock_properties,
             fluid_properties=fluid_properties,
             rock_fluid_properties=rock_fluid_properties,
@@ -1898,7 +1680,6 @@ def evolve_pressure_adaptively(
         elevation_grid=elevation_grid,
         time_step=time_step,
         time_step_size=time_step_size,
-        boundary_conditions=boundary_conditions,
         rock_properties=rock_properties,
         fluid_properties=fluid_properties,
         rock_fluid_properties=rock_fluid_properties,

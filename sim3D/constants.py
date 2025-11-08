@@ -1,180 +1,703 @@
-"""Constants and Conversion Factors"""
+"""Physical constants and conversion factors"""
 
-STANDARD_PRESSURE = 101325  # Pa
-"""Standard atmospheric pressure in Pascals (Pa)"""
-STANDARD_PRESSURE_IMPERIAL = 14.696  # psi
-"""Standard atmospheric pressure in pounds per square inch (psi)"""
-STANDARD_TEMPERATURE = 288.7056  # K (15.6oC)
-"""Standard temperature in Kelvin (K)"""
-STANDARD_TEMPERATURE_IMPERIAL = 60.0  # °F
-"""Standard temperature in Fahrenheit (°F)"""
-OIL_THERMAL_EXPANSION_COEFFICIENT = 9.7e-4  # 1/K
-"""Thermal expansion coefficient for oil (1/K)"""
-WATER_THERMAL_EXPANSION_COEFFICIENT = 3.0e-4  # 1/K
-"""Thermal expansion coefficient for water (1/K)"""
-WATER_ISOTHERMAL_COMPRESSIBILITY = 4.6e-10  # 1/Pa
-"""Isothermal compressibility of water at 15.6°C in 1/Pa"""
-OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL = 5.39e-4  # 1/°F
-"""Thermal expansion coefficient for oil in imperial units (1/°F)"""
-WATER_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL = 1.67e-4  # 1/°F
-"""Thermal expansion coefficient for water in imperial units (1/°F)"""
-WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL = 3.17e-6  # 1/psi
-"""Isothermal compressibility of water at 15.6°C in 1/psi"""
-STANDARD_WATER_DENSITY = 998.2  # kg/m³
-"""Standard water density at 15.6°C in kg/m³"""
-STANDARD_WATER_DENSITY_IMPERIAL = 62.37  # lb/ft³
-"""Standard water density at 15.6°C in lb/ft³"""
-STANDARD_AIR_DENSITY = 1.225  # kg/m³
-"""Standard air density at 15.6°C in kg/m³"""
-STANDARD_AIR_DENSITY_IMPERIAL = 0.0765  # lb/ft³
-"""Standard air density at 15.6°C in lb/ft³"""
-MOLECULAR_WEIGHT_WATER = 18.01528  # g/mol
-"""Molecular weight of water in grams per mole (g/mol)"""
-MOLECULAR_WEIGHT_CO2 = 44.01  # g/mol
-"""Molecular weight of carbon dioxide in grams per mole (g/mol)"""
-MOLECULAR_WEIGHT_N2 = 28.0134  # g/mol
-"""Molecular weight of nitrogen in grams per mole (g/mol)"""
-MOLECULAR_WEIGHT_METHANE = 16.04246  # g/mol
-"""Molecular weight of methane in grams per mole (g/mol)"""
-MOLECULAR_WEIGHT_NACL = 58.44  # g/mol
-"""Molecular weight of sodium chloride (NaCl) in grams per mole (g/mol)"""
-MOLECULAR_WEIGHT_AIR = 28.9644  # g/mol
-"""Molecular weight of air in grams per mole (g/mol) or (lb/lb-mol)"""
-PSI_TO_PA = 6894.757  # 1 psi = 6894.76 Pa
-"""Conversion factor from psi to Pascals (Pa)"""
-PA_TO_PSI = 1 / PSI_TO_PA
-"""Conversion factor from Pascals to psi"""
-PSI_TO_BAR = 0.0689476
-"""Conversion factor from psi to bar"""
-RANKINE_TO_KELVIN = 5 / 9  # T(K) = T(R) * 5/9
-"""Conversion factor from Rankine to Kelvin"""
-KELVIN_TO_RANKINE = 9 / 5  # T(R) = T(K) * 9/5
-"""Conversion factor from Kelvin to Rankine"""
-CP_TO_PA_S = 0.001  # 1 cP = 0.001 Pa.s (Pascal-second)
-"""Conversion factor from centipoise to Pascal-seconds (Pa·s)"""
-MD_TO_M2 = 9.869233e-16  # 1 mD = 9.869233e-16 m^2
-"""Conversion factor from millidarcies to square meters (m²)"""
-SCF_PER_STB_TO_M3_PER_M3 = 0.1781076  # 1 scf/STB = ~0.178 m3/m3 (gas/oil ratio)
-"""Conversion factor from standard cubic feet per stock tank barrel to cubic meters per cubic meter"""
-M3_PER_M3_TO_SCF_PER_STB = 1 / SCF_PER_STB_TO_M3_PER_M3
-"""Conversion factor from cubic meters per cubic meter to standard cubic feet per stock tank barrel"""
-M3_PER_M3_TO_BBL_PER_SCF = 5.614583
-"""Conversion factor from cubic meters per cubic meter to barrels per standard cubic foot (BBL/scf)"""
-BBL_PER_SCF_TO_M3_PER_M3 = 1 / M3_PER_M3_TO_BBL_PER_SCF
-"""Conversion factor from barrels per standard cubic foot to cubic meters per cubic meter (m³/m³)"""
-M3_PER_M3_TO_BBL_PER_STB = 1.0
-"""Conversion factor from cubic meters per cubic meter to barrels per stock tank barrel (BBL/STB)"""
-BBL_PER_STB_TO_M3_PER_M3 = 1 / M3_PER_M3_TO_BBL_PER_STB
-"""Conversion factor from barrels per stock tank barrel to cubic meters per cubic meter (m³/m³)"""
-M3_TO_SCF = 35.3147  # 1 m³ = 35.3147 scf
-"""Conversion factor from cubic meters to standard cubic feet (scf)"""
-SCF_TO_BBL = 0.1781076  # 1 scf = 0.1781076 BBL
-"""Conversion factor from standard cubic feet to barrels (BBL)"""
-BBL_TO_FT3 = 5.614583  # 1 barrel = 5.614583 ft³
-"""Conversion factor from barrels to cubic feet (ft³)"""
-FT3_TO_BBL = 1 / BBL_TO_FT3
-"""Conversion factor from cubic feet to barrels (ft³)"""
-STB_TO_FT3 = 5.614583  # 1 stock tank barrel = 5.614583 ft³
-"""Conversion factor from stock tank barrels to cubic feet (ft³)"""
-FT3_TO_STB = 1 / STB_TO_FT3
-"""Conversion factor from cubic feet to stock tank barrels (ft³)"""
-STB_TO_M3 = 0.158987  # 1 stock tank barrel = 0.158987 m^3
-"""Conversion factor from stock tank barrels to cubic meters (m³)"""
-BBL_TO_M3 = 0.158987  # 1 barrel = 0.158987 m^3
-"""Conversion factor from barrels to cubic meters (m³)"""
-M3_TO_BBL = 1 / BBL_TO_M3
-"""Conversion factor from cubic meters to barrels (m³)"""
-SCF_TO_SCM = 0.0283168  # 1 standard cubic foot = 0.0283168 standard cubic meter
-"""Conversion factor from standard cubic feet to standard cubic meters (m³)"""
-CENTIPOISE_TO_PA_S = 0.001  # 1 cP = 0.001 Pa.s (Pascal-second)
-"""Conversion factor from centipoise to Pascal-seconds (Pa·s)"""
-PA_S_TO_CENTIPOISE = 1000  # 1 Pa.s = 1000 cP
-"""Conversion factor from Pascal-seconds to centipoise (cP)"""
-IDEAL_GAS_CONSTANT = 8.31446261815324  # J/(mol·K)
-"""Universal gas constant in J/(mol·K)"""
-IDEAL_GAS_CONSTANT_SI = 8.31446261815324e-3  # kJ/(mol·K)
-"""Universal gas constant in kJ/(mol·K)"""
-IDEAL_GAS_CONSTANT_IMPERIAL = 10.73159  # ft³·psi/(lb·mol·°R)
-"""Universal gas constant in ft³·psi/(lb·mol·°R)"""
-POUNDS_PER_FT3_TO_KG_PER_M3 = 16.0185  # 1 lb/ft³ = 16.0185 kg/m³
-"""Conversion factor from pounds per cubic foot to kilograms per cubic meter (kg/m³)"""
-KG_PER_M3_TO_POUNDS_PER_FT3 = 1 / POUNDS_PER_FT3_TO_KG_PER_M3
-"""Conversion factor from kilograms per cubic meter to pounds per cubic foot (lb/ft³)"""
-POUNDS_PER_FT3_TO_GRAMS_PER_CM3 = 0.01601846  # 1 lb/ft³ = 0.01601846 g/cm³
-PPM_TO_GRAMS_PER_LITER = 1e-3  # 1 ppm = 1 gram per liter
-"""Conversion factor from parts per million to grams per liter (g/L)"""
-GRAMS_PER_LITER_TO_PPM = 1 / PPM_TO_GRAMS_PER_LITER
-"""Conversion factor from grams per liter to parts per million (ppm)"""
-SCF_PER_POUND_MOLE = 379.49  # 1 lb-mol = 379.49 scf
-"""Conversion factor from standard cubic feet to pound-moles (lb-mol)"""
-INCHES_TO_METERS = 0.0254  # 1 inch = 0.0254 meters
-"""Conversion factor from inches to meters (m)"""
-METERS_TO_INCHES = 1 / INCHES_TO_METERS
-"""Conversion factor from meters to inches (m)"""
-FT_TO_METERS = 0.3048  # 1 foot = 0.3048 meters
-"""Conversion factor from feet to meters (m)"""
-METERS_TO_FT = 1 / FT_TO_METERS
-"""Conversion factor from meters to feet (m)"""
-ACRES_TO_FT2 = 43560  # 1 acre = 43560 ft²
-"""Conversion factor from acres to square feet (ft²)"""
-FT2_TO_ACRES = 1 / ACRES_TO_FT2
-"""Conversion factor from square feet to acres"""
-ACRE_FT_TO_FT3 = 43560  # 1 acre-foot = 43560 ft³
-"""Conversion factor from acre-feet to cubic feet (ft³)"""
-FT3_TO_ACRE_FT = 1 / ACRE_FT_TO_FT3
-"""Conversion factor from cubic feet to acre-feet"""
-ACRE_FT_TO_BBL = 7758  # 1 acre-foot = 7758 BBL
-"""Conversion factor from acre-feet to barrels (BBL)"""
-BBL_TO_ACRE_FT = 1 / ACRE_FT_TO_BBL
-"""Conversion factor from barrels to acre-feet"""
-M3_PER_SECOND_TO_STB_PER_DAY = 543168.384
-"""Conversion factor from cubic meters per second to stock tank barrels per day (STB/day)"""
-STB_PER_DAY_TO_M3_PER_SECOND = 1 / M3_PER_SECOND_TO_STB_PER_DAY
-"""Conversion factor from stock tank barrels per day to cubic meters per second (m³/s)"""
-M3_PER_SECOND_TO_SCF_PER_DAY = 3049492.8
-"""Conversion factor from cubic meters per second to standard cubic feet per day (scf/day)"""
-SCF_PER_DAY_TO_M3_PER_SECOND = 1 / M3_PER_SECOND_TO_SCF_PER_DAY
-"""Conversion factor from standard cubic feet per day to cubic meters per second (m³/s)"""
-SECONDS_PER_DAY = 86400.0
-"""Conversion factor from days to seconds"""
-DAYS_PER_SECOND = 1 / SECONDS_PER_DAY
-"""Conversion factor from seconds to days"""
-MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY = 0.001127
-"""Conversion factor from millidarcies per centipoise to ft²/psi.day"""
-MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND = (
-    MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY / SECONDS_PER_DAY
+from contextvars import ContextVar
+import typing
+
+import attrs
+
+
+__all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
+
+
+@attrs.define(slots=True, frozen=True)
+class Constant:
+    """A constant value with optional description and metadata.
+
+    This class wraps a constant value and provides additional context about
+    what the constant represents, its units, and any other relevant information.
+    """
+
+    value: typing.Any
+    """The actual value of the constant."""
+
+    description: typing.Optional[str] = None
+    """Optional description of what this constant represents."""
+
+    unit: typing.Optional[str] = None
+    """Optional unit of measurement for this constant."""
+
+    def __str__(self) -> str:
+        """Return a human-readable string representation of the `Constant`."""
+        return f"{self.value}{self.unit or ''}"
+
+    def __repr__(self) -> str:
+        """Return a string representation of the `Constant`."""
+        parts = [f"value={self.value}"]
+        if self.description:
+            parts.append(f"description='{self.description}'")
+        if self.unit:
+            parts.append(f"unit='{self.unit}'")
+        return f"Constant({', '.join(parts)})"
+
+
+# Default constants dictionary
+DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
+    # Standard Conditions
+    "STANDARD_PRESSURE": Constant(
+        value=101325, description="Standard atmospheric pressure", unit="Pa"
+    ),
+    "STANDARD_PRESSURE_IMPERIAL": Constant(
+        value=14.696, description="Standard atmospheric pressure", unit="psi"
+    ),
+    "STANDARD_TEMPERATURE": Constant(
+        value=288.7056, description="Standard temperature (15.6°C)", unit="K"
+    ),
+    "STANDARD_TEMPERATURE_IMPERIAL": Constant(
+        value=60.0, description="Standard temperature", unit="°F"
+    ),
+    # Thermal and Compressibility Properties
+    "OIL_THERMAL_EXPANSION_COEFFICIENT": Constant(
+        value=9.7e-4, description="Thermal expansion coefficient for oil", unit="1/K"
+    ),
+    "WATER_THERMAL_EXPANSION_COEFFICIENT": Constant(
+        value=3.0e-4, description="Thermal expansion coefficient for water", unit="1/K"
+    ),
+    "WATER_ISOTHERMAL_COMPRESSIBILITY": Constant(
+        value=4.6e-10,
+        description="Isothermal compressibility of water at 15.6°C",
+        unit="1/Pa",
+    ),
+    "OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
+        value=5.39e-4, description="Thermal expansion coefficient for oil", unit="1/°F"
+    ),
+    "WATER_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
+        value=1.67e-4,
+        description="Thermal expansion coefficient for water",
+        unit="1/°F",
+    ),
+    "WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL": Constant(
+        value=3.17e-6,
+        description="Isothermal compressibility of water at 15.6°C",
+        unit="1/psi",
+    ),
+    # Standard Densities
+    "STANDARD_WATER_DENSITY": Constant(
+        value=998.2, description="Standard water density at 15.6°C", unit="kg/m³"
+    ),
+    "STANDARD_WATER_DENSITY_IMPERIAL": Constant(
+        value=62.37, description="Standard water density at 15.6°C", unit="lb/ft³"
+    ),
+    "STANDARD_AIR_DENSITY": Constant(
+        value=1.225, description="Standard air density at 15.6°C", unit="kg/m³"
+    ),
+    "STANDARD_AIR_DENSITY_IMPERIAL": Constant(
+        value=0.0765, description="Standard air density at 15.6°C", unit="lb/ft³"
+    ),
+    # Molecular Weights
+    "MOLECULAR_WEIGHT_WATER": Constant(
+        value=18.01528, description="Molecular weight of water", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_CO2": Constant(
+        value=44.01, description="Molecular weight of carbon dioxide", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_N2": Constant(
+        value=28.0134, description="Molecular weight of nitrogen", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_METHANE": Constant(
+        value=16.04246, description="Molecular weight of methane", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_NACL": Constant(
+        value=58.44,
+        description="Molecular weight of sodium chloride (NaCl)",
+        unit="g/mol",
+    ),
+    "MOLECULAR_WEIGHT_AIR": Constant(
+        value=28.9644, description="Molecular weight of air", unit="g/mol"
+    ),
+    # Pressure Conversions
+    "PSI_TO_PA": Constant(
+        value=6894.757,
+        description="Conversion factor from psi to Pascals",
+        unit="Pa/psi",
+    ),
+    "PA_TO_PSI": Constant(
+        value=1 / 6894.757,
+        description="Conversion factor from Pascals to psi",
+        unit="psi/Pa",
+    ),
+    "PSI_TO_BAR": Constant(
+        value=0.0689476, description="Conversion factor from psi to bar", unit="bar/psi"
+    ),
+    # Temperature Conversions
+    "RANKINE_TO_KELVIN": Constant(
+        value=5 / 9,
+        description="Conversion factor from Rankine to Kelvin: T(K) = T(R) * 5/9",
+        unit="K/R",
+    ),
+    "KELVIN_TO_RANKINE": Constant(
+        value=9 / 5,
+        description="Conversion factor from Kelvin to Rankine: T(R) = T(K) * 9/5",
+        unit="R/K",
+    ),
+    # Viscosity Conversions
+    "CP_TO_PA_S": Constant(
+        value=0.001,
+        description="Conversion factor from centipoise to Pascal-seconds",
+        unit="Pa·s/cP",
+    ),
+    "CENTIPOISE_TO_PA_S": Constant(
+        value=0.001,
+        description="Conversion factor from centipoise to Pascal-seconds",
+        unit="Pa·s/cP",
+    ),
+    "PASCAL_SECONDS_TO_CENTIPOISE": Constant(
+        value=1000,
+        description="Conversion factor from Pascal-seconds to centipoise",
+        unit="cP/(Pa·s)",
+    ),
+    # Permeability Conversions
+    "MD_TO_M2": Constant(
+        value=9.869233e-16,
+        description="Conversion factor from millidarcies to square meters",
+        unit="m²/mD",
+    ),
+    # Gas-Oil Ratio Conversions
+    "SCF_PER_STB_TO_M3_PER_M3": Constant(
+        value=0.1781076,
+        description="Conversion factor from scf/STB to m³/m³",
+        unit="(m³/m³)/(scf/STB)",
+    ),
+    "M3_PER_M3_TO_SCF_PER_STB": Constant(
+        value=1 / 0.1781076,
+        description="Conversion factor from m³/m³ to scf/STB",
+        unit="(scf/STB)/(m³/m³)",
+    ),
+    # Formation Volume Factor Conversions
+    "M3_PER_M3_TO_BBL_PER_SCF": Constant(
+        value=5.614583,
+        description="Conversion factor from m³/m³ to BBL/scf",
+        unit="(BBL/scf)/(m³/m³)",
+    ),
+    "BBL_PER_SCF_TO_M3_PER_M3": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from BBL/scf to m³/m³",
+        unit="(m³/m³)/(BBL/scf)",
+    ),
+    "M3_PER_M3_TO_BBL_PER_STB": Constant(
+        value=1.0,
+        description="Conversion factor from m³/m³ to BBL/STB",
+        unit="(BBL/STB)/(m³/m³)",
+    ),
+    "BBL_PER_STB_TO_M3_PER_M3": Constant(
+        value=1.0,
+        description="Conversion factor from BBL/STB to m³/m³",
+        unit="(m³/m³)/(BBL/STB)",
+    ),
+    # Volume Conversions
+    "M3_TO_SCF": Constant(
+        value=35.3147,
+        description="Conversion factor from cubic meters to standard cubic feet",
+        unit="scf/m³",
+    ),
+    "SCF_TO_BBL": Constant(
+        value=0.1781076,
+        description="Conversion factor from standard cubic feet to barrels",
+        unit="BBL/scf",
+    ),
+    "BBL_TO_FT3": Constant(
+        value=5.614583,
+        description="Conversion factor from barrels to cubic feet",
+        unit="ft³/BBL",
+    ),
+    "FT3_TO_BBL": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from cubic feet to barrels",
+        unit="BBL/ft³",
+    ),
+    "STB_TO_FT3": Constant(
+        value=5.614583,
+        description="Conversion factor from stock tank barrels to cubic feet",
+        unit="ft³/STB",
+    ),
+    "FT3_TO_STB": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from cubic feet to stock tank barrels",
+        unit="STB/ft³",
+    ),
+    "STB_TO_M3": Constant(
+        value=0.158987,
+        description="Conversion factor from stock tank barrels to cubic meters",
+        unit="m³/STB",
+    ),
+    "BBL_TO_M3": Constant(
+        value=0.158987,
+        description="Conversion factor from barrels to cubic meters",
+        unit="m³/BBL",
+    ),
+    "M3_TO_BBL": Constant(
+        value=1 / 0.158987,
+        description="Conversion factor from cubic meters to barrels",
+        unit="BBL/m³",
+    ),
+    "SCF_TO_SCM": Constant(
+        value=0.0283168,
+        description="Conversion factor from standard cubic feet to standard cubic meters",
+        unit="m³/scf",
+    ),
+    # Gas Constant
+    "IDEAL_GAS_CONSTANT": Constant(
+        value=8.31446261815324, description="Universal gas constant", unit="J/(mol·K)"
+    ),
+    "IDEAL_GAS_CONSTANT_SI": Constant(
+        value=8.31446261815324e-3,
+        description="Universal gas constant",
+        unit="kJ/(mol·K)",
+    ),
+    "IDEAL_GAS_CONSTANT_IMPERIAL": Constant(
+        value=10.73159, description="Universal gas constant", unit="ft³·psi/(lb·mol·°R)"
+    ),
+    # Density Conversions
+    "POUNDS_PER_FT3_TO_KG_PER_M3": Constant(
+        value=16.0185,
+        description="Conversion factor from lb/ft³ to kg/m³",
+        unit="(kg/m³)/(lb/ft³)",
+    ),
+    "KG_PER_M3_TO_POUNDS_PER_FT3": Constant(
+        value=1 / 16.0185,
+        description="Conversion factor from kg/m³ to lb/ft³",
+        unit="(lb/ft³)/(kg/m³)",
+    ),
+    "POUNDS_PER_FT3_TO_GRAMS_PER_CM3": Constant(
+        value=0.01601846,
+        description="Conversion factor from lb/ft³ to g/cm³",
+        unit="(g/cm³)/(lb/ft³)",
+    ),
+    # Concentration Conversions
+    "PPM_TO_GRAMS_PER_LITER": Constant(
+        value=1e-3, description="Conversion factor from ppm to g/L", unit="(g/L)/ppm"
+    ),
+    "GRAMS_PER_LITER_TO_PPM": Constant(
+        value=1e3, description="Conversion factor from g/L to ppm", unit="ppm/(g/L)"
+    ),
+    "PPM_TO_WEIGHT_FRACTION": Constant(
+        value=1e-6,
+        description="Conversion factor from ppm to weight fraction",
+        unit="fraction/ppm",
+    ),
+    "PPM_TO_WEIGHT_PERCENT": Constant(
+        value=1e-4,
+        description="Conversion factor from ppm to weight percent",
+        unit="%/ppm",
+    ),
+    "WEIGHT_PERCENT_TO_PPM": Constant(
+        value=1e4,
+        description="Conversion factor from weight percent to ppm",
+        unit="ppm/%",
+    ),
+    # Molar Volume
+    "SCF_PER_POUND_MOLE": Constant(
+        value=379.49,
+        description="Standard cubic feet per pound-mole",
+        unit="scf/(lb·mol)",
+    ),
+    # Length Conversions
+    "INCHES_TO_METERS": Constant(
+        value=0.0254, description="Conversion factor from inches to meters", unit="m/in"
+    ),
+    "METERS_TO_INCHES": Constant(
+        value=1 / 0.0254,
+        description="Conversion factor from meters to inches",
+        unit="in/m",
+    ),
+    "FT_TO_METERS": Constant(
+        value=0.3048, description="Conversion factor from feet to meters", unit="m/ft"
+    ),
+    "METERS_TO_FT": Constant(
+        value=1 / 0.3048,
+        description="Conversion factor from meters to feet",
+        unit="ft/m",
+    ),
+    # Area Conversions
+    "ACRES_TO_FT2": Constant(
+        value=43560,
+        description="Conversion factor from acres to square feet",
+        unit="ft²/acre",
+    ),
+    "FT2_TO_ACRES": Constant(
+        value=1 / 43560,
+        description="Conversion factor from square feet to acres",
+        unit="acre/ft²",
+    ),
+    # Volume-Area Conversions
+    "ACRE_FT_TO_FT3": Constant(
+        value=43560,
+        description="Conversion factor from acre-feet to cubic feet",
+        unit="ft³/(acre·ft)",
+    ),
+    "FT3_TO_ACRE_FT": Constant(
+        value=1 / 43560,
+        description="Conversion factor from cubic feet to acre-feet",
+        unit="(acre·ft)/ft³",
+    ),
+    "ACRE_FT_TO_BBL": Constant(
+        value=7758,
+        description="Conversion factor from acre-feet to barrels",
+        unit="BBL/(acre·ft)",
+    ),
+    "BBL_TO_ACRE_FT": Constant(
+        value=1 / 7758,
+        description="Conversion factor from barrels to acre-feet",
+        unit="(acre·ft)/BBL",
+    ),
+    # Flow Rate Conversions
+    "M3_PER_SECOND_TO_STB_PER_DAY": Constant(
+        value=543168.384,
+        description="Conversion factor from m³/s to STB/day",
+        unit="(STB/day)/(m³/s)",
+    ),
+    "STB_PER_DAY_TO_M3_PER_SECOND": Constant(
+        value=1 / 543168.384,
+        description="Conversion factor from STB/day to m³/s",
+        unit="(m³/s)/(STB/day)",
+    ),
+    "M3_PER_SECOND_TO_SCF_PER_DAY": Constant(
+        value=3049492.8,
+        description="Conversion factor from m³/s to scf/day",
+        unit="(scf/day)/(m³/s)",
+    ),
+    "SCF_PER_DAY_TO_M3_PER_SECOND": Constant(
+        value=1 / 3049492.8,
+        description="Conversion factor from scf/day to m³/s",
+        unit="(m³/s)/(scf/day)",
+    ),
+    # Time Conversions
+    "SECONDS_PER_DAY": Constant(
+        value=86400.0, description="Number of seconds in a day", unit="s/day"
+    ),
+    "DAYS_PER_SECOND": Constant(
+        value=1 / 86400.0, description="Number of days in a second", unit="day/s"
+    ),
+    "DAYS_PER_YEAR": Constant(
+        value=365.25, description="Number of days in a year", unit="day/year"
+    ),
+    "SECONDS_PER_YEAR": Constant(
+        value=365.25 * 86400.0, description="Number of seconds in a year", unit="s/year"
+    ),
+    # Transmissibility Conversions
+    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY": Constant(
+        value=0.001127,
+        description="Conversion factor from mD/cP to ft²/(psi·day)",
+        unit="(ft²/(psi·day))/(mD/cP)",
+    ),
+    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND": Constant(
+        value=0.001127 / 86400.0,
+        description="Conversion factor from mD/cP to ft²/(psi·s)",
+        unit="(ft²/(psi·s))/(mD/cP)",
+    ),
+    # Gravity
+    "ACCELERATION_DUE_TO_GRAVITY_M_PER_S2": Constant(
+        value=9.80665, description="Standard acceleration due to gravity", unit="m/s²"
+    ),
+    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2": Constant(
+        value=32.174, description="Standard acceleration due to gravity", unit="ft/s²"
+    ),
+    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2": Constant(
+        value=32.174 * 86400.0**2,
+        description="Standard acceleration due to gravity",
+        unit="ft/day²",
+    ),
+    # Reservoir Fluid Defaults
+    "RESERVOIR_OIL_NAME": Constant(
+        value="n-Dodecane",
+        description="Default displaced fluid for simulations (CoolProp compatible)",
+        unit=None,
+    ),
+    "RESERVOIR_GAS_NAME": Constant(
+        value="Methane",
+        description="Default gas that exists with oil in the reservoir (CoolProp compatible)",
+        unit=None,
+    ),
+    # Valid Ranges
+    "MIN_VALID_PRESSURE": Constant(
+        value=1.45,
+        description="Minimum valid pressure (below this, fluid model may be non-reservoir like)",
+        unit="psi",
+    ),
+    "MAX_VALID_PRESSURE": Constant(
+        value=14700.0,
+        description="Maximum valid pressure (above this, fluid model may be non-reservoir like)",
+        unit="psi",
+    ),
+    "MIN_VALID_TEMPERATURE": Constant(
+        value=32.0,
+        description="Minimum valid temperature (below this, fluid model may be non-reservoir like)",
+        unit="°F",
+    ),
+    "MAX_VALID_TEMPERATURE": Constant(
+        value=482.0,
+        description="Maximum valid temperature (above this, fluid model may be non-reservoir like)",
+        unit="°F",
+    ),
+}
+
+
+class Constants:
+    """Physical constants and conversion factors used in reservoir simulations.
+
+    All constants are stored in an internal dictionary and can be accessed via dot notation.
+    Constants can be modified at runtime if needed. Use __getattr__ for value access and
+    __getitem__ for `Constant` object access.
+    """
+
+    __slots__ = ("_store",)
+
+    def __new__(cls) -> "Constants":
+        """Create a new Constants instance."""
+        instance = super().__new__(cls)
+        instance._store = {}
+        return instance
+
+    def __init__(self) -> None:
+        """Initialize the constants store with default values."""
+        for name, value in DEFAULT_CONSTANTS.items():
+            if isinstance(value, Constant):
+                self._store[name] = value
+            else:
+                # Wrap raw values in Constant objects
+                self._store[name] = Constant(value=value)
+
+    def __getattr__(self, name: str) -> typing.Any:
+        """Get a constant's value using dot notation.
+
+        :param name: Name of the constant
+        :return: Value of the constant (unwrapped from Constant object)
+        :raises AttributeError: If the constant does not exist
+        """
+        if name.startswith("_"):
+            # Allow access to private attributes normally
+            return object.__getattribute__(self, name)
+
+        try:
+            constant = self._store[name]
+            return constant.value if isinstance(constant, Constant) else constant
+        except KeyError:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from None
+
+    def __getitem__(self, name: str) -> Constant:
+        """Get the Constant object (with metadata) using bracket notation.
+
+        :param name: Name of the constant
+        :return: Constant object with value, description, and unit
+        :raises KeyError: If the constant does not exist
+        """
+        return self._store[name]
+
+    def __setattr__(self, name: str, value: typing.Union[typing.Any, Constant]) -> None:
+        """Set a constant value using dot notation.
+
+        Accepts either a raw value (which will be wrapped in a Constant) or a Constant object.
+
+        :param name: Name of the constant
+        :param value: Value to set (raw value or Constant object)
+        """
+        if name.startswith("_"):
+            # Allow setting private attributes normally
+            object.__setattr__(self, name, value)
+        else:
+            if isinstance(value, Constant):
+                self._store[name] = value
+            else:
+                # Wrap raw values in Constant objects
+                self._store[name] = Constant(value=value)
+
+    def __setitem__(self, name: str, value: typing.Union[typing.Any, Constant]) -> None:
+        """Set a constant using bracket notation.
+
+        :param name: Name of the constant
+        :param value: Value to set (raw value or Constant object)
+        """
+        if isinstance(value, Constant):
+            self._store[name] = value
+        else:
+            # Wrap raw values in Constant objects
+            self._store[name] = Constant(value=value)
+
+    def __delattr__(self, name: str) -> None:
+        """Delete a constant from the store.
+
+        :param name: Name of the constant to delete
+        :raises AttributeError: If the constant does not exist
+        """
+        if name.startswith("_"):
+            object.__delattr__(self, name)
+        else:
+            try:
+                del self._store[name]
+            except KeyError:
+                raise AttributeError(
+                    f"'{type(self).__name__}' object has no attribute '{name}'"
+                ) from None
+
+    def __delitem__(self, name: str) -> None:
+        """Delete a constant using bracket notation.
+
+        :param name: Name of the constant to delete
+        :raises KeyError: If the constant does not exist
+        """
+        del self._store[name]
+
+    def __contains__(self, name: str) -> bool:
+        """Check if a constant exists.
+
+        :param name: Name of the constant
+        :return: True if the constant exists, False otherwise
+        """
+        return name in self._store
+
+    def keys(self) -> typing.KeysView[str]:
+        """Get all constant names.
+
+        :return: View of all constant names
+        """
+        return self._store.keys()
+
+    def values(self) -> typing.ValuesView[Constant]:
+        """Get all Constant objects.
+
+        :return: View of all Constant objects
+        """
+        return self._store.values()
+
+    def items(self) -> typing.ItemsView[str, Constant]:
+        """Get all constant name-Constant object pairs.
+
+        :return: View of all constant name-Constant pairs
+        """
+        return self._store.items()
+
+    def get(self, name: str, default: typing.Any = None) -> typing.Any:
+        """Get a constant's value with a default fallback.
+
+        :param name: Name of the constant
+        :param default: Default value if constant doesn't exist
+        :return: Value of the constant or default
+        """
+        constant = self._store.get(name)
+        if constant is None:
+            return default
+        return constant.value if isinstance(constant, Constant) else constant
+
+    def get_constant(
+        self, name: str, default: typing.Optional[Constant] = None
+    ) -> typing.Optional[Constant]:
+        """Get a `Constant` object with a default fallback.
+
+        :param name: Name of the constant
+        :param default: Default `Constant` if constant doesn't exist
+        :return: `Constant` object or default
+        """
+        return self._store.get(name, default)
+
+    def __repr__(self) -> str:
+        """Return a string representation of the Constants object."""
+        return f"{type(self).__name__}(constants={len(self._store)})"
+
+    def __len__(self) -> int:
+        """Return the number of constants in the store."""
+        return len(self._store)
+
+    def __call__(self) -> "ConstantsContext":
+        """
+        Create a context manager that within its context, temporarily overrides/set the default constants
+        accessed through the global constants proxy `sim3D.c`  to this `Constants` instance.
+
+        :return: `ConstantsContext` for temporary overrides
+        """
+        return ConstantsContext(self)
+
+
+_constants_context: ContextVar[Constants] = ContextVar(
+    "constants_context", default=Constants()
 )
-PPM_TO_WEIGHT_FRACTION = 1e-6
-"""Conversion factor from parts per million (ppm) to weight fraction"""
-PPM_TO_WEIGHT_PERCENT = 1e-4  # 1 ppm = 0.0001 weight percent
-"""Conversion factor from parts per million (ppm) to weight percent"""
-WEIGHT_PERCENT_TO_PPM = 1 / PPM_TO_WEIGHT_PERCENT
-"""Conversion factor from weight percent to parts per million (ppm)"""
-ACCELERATION_DUE_TO_GRAVITY_M_PER_S2 = 9.80665  # m/s²
-"""Standard acceleration due to gravity in meters per second squared (m/s²)"""
-ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 = 32.174  # ft/s²
-"""Standard acceleration due to gravity in feet per second squared (ft/s²)"""
-ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2 = (
-    ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * SECONDS_PER_DAY**2
-)  # ft/day²
-"""Standard acceleration due to gravity in feet per day squared (ft/day²)"""
-DAYS_PER_YEAR = 365.25
-"""Conversion factor from years to days"""
-SECONDS_PER_YEAR = DAYS_PER_YEAR * SECONDS_PER_DAY
-"""Conversion factor from years to seconds"""
 
-RESERVOIR_OIL_NAME = (
-    "n-Dodecane"  # Heavy oil, can be changed to any fluid supported by CoolProp
-)
-"""Default displaced fluid for simulations, can be changed to any fluid supported by CoolProp"""
-RESERVOIR_GAS_NAME = "Methane"  # Default gas that exist with oil in the reservoir, can be changed to any fluid supported by CoolProp
 
-# Outside this ranges, the fluid model may be non-reservoir like.
-MIN_VALID_PRESSURE = 1.45
-"""Minimum valid pressure in psi"""
-MAX_VALID_PRESSURE = 14700.0
-"""Maximum valid pressure in psi"""
-MIN_VALID_TEMPERATURE = 32.0
-"""Minimum valid temperature in Fahrenheit"""
-MAX_VALID_TEMPERATURE = 482.0
-"""Maximum valid temperature in Fahrenheit"""
+class ConstantsContext:
+    """
+    Context manager for temporary global `Constants` overrides.
+
+    This context manager allows for temporary overrides of the global `Constants`
+    instance within a specific context. Upon exiting the context, the previous
+    `Constants` instance is restored.
+    """
+
+    def __init__(self, constants: Constants) -> None:
+        """Initialize the context manager with a new Constants instance.
+
+        :param constants: New Constants instance to use within the context
+        """
+        self._new_constants = constants
+        self._token = None
+
+    def __enter__(self) -> Constants:
+        """Enter the context, setting the new Constants instance.
+
+        :return: The new Constants instance
+        """
+        self._token = _constants_context.set(self._new_constants)
+        return self._new_constants
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit the context, restoring the previous Constants instance."""
+        if self._token is not None:
+            _constants_context.reset(self._token)
+
+
+class _ConstantsProvider:
+    """
+    Proxy class to access the current context's `Constants` instance.
+
+    Use the `constants` property to get the current `Constants` instance.
+
+    Override the current `Constants` instance using the `ConstantsContext` context manager.
+    """
+
+    @property
+    def constants(self) -> Constants:
+        """Get the current Constants instance.
+
+        :return: Current Constants instance
+        """
+        return _constants_context.get()
+
+    def __getattr__(self, name: str) -> typing.Any:
+        """Get a constant's value from the current Constants instance.
+
+        :param name: Name of the constant
+        :return: Value of the constant
+        :raises AttributeError: If the constant does not exist
+        """
+        return getattr(self.constants, name)
+
+    def __getitem__(self, name: str) -> Constant:
+        """Get a Constant object from the current Constants instance.
+
+        :param name: Name of the constant
+        :return: Constant object
+        :raises KeyError: If the constant does not exist
+        """
+        return self.constants[name]
+
+
+c = _ConstantsProvider()
+"""Global proxy to access physical constants and conversion factors."""
+
+
+def get_constant(name: str) -> typing.Optional[Constant]:
+    """Get a `Constant` object by name from the global constants.
+
+    :param name: Name of the constant
+    :return: `Constant` object or None if not found
+    """
+    return c.constants.get_constant(name)

@@ -6,21 +6,161 @@ import copy
 import itertools
 import logging
 import typing
-from typing import List, Optional, Tuple
 
 import attrs
 import numpy as np
 
-from sim3D.statics import ReservoirModel
+from sim3D.models import ReservoirModel
 from sim3D.types import NDimension, ThreeDimensions
 
-__all__ = ["Fault", "apply_fault", "apply_faults"]
+__all__ = ["Fault", "apply_fault", "apply_faults", "FaultPropertyDefaults"]
 
 logger = logging.getLogger(__name__)
 
-
 MIN_TRANSMISSIBILITY_FACTOR = 1e-12
 """Minimum transmissibility scaling factor for numerical stability."""
+
+FloatDefault = typing.Union[float, np.floating[typing.Any]]
+StatDefault = typing.Literal["mean", "median", "min", "max", "zero"]
+HookDefault = typing.Callable[[np.typing.NDArray], FloatDefault]
+DefaultDef = typing.Union[FloatDefault, StatDefault, HookDefault]
+
+
+@attrs.define(slots=True, frozen=True)
+class FaultPropertyDefaults:
+    """
+    Smart default value provider for reservoir properties.
+
+    Supports three modes:
+    1. Constant values (float)
+    2. Callable that generates values based on grid statistics
+    3. Special keywords: 'mean', 'median', 'min', 'max', 'zero'
+    """
+
+    # Geometric properties
+    thickness: DefaultDef = 1.0
+
+    # Rock properties
+    porosity: DefaultDef = 0.2
+    permeability: DefaultDef = 100.0
+    net_to_gross: DefaultDef = 1.0
+
+    # Saturation properties
+    water_saturation: DefaultDef = 0.3
+    oil_saturation: DefaultDef = 0.7
+    gas_saturation: DefaultDef = 0.0
+    irreducible_water_saturation: DefaultDef = 0.2
+    residual_oil_saturation_water: DefaultDef = 0.2
+    residual_oil_saturation_gas: DefaultDef = 0.1
+    residual_gas_saturation: DefaultDef = 0.05
+
+    # Pressure and temperature
+    pressure: DefaultDef = "median"  # Use median for pressure
+    temperature: DefaultDef = "median"
+
+    # Fluid properties
+    oil_viscosity: DefaultDef = 1.0
+    water_viscosity: DefaultDef = 0.5
+    gas_viscosity: DefaultDef = 0.02
+
+    oil_density: DefaultDef = 850.0
+    water_density: DefaultDef = 1000.0
+    gas_density: DefaultDef = 0.8
+
+    # Formation volume factors
+    oil_fvf: DefaultDef = 1.2
+    water_fvf: DefaultDef = 1.0
+    gas_fvf: DefaultDef = 0.005
+
+    # Other properties
+    compressibility: DefaultDef = 1e-5
+    bubble_point_pressure: DefaultDef = "mean"
+
+    # Generic fallback for unspecified properties
+    generic: DefaultDef = "mean"
+
+    def get_default_value(
+        self,
+        property_name: str,
+        grid: np.typing.NDArray,
+        property_type: typing.Optional[str] = None,
+    ) -> float:
+        """
+        Compute default value for a property based on configuration.
+
+        :param property_name: Name of the property (e.g., 'porosity')
+        :param grid: Original grid array to analyze
+        :param property_type: typing.Optional type hint ('saturation', 'permeability', etc.)
+        :return: Computed default value
+        """
+        # Try to find specific configuration
+        spec = getattr(self, property_name, None)
+        if spec is None:
+            spec = self.generic
+
+        # Handle different specification types
+        if isinstance(spec, (int, float)):
+            return float(spec)
+
+        if callable(spec):
+            return float(spec(grid))  # type: ignore[call-arg]
+
+        if isinstance(spec, str):
+            spec = typing.cast(StatDefault, spec)
+            return self._compute_statistical_default(spec, grid, property_type)
+
+        # Fallback to mean if all else fails
+        return self._compute_statistical_default("mean", grid, property_type)
+
+    def _compute_statistical_default(
+        self,
+        method: StatDefault,
+        grid: np.typing.NDArray,
+        property_type: typing.Optional[str] = None,
+    ) -> float:
+        """Compute statistical defaults from grid data."""
+        # Filter out invalid values
+        valid_data = grid[np.isfinite(grid)]
+
+        # Apply property-specific constraints
+        if property_type == "saturation":
+            valid_data = valid_data[(valid_data >= 0) & (valid_data <= 1)]
+        elif property_type in ("permeability", "porosity", "thickness"):
+            valid_data = valid_data[valid_data > 0]
+
+        if len(valid_data) == 0:
+            logger.warning(f"No valid data for {method} calculation, using fallback")
+            return self._get_fallback_value(property_type)
+
+        # Compute based on method
+        if method == "mean":
+            return float(np.mean(valid_data))
+        elif method == "median":
+            return float(np.median(valid_data))
+        elif method == "min":
+            return float(np.min(valid_data))
+        elif method == "max":
+            return float(np.max(valid_data))
+        elif method == "zero":
+            return 0.0
+
+        logger.warning(f"Unknown method '{method}', using mean")
+        return float(np.mean(valid_data))
+
+    def _get_fallback_value(self, property_type: typing.Optional[str]) -> float:
+        """Get sensible fallback when no valid data exists."""
+        fallbacks = {
+            "saturation": 0.0,
+            "porosity": 0.2,
+            "permeability": 100.0,
+            "thickness": 1.0,
+            "pressure": 3000.0,
+            "temperature": 350.0,
+            "density": 850.0,
+            "viscosity": 1.0,
+            "fvf": 1.0,
+        }
+        return fallbacks.get(str(property_type), 1e-6)
 
 
 @attrs.define(slots=True, frozen=True)
@@ -70,13 +210,13 @@ class Fault:
     - Must be > MIN_TRANSMISSIBILITY_FACTOR for numerical stability
     """
 
-    fault_permeability: Optional[float] = None
+    fault_permeability: typing.Optional[float] = None
     """
     Permeability value for fault zone cells (mD).
     If None, fault zone properties are not modified.
     """
 
-    fault_porosity: Optional[float] = None
+    fault_porosity: typing.Optional[float] = None
     """
     Porosity value for fault zone cells (fraction).
     If None, fault zone properties are not modified.
@@ -94,7 +234,7 @@ class Fault:
     This automatically sets appropriate transmissibility_scale if not manually specified.
     """
 
-    mask: Optional[np.typing.NDArray] = None
+    mask: typing.Optional[np.ndarray] = None
     """
     Optional 3D boolean mask defining fault geometry.
     If provided, overrides geometric fault plane calculation.
@@ -103,42 +243,16 @@ class Fault:
 
     preserve_grid_data: bool = False
     """
-    If True, expand grid dimensions to preserve all displaced data (Option 2).
-    If False, use traditional displacement with data loss (Option 1, default).
-    
-    Example with 5-layer grid and 3-cell downthrow:
-    
-    preserve_grid_data=False (Option 1 - Default):
+    If True, expand grid dimensions to preserve all displaced data.
+    If False, use traditional displacement with data loss (default).
+    """
 
-    ```markdown
-    ┌─────────────────┬─────────────────┐
-    │ BEFORE (5x5x5)  │ AFTER (5x5x5)   │
-    │ z=4: [A A A A A]│ z=4: [A A ■ ■ ■]│ ← Fill with defaults
-    │ z=3: [B B B B B]│ z=3: [B B ■ ■ ■]│ 
-    │ z=2: [C C C C C]│ z=2: [C C ■ ■ ■]│
-    │ z=1: [D D D D D]│ z=1: [D D A A A]│ ← A moved down
-    │ z=0: [E E E E E]│ z=0: [E E B B B]│ ← C,D,E LOST! 💀
-    └─────────────────┴─────────────────┘
-    ```
-
-    preserve_grid_data=True (Option 2 - Grid Expansion):
-
-    ```markdown
-    ┌─────────────────┬─────────────────┐
-    │ BEFORE (5x5x5)  │ AFTER (5x5x8)   │
-    │ z=4: [A A A A A]│ z=7: [A A ■ ■ ■]│ ← Fill exposed top
-    │ z=3: [B B B B B]│ z=6: [B B ■ ■ ■]│
-    │ z=2: [C C C C C]│ z=5: [C C ■ ■ ■]│
-    │ z=1: [D D D D D]│ z=4: [D D A A A]│ ← A moved down 3
-    │ z=0: [E E E E E]│ z=3: [E E B B B]│ ← B moved down 3
-    │                 │ z=2: [■ ■ C C C]│ ← C moved down 3
-    │                 │ z=1: [■ ■ D D D]│ ← D moved down 3
-    │                 │ z=0: [■ ■ E E E]│ ← E moved down 3
-    └─────────────────┴─────────────────┘
-    ```
-
-    Grid dimensions: 5x5x5 → 5x5x8 (expanded by throw amount)
-    ALL data preserved ✓
+    property_defaults: FaultPropertyDefaults = attrs.field(
+        factory=lambda: FaultPropertyDefaults()
+    )
+    """
+    Custom default values for properties in displaced/expanded regions.
+    If None, uses FaultPropertyDefaults() with sensible defaults.
     """
 
     def __attrs_post_init__(self) -> None:
@@ -148,12 +262,10 @@ class Fault:
                 self, "transmissibility_scale", MIN_TRANSMISSIBILITY_FACTOR
             )
             logger.warning(
-                f"Fault {self.id}: transmissibility_scale clamped to {MIN_TRANSMISSIBILITY_FACTOR} "
-                f"for numerical stability"
+                f"Fault {self.id}: transmissibility_scale clamped to {MIN_TRANSMISSIBILITY_FACTOR}"
             )
 
         if self.conductive and self.transmissibility_scale < 1.0:
-            # For conductive faults, increase transmissibility
             object.__setattr__(
                 self, "transmissibility_scale", max(10.0, self.transmissibility_scale)
             )
@@ -184,33 +296,33 @@ def apply_fault(
     :param fault: Fault configuration defining geometry and properties
     :return: New reservoir model with fault applied
     """
-    logger.info(f"Applying fault '{fault.id}' to reservoir model")
+    logger.debug(f"Applying fault '{fault.id}' to reservoir model")
+
     errors = validate_fault(fault, model.grid_shape)
     if errors:
         for error in errors:
             logger.error(error)
-        raise ValueError(
-            f"Fault {fault.id} configuration is invalid; see log for details"
-        )
+        raise ValueError(f"Fault {fault.id} configuration is invalid")
 
     new_model = copy.deepcopy(model)
     grid_shape = new_model.grid_shape
+
     if len(grid_shape) != 3:
         raise ValueError("Fault application requires 3D reservoir models")
 
     new_model = typing.cast(ReservoirModel[ThreeDimensions], new_model)
+
     # Generate or validate fault mask
     if fault.mask is not None:
         if fault.mask.shape != grid_shape:
             raise ValueError(
-                f"Fault {fault.id}: mask shape {fault.mask.shape} "
-                f"does not match grid shape {grid_shape}"
+                f"Fault {fault.id}: mask shape {fault.mask.shape} != grid shape {grid_shape}"
             )
         fault_mask = fault.mask.copy()
     else:
         fault_mask = _make_fault_mask(grid_shape, fault)
 
-    # Apply fault effects in proper order to handle grid dimension changes
+    # Apply fault effects in proper order
     # 1. Modify fault zone properties (before geometric displacement)
     if fault.fault_permeability is not None or fault.fault_porosity is not None:
         new_model = _apply_fault_zone_properties(new_model, fault_mask, fault)
@@ -218,127 +330,95 @@ def apply_fault(
     # 2. Scale transmissibilities across fault (before geometric displacement)
     new_model = _scale_transmissibility(new_model, fault_mask, fault)
 
-    # 3. Apply geometric displacement (throw) to all grids if specified
-    # This may change grid dimensions, so it should be done last
+    # 3. Apply geometric displacement (throw) - may change grid dimensions
     if fault.geometric_throw_cells != 0:
         new_model = _apply_geometric_throw(new_model, fault_mask, fault)
 
-    logger.info(f"Successfully applied fault '{fault.id}'")
+    logger.debug(f"Successfully applied fault '{fault.id}'")
     return typing.cast(ReservoirModel[NDimension], new_model)
 
 
 def apply_faults(
-    model: ReservoirModel[NDimension], *configs: Fault
+    model: ReservoirModel[NDimension], *faults: Fault
 ) -> ReservoirModel[NDimension]:
     """
     Apply multiple faults to a reservoir model.
 
-    Faults are applied sequentially in the order provided. Each fault
-    is applied to the result of the previous fault application.
+    Faults are applied sequentially in the order provided.
 
     :param model: Input reservoir model
-    :param configs: Sequence of fault configurations
+    :param faults: Sequence of fault configurations
     :return: New reservoir model with all faults applied
     """
-    logger.info(f"Applying {len(configs)} faults to reservoir model")
+    logger.debug(f"Applying {len(faults)} faults to reservoir model")
 
     faulted_model = model
-    for fault in configs:
+    for fault in faults:
         faulted_model = apply_fault(faulted_model, fault)
 
-    logger.info(f"Successfully applied all {len(configs)} faults")
+    logger.debug(f"Successfully applied all {len(faults)} faults")
     return faulted_model
 
 
-def _make_fault_mask(grid_shape: Tuple[int, int, int], fault: Fault) -> np.ndarray:
+def _make_fault_mask(
+    grid_shape: typing.Tuple[int, int, int], fault: Fault
+) -> np.ndarray:
     """
     Generate a 3D boolean mask defining the fault geometry.
 
     For inclined faults, the mask follows the equation:
     z = z0 + slope * (coord - coord0)
-    where coord is x or y depending on orientation.
 
     :param grid_shape: Shape of the reservoir grid (nx, ny, nz)
     :param fault: Fault configuration
     :return: 3D boolean array marking fault cells
     """
     nx, ny, nz = grid_shape
-
-    # Create coordinate grids
-    x_coords = np.arange(nx)
-    y_coords = np.arange(ny)
-    z_coords = np.arange(nz)
+    mask = np.zeros((nx, ny, nz), dtype=bool)
 
     if fault.orientation == "x":
         # Fault cuts through x-direction
-        Y, Z = np.meshgrid(y_coords, z_coords, indexing="ij")
-
-        # Create mask: cells at or near the fault plane
-        mask = np.zeros((nx, ny, nz), dtype=bool)
-
-        # For vertical fault (slope = 0), mark cells at fault_index
         if abs(fault.slope) < 1e-6:
+            # Vertical fault
             if 0 <= fault.fault_index < nx:
                 mask[fault.fault_index, :, :] = True
         else:
-            # For inclined fault, mark cells intersected by the plane
-            for i in range(nx):
-                for j in range(ny):
-                    fault_z_at_j = fault.intercept + fault.slope * (
-                        j - fault.fault_index
-                    )
-                    fault_z_at_j = max(0, min(nz - 1, fault_z_at_j))
-
-                    # Mark cells within 0.5 cells of the fault plane
-                    z_low = max(0, int(fault_z_at_j - 0.5))
-                    z_high = min(nz - 1, int(fault_z_at_j + 0.5))
-
-                    if i == fault.fault_index:
-                        for k in range(z_low, z_high + 1):
-                            mask[i, j, k] = True
+            # Inclined fault
+            for j in range(ny):
+                fault_z = fault.intercept + fault.slope * (j - fault.fault_index)
+                fault_z = np.clip(fault_z, 0, nz - 1)
+                z_low = max(0, int(fault_z - 0.5))
+                z_high = min(nz - 1, int(fault_z + 0.5))
+                mask[fault.fault_index, j, z_low : z_high + 1] = True
 
     elif fault.orientation == "y":
         # Fault cuts through y-direction
-        X, Z = np.meshgrid(x_coords, z_coords, indexing="ij")
-
-        mask = np.zeros((nx, ny, nz), dtype=bool)
-
-        # For vertical fault (slope = 0), mark cells at fault_index
         if abs(fault.slope) < 1e-6:
+            # Vertical fault
             if 0 <= fault.fault_index < ny:
                 mask[:, fault.fault_index, :] = True
         else:
-            # For inclined fault, mark cells intersected by the plane
+            # Inclined fault
             for i in range(nx):
-                for j in range(ny):
-                    fault_z_at_i = fault.intercept + fault.slope * (
-                        i - fault.fault_index
-                    )
-                    fault_z_at_i = max(0, min(nz - 1, fault_z_at_i))
+                fault_z = fault.intercept + fault.slope * (i - fault.fault_index)
+                fault_z = np.clip(fault_z, 0, nz - 1)
+                z_low = max(0, int(fault_z - 0.5))
+                z_high = min(nz - 1, int(fault_z + 0.5))
+                mask[i, fault.fault_index, z_low : z_high + 1] = True
 
-                    # Mark cells within 0.5 cells of the fault plane
-                    z_low = max(0, int(fault_z_at_i - 0.5))
-                    z_high = min(nz - 1, int(fault_z_at_i + 0.5))
-
-                    if j == fault.fault_index:
-                        for k in range(z_low, z_high + 1):
-                            mask[i, j, k] = True
-
-    else:
-        raise ValueError(f"Invalid fault orientation: {fault.orientation}")
     return mask
 
 
 def _scale_transmissibility(
     model: ReservoirModel[ThreeDimensions],
-    fault_mask: np.typing.NDArray,
+    fault_mask: np.ndarray,
     fault: Fault,
 ) -> ReservoirModel[ThreeDimensions]:
     """
     Scale transmissibilities across fault boundaries.
 
-    This function identifies transmissibility connections that cross
-    the fault and scales them by the transmissibility_scale factor.
+    Identifies connections that cross the fault and scales permeability
+    to reduce/increase transmissibility.
 
     :param model: Reservoir model to modify
     :param fault_mask: 3D boolean array marking fault cells
@@ -347,97 +427,63 @@ def _scale_transmissibility(
     """
     logger.debug(f"Scaling transmissibilities for fault '{fault.id}'")
 
-    # We'll modify permeability which affects transmissibility
-    # Since we don't have direct access to transmissibility arrays,
-    # as they are computed from permeability and geometry.
     nx, ny, nz = model.grid_shape
 
-    # Identify fault boundaries and scale connections
+    # Scale connections based on fault orientation
     if fault.orientation == "x":
-        # Scale x-direction transmissibilities
+        # Scale x-direction connections
         for i, j, k in itertools.product(range(nx - 1), range(ny), range(nz)):
-            # Check if connection crosses fault
-            cell1_is_fault = fault_mask[i, j, k]
-            cell2_is_fault = fault_mask[i + 1, j, k]
-
-            if cell1_is_fault or cell2_is_fault:
-                # This connection crosses or touches the fault
-                # In a real implementation, scale transmissibility_x[i, j, k]
-
-                # For now, we'll reduce permeability at fault interface
-                if cell1_is_fault:
-                    current_perm = model.rock_properties.absolute_permeability.x[
-                        i, j, k
-                    ]
-                    new_perm = current_perm * fault.transmissibility_scale
-                    model.rock_properties.absolute_permeability.x[i, j, k] = new_perm
-
-                if cell2_is_fault:
-                    current_perm = model.rock_properties.absolute_permeability.x[
-                        i + 1, j, k
-                    ]
-                    new_perm = current_perm * fault.transmissibility_scale
+            if fault_mask[i, j, k] or fault_mask[i + 1, j, k]:
+                if fault_mask[i, j, k]:
+                    perm = model.rock_properties.absolute_permeability.x[i, j, k]
+                    model.rock_properties.absolute_permeability.x[i, j, k] = (
+                        perm * fault.transmissibility_scale
+                    )
+                if fault_mask[i + 1, j, k]:
+                    perm = model.rock_properties.absolute_permeability.x[i + 1, j, k]
                     model.rock_properties.absolute_permeability.x[i + 1, j, k] = (
-                        new_perm
+                        perm * fault.transmissibility_scale
                     )
 
     elif fault.orientation == "y":
-        # Scale y-direction transmissibilities
+        # Scale y-direction connections
         for i, j, k in itertools.product(range(nx), range(ny - 1), range(nz)):
-            # Check if connection crosses fault
-            cell1_is_fault = fault_mask[i, j, k]
-            cell2_is_fault = fault_mask[i, j + 1, k]
-
-            if cell1_is_fault or cell2_is_fault:
-                # This connection crosses or touches the fault
-                if cell1_is_fault:
-                    current_perm = model.rock_properties.absolute_permeability.y[
-                        i, j, k
-                    ]
-                    new_perm = current_perm * fault.transmissibility_scale
-                    model.rock_properties.absolute_permeability.y[i, j, k] = new_perm
-
-                if cell2_is_fault:
-                    current_perm = model.rock_properties.absolute_permeability.y[
-                        i, j + 1, k
-                    ]
-                    new_perm = current_perm * fault.transmissibility_scale
+            if fault_mask[i, j, k] or fault_mask[i, j + 1, k]:
+                if fault_mask[i, j, k]:
+                    perm = model.rock_properties.absolute_permeability.y[i, j, k]
+                    model.rock_properties.absolute_permeability.y[i, j, k] = (
+                        perm * fault.transmissibility_scale
+                    )
+                if fault_mask[i, j + 1, k]:
+                    perm = model.rock_properties.absolute_permeability.y[i, j + 1, k]
                     model.rock_properties.absolute_permeability.y[i, j + 1, k] = (
-                        new_perm
+                        perm * fault.transmissibility_scale
                     )
 
-    # Always consider z-direction scaling for inclined faults
+    # Always scale z-direction for inclined faults
     for i, j, k in itertools.product(range(nx), range(ny), range(nz - 1)):
-        cell1_is_fault = fault_mask[i, j, k]
-        cell2_is_fault = fault_mask[i, j, k + 1]
-
-        if cell1_is_fault or cell2_is_fault:
-            # Scale z-direction connection
-            if cell1_is_fault:
-                current_perm = model.rock_properties.absolute_permeability.z[i, j, k]
-                new_perm = current_perm * fault.transmissibility_scale
-                model.rock_properties.absolute_permeability.z[i, j, k] = new_perm
-
-            if cell2_is_fault:
-                current_perm = model.rock_properties.absolute_permeability.z[
-                    i, j, k + 1
-                ]
-                new_perm = current_perm * fault.transmissibility_scale
-                model.rock_properties.absolute_permeability.z[i, j, k + 1] = new_perm
+        if fault_mask[i, j, k] or fault_mask[i, j, k + 1]:
+            if fault_mask[i, j, k]:
+                perm = model.rock_properties.absolute_permeability.z[i, j, k]
+                model.rock_properties.absolute_permeability.z[i, j, k] = (
+                    perm * fault.transmissibility_scale
+                )
+            if fault_mask[i, j, k + 1]:
+                perm = model.rock_properties.absolute_permeability.z[i, j, k + 1]
+                model.rock_properties.absolute_permeability.z[i, j, k + 1] = (
+                    perm * fault.transmissibility_scale
+                )
 
     return model
 
 
 def _apply_fault_zone_properties(
     model: ReservoirModel[ThreeDimensions],
-    fault_mask: np.typing.NDArray,
+    fault_mask: np.ndarray,
     fault: Fault,
 ) -> ReservoirModel[ThreeDimensions]:
     """
     Apply fault zone rock properties to cells within the fault.
-
-    This function modifies permeability and/or porosity values
-    for cells identified by the fault mask.
 
     :param model: Reservoir model to modify
     :param fault_mask: 3D boolean array marking fault cells
@@ -447,26 +493,18 @@ def _apply_fault_zone_properties(
     logger.debug(f"Applying fault zone properties for fault '{fault.id}'")
 
     if fault.fault_permeability is not None:
-        # Apply fault permeability to x, y, and z directions
         model.rock_properties.absolute_permeability.x[fault_mask] = (
             fault.fault_permeability
         )
-        if model.rock_properties.absolute_permeability.y.size > 0:
-            model.rock_properties.absolute_permeability.y[fault_mask] = (
-                fault.fault_permeability
-            )
-
-        if model.rock_properties.absolute_permeability.z.size > 0:
-            model.rock_properties.absolute_permeability.z[fault_mask] = (
-                fault.fault_permeability
-            )
-
-        logger.debug(f"Set fault zone permeability to {fault.fault_permeability} mD")
+        model.rock_properties.absolute_permeability.y[fault_mask] = (
+            fault.fault_permeability
+        )
+        model.rock_properties.absolute_permeability.z[fault_mask] = (
+            fault.fault_permeability
+        )
 
     if fault.fault_porosity is not None:
         model.rock_properties.porosity_grid[fault_mask] = fault.fault_porosity
-        logger.debug(f"Set fault zone porosity to {fault.fault_porosity}")
-
     return model
 
 
@@ -476,325 +514,369 @@ def _apply_geometric_throw(
     fault: Fault,
 ) -> ReservoirModel[ThreeDimensions]:
     """
-    Apply geometric displacement (throw) to all property grids consistently.
+    Apply geometric displacement (throw) using improved block-based algorithm.
 
-    This function shifts all property grids in the "downthrown" block by the specified
-    number of cells in the z-direction, modifying the grids in-place.
+    Key improvements:
+    - Block-based displacement (no cell-by-cell jumbling)
+    - Smart property-aware default filling
+    - Clean separation between upthrown and downthrown blocks
 
     :param model: Reservoir model to modify
     :param fault_mask: 3D boolean array marking fault cells
     :param fault: Fault configuration
-    :return: Modified reservoir model
+    :return: Modified reservoir model with updated grid dimensions
     """
-    logger.debug(
-        f"Applying geometric throw of {fault.geometric_throw_cells} cells for fault '{fault.id}'"
-    )
+    logger.debug(f"Applying geometric throw ({fault.geometric_throw_cells} cells)")
 
     if fault.geometric_throw_cells == 0:
         return model
 
     throw = fault.geometric_throw_cells
     displacement_mask = _create_displacement_mask(model.grid_shape, fault)
+    defaults = fault.property_defaults
 
-    # Apply displacement to all property grids consistently
-    logger.debug(
-        f"Applying {throw}-cell displacement to all property grids (preserve_data={fault.preserve_grid_data})"
-    )
-
-    # Apply to geometric grids
-    displaced_thickness_grid = _displace_grid(
-        grid=model.thickness_grid,
-        displacement_mask=displacement_mask,
+    # Create displacement context for all grids
+    ctx = DisplacementContext(
+        original_shape=model.grid_shape,
         throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
+        displacement_mask=displacement_mask,
+        preserve_data=fault.preserve_grid_data,
+        defaults=defaults,
     )
 
-    # Apply to rock properties
-    rock_props = model.rock_properties
-    displaced_porosity_grid = _displace_grid(
-        grid=rock_props.porosity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_net_to_gross_ratio_grid = _displace_grid(
-        grid=rock_props.net_to_gross_ratio_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_irreducible_water_saturation_grid = _displace_grid(
-        grid=rock_props.irreducible_water_saturation_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_residual_oil_saturation_water_grid = _displace_grid(
-        grid=rock_props.residual_oil_saturation_water_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_residual_oil_saturation_gas_grid = _displace_grid(
-        grid=rock_props.residual_oil_saturation_gas_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_residual_gas_saturation_grid = _displace_grid(
-        grid=rock_props.residual_gas_saturation_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
+    # Apply displacement to all property grids
+    logger.debug("Displacing all property grids with block-based algorithm")
+
+    # Geometric grids
+    new_thickness = ctx.displace_grid(
+        model.thickness_grid, property_name="thickness", property_type="thickness"
     )
 
-    # Apply to permeability grids
-    displaced_permeability_x = _displace_grid(
-        grid=rock_props.absolute_permeability.x,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_permeability_y = _displace_grid(
-        grid=rock_props.absolute_permeability.y,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_permeability_z = _displace_grid(
-        grid=rock_props.absolute_permeability.z,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-
-    # Update rock properties with displaced grids
-    new_absolute_permeability = attrs.evolve(
-        rock_props.absolute_permeability,
-        x=displaced_permeability_x,
-        y=displaced_permeability_y
-        if displaced_permeability_y is not None
-        else rock_props.absolute_permeability.y,
-        z=displaced_permeability_z
-        if displaced_permeability_z is not None
-        else rock_props.absolute_permeability.z,
-    )
-    new_rock_properties = attrs.evolve(
-        rock_props,
-        porosity_grid=displaced_porosity_grid,
-        net_to_gross_ratio_grid=displaced_net_to_gross_ratio_grid,
-        irreducible_water_saturation_grid=displaced_irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=displaced_residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=displaced_residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=displaced_residual_gas_saturation_grid,
-        absolute_permeability=new_absolute_permeability,
+    # Rock properties
+    rock = model.rock_properties
+    new_rock = attrs.evolve(
+        rock,
+        porosity_grid=ctx.displace_grid(rock.porosity_grid, "porosity", "porosity"),
+        net_to_gross_ratio_grid=ctx.displace_grid(
+            rock.net_to_gross_ratio_grid, "net_to_gross"
+        ),
+        irreducible_water_saturation_grid=ctx.displace_grid(
+            rock.irreducible_water_saturation_grid,
+            "irreducible_water_saturation",
+            "saturation",
+        ),
+        residual_oil_saturation_water_grid=ctx.displace_grid(
+            rock.residual_oil_saturation_water_grid,
+            "residual_oil_saturation_water",
+            "saturation",
+        ),
+        residual_oil_saturation_gas_grid=ctx.displace_grid(
+            rock.residual_oil_saturation_gas_grid,
+            "residual_oil_saturation_gas",
+            "saturation",
+        ),
+        residual_gas_saturation_grid=ctx.displace_grid(
+            rock.residual_gas_saturation_grid, "residual_gas_saturation", "saturation"
+        ),
+        absolute_permeability=attrs.evolve(
+            rock.absolute_permeability,
+            x=ctx.displace_grid(
+                rock.absolute_permeability.x, "permeability", "permeability"
+            ),
+            y=ctx.displace_grid(
+                rock.absolute_permeability.y, "permeability", "permeability"
+            ),
+            z=ctx.displace_grid(
+                rock.absolute_permeability.z, "permeability", "permeability"
+            ),
+        ),
     )
 
-    # Apply to fluid properties
-    fluid_props = model.fluid_properties
-    displaced_pressure_grid = _displace_grid(
-        grid=fluid_props.pressure_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_temperature_grid = _displace_grid(
-        grid=fluid_props.temperature_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_bubble_point_pressure_grid = _displace_grid(
-        grid=fluid_props.oil_bubble_point_pressure_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_saturation_grid = _displace_grid(
-        grid=fluid_props.oil_saturation_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_viscosity_grid = _displace_grid(
-        grid=fluid_props.oil_viscosity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_compressibility_grid = _displace_grid(
-        grid=fluid_props.oil_compressibility_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_specific_gravity_grid = _displace_grid(
-        grid=fluid_props.oil_specific_gravity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_api_gravity_grid = _displace_grid(
-        grid=fluid_props.oil_api_gravity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_density_grid = _displace_grid(
-        grid=fluid_props.oil_density_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_bubble_point_pressure_grid = _displace_grid(
-        grid=fluid_props.water_bubble_point_pressure_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_saturation_grid = _displace_grid(
-        grid=fluid_props.water_saturation_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_viscosity_grid = _displace_grid(
-        grid=fluid_props.water_viscosity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_compressibility_grid = _displace_grid(
-        grid=fluid_props.water_compressibility_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_density_grid = _displace_grid(
-        grid=fluid_props.water_density_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_saturation_grid = _displace_grid(
-        grid=fluid_props.gas_saturation_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_viscosity_grid = _displace_grid(
-        grid=fluid_props.gas_viscosity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_compressibility_grid = _displace_grid(
-        grid=fluid_props.gas_compressibility_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_gravity_grid = _displace_grid(
-        grid=fluid_props.gas_gravity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_molecular_weight_grid = _displace_grid(
-        grid=fluid_props.gas_molecular_weight_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_density_grid = _displace_grid(
-        grid=fluid_props.gas_density_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_solution_gas_to_oil_ratio_grid = _displace_grid(
-        grid=fluid_props.solution_gas_to_oil_ratio_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_solubility_in_water_grid = _displace_grid(
-        grid=fluid_props.gas_solubility_in_water_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_oil_formation_volume_factor_grid = _displace_grid(
-        grid=fluid_props.oil_formation_volume_factor_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_gas_formation_volume_factor_grid = _displace_grid(
-        grid=fluid_props.gas_formation_volume_factor_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_formation_volume_factor_grid = _displace_grid(
-        grid=fluid_props.water_formation_volume_factor_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
-    )
-    displaced_water_salinity_grid = _displace_grid(
-        grid=fluid_props.water_salinity_grid,
-        displacement_mask=displacement_mask,
-        throw=throw,
-        preserve_grid_data=fault.preserve_grid_data,
+    # Fluid properties
+    fluid = model.fluid_properties
+    new_fluid = attrs.evolve(
+        fluid,
+        pressure_grid=ctx.displace_grid(fluid.pressure_grid, "pressure", "pressure"),
+        temperature_grid=ctx.displace_grid(
+            fluid.temperature_grid, "temperature", "temperature"
+        ),
+        oil_bubble_point_pressure_grid=ctx.displace_grid(
+            fluid.oil_bubble_point_pressure_grid, "bubble_point_pressure", "pressure"
+        ),
+        oil_saturation_grid=ctx.displace_grid(
+            fluid.oil_saturation_grid, "oil_saturation", "saturation"
+        ),
+        water_saturation_grid=ctx.displace_grid(
+            fluid.water_saturation_grid, "water_saturation", "saturation"
+        ),
+        gas_saturation_grid=ctx.displace_grid(
+            fluid.gas_saturation_grid, "gas_saturation", "saturation"
+        ),
+        oil_viscosity_grid=ctx.displace_grid(
+            fluid.oil_viscosity_grid, "oil_viscosity", "viscosity"
+        ),
+        water_viscosity_grid=ctx.displace_grid(
+            fluid.water_viscosity_grid, "water_viscosity", "viscosity"
+        ),
+        gas_viscosity_grid=ctx.displace_grid(
+            fluid.gas_viscosity_grid, "gas_viscosity", "viscosity"
+        ),
+        oil_density_grid=ctx.displace_grid(
+            fluid.oil_density_grid, "oil_density", "density"
+        ),
+        water_density_grid=ctx.displace_grid(
+            fluid.water_density_grid, "water_density", "density"
+        ),
+        gas_density_grid=ctx.displace_grid(
+            fluid.gas_density_grid, "gas_density", "density"
+        ),
+        oil_compressibility_grid=ctx.displace_grid(
+            fluid.oil_compressibility_grid, "compressibility"
+        ),
+        water_compressibility_grid=ctx.displace_grid(
+            fluid.water_compressibility_grid, "compressibility"
+        ),
+        gas_compressibility_grid=ctx.displace_grid(
+            fluid.gas_compressibility_grid, "compressibility"
+        ),
+        oil_formation_volume_factor_grid=ctx.displace_grid(
+            fluid.oil_formation_volume_factor_grid, "oil_fvf", "fvf"
+        ),
+        water_formation_volume_factor_grid=ctx.displace_grid(
+            fluid.water_formation_volume_factor_grid, "water_fvf", "fvf"
+        ),
+        gas_formation_volume_factor_grid=ctx.displace_grid(
+            fluid.gas_formation_volume_factor_grid, "gas_fvf", "fvf"
+        ),
+        # Add remaining fluid properties as needed...
+        oil_specific_gravity_grid=ctx.displace_grid(
+            fluid.oil_specific_gravity_grid, "generic"
+        ),
+        oil_api_gravity_grid=ctx.displace_grid(fluid.oil_api_gravity_grid, "generic"),
+        water_bubble_point_pressure_grid=ctx.displace_grid(
+            fluid.water_bubble_point_pressure_grid, "bubble_point_pressure", "pressure"
+        ),
+        gas_gravity_grid=ctx.displace_grid(fluid.gas_gravity_grid, "generic"),
+        gas_molecular_weight_grid=ctx.displace_grid(
+            fluid.gas_molecular_weight_grid, "generic"
+        ),
+        solution_gas_to_oil_ratio_grid=ctx.displace_grid(
+            fluid.solution_gas_to_oil_ratio_grid, "generic"
+        ),
+        gas_solubility_in_water_grid=ctx.displace_grid(
+            fluid.gas_solubility_in_water_grid, "generic"
+        ),
+        water_salinity_grid=ctx.displace_grid(fluid.water_salinity_grid, "generic"),
+        oil_effective_viscosity_grid=ctx.displace_grid(
+            fluid.oil_effective_viscosity_grid, "oil_viscosity", "viscosity"
+        ),
+        solvent_concentration_grid=ctx.displace_grid(
+            fluid.solvent_concentration_grid, "generic"
+        ),
     )
 
-    # Update fluid properties with all displaced grids
-    new_fluid_properties = attrs.evolve(
-        fluid_props,
-        pressure_grid=displaced_pressure_grid,
-        temperature_grid=displaced_temperature_grid,
-        oil_bubble_point_pressure_grid=displaced_oil_bubble_point_pressure_grid,
-        oil_saturation_grid=displaced_oil_saturation_grid,
-        oil_viscosity_grid=displaced_oil_viscosity_grid,
-        oil_compressibility_grid=displaced_oil_compressibility_grid,
-        oil_specific_gravity_grid=displaced_oil_specific_gravity_grid,
-        oil_api_gravity_grid=displaced_oil_api_gravity_grid,
-        oil_density_grid=displaced_oil_density_grid,
-        water_bubble_point_pressure_grid=displaced_water_bubble_point_pressure_grid,
-        water_saturation_grid=displaced_water_saturation_grid,
-        water_viscosity_grid=displaced_water_viscosity_grid,
-        water_compressibility_grid=displaced_water_compressibility_grid,
-        water_density_grid=displaced_water_density_grid,
-        gas_saturation_grid=displaced_gas_saturation_grid,
-        gas_viscosity_grid=displaced_gas_viscosity_grid,
-        gas_compressibility_grid=displaced_gas_compressibility_grid,
-        gas_gravity_grid=displaced_gas_gravity_grid,
-        gas_molecular_weight_grid=displaced_gas_molecular_weight_grid,
-        gas_density_grid=displaced_gas_density_grid,
-        solution_gas_to_oil_ratio_grid=displaced_solution_gas_to_oil_ratio_grid,
-        gas_solubility_in_water_grid=displaced_gas_solubility_in_water_grid,
-        oil_formation_volume_factor_grid=displaced_oil_formation_volume_factor_grid,
-        gas_formation_volume_factor_grid=displaced_gas_formation_volume_factor_grid,
-        water_formation_volume_factor_grid=displaced_water_formation_volume_factor_grid,
-        water_salinity_grid=displaced_water_salinity_grid,
-    )
-
-    # Update the model with new thickness grid, rock and fluid properties
-    # Also update grid_shape to match the new dimensions if grid was expanded
-    new_grid_shape = displaced_thickness_grid.shape
-    model = attrs.evolve(
+    # Update model with new grids and shape
+    new_model = attrs.evolve(
         model,
-        grid_shape=new_grid_shape,
-        thickness_grid=displaced_thickness_grid,
-        rock_properties=new_rock_properties,
-        fluid_properties=new_fluid_properties,
+        grid_shape=ctx.new_shape,
+        thickness_grid=new_thickness,
+        rock_properties=new_rock,
+        fluid_properties=new_fluid,
     )
-    logger.debug(f"Successfully applied geometric displacement for fault '{fault.id}'")
-    return model
+    logger.debug(f"Grid shape: {model.grid_shape} → {ctx.new_shape}")
+    return new_model
 
 
-def validate_fault(fault: Fault, grid_shape: Tuple[int, ...]) -> List[str]:
+@attrs.define(slots=True, frozen=True)
+class DisplacementContext:
+    """
+    Context object that handles block-based displacement for all grids.
+
+    This encapsulates the displacement logic and default value computation,
+    making the code cleaner and more maintainable.
+    """
+
+    original_shape: typing.Tuple[int, int, int]
+    throw: int
+    displacement_mask: np.typing.NDArray
+    preserve_data: bool
+    defaults: FaultPropertyDefaults
+
+    @property
+    def new_shape(self) -> typing.Tuple[int, int, int]:
+        """Compute new grid shape after displacement."""
+        nx, ny, nz = self.original_shape
+        if self.preserve_data:
+            return (nx, ny, nz + abs(self.throw))
+        return self.original_shape
+
+    def displace_grid(
+        self,
+        grid: np.ndarray,
+        property_name: str,
+        property_type: typing.Optional[str] = None,
+    ) -> np.ndarray:
+        """
+        Displace a single grid using block-based algorithm.
+
+        :param grid: Original grid to displace
+        :param property_name: Name of property (for default value lookup)
+        :param property_type: Type hint for default computation
+        :return: Displaced grid (possibly expanded)
+        """
+        if self.preserve_data:
+            return self._displace_with_expansion(grid, property_name, property_type)
+        return self._displace_without_expansion(grid, property_name, property_type)
+
+    def _displace_with_expansion(
+        self,
+        grid: np.typing.NDArray,
+        property_name: str,
+        property_type: typing.Optional[str],
+    ) -> np.typing.NDArray:
+        """
+        Block-based displacement WITH grid expansion (preserves all data).
+
+        Algorithm:
+        1. Create expanded grid with smart defaults
+        2. Identify upthrown and downthrown blocks
+        3. Copy upthrown block to new position (stays in place)
+        4. Copy downthrown block to displaced position
+        5. Fill gaps with property-aware defaults
+        """
+        nx, ny, nz = self.original_shape
+        abs_throw = abs(self.throw)
+        new_nz = nz + abs_throw
+
+        # Get smart default value for this property
+        default_value = self.defaults.get_default_value(
+            property_name=property_name,
+            grid=grid,
+            property_type=property_type,
+        )
+
+        # Create expanded grid filled with defaults
+        new_grid = np.full((nx, ny, new_nz), fill_value=default_value, dtype=grid.dtype)
+
+        # Identify upthrown and downthrown blocks
+        upthrown_mask = ~self.displacement_mask  # Not displaced
+        downthrown_mask = self.displacement_mask  # Displaced
+
+        if self.throw > 0:
+            # Normal fault: downthrown block moves DOWN
+            # Layout: [upthrown at top | gap filled with defaults | downthrown at bottom]
+
+            # Copy upthrown block to top of new grid (unchanged position)
+            for k in range(nz):
+                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
+                    upthrown_mask[:, :, k]
+                ]
+
+            # Copy downthrown block to displaced position (down by throw)
+            for k in range(nz):
+                target_k = k + self.throw
+                if target_k < new_nz:
+                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
+                        downthrown_mask[:, :, k]
+                    ]
+
+            # Gap at top of downthrown block (k to k+throw) already filled with defaults
+
+        else:
+            # Reverse fault: downthrown block moves UP
+            # Layout: [downthrown at top | upthrown at bottom | gap at very bottom]
+
+            # Copy upthrown block to bottom portion (shifted down by abs_throw)
+            for k in range(nz):
+                target_k = k + abs_throw
+                if target_k < new_nz:
+                    new_grid[:, :, target_k][upthrown_mask[:, :, k]] = grid[:, :, k][
+                        upthrown_mask[:, :, k]
+                    ]
+
+            # Copy downthrown block to top (displaced up, so k -> k position in new grid)
+            for k in range(nz):
+                if k < new_nz:
+                    new_grid[:, :, k][downthrown_mask[:, :, k]] = grid[:, :, k][
+                        downthrown_mask[:, :, k]
+                    ]
+
+            # Gap at bottom already filled with defaults
+        return new_grid
+
+    def _displace_without_expansion(
+        self,
+        grid: np.typing.NDArray,
+        property_name: str,
+        property_type: typing.Optional[str],
+    ) -> np.typing.NDArray:
+        """
+        Block-based displacement WITHOUT grid expansion (data loss at boundaries).
+
+        Algorithm:
+        1. Create new grid same size as original
+        2. Copy upthrown block (stays in place)
+        3. Copy downthrown block to displaced position (may go out of bounds)
+        4. Fill exposed regions with smart defaults
+        """
+        nx, ny, nz = self.original_shape
+        # Get smart default value
+        default_value = self.defaults.get_default_value(
+            property_name=property_name,
+            grid=grid,
+            property_type=property_type,
+        )
+        # Create new grid filled with defaults
+        new_grid = np.full((nx, ny, nz), fill_value=default_value, dtype=grid.dtype)
+
+        # Identify blocks
+        upthrown_mask = ~self.displacement_mask
+        downthrown_mask = self.displacement_mask
+
+        if self.throw > 0:
+            # Normal fault: downthrown moves down
+            # Copy upthrown block (unchanged)
+            for k in range(nz):
+                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
+                    upthrown_mask[:, :, k]
+                ]
+
+            # Copy downthrown block (displaced down, may lose bottom data)
+            for k in range(nz):
+                target_k = k + self.throw
+                if target_k < nz:  # Only copy if target is in bounds
+                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
+                        downthrown_mask[:, :, k]
+                    ]
+
+            # Top of downthrown block exposed - already filled with defaults
+
+        else:
+            # Reverse fault: downthrown moves up
+            abs_throw = abs(self.throw)
+
+            # Copy upthrown block (unchanged)
+            for k in range(nz):
+                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
+                    upthrown_mask[:, :, k]
+                ]
+
+            # Copy downthrown block (displaced up, may lose top data)
+            for k in range(nz):
+                target_k = k - abs_throw
+                if target_k >= 0:  # Only copy if target is in bounds
+                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
+                        downthrown_mask[:, :, k]
+                    ]
+
+            # Bottom of downthrown block exposed - already filled with defaults
+
+        return new_grid
+
+
+def validate_fault(
+    fault: Fault, grid_shape: typing.Tuple[int, ...]
+) -> typing.List[str]:
     """
     Validate fault configuration against grid dimensions.
 
@@ -803,6 +885,11 @@ def validate_fault(fault: Fault, grid_shape: Tuple[int, ...]) -> List[str]:
     :return: List of validation error messages (empty if valid)
     """
     errors = []
+
+    if len(grid_shape) != 3:
+        errors.append("Grid must be 3D")
+        return errors
+
     nx, ny, nz = grid_shape
 
     # Check fault index bounds
@@ -832,16 +919,17 @@ def validate_fault(fault: Fault, grid_shape: Tuple[int, ...]) -> List[str]:
         errors.append(
             f"Fault {fault.id}: mask shape {fault.mask.shape} != grid shape {grid_shape}"
         )
+
     return errors
 
 
 def _create_displacement_mask(
-    grid_shape: Tuple[int, int, int], fault: Fault
+    grid_shape: typing.Tuple[int, int, int], fault: Fault
 ) -> np.ndarray:
     """
     Create a boolean mask indicating which cells should be displaced by the fault.
 
-    Determines displacement pattern based on fault orientation and throw direction.
+    This defines the "downthrown block" - cells that will move vertically.
 
     :param grid_shape: Shape of the reservoir grid (nx, ny, nz)
     :param fault: Fault configuration
@@ -855,158 +943,10 @@ def _create_displacement_mask(
         # Cells with x > fault_index are downthrown
         if fault.fault_index < nx - 1:
             displacement_mask[fault.fault_index + 1 :, :, :] = True
+
     elif fault.orientation == "y":
         # Cells with y > fault_index are downthrown
         if fault.fault_index < ny - 1:
             displacement_mask[:, fault.fault_index + 1 :, :] = True
+
     return displacement_mask
-
-
-def _displace_grid(
-    grid: np.typing.NDArray,
-    displacement_mask: np.typing.NDArray,
-    throw: int,
-    preserve_grid_data: bool = False,
-) -> np.typing.NDArray:
-    """
-    Apply vertical displacement to a single grid array.
-
-    This function modifies the grid in-place by shifting values according to
-    the displacement pattern. Can either use traditional displacement (with data loss)
-    or grid expansion (preserving all data).
-
-    :param grid: 3D numpy array to displace
-    :param displacement_mask: Boolean mask indicating cells to displace
-    :param throw: Number of cells to displace (positive = down, negative = up)
-    :param preserve_grid_data: If True, expand grid to preserve all data (Option 2).
-                               If False, use traditional displacement with data loss (Option 1).
-    :return: Displaced grid array (possibly expanded)
-    """
-    if preserve_grid_data:
-        return _displace_grid_with_expansion(grid, displacement_mask, throw)
-    return _displace_grid_without_expansion(grid, displacement_mask, throw)
-
-
-def _displace_grid_without_expansion(
-    grid: np.typing.NDArray, displacement_mask: np.typing.NDArray, throw: int
-) -> np.typing.NDArray:
-    """
-    Traditional displacement method with fixed grid size and potential data loss.
-
-    This is the original implementation (Option 1).
-    """
-    nx, ny, nz = grid.shape
-    new_grid = grid.copy()
-    default_value = _get_grid_default_value(grid)
-
-    if throw > 0:
-        # Normal fault: downthrown block moves down
-        for i, j in itertools.product(range(nx), range(ny)):
-            if displacement_mask[i, j, :].any():
-                # Process only cells that can fit after displacement
-                for k in range(nz - throw):
-                    if displacement_mask[i, j, k]:
-                        if k + throw < nz:
-                            new_grid[i, j, k + throw] = grid[i, j, k]
-                            # Fill vacated space with default
-                            new_grid[i, j, k] = default_value
-    else:
-        # Reverse fault: downthrown block moves up
-        abs_throw = abs(throw)
-        for i, j in itertools.product(range(nx), range(ny)):
-            if displacement_mask[i, j, :].any():
-                for k in range(abs_throw, nz):
-                    if displacement_mask[i, j, k]:
-                        if k - abs_throw >= 0:
-                            new_grid[i, j, k - abs_throw] = grid[i, j, k]
-                            # Fill vacated space with default
-                            new_grid[i, j, k] = default_value
-
-    return new_grid
-
-
-def _displace_grid_with_expansion(
-    grid: np.typing.NDArray, displacement_mask: np.typing.NDArray, throw: int
-) -> np.typing.NDArray:
-    """
-    Displacement with grid expansion to preserve all data (Option 2).
-
-    This method expands the grid dimensions to accommodate displaced cells,
-    ensuring no geological data is lost during fault displacement.
-
-    :param grid: Original 3D grid array
-    :param displacement_mask: Boolean mask indicating cells to displace
-    :param throw: Number of cells to displace (positive = down, negative = up)
-    :return: Expanded grid with all data preserved
-    """
-    nx, ny, nz = grid.shape
-    abs_throw = abs(throw)
-    default_value = _get_grid_default_value(grid)
-
-    # Calculate new grid dimensions
-    new_nz = nz + abs_throw
-
-    # Create expanded grid filled with default values
-    expanded_grid = np.full((nx, ny, new_nz), default_value, dtype=grid.dtype)
-
-    if throw > 0:
-        # Normal fault: downthrown block moves down
-        # Structure: [original_upthrown | displaced_downthrown | defaults_at_bottom]
-
-        # First, copy all original data to the top portion
-        expanded_grid[:, :, :nz] = grid
-        # Then apply displacement to downthrown cells
-        for i, j in itertools.product(range(nx), range(ny)):
-            if displacement_mask[i, j, :].any():
-                # Displace each cell in the downthrown block
-                for k in range(nz):
-                    if displacement_mask[i, j, k]:
-                        # Move cell down by throw amount
-                        target_k = k + throw
-                        expanded_grid[i, j, target_k] = grid[i, j, k]
-
-                        # Fill the vacated space with default (newly exposed area)
-                        expanded_grid[i, j, k] = default_value
-
-    else:
-        # Reverse fault: downthrown block moves up
-        # Structure: [defaults_at_top | displaced_downthrown | original_upthrown]
-
-        # First, copy all original data to the bottom portion
-        expanded_grid[:, :, abs_throw:] = grid
-        # Fill the top portion with defaults (newly exposed area)
-        expanded_grid[:, :, :abs_throw] = default_value
-        # Then apply upward displacement to downthrown cells
-        for i, j in itertools.product(range(nx), range(ny)):
-            if displacement_mask[i, j, :].any():
-                # Process from bottom to top to avoid overwriting
-                for k in range(nz - 1, -1, -1):
-                    if displacement_mask[i, j, k]:
-                        # Move cell up by abs_throw amount
-                        target_k = k  # Position in expanded grid (already shifted)
-                        source_k = (
-                            k + abs_throw
-                        )  # Position of original data in expanded grid
-                        # Move the cell up
-                        expanded_grid[i, j, target_k] = expanded_grid[i, j, source_k]
-                        # Fill the vacated space at bottom with default
-                        expanded_grid[i, j, source_k] = default_value
-
-    return expanded_grid
-
-
-def _get_grid_default_value(grid: np.typing.NDArray) -> float:
-    """
-    Determine an appropriate default value for filling gaps in displaced grids.
-
-    :param grid: Grid array to analyze
-    :return: Appropriate default value based on grid statistics
-    """
-    # Use mean value for most properties, with some bounds checking
-    non_zero_values = grid[grid > 0]
-    if len(non_zero_values) > 0:
-        default_value = float(np.mean(non_zero_values))
-        # For properties that should be small/positive, use a conservative minimum
-        return max(default_value, 1e-6)
-    # If no positive values, return a small positive number
-    return 1e-6

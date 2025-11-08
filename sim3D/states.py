@@ -6,17 +6,10 @@ import attrs
 import numpy as np
 from scipy.optimize import curve_fit
 
-from sim3D.constants import (
-    ACRE_FT_TO_FT3,
-    FT2_TO_ACRES,
-    FT3_TO_BBL,
-    DAYS_PER_YEAR,
-    SECONDS_PER_YEAR,
-    SECONDS_PER_DAY,
-)
+from sim3D.constants import c
 from sim3D.grids import uniform_grid
 from sim3D.properties import compute_hydrocarbon_in_place
-from sim3D.statics import ReservoirModel
+from sim3D.models import ReservoirModel
 from sim3D.types import NDimension, RateGrids
 from sim3D.wells import Wells, _expand_intervals
 
@@ -138,8 +131,8 @@ class DeclineCurveResult:
     """Type of decline curve analysis performed."""
     initial_rate: float
     """Initial production rate in stock tank barrels per day (STB/day) for oil/water or standard cubic feet per day (SCF/day) for gas."""
-    decline_rate_per_year: float
-    """Decline rate per year as a fraction."""
+    decline_rate_per_timestep: float
+    """Decline rate per time step as a fraction."""
     b_factor: float
     """Hyperbolic decline exponent (0 for exponential, 1 for harmonic)."""
     r_squared: float
@@ -477,7 +470,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: The area of the cell in acres.
         """
         cell_area_in_ft2 = x_dim * y_dim
-        return cell_area_in_ft2 * FT2_TO_ACRES
+        return cell_area_in_ft2 * c.FT2_TO_ACRES
 
     @functools.cache
     def oil_in_place(self, time_step: int = -1) -> float:
@@ -627,12 +620,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Production is in ft³/day, convert to STB using FVF
             oil_production = state.production.oil
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
 
             time_step_production = 0.0
             if oil_production is not None:
-                oil_production_stb_day = oil_production * FT3_TO_BBL / oil_fvf_grid
+                oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
                 time_step_production += np.nansum(
                     oil_production_stb_day * time_step_in_days
                 )
@@ -659,7 +652,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Production is in ft³/day, convert to SCF using FVF
             gas_production = state.production.gas
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
 
             time_step_production = 0.0
@@ -691,7 +684,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Production is in ft³/day, convert to STB using FVF
             water_production = state.production.water
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
@@ -699,7 +692,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             time_step_production = 0.0
             if water_production is not None:
                 water_production_stb_day = (
-                    water_production * FT3_TO_BBL / water_fvf_grid
+                    water_production * c.FT3_TO_BBL / water_fvf_grid
                 )
                 time_step_production += np.nansum(
                     water_production_stb_day * time_step_in_days
@@ -726,11 +719,11 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Injection is in ft³/day, convert to STB using FVF
             oil_injection = state.injection.oil
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
             time_step_injection = 0.0
             if oil_injection is not None:
-                oil_injection_stb_day = oil_injection * FT3_TO_BBL / oil_fvf_grid
+                oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
                 time_step_injection += np.nansum(
                     oil_injection_stb_day * time_step_in_days
                 )
@@ -755,7 +748,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Injection is in ft³/day, convert to SCF using FVF
             gas_injection = state.injection.gas
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
             time_step_injection = 0.0
             if gas_injection is not None:
@@ -784,13 +777,15 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             state = self.get_state(t)
             # Injection is in ft³/day, convert to STB using FVF
             water_injection = state.injection.water
-            time_step_in_days = state.time_step_size / SECONDS_PER_DAY
+            time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
             time_step_injection = 0.0
             if water_injection is not None:
-                water_injection_stb_day = water_injection * FT3_TO_BBL / water_fvf_grid
+                water_injection_stb_day = (
+                    water_injection * c.FT3_TO_BBL / water_fvf_grid
+                )
                 time_step_injection += np.nansum(
                     water_injection_stb_day * time_step_in_days
                 )
@@ -988,7 +983,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             * model.thickness_grid
             * model.rock_properties.porosity_grid
             * model.rock_properties.net_to_gross_ratio_grid
-            * ACRE_FT_TO_FT3  # Convert acre-ft to ft³
+            * c.ACRE_FT_TO_FT3  # Convert acre-ft to ft³
         )
         total_pore_volume = np.nansum(pore_volume_grid)
 
@@ -1023,7 +1018,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         if (oil_production := state.production.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_rate = np.nansum(oil_production * FT3_TO_BBL / oil_fvf_grid)
+            oil_rate = np.nansum(oil_production * c.FT3_TO_BBL / oil_fvf_grid)
 
         if (gas_production := state.production.gas) is not None:
             # Convert from ft³/day to SCF/day using gas FVF
@@ -1035,7 +1030,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_rate = np.nansum(water_production * FT3_TO_BBL / water_fvf_grid)
+            water_rate = np.nansum(water_production * c.FT3_TO_BBL / water_fvf_grid)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
@@ -1065,7 +1060,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         if (oil_injection := state.injection.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_rate = np.nansum(oil_injection * FT3_TO_BBL / oil_fvf_grid)
+            oil_rate = np.nansum(oil_injection * c.FT3_TO_BBL / oil_fvf_grid)
 
         if (gas_injection := state.injection.gas) is not None:
             # Convert from ft³/day to SCF/day using gas FVF
@@ -1077,7 +1072,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_rate = np.nansum(water_injection * FT3_TO_BBL / water_fvf_grid)
+            water_rate = np.nansum(water_injection * c.FT3_TO_BBL / water_fvf_grid)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
@@ -1261,10 +1256,10 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 * state.model.rock_properties.net_to_gross_ratio_grid
             )
             * self._get_cell_area_in_acres(*state.model.cell_dimension[:2])
-            * ACRE_FT_TO_FT3
+            * c.ACRE_FT_TO_FT3
         )
         compressibility_expansion = (
-            pore_volume * total_compressibility * pressure_decline * FT3_TO_BBL
+            pore_volume * total_compressibility * pressure_decline * c.FT3_TO_BBL
         )
         compaction_drive = (
             compressibility_expansion / initial_oil if initial_oil > 0 else 0.0
@@ -1357,8 +1352,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             * state.model.rock_properties.net_to_gross_ratio_grid  # Include net-to-gross ratio
             * initial_oil_saturation
             / initial_state.model.fluid_properties.oil_formation_volume_factor_grid
-            * ACRE_FT_TO_FT3
-            / FT3_TO_BBL  # Convert to STB
+            * c.ACRE_FT_TO_FT3
+            / c.FT3_TO_BBL  # Convert to STB
         )
         contacted_oil = np.sum(oil_volume_grid[contacted_cells])
         uncontacted_oil = np.sum(oil_volume_grid[~contacted_cells])
@@ -1480,7 +1475,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                         ]
                     )
                     cell_flow_rate = (
-                        state.production.oil[i, j, k] * FT3_TO_BBL / oil_fvf
+                        state.production.oil[i, j, k] * c.FT3_TO_BBL / oil_fvf
                     )  # stb/day
                 else:
                     if state.production.gas is None:
@@ -2007,14 +2002,14 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         )
         print(f"Recommended model: {recommended}")
         print(f"R² = {all_models[recommended].r_squared:.4f}")
-        print(f"Di = {all_models[recommended].decline_rate_per_year:.3f} per year")
+        print(f"Di = {all_models[recommended].decline_rate_per_timestep:.3f} per year")
         if recommended == "hyperbolic":
             print(f"b = {all_models[recommended].b_factor:.3f}")
-        >>>
+
         # Compare EUR estimates from all models
         for model_name, result in all_models.items():
             if not result.error:
-                eur = analyst.calculate_eur(result, forecast_years=30)
+                eur = analyst.estimate_economic_ultimate_recovery(result, forecast_time_steps=30)
                 print(f"{model_name}: EUR = {eur:,.0f} STB")
 
         # Use recommended model for forecasting
@@ -2047,7 +2042,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             - Update decline curves annually as new production data becomes available
         """
         models = ["exponential", "hyperbolic", "harmonic"]
-        results = {}
+        results: typing.Dict[str, DeclineCurveResult] = {}
 
         for model in models:
             result = self.decline_curve_analysis(
@@ -2058,6 +2053,15 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             )
             results[model] = result
 
+        # Get time step size to convert decline rate bounds
+        state = self.get_state(from_time_step)
+        time_step_size_seconds = state.time_step_size
+        timesteps_per_year = c.SECONDS_PER_YEAR / time_step_size_seconds
+
+        # Convert typical decline rate bounds from per-year to per-timestep
+        max_decline_per_year = 2.0  # 0-200% per year
+        max_decline_per_timestep = max_decline_per_year / timesteps_per_year
+
         # Recommend based on R² and physical reasonableness
         best_model = "exponential"
         best_r_squared = 0.0
@@ -2066,12 +2070,15 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             if result.error:
                 continue
 
-            # Check for physically reasonable parameters
-            if result.decline_rate_per_year < 0 or result.decline_rate_per_year > 2.0:
-                continue  # Decline rate should be between 0-200% per year
+            # Check for physically reasonable parameters (adjusted for timestep units)
+            if (
+                result.decline_rate_per_timestep < 0
+                or result.decline_rate_per_timestep > max_decline_per_timestep
+            ):
+                continue
 
             if model == "hyperbolic" and (result.b_factor < 0 or result.b_factor > 2.0):
-                continue  # b-factor should be between 0-2
+                continue
 
             if result.r_squared > best_r_squared:
                 best_r_squared = result.r_squared
@@ -2095,6 +2102,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         - Exponential: q = qi * exp(-Di * t)
         - Hyperbolic: q = qi / (1 + b * Di * t)^(1/b)
         - Harmonic: q = qi / (1 + Di * t) [special case of hyperbolic with b=1]
+
+        NOTE: All decline rates are stored per time step (not per year).
 
         :param from_time_step: Starting time step for analysis.
         :param to_time_step: Ending time step for analysis.
@@ -2135,7 +2144,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             return DeclineCurveResult(
                 decline_type=decline_type,
                 initial_rate=0.0,
-                decline_rate_per_year=0.0,
+                decline_rate_per_timestep=0.0,  # Will be 0 for error cases
                 b_factor=0.0,
                 r_squared=0.0,
                 phase=phase,
@@ -2160,11 +2169,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             log_initial_rate_intercept = linear_regression_coefficients[1]
             exponential_initial_production_rate = np.exp(log_initial_rate_intercept)
 
-            # Convert decline rate to annual basis (assuming time steps are days)
-            exponential_decline_rate_per_year = (
-                exponential_decline_rate_per_timestep * SECONDS_PER_YEAR
-            )
-
             # Calculate coefficient of determination (R²) for goodness of fit
             predicted_exponential_rates = exponential_initial_production_rate * np.exp(
                 -exponential_decline_rate_per_timestep * filtered_time_steps
@@ -2183,7 +2187,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             return DeclineCurveResult(
                 decline_type="exponential",
                 initial_rate=exponential_initial_production_rate,
-                decline_rate_per_year=exponential_decline_rate_per_year,
+                decline_rate_per_timestep=exponential_decline_rate_per_timestep,  # Now per timestep
                 b_factor=0.0,
                 r_squared=exponential_r_squared,
                 phase=phase,
@@ -2205,11 +2209,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             reciprocal_initial_rate_intercept = harmonic_regression_coefficients[1]
             harmonic_initial_production_rate = 1.0 / reciprocal_initial_rate_intercept
 
-            # Convert decline rate to annual basis
-            harmonic_decline_rate_per_year = (
-                harmonic_decline_rate_per_timestep * SECONDS_PER_YEAR
-            )
-
             # Calculate predicted rates and R²
             predicted_harmonic_rates = harmonic_initial_production_rate / (
                 1.0 + harmonic_decline_rate_per_timestep * filtered_time_steps
@@ -2228,7 +2227,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             return DeclineCurveResult(
                 decline_type="harmonic",
                 initial_rate=harmonic_initial_production_rate,
-                decline_rate_per_year=harmonic_decline_rate_per_year,
+                decline_rate_per_timestep=harmonic_decline_rate_per_timestep,  # Now per timestep
                 b_factor=1.0,  # Harmonic decline has b=1
                 r_squared=harmonic_r_squared,
                 phase=phase,
@@ -2251,8 +2250,18 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         # Initial parameter estimates
         estimated_initial_rate = positive_production_rates[0]
-        estimated_decline_rate = 0.001  # Small initial estimate
+        estimated_decline_rate = 0.001  # Small initial estimate per timestep
         estimated_b_factor = 0.5  # Typical hyperbolic exponent
+
+        # Get time step size to set appropriate bounds for decline rate
+        # Typical decline rates: 0.05-0.8 per year for oil wells
+        # Convert to per-timestep by dividing by number of timesteps per year
+        state = self.get_state(from_time_step)
+        time_step_size_seconds = state.time_step_size
+        timesteps_per_year = c.SECONDS_PER_YEAR / time_step_size_seconds
+
+        # Upper bound for decline rate: 2.0 per year → 2.0/timesteps_per_year per timestep
+        max_decline_per_timestep = 2.0 / timesteps_per_year
 
         # Perform non-linear curve fitting
         optimized_parameters, parameter_covariance = curve_fit(
@@ -2260,7 +2269,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             filtered_time_steps,
             positive_production_rates,
             p0=[estimated_initial_rate, estimated_decline_rate, estimated_b_factor],
-            bounds=([0, 0, 0.1], [np.inf, 1.0, 2.0]),  # Reasonable parameter bounds
+            bounds=([0, 0, 0.1], [np.inf, max_decline_per_timestep, 2.0]),
             maxfev=1000,
         )
 
@@ -2269,11 +2278,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             hyperbolic_decline_rate_per_timestep,
             hyperbolic_b_factor,
         ) = optimized_parameters
-
-        # Convert decline rate to annual basis
-        hyperbolic_decline_rate_per_year = (
-            hyperbolic_decline_rate_per_timestep * SECONDS_PER_YEAR
-        )
 
         # Calculate predicted rates and R²
         predicted_hyperbolic_rates = hyperbolic_decline_function(
@@ -2296,7 +2300,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         return DeclineCurveResult(
             decline_type="hyperbolic",
             initial_rate=hyperbolic_initial_rate,
-            decline_rate_per_year=hyperbolic_decline_rate_per_year,
+            decline_rate_per_timestep=hyperbolic_decline_rate_per_timestep,  # Now per timestep
             b_factor=hyperbolic_b_factor,
             r_squared=hyperbolic_r_squared,
             phase=phase,
@@ -2325,89 +2329,33 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         1. Exponential Decline:
         q(t) = qi x exp(-Di x t)
 
-        Where:
-        - q(t) = production rate at time t
-        - qi = initial production rate at start of forecast
-        - Di = nominal decline rate (fraction per year)
-        - t = time since start of forecast (years)
-
         2. Harmonic Decline:
         q(t) = qi / (1 + Di x t)
-
-        Where:
-        - q(t) = production rate at time t
-        - qi = initial production rate
-        - Di = initial decline rate (fraction per year)
-        - t = time (years)
 
         3. Hyperbolic Decline:
         q(t) = qi / (1 + b x Di x t)^(1/b)
 
         Where:
-        - q(t) = production rate at time t
-        - qi = initial production rate
-        - Di = initial decline rate (fraction per year)
+        - q(t) = production rate at time step t (STB/day for oil/water, scf/day for gas)
+        - qi = initial production rate at start of forecast
+        - Di = decline rate per time step (NOT per year)
         - b = hyperbolic exponent (0 < b ≤ 2)
-        - t = time (years)
+        - t = number of time steps since start of forecast
 
-        Special cases:
-        - b = 0: Exponential decline
-        - b = 1: Harmonic decline
-        - 0 < b < 1: Most common for oil wells
-
-        Economic Limit:
-        The economic limit is the minimum production rate at which continued operation
-        is economically viable. When the forecasted rate falls below this threshold,
-        the well is considered to have reached its economic life and forecasting stops.
-
-        Time Conversion:
-        The method automatically handles time unit conversion based on the
-        time_step_size_unit used in the original decline_curve_analysis. The decline
-        rates are converted from annual basis to the appropriate time step basis.
+        NOTE: Production rates are in "per day" units (STB/day, scf/day) regardless of
+        time step size. The decline rate is per timestep, but rates remain in per-day units.
 
         :param decline_result: `DeclineCurveResult` object containing fitted decline parameters
             from `decline_curve_analysis()` method. Must have valid parameters
             (no error flag set).
         :param time_steps: Number of time steps to forecast into the future.
-            Time steps use the same unit as the original analysis.
-        :param economic_limit: Optional minimum economic production rate. Forecasting stops
-            when predicted rate falls below this value. Units must match
-            the phase being analyzed (STB/day for oil/water, scf/day for gas).
-            Default is None (no economic limit applied).
-        :return: List of tuples containing (time_step, forecasted_rate). Time steps are
-            absolute values continuing from the last historical time step. Returns
-            empty list if decline_result contains errors.
-
-        Example:
-        ```python
-        # Perform decline curve analysis
-        result = analyst.decline_curve_analysis(
-            from_time_step=0,
-            to_time_step=100,
-            decline_type="hyperbolic",
-            phase="oil"
-        )
-
-        # Forecast next 365 days with 10 STB/day economic limit
-        forecast = analyst.forecast_production(
-             decline_result=result,
-             time_steps=365,
-             economic_limit=10.0
-        )
-
-        # Plot historical and forecasted rates
-        historical_times, historical_rates = result.time_steps, result.actual_rates
-        forecast_times = [t for t, _ in forecast]
-        forecast_rates = [r for _, r in forecast]
-        ```
-
-        Notes:
-            - Forecasts are only as reliable as the quality of the historical fit (check R²)
-            - Long-term forecasts (>5-10 years) have increasing uncertainty
-            - Economic limit should account for operating costs, not just technical limits
-            - Forecasts assume no changes in well operations or reservoir conditions
-            - For hyperbolic decline with b > 1, rates may decline too slowly at late time;
-            consider switching to exponential decline after a certain period
+        :param economic_limit: Optional minimum economic production rate in per-day units
+            (STB/day for oil/water, scf/day for gas). Forecasting stops when predicted
+            rate falls below this value. Default is None (no economic limit applied).
+        :return: List of tuples containing (time_step, forecasted_rate). Rates are in
+            per-day units (STB/day or scf/day). Time steps are absolute values continuing
+            from the last historical time step. Returns empty list if decline_result
+            contains errors.
         """
         if decline_result.error:
             return []
@@ -2416,30 +2364,31 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             decline_result.time_steps[-1] if decline_result.time_steps else 0
         )
         forecast = []
+        decline_rate_per_timestep = decline_result.decline_rate_per_timestep
 
         for t in range(1, time_steps + 1):
             future_time = last_time_step + t
+            time_since_start = t  # Time steps since start of forecast
 
             if decline_result.decline_type == "exponential":
                 rate = decline_result.initial_rate * np.exp(
-                    -decline_result.decline_rate_per_year * future_time / DAYS_PER_YEAR
+                    -decline_rate_per_timestep * time_since_start
                 )
             elif decline_result.decline_type == "harmonic":
                 rate = decline_result.initial_rate / (
-                    1
-                    + decline_result.decline_rate_per_year * future_time / DAYS_PER_YEAR
+                    1 + decline_rate_per_timestep * time_since_start
                 )
             elif decline_result.decline_type == "hyperbolic":
                 rate = decline_result.initial_rate / (
                     1
                     + decline_result.b_factor
-                    * decline_result.decline_rate_per_year
-                    * future_time
-                    / DAYS_PER_YEAR
+                    * decline_rate_per_timestep
+                    * time_since_start
                 ) ** (1 / decline_result.b_factor)
             else:
                 rate = 0.0
 
+            # Economic limit is already in per-day units (same as rate), so direct comparison works
             if economic_limit and rate < economic_limit:
                 break
 
@@ -2449,7 +2398,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
     def estimate_economic_ultimate_recovery(
         self,
         decline_result: DeclineCurveResult,
-        forecast_years: float = 30.0,
+        forecast_time_steps: int,
         economic_limit: float = 0.0,
     ) -> float:
         """
@@ -2457,35 +2406,15 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         EUR represents the total cumulative production expected from a well or reservoir
         over its economic life. This method uses analytical integration of decline curve
-        equations to calculate cumulative production rather than numerical summation,
-        providing accurate results efficiently.
+        equations to calculate cumulative production.
 
         Cumulative Production Equations by Decline Type:
 
         1. Exponential Decline:
         Np = (qi - qf) / Di
 
-        Where:
-        - Np = cumulative production from qi to qf
-        - qi = initial production rate (STB/day or scf/day)
-        - qf = final production rate at abandonment (STB/day or scf/day)
-        - Di = nominal decline rate (1/year)
-
-        Derivation: Integrate q = qi x exp(-Dixt) from t=0 to t=abandonment time
-
         2. Harmonic Decline:
-        Np = (qi / Di) x ln(1 + Di x t)
-
-        Where:
-        - Np = cumulative production over time t
-        - qi = initial production rate
-        - Di = initial decline rate (1/year)
-        - t = time period (years)
-        - ln = natural logarithm
-
-        Alternatively: Np = (qi / Di) x ln(qi / qf)
-
-        Derivation: Integrate q = qi / (1 + Dixt) from t=0 to t=forecast_years
+        Np = (qi / Di) x ln(qi / qf)
 
         3. Hyperbolic Decline:
         For b ≠ 1:
@@ -2495,130 +2424,113 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         Np = (qi / Di) x ln(qi / qf)
 
         Where:
-        - Np = cumulative production
-        - qi = initial production rate
-        - qf = final production rate
-        - Di = initial decline rate (1/year)
+        - Np = cumulative production (STB for oil/water, scf for gas)
+        - qi = initial production rate (STB/day or scf/day)
+        - qf = final production rate (STB/day or scf/day, at forecast end or economic limit)
+        - Di = decline rate per time step
         - b = hyperbolic exponent (0 < b ≤ 2)
 
-        Derivation: Integrate q = qi / (1 + bxDixt)^(1/b) from t=0 to abandonment time
-
-        Physical interpretation of b:
-        - b = 0: Exponential decline (boundary-dominated flow, constant %decline)
-        - 0 < b < 1: Typical for oil wells (transitioning flow regimes)
-        - b = 1: Harmonic decline (steady-state linear flow)
-        - b > 1: Rare, may indicate water breakthrough or operational changes
-
-        Economic Limit Consideration:
-        The economic limit (qf) is the minimum rate at which operating costs equal revenue.
-        Production is assumed to cease when the decline curve reaches this rate. The time
-        to reach economic limit can be calculated:
-
-        Exponential: t_econ = -ln(qf/qi) / Di
-        Harmonic: t_econ = (qi - qf) / (Di x qf)
-        Hyperbolic: t_econ = [(qi/qf)^b - 1] / (b x Di)
-
-        The EUR calculation automatically limits the forecast time to either the specified
-        forecast_years or the time to reach economic limit, whichever is shorter.
-
-        Reserves Classification:
-        - Proven Reserves: EUR based on well-calibrated decline curves with high confidence
-        - Probable Reserves: EUR with moderate uncertainty, may use type curves
-        - Possible Reserves: EUR with higher uncertainty, speculative parameters
+        NOTE: The returned EUR is in stock tank barrels (STB) for oil/water or standard
+        cubic feet (scf) for gas. The calculation accounts for the time step size by
+        using the integrated decline equations which naturally handle the time step units.
 
         :param decline_result: `DeclineCurveResult` object from `decline_curve_analysis()` containing
             the fitted decline parameters (qi, Di, b) and decline type.
-        :param forecast_years: Time horizon for EUR calculation in years. For exponential decline,
-            this is often set to time when rate reaches economic limit. For
-            harmonic/hyperbolic, may extend to facility life (20-40 years).
-            Default is 30 years.
-        :param economic_limit: Minimum economic production rate in same units as production
+        :param forecast_time_steps: Number of time steps to forecast for EUR calculation.
+        :param economic_limit: Minimum economic production rate in per-day units
             (STB/day for oil/water, scf/day for gas). Production below this
             rate is assumed to be uneconomic. Default is 0.0 (no limit).
-            Typical values: 5-20 STB/day for oil wells, 50-500 Mscf/day for gas.
-        :param time_step_size_days: Size of one time step in days, used for time unit conversion.
-            Should match the time step size used in the simulation.
-            Default is 1.0 day per time step.
         :return: Estimated Ultimate Recovery (EUR) in stock tank barrels (STB) for oil/water
             or standard cubic feet (scf) for gas. Returns 0.0 if decline_result contains
             errors or if parameters are invalid.
-
-        Example:
-        ```python
-        # Fit decline curve to historical data
-        decline = analyst.decline_curve_analysis(
-            from_time_step=0,
-            to_time_step=365,
-            decline_type="hyperbolic",
-            phase="oil"
-        )
-
-        # Calculate EUR with 30-year forecast and 10 STB/day economic limit
-        eur_stb = analyst.estimate_economic_ultimate_recovery(
-            decline_result=decline,
-            forecast_years=30.0,
-            economic_limit=10.0
-        )
-        print(f"EUR: {eur_stb:,.0f} STB")
-
-        # Calculate remaining reserves
-        cumulative_to_date = analyst.cumulative_oil_produced
-        remaining_reserves = eur_stb - cumulative_to_date
-        recovery_factor = eur_stb / analyst.stoiip
-        ```
-
-        Notes:
-            - EUR is highly sensitive to economic limit assumption; conduct sensitivity analysis
-            - Exponential decline typically gives most conservative (lowest) EUR estimates
-            - Harmonic decline can overestimate EUR if applied too early in well life
-            - Hyperbolic decline with b > 0.5 may need transition to exponential at late time
-            - Consider using P10/P50/P90 scenarios with different decline parameters
-            - EUR does not account for:
-            * Future workovers or recompletions
-            * Changes in operating conditions
-            * Facility constraints or downtime
-            * Regulatory or market shutdowns
-            - For gas wells, convert EUR from scf to reserves reporting units (Bcf, MMscf)
-            - Always compare EUR to STOIIP/GIIP to ensure recovery factor is reasonable
-            (typical oil RF: 5-50%, gas RF: 50-90%)
         """
         if decline_result.error:
             return 0.0
 
-        qi = decline_result.initial_rate
-        di = decline_result.decline_rate_per_year
+        qi = decline_result.initial_rate  # STB/day or scf/day
+        di = decline_result.decline_rate_per_timestep  # per timestep
         b = decline_result.b_factor
 
-        # Convert economic limit to time
-        if economic_limit > 0 and decline_result.decline_type == "exponential":
-            time_to_limit = (
-                -np.log(economic_limit / qi) / di if qi > economic_limit else 0
-            )
-            forecast_years = min(forecast_years, time_to_limit)
+        if di <= 0:
+            return 0.0
+
+        # Calculate final rate after forecast_time_steps (in STB/day or scf/day)
+        if decline_result.decline_type == "exponential":
+            q_final = qi * np.exp(-di * forecast_time_steps)
+        elif decline_result.decline_type == "harmonic":
+            q_final = qi / (1 + di * forecast_time_steps)
+        elif decline_result.decline_type == "hyperbolic":
+            q_final = qi / (1 + b * di * forecast_time_steps) ** (1 / b)
+        else:
+            return 0.0
+
+        # Apply economic limit (both in per-day units)
+        q_final = max(q_final, economic_limit)
+
+        # Calculate time to reach economic limit if applicable
+        if economic_limit > 0 and q_final == economic_limit:
+            if decline_result.decline_type == "exponential":
+                time_to_limit = (
+                    -np.log(economic_limit / qi) / di if qi > economic_limit else 0
+                )
+            elif decline_result.decline_type == "harmonic":
+                time_to_limit = (
+                    (qi - economic_limit) / (di * economic_limit)
+                    if economic_limit > 0
+                    else 0
+                )
+            elif decline_result.decline_type == "hyperbolic":
+                if b > 0:
+                    time_to_limit = ((qi / economic_limit) ** b - 1) / (b * di)
+                else:
+                    time_to_limit = 0
+            else:
+                time_to_limit = 0
+
+            # Use shorter of forecast_time_steps or time_to_limit
+            effective_time_steps = min(forecast_time_steps, int(time_to_limit))
+
+            # Recalculate q_final at effective time
+            if decline_result.decline_type == "exponential":
+                q_final = qi * np.exp(-di * effective_time_steps)
+            elif decline_result.decline_type == "harmonic":
+                q_final = qi / (1 + di * effective_time_steps)
+            elif decline_result.decline_type == "hyperbolic":
+                q_final = qi / (1 + b * di * effective_time_steps) ** (1 / b)
 
         # Calculate cumulative production analytically
+        # NOTE: These formulas give results in units of [rate × time]
+        # Since rate is in per-day units and time is in timesteps, we get [per-day × timesteps]
+        # This naturally gives us the correct volume units (STB or scf) as long as
+        # the decline rate Di is per timestep and qi, qf are per day
+
         if decline_result.decline_type == "exponential":
             # Q = (qi - q_final) / Di
-            q_final = qi * np.exp(-di * forecast_years)
-            q_final = max(q_final, economic_limit)
+            # Units: [(STB/day) / (1/timestep)] = [STB/day × timestep]
+            # If timestep = 1 day, this gives STB ✓
             cumulative = (qi - q_final) / di
 
         elif decline_result.decline_type == "harmonic":
-            # Q = qi * ln(1 + Di*t) / Di
-            cumulative = qi * np.log(1 + di * forecast_years) / di
+            # Q = (qi / Di) * ln(qi / q_final)
+            if q_final > 0:
+                cumulative = (qi / di) * np.log(qi / q_final)
+            else:
+                cumulative = 0.0
 
         elif decline_result.decline_type == "hyperbolic":
             # Q = qi^b / (Di*(1-b)) * [qi^(1-b) - q_final^(1-b)]
             if abs(b - 1.0) < 0.001:  # Close to harmonic
-                cumulative = qi * np.log(1 + di * forecast_years) / di
+                if q_final > 0:
+                    cumulative = (qi / di) * np.log(qi / q_final)
+                else:
+                    cumulative = 0.0
             else:
-                q_final = qi / (1 + b * di * forecast_years) ** (1 / b)
-                q_final = max(q_final, economic_limit)
                 cumulative = (
                     (qi**b) / (di * (1 - b)) * (qi ** (1 - b) - q_final ** (1 - b))
                 )
         else:
             cumulative = 0.0
+
         return float(cumulative)
 
     def reservoir_volumetrics_history(

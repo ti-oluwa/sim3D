@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 
 from sim3D.boundaries import BoundaryConditions, GridBoundaryCondition
-from sim3D.constants import RESERVOIR_GAS_NAME
+from sim3D.constants import c
 from sim3D.grids.base import build_uniform_grid
 from sim3D.grids.properties import (
     build_fluid_viscosity_grid,
@@ -27,7 +27,7 @@ from sim3D.grids.properties import (
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from sim3D.statics import (
+from sim3D.models import (
     CapillaryPressureParameters,
     FluidProperties,
     ReservoirModel,
@@ -46,7 +46,13 @@ from sim3D.types import (
     RelativePermeabilityFunc,
     WellLocation,
 )
-from sim3D.wells import InjectionWell, ProductionWell, WellFluid, Wells
+from sim3D.wells import (
+    InjectedFluid,
+    InjectionWell,
+    ProducedFluid,
+    ProductionWell,
+    Wells,
+)
 from sim3D.faults import Fault, apply_faults
 
 __all__ = [
@@ -272,7 +278,9 @@ def reservoir_model(
         NDimensionalGrid[NDimension]
     ] = None,
     capillary_pressure_params: typing.Optional[CapillaryPressureParameters] = None,
-    solution_gas_to_oil_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    solution_gas_to_oil_ratio_grid: typing.Optional[
+        NDimensionalGrid[NDimension]
+    ] = None,
     gas_solubility_in_water_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_formation_volume_factor_grid: typing.Optional[
         NDimensionalGrid[NDimension]
@@ -285,9 +293,11 @@ def reservoir_model(
     ] = None,
     net_to_gross_ratio_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     water_salinity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    solvent_concentration_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    oil_effective_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
     faults: typing.Optional[typing.Iterable[Fault]] = None,
-    reservoir_gas_name: str = RESERVOIR_GAS_NAME,
+    reservoir_gas: typing.Optional[str] = None,
 ) -> ReservoirModel[NDimension]:
     """
     Constructs a N-Dimensional reservoir model with given rock and fluid properties.
@@ -338,9 +348,11 @@ def reservoir_model(
     :param water_formation_volume_factor_grid: Water formation volume factor grid (bbl/scf), optional.
     :param net_to_gross_ratio_grid: Net-to-gross ratio grid (fraction), optional.
     :param water_salinity_grid: Water salinity grid (ppm), optional.
+    :param solvent_concentration_grid: Solvent concentration in oil phase (0=pure oil, 1=pure solvent), optional.
+    :param oil_effective_viscosity_grid: Effective oil-solvent mixture viscosity using miscible model (e.g Todd Longstaff) (cP), optional.
     :param boundary_conditions: Boundary conditions for the model, optional. Defaults to no-flow conditions.
     :param faults: Iterable of faults to be applied to the reservoir model, optional.
-    :param reservoir_gas_name: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`. Can also be the name of the gas injected into the reservoir.
+    :param reservoir_gas: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`. Can also be the name of the gas injected into the reservoir.
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
     if not 1 <= len(grid_shape) <= 3:
@@ -354,6 +366,8 @@ def reservoir_model(
 
     validate_input_pressure(pressure_grid)
     validate_input_temperature(temperature_grid)
+
+    reservoir_gas = typing.cast(str, reservoir_gas or c.RESERVOIR_GAS_NAME)
 
     if water_salinity_grid is None:
         water_salinity_grid = build_uniform_grid(
@@ -389,11 +403,11 @@ def reservoir_model(
         gas_viscosity_grid = build_fluid_viscosity_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
-            fluid=reservoir_gas_name,
+            fluid=reservoir_gas,
         )
 
     if gas_gravity_grid is None:
-        gas_gravity_grid = build_gas_gravity_grid(gas=reservoir_gas_name)
+        gas_gravity_grid = build_gas_gravity_grid(gas=reservoir_gas)
 
     if water_viscosity_grid is None:
         water_viscosity_grid = build_water_viscosity_grid(
@@ -433,7 +447,10 @@ def reservoir_model(
         )
 
     oil_api_gravity_grid = build_oil_api_gravity_grid(oil_specific_gravity_grid)
-    if solution_gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is not None:
+    if (
+        solution_gas_to_oil_ratio_grid is None
+        and oil_bubble_point_pressure_grid is not None
+    ):
         solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
@@ -441,14 +458,20 @@ def reservoir_model(
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
         )
-    elif solution_gas_to_oil_ratio_grid is not None and oil_bubble_point_pressure_grid is None:
+    elif (
+        solution_gas_to_oil_ratio_grid is not None
+        and oil_bubble_point_pressure_grid is None
+    ):
         oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
             gas_gravity_grid=gas_gravity_grid,
             oil_api_gravity_grid=oil_api_gravity_grid,
             temperature_grid=temperature_grid,
             solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_grid,
         )
-    elif solution_gas_to_oil_ratio_grid is None and oil_bubble_point_pressure_grid is None:
+    elif (
+        solution_gas_to_oil_ratio_grid is None
+        and oil_bubble_point_pressure_grid is None
+    ):
         warnings.warn(
             "Both `oil_bubble_point_pressure_grid` and `solution_gas_to_oil_ratio_grid` are not provided. "
             "Attempting to estimate the bubble point pressure and GOR. If estimation fails, "
@@ -485,7 +508,7 @@ def reservoir_model(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
             salinity_grid=water_salinity_grid,
-            gas=reservoir_gas_name,
+            gas=reservoir_gas,
         )
 
     # Formation Volume Factor Grids
@@ -533,7 +556,7 @@ def reservoir_model(
             temperature_grid=temperature_grid,
             gas_solubility_in_water_grid=gas_solubility_in_water_grid,
             salinity_grid=water_salinity_grid,
-            gas=reservoir_gas_name,
+            gas=reservoir_gas,
         )
 
     if water_compressibility_grid is None:
@@ -553,6 +576,13 @@ def reservoir_model(
         formation_volume_factor_grid=oil_formation_volume_factor_grid,
     )
 
+    solvent_concentration_grid = solvent_concentration_grid or build_uniform_grid(
+        grid_shape=grid_shape,
+        value=0.0,
+    )
+    oil_effective_viscosity_grid = (
+        oil_effective_viscosity_grid or oil_viscosity_grid.copy()
+    )
     fluid_properties = FluidProperties(
         pressure_grid=pressure_grid,
         temperature_grid=temperature_grid,
@@ -580,7 +610,9 @@ def reservoir_model(
         gas_formation_volume_factor_grid=gas_formation_volume_factor_grid,
         water_formation_volume_factor_grid=water_formation_volume_factor_grid,
         water_salinity_grid=water_salinity_grid,
-        reservoir_gas_name=reservoir_gas_name,
+        solvent_concentration_grid=solvent_concentration_grid,
+        oil_effective_viscosity_grid=oil_effective_viscosity_grid,
+        reservoir_gas=reservoir_gas,
     )
     rock_properties = RockProperties(
         compressibility=rock_compressibility,
@@ -627,7 +659,7 @@ def injection_well(
     perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
     bottom_hole_pressure: float,
-    injected_fluid: WellFluid,
+    injected_fluid: InjectedFluid,
     **kwargs: typing.Any,
 ) -> InjectionWell[WellLocation]:
     """
@@ -656,7 +688,7 @@ def production_well(
     perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
     bottom_hole_pressure: float,
-    produced_fluids: typing.Sequence[WellFluid],
+    produced_fluids: typing.Sequence[ProducedFluid],
     skin_factor: float = 0.0,
     **kwargs: typing.Any,
 ) -> ProductionWell[WellLocation]:

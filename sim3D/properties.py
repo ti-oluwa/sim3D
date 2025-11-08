@@ -9,40 +9,8 @@ from CoolProp.CoolProp import PropsSI
 import numpy as np
 from scipy.optimize import brentq, root_scalar
 
-from sim3D.constants import (
-    BBL_TO_FT3,
-    DAYS_PER_SECOND,
-    FT3_TO_BBL,
-    FT3_TO_STB,
-    IDEAL_GAS_CONSTANT_IMPERIAL,
-    KG_PER_M3_TO_POUNDS_PER_FT3,
-    M3_PER_M3_TO_SCF_PER_STB,
-    MAX_VALID_PRESSURE,
-    MAX_VALID_TEMPERATURE,
-    MIN_VALID_PRESSURE,
-    MIN_VALID_TEMPERATURE,
-    MOLECULAR_WEIGHT_AIR,
-    MOLECULAR_WEIGHT_CO2,
-    MOLECULAR_WEIGHT_METHANE,
-    MOLECULAR_WEIGHT_N2,
-    MOLECULAR_WEIGHT_NACL,
-    OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL,
-    PA_S_TO_CENTIPOISE,
-    PA_TO_PSI,
-    PSI_TO_BAR,
-    POUNDS_PER_FT3_TO_GRAMS_PER_CM3,
-    POUNDS_PER_FT3_TO_KG_PER_M3,
-    PPM_TO_WEIGHT_FRACTION,
-    PSI_TO_PA,
-    SCF_PER_POUND_MOLE,
-    STANDARD_PRESSURE_IMPERIAL,
-    STANDARD_TEMPERATURE_IMPERIAL,
-    STANDARD_WATER_DENSITY,
-    STANDARD_WATER_DENSITY_IMPERIAL,
-    ACRE_FT_TO_BBL,
-    ACRE_FT_TO_FT3,
-)
-from sim3D.types import FluidMiscibility, NDimension, NDimensionalGrid, WettabilityType
+from sim3D.constants import c
+from sim3D.types import NDimension, NDimensionalGrid, WettabilityType
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +25,14 @@ def validate_input_temperature(temperature: typing.Union[float, np.ndarray]) -> 
     :raises ValueError: If any temperature is outside the valid range.
     """
     temp_array = np.asarray(temperature)
-    invalid_mask = (temp_array < MIN_VALID_TEMPERATURE) | (
-        temp_array > MAX_VALID_TEMPERATURE
+    invalid_mask = (temp_array < c.MIN_VALID_TEMPERATURE) | (
+        temp_array > c.MAX_VALID_TEMPERATURE
     )
 
     if np.any(invalid_mask):
         invalid: np.ndarray = temp_array[invalid_mask]
         raise ValueError(
-            f"Temperature(s) out of valid range [{MIN_VALID_TEMPERATURE}, {MAX_VALID_TEMPERATURE}] K: "
+            f"Temperature(s) out of valid range [{c.MIN_VALID_TEMPERATURE}, {c.MAX_VALID_TEMPERATURE}] K: "
             f"{invalid}"
         )
 
@@ -79,17 +47,18 @@ def validate_input_pressure(pressure: typing.Union[float, np.ndarray]) -> None:
     :raises ValueError: If any pressure is outside the valid range.
     """
     pressure_array = np.asarray(pressure)
-    invalid = (pressure_array < MIN_VALID_PRESSURE) | (
-        pressure_array > MAX_VALID_PRESSURE
+    invalid = (pressure_array < c.MIN_VALID_PRESSURE) | (
+        pressure_array > c.MAX_VALID_PRESSURE
     )
 
     if np.any(invalid):
         raise ValueError(
-            f"Pressure(s) out of valid range [{MIN_VALID_PRESSURE}, {MAX_VALID_PRESSURE}] Pa: "
+            f"Pressure(s) out of valid range [{c.MIN_VALID_PRESSURE}, {c.MAX_VALID_PRESSURE}] Pa: "
             f"{pressure_array[invalid]}"
         )
 
 
+@functools.lru_cache(maxsize=64)
 def is_CoolProp_supported_fluid(fluid: str) -> bool:
     """
     Check if the fluid is supported by CoolProp.
@@ -139,6 +108,7 @@ def clip_scalar(value: float, min_val: float, max_val: float) -> float:
 ##################################################
 
 
+@functools.lru_cache(maxsize=1024)
 def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid density from EOS using CoolProp.
@@ -149,7 +119,7 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     :return: Density in lbm/ft³
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PA
     density: float = PropsSI(
         "D",
         "P",
@@ -158,9 +128,10 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
         clip_temperature(temperature_in_kelvin, fluid),
         fluid,
     )
-    return density * KG_PER_M3_TO_POUNDS_PER_FT3
+    return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
 
 
+@functools.lru_cache(maxsize=1024)
 def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid dynamic viscosity from EOS using CoolProp.
@@ -171,7 +142,7 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
     :return: Viscosity in centipoise (cP)
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PA
     viscosity = PropsSI(
         "V",
         "P",
@@ -180,9 +151,10 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
         clip_temperature(temperature_in_kelvin, fluid),
         fluid,
     )
-    return viscosity * PA_S_TO_CENTIPOISE
+    return viscosity * c.PASCAL_SECONDS_TO_CENTIPOISE
 
 
+@functools.lru_cache(maxsize=1024)
 def compute_fluid_compressibility_factor(
     pressure: float, temperature: float, fluid: str
 ) -> float:
@@ -195,7 +167,7 @@ def compute_fluid_compressibility_factor(
     :return: Compressibility factor Z (dimensionless)
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PA
     return PropsSI(
         "Z",
         "P",
@@ -206,6 +178,7 @@ def compute_fluid_compressibility_factor(
     )
 
 
+@functools.lru_cache(maxsize=1024)
 def compute_fluid_compressibility(
     pressure: float,
     temperature: float,
@@ -224,7 +197,7 @@ def compute_fluid_compressibility(
     :return: Compressibility in psi⁻¹
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PA
     return (
         PropsSI(
             "ISOTHERMAL_COMPRESSIBILITY",
@@ -234,7 +207,7 @@ def compute_fluid_compressibility(
             clip_temperature(temperature_in_kelvin, fluid),
             fluid,
         )
-        / PA_TO_PSI
+        / c.PA_TO_PSI
     )
 
 
@@ -249,10 +222,10 @@ def compute_gas_gravity(gas: str) -> float:
     :return: Gas gravity (dimensionless)
     """
     gas_density_at_stp = compute_fluid_density(
-        STANDARD_PRESSURE_IMPERIAL, STANDARD_TEMPERATURE_IMPERIAL, fluid=gas
+        c.STANDARD_PRESSURE_IMPERIAL, c.STANDARD_TEMPERATURE_IMPERIAL, fluid=gas
     )
     air_density_at_stp = compute_fluid_density(
-        STANDARD_PRESSURE_IMPERIAL, STANDARD_TEMPERATURE_IMPERIAL, fluid="Air"
+        c.STANDARD_PRESSURE_IMPERIAL, c.STANDARD_TEMPERATURE_IMPERIAL, fluid="Air"
     )
     return gas_density_at_stp / air_density_at_stp
 
@@ -262,6 +235,7 @@ def compute_gas_gravity(gas: str) -> float:
 ####################################################
 
 
+@functools.lru_cache(maxsize=1024)
 def compute_gas_gravity_from_density(
     pressure: float,
     temperature: float,
@@ -279,58 +253,11 @@ def compute_gas_gravity_from_density(
     :return: Gas gravity (dimensionless)
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PA
     air_density = compute_fluid_density(
         pressure_in_pascals, temperature_in_kelvin, fluid="Air"
     )
-    return density / (air_density * KG_PER_M3_TO_POUNDS_PER_FT3)
-
-
-def mix_fluid_property(
-    fluid1_saturation: float,
-    fluid1_property: float,
-    fluid2_saturation: float,
-    fluid2_property: float,
-    miscibility: FluidMiscibility = "logarithmic",
-) -> float:
-    """
-    Mixes two fluid properties based on their saturations using a specified mixing method.
-
-    The mixing methods available are:
-        - Logarithmic: property_eff = property1^S1 * property2^(1 - S1)
-        - Harmonic: 1/property_eff = (S1/property1) + ((1 - S1)/property2)
-        - Linear: property_eff = S1 * property1 + (1 - S1) * property2
-
-    :param fluid1_saturation: Saturation of the first fluid (fraction, 0 to 1)
-    :param fluid1_property: Property of the first fluid (e.g., viscosity, compressibility)
-    :param fluid2_saturation: Saturation of the second fluid (fraction, 0 to 1)
-    :param fluid2_property: Property of the second fluid (e.g., viscosity, compressibility)
-    :param miscibility: Method for mixing properties ('logarithmic', 'harmonic', 'linear')
-    :return: Effective mixed property value
-    """
-    # Clip saturations to avoid numerical issues
-    fluid1_saturation = clip_scalar(fluid1_saturation, 1e-8, 1 - 1e-8)
-    fluid2_saturation = clip_scalar(fluid2_saturation, 1e-8, 1 - 1e-8)
-
-    if miscibility == "logarithmic":
-        return (fluid1_property**fluid1_saturation) * (
-            fluid2_property**fluid2_saturation
-        )
-
-    elif miscibility == "harmonic":
-        # Adjust minimum properties to avoid division by zero
-        fluid1_property = max(fluid1_property, 1e-8)
-        fluid2_property = max(fluid2_property, 1e-8)
-        return 1 / (
-            (fluid1_saturation / fluid1_property)
-            + (fluid2_saturation / fluid2_property)
-        )
-
-    elif miscibility == "linear":
-        return (fluid1_saturation * fluid1_property) + (
-            fluid2_saturation * fluid2_property
-        )
-    raise ValueError("Unknown mixing method.")
+    return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
 def compute_total_fluid_compressibility(
@@ -360,23 +287,6 @@ def compute_total_fluid_compressibility(
         total_fluid_compressibility += gas_saturation * gas_compressibility
 
     return total_fluid_compressibility
-
-
-def linear_decay_factor_to_exponential_decay_constant(
-    linear_decay_factor: float,
-) -> float:
-    """
-    Converts a linear decay factor (alpha) to an equivalent
-    exponential decay constant (beta) such that:
-
-        1 - alpha * S ≈ exp(-beta * S)
-
-    :param linear_decay_factor: Linear decay coefficient (alpha), 0 < alpha < 1
-    :return: Exponential decay constant (beta)
-    """
-    if not (0 < linear_decay_factor < 1):
-        raise ValueError("Linear decay factor must be between 0 and 1.")
-    return -np.log(1 - linear_decay_factor)
 
 
 def compute_diffusion_number(
@@ -416,7 +326,7 @@ def compute_diffusion_number(
     :param cell_size: Size of the grid block (ft)
     :return: Diffusion number (dimensionless)
     """
-    time_in_days = time_step_size * DAYS_PER_SECOND
+    time_in_days = time_step_size * c.DAYS_PER_SECOND
     diffusion_number = (total_mobility / (porosity * total_compressibility)) * (
         time_in_days / cell_size**2
     )
@@ -623,17 +533,17 @@ def compute_oil_specific_gravity_from_density(
     :param oil_compressibility: Oil compressibility (psi⁻¹)
     :return: Specific gravity of oil (dimensionless)
     """
-    delta_p = STANDARD_PRESSURE_IMPERIAL - pressure
-    delta_t = STANDARD_TEMPERATURE_IMPERIAL - temperature
+    delta_p = c.STANDARD_PRESSURE_IMPERIAL - pressure
+    delta_t = c.STANDARD_TEMPERATURE_IMPERIAL - temperature
     correction_factor = np.exp(
         (oil_compressibility * delta_p)
-        + (OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL * delta_t)
+        + (c.OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL * delta_t)
     )
     correction_factor = clip_scalar(
         correction_factor, 0.2, 2.0
     )  # Avoid numerical issues with very small values
     oil_density_at_stp = oil_density * correction_factor
-    return oil_density_at_stp / STANDARD_WATER_DENSITY_IMPERIAL
+    return oil_density_at_stp / c.c.STANDARD_WATER_DENSITY_IMPERIAL
 
 
 def convert_surface_rate_to_reservoir(
@@ -850,8 +760,7 @@ def compute_oil_formation_volume_factor(
 
 
 def compute_water_formation_volume_factor(
-    water_density: float,
-    salinity: float,
+    water_density: float, salinity: float
 ) -> float:
     """
     Computes the water formation volume factor (B_w) in bbl/STB of water
@@ -871,8 +780,8 @@ def compute_water_formation_volume_factor(
     :return: Water formation volume factor in bbl/STB
     """
     standard_water_density = compute_water_density_batzle(
-        pressure=STANDARD_PRESSURE_IMPERIAL,
-        temperature=STANDARD_TEMPERATURE_IMPERIAL,
+        pressure=c.STANDARD_PRESSURE_IMPERIAL,
+        temperature=c.STANDARD_TEMPERATURE_IMPERIAL,
         salinity=salinity,
     )
     if water_density <= 0:
@@ -964,8 +873,8 @@ def compute_gas_formation_volume_factor(
     return (
         gas_compressibility_factor
         * temperature
-        * STANDARD_PRESSURE_IMPERIAL
-        / (pressure * STANDARD_TEMPERATURE_IMPERIAL)
+        * c.STANDARD_PRESSURE_IMPERIAL
+        / (pressure * c.STANDARD_TEMPERATURE_IMPERIAL)
     )
 
 
@@ -1447,7 +1356,7 @@ def compute_gas_molecular_weight(gas_gravity: float) -> float:
     """
     if gas_gravity <= 0:
         raise ValueError("Gas specific gravity must be greater than zero.")
-    return gas_gravity * MOLECULAR_WEIGHT_AIR
+    return gas_gravity * c.MOLECULAR_WEIGHT_AIR
 
 
 def compute_gas_pseudocritical_properties(
@@ -1533,7 +1442,7 @@ def compute_gas_density(
     # Density in lbm/ft3
     gas_density = (pressure * gas_molecular_weight_lbm_per_lbmole) / (
         gas_compressibility_factor
-        * IDEAL_GAS_CONSTANT_IMPERIAL
+        * c.IDEAL_GAS_CONSTANT_IMPERIAL
         * temperature_in_rankine
     )
     return gas_density
@@ -1575,7 +1484,7 @@ def compute_gas_viscosity(
     temperature_in_rankine = temperature + 459.67
     # NO CONVERSION NEEDED - g/mol is numerically equal to lb/lbmol
     gas_molecular_weight_lbm_per_lbmole = gas_molecular_weight
-    density_in_grams_per_cm3 = gas_density * POUNDS_PER_FT3_TO_GRAMS_PER_CM3
+    density_in_grams_per_cm3 = gas_density * c.POUNDS_PER_FT3_TO_GRAMS_PER_CM3
 
     k = (
         (9.4 + (0.02 * gas_molecular_weight_lbm_per_lbmole))
@@ -1615,7 +1524,7 @@ def fahrenheit_to_celsius(temp_F: float) -> float:
 def _compute_water_viscosity(
     temperature: float, salinity: float, pressure: float
 ) -> float:
-    salinity_fraction = salinity * PPM_TO_WEIGHT_FRACTION
+    salinity_fraction = salinity * c.PPM_TO_WEIGHT_FRACTION
     A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
     B = 1.48e-3 - 1.8e-7 * salinity_fraction
     C = 2.94e-6
@@ -2022,7 +1931,7 @@ def _gas_solubility_in_water_duan_sun_co2(
     if pressure <= 0 or temperature <= 0:
         raise ValueError("Pressure and temperature must be positive.")
 
-    P = pressure * PSI_TO_BAR
+    P = pressure * c.PSI_TO_BAR
     T = fahrenheit_to_kelvin(temperature)
 
     if not (273.15 <= T <= 533.15):
@@ -2053,7 +1962,7 @@ def _gas_solubility_in_water_duan_sun_co2(
     # Apply Salinity Correction (Setschenow equation)
     # Convert salinity from ppm to molality (mol NaCl / kg H2O)
     # 1 ppm NaCl ≈ 1 mg NaCl / 1 L H2O ≈ 1 mg NaCl / 1 kg H2O
-    m_nacl = salinity / (MOLECULAR_WEIGHT_NACL * 1000)
+    m_nacl = salinity / (c.MOLECULAR_WEIGHT_NACL * 1000)
 
     # Setschenow coefficient (k_s) for CO2-NaCl interaction, with T-dependence
     # This is a common empirical fit.
@@ -2071,9 +1980,9 @@ def _gas_solubility_in_water_duan_sun_co2(
 
 
 MOLAR_MASSES = {
-    "co2": MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-    "methane": MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
-    "n2": MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
+    "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+    "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
+    "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
 }
 
 # Henry's constants (Sander, 2020) — ln(H) = A + B/T + C*ln(T)
@@ -2134,14 +2043,14 @@ def _gas_solubility_in_water_henry_law(
     try:
         water_density = (
             compute_fluid_density(pressure, temperature, "Water")
-            * POUNDS_PER_FT3_TO_KG_PER_M3
+            * c.POUNDS_PER_FT3_TO_KG_PER_M3
         )
     except Exception:
-        water_density = STANDARD_WATER_DENSITY
+        water_density = c.STANDARD_WATER_DENSITY
 
     # Setschenow salinity correction
     # Converts salinity from ppm (mg/kg) to mol/kg using molar mass in g/mol
-    molarity = salinity / (MOLECULAR_WEIGHT_NACL * 1000)
+    molarity = salinity / (c.MOLECULAR_WEIGHT_NACL * 1000)
 
     setschenow_constants = {"co2": 0.12, "methane": 0.17, "n2": 0.13}
     k_s = setschenow_constants[gas]
@@ -2150,7 +2059,7 @@ def _gas_solubility_in_water_henry_law(
     gas_solubility = (
         (pressure / H) * (M / water_density) * salinity_factor
     )  # m³ gas / m³ water
-    return gas_solubility * M3_PER_M3_TO_SCF_PER_STB
+    return gas_solubility * c.M3_PER_M3_TO_SCF_PER_STB
 
 
 def compute_gas_solubility_in_water(
@@ -2299,7 +2208,7 @@ def compute_water_compressibility(
     :param salinity: Salinity in parts per million (ppm).
     :return: Water compressibility (C_w) in (psi⁻¹).
     """
-    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * FT3_TO_BBL
+    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * c.FT3_TO_BBL
     dBw_gas_free_dP = _compute_dBw_gas_free_dp_mccain(
         pressure=pressure,
         temperature=temperature,
@@ -2376,20 +2285,20 @@ def compute_live_oil_density(
     # Convert API to stock tank oil density (lb/ft³)
     stock_tank_oil_density_lb_per_ft3 = (
         141.5 / (api_gravity + 131.5)
-    ) * STANDARD_WATER_DENSITY_IMPERIAL
+    ) * c.STANDARD_WATER_DENSITY_IMPERIAL
 
     # Mass of oil per STB (lb)
-    mass_stock_tank_oil = stock_tank_oil_density_lb_per_ft3 / FT3_TO_STB
+    mass_stock_tank_oil = stock_tank_oil_density_lb_per_ft3 / c.FT3_TO_STB
 
     # Mass of dissolved gas per STB (lb)
     # Approx: 1 scf = gas_gravity * (molecular weight of air) / 379.49 lb
-    gas_mass_per_scf = (gas_gravity * MOLECULAR_WEIGHT_AIR) / SCF_PER_POUND_MOLE
+    gas_mass_per_scf = (gas_gravity * c.MOLECULAR_WEIGHT_AIR) / c.SCF_PER_POUND_MOLE
     mass_dissolved_gas = gas_to_oil_ratio * gas_mass_per_scf
 
     # Total mass and volume
     total_mass_lb_per_stb = mass_stock_tank_oil + mass_dissolved_gas
     # print(formation_volume_factor)
-    total_volume_ft3_per_stb = formation_volume_factor * BBL_TO_FT3
+    total_volume_ft3_per_stb = formation_volume_factor * c.BBL_TO_FT3
 
     # Live oil density in lb/ft³
     live_oil_density_lb_per_ft3 = total_mass_lb_per_stb / total_volume_ft3_per_stb
@@ -2430,7 +2339,7 @@ def compute_water_density_mccain(
     delta_pressure = 0.00001427 * (pressure - 14.7)
     delta_temperature = -0.00048314 * (temperature - 60.0)
     water_density = (
-        STANDARD_WATER_DENSITY_IMPERIAL
+        c.STANDARD_WATER_DENSITY_IMPERIAL
         + delta_salinity
         + delta_pressure
         + delta_temperature
@@ -2549,7 +2458,7 @@ def compute_water_density(
     # Calculate Live Water Density (Imperial units first)
     # Mass of standard water per STB (volume of STB is 1 STB, density lb/ft3 * 5.615 ft3/bbl)
     standard_mass_water_in_lb_per_stb = (
-        standard_water_density_in_lb_per_ft3 * BBL_TO_FT3
+        standard_water_density_in_lb_per_ft3 * c.BBL_TO_FT3
     )  # lb/STB
 
     # Mass of dissolved gas per STB
@@ -2558,8 +2467,8 @@ def compute_water_density(
     # Mass gas (lb) = Rsw (scf) * Density of gas at std cond (lb/scf)
     # Density of gas at std cond (lb/scf) = gas_gravity * (28.96 lb/lb-mol_air / 379.4 scf/lb-mol_ideal_gas) = gas_gravity * 0.0763 lb/scf
     mass_of_dissolved_gas_in_lb_per_stb = (
-        gas_solubility_in_water * gas_gravity * MOLECULAR_WEIGHT_AIR
-    ) / SCF_PER_POUND_MOLE  # lb_mass_gas/STB
+        gas_solubility_in_water * gas_gravity * c.MOLECULAR_WEIGHT_AIR
+    ) / c.SCF_PER_POUND_MOLE  # lb_mass_gas/STB
 
     # Total mass of live water (and dissolved gas) per STB
     total_mass_in_lb_per_stb = (
@@ -2568,7 +2477,7 @@ def compute_water_density(
 
     # Volume of live water at reservoir conditions (ft^3 per STB)
     volume_of_live_water_in_ft3_per_stb = (
-        gas_free_water_formation_volume_factor * BBL_TO_FT3
+        gas_free_water_formation_volume_factor * c.BBL_TO_FT3
     )  # res bbl/STB * ft^3/bbl = ft^3/STB
     live_water_density_in_lb_per_ft3 = (
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
@@ -2734,7 +2643,7 @@ def compute_hydrocarbon_in_place(
     if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
         # Oil in Place (OIP) calculation (May include dissolved gas in undersaturated reservoirs)
         oip = (
-            ACRE_FT_TO_BBL
+            c.ACRE_FT_TO_BBL
             * area
             * thickness
             * porosity
@@ -2746,7 +2655,7 @@ def compute_hydrocarbon_in_place(
 
     # Free Gas in Place (GIP) calculation
     free_gip = (
-        ACRE_FT_TO_FT3
+        c.ACRE_FT_TO_FT3
         * area
         * thickness
         * porosity
@@ -2755,3 +2664,78 @@ def compute_hydrocarbon_in_place(
         / formation_volume_factor
     )
     return free_gip
+
+
+def compute_todd_longstaff_effective_viscosity(
+    oil_viscosity: float,
+    solvent_viscosity: float,
+    solvent_concentration: float,
+    omega: float = 0.0,
+) -> float:
+    """
+    Compute effective viscosity using Todd-Longstaff mixing model.
+
+    Formula:
+        μ_eff = (C_s * μ_s^(1/4) + C_o * μ_o^(1/4))^4                    (ω = 0, fully miscible)
+        μ_eff = C_s * μ_s + C_o * μ_o                                     (ω = 1, immiscible)
+        μ_eff = [(C_s * μ_s^(1/4) + C_o * μ_o^(1/4))^4]^(1-ω) * [C_s*μ_s + C_o*μ_o]^ω
+
+    Where:
+        C_s = solvent concentration (0 to 1)
+        C_o = oil concentration = 1 - C_s
+        ω = mixing parameter (0=fully miscible, 1=immiscible)
+
+    :param oil_viscosity: Oil viscosity (cP)
+    :param solvent_viscosity: Solvent viscosity (cP)
+    :param solvent_concentration: Solvent concentration (fraction 0-1)
+    :param omega: Todd-Longstaff mixing parameter (0-1)
+    :return: Effective mixture viscosity (cP)
+    """
+    solvent_concentration = clip_scalar(solvent_concentration, 0.0, 1.0)
+    oil_concentration = 1.0 - solvent_concentration
+
+    # Fully miscible mixing (quarter-power mixing)
+    quarter_power_mix = (
+        solvent_concentration * (solvent_viscosity**0.25)
+        + oil_concentration * (oil_viscosity**0.25)
+    ) ** 4
+
+    # Immiscible mixing (linear)
+    linear_mix = (
+        solvent_concentration * solvent_viscosity + oil_concentration * oil_viscosity
+    )
+
+    # Todd-Longstaff combination
+    if omega == 0.0:
+        return quarter_power_mix
+    elif omega == 1.0:
+        return linear_mix
+    return (quarter_power_mix ** (1 - omega)) * (linear_mix**omega)
+
+
+def compute_miscibility_function(
+    pressure: float,
+    minimum_miscibility_pressure: float,
+    transition_width: float = 500.0,
+) -> float:
+    """
+    Compute miscibility function based on pressure.
+
+    Returns a smooth transition from immiscible (ω=1) at low pressure
+    to miscible (ω=0) above minimum miscibility pressure.
+
+    Uses hyperbolic tangent for smooth transition:
+        ω(P) = 0.5 * (1 - tanh((P - MMP) / ΔP))
+
+    :param pressure: Current pressure (psi)
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (psi)
+    :param transition_width: Pressure width of transition zone (psi)
+    :return: Effective omega parameter (0=miscible, 1=immiscible)
+    """
+    if pressure >= minimum_miscibility_pressure + transition_width:
+        return 0.0  # Fully miscible
+    elif pressure <= minimum_miscibility_pressure - transition_width:
+        return 1.0  # Fully immiscible
+    # Smooth transition
+    normalized = (pressure - minimum_miscibility_pressure) / transition_width
+    return 0.5 * (1.0 - np.tanh(normalized))

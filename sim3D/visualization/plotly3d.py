@@ -15,7 +15,7 @@ import numpy as np
 import plotly.graph_objects as go
 from typing_extensions import TypedDict
 
-from sim3D.dynamics import ModelState
+from sim3D.simulation import ModelState
 from sim3D.grids.base import coarsen_grid
 from sim3D.types import (
     NDimension,

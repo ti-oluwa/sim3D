@@ -131,6 +131,20 @@ class PropertyRegistry:
             color_scheme=ColorScheme.INFERNO,
             log_scale=True,
         ),
+        "oil_effective_viscosity": PropertyMetadata(
+            name="model.fluid_properties.oil_effective_viscosity_grid",
+            display_name="Oil Effective Viscosity [Oil + Solvent (if any)]",
+            unit="cP",
+            color_scheme=ColorScheme.INFERNO,
+            log_scale=True,
+        ),
+        "solvent_concentration": PropertyMetadata(
+            name="model.fluid_properties.solvent_concentration_grid",
+            display_name="Solvent Concentration in Oil",
+            unit="fraction",
+            color_scheme=ColorScheme.PLASMA,
+            aliases=["solvent_conc"],
+        ),
         "oil_density": PropertyMetadata(
             name="model.fluid_properties.oil_density_grid",
             display_name="Oil Density",
