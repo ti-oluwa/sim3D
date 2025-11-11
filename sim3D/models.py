@@ -10,8 +10,8 @@ from sim3D.boundaries import BoundaryConditions
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
-    WettabilityType,
-    RelativePermeabilityFunc,
+    RelativePermeabilityTable,
+    CapillaryPressureTable,
 )
 from sim3D.grids.base import (
     build_elevation_grid,
@@ -22,13 +22,7 @@ from sim3D.grids.base import (
 )
 
 
-__all__ = [
-    "CapillaryPressureParameters",
-    "FluidProperties",
-    "RockProperties",
-    "ReservoirModel",
-    "RockPermeability",
-]
+__all__ = ["FluidProperties", "RockProperties", "ReservoirModel", "RockPermeability"]
 
 
 class PadMixin(typing.Generic[NDimension]):
@@ -131,167 +125,6 @@ class PadMixin(typing.Generic[NDimension]):
             hooked_value = hook(value)
             hooked_fields[field.name] = hooked_value
         return attrs.evolve(self, **hooked_fields)
-
-
-@attrs.define(slots=True, frozen=True)
-class CapillaryPressureParameters:
-    """Parameters defining the capillary pressure curve (e.g., Brooks-Corey)."""
-
-    wettability: WettabilityType = WettabilityType.WATER_WET
-    """
-    Wettability type of the reservoir rock.
-    
-    Typical values:
-    - WATER_WET: Most sandstones, clean carbonates (60-70% of reservoirs)
-    - MIXED_WET: Aged reservoirs, some carbonates (20-30% of reservoirs)
-    - OIL_WET: Rare, some carbonates, heavy oil reservoirs (5-10% of reservoirs)
-
-    This determines how fluids interact with the rock surface, affecting capillary pressure.
-    """
-    oil_water_entry_pressure_oil_wet: float = 0.5
-    """
-    Oil-water entry pressure (psi) for water-wet rock.
-    
-    Typical ranges by rock type:
-    - High permeability sandstone (>500 mD): 0.1-0.5 psi
-    - Medium permeability sandstone (100-500 mD): 0.5-2.0 psi
-    - Low permeability sandstone (10-100 mD): 2.0-10.0 psi
-    - Tight sandstone (<10 mD): 10.0-50.0 psi
-    - High permeability carbonate: 0.2-1.0 psi
-    - Low permeability carbonate: 5.0-20.0 psi
-    
-    Default: 0.5 psi (good quality sandstone)
-
-    It is the pressure (psi) at which oil starts to displace water in an oil-wet reservoir.
-
-    This is the entry pressure for oil in an oil-wet system.
-    Large entry pressure means stronger capillary forces are needed for oil to enter the pores.
-    """
-    oil_water_pore_size_distribution_index_water_wet: float = 2.0
-    """
-    Pore size distribution index (λ) for water-wet rock.
-    
-    Physical meaning:
-    - Higher λ (3.0-5.0): Uniform pore sizes, sharp capillary pressure transition
-    - Medium λ (2.0-3.0): Moderate pore size variation (most common)
-    - Lower λ (1.0-2.0): Wide pore size distribution, gradual transition
-    
-    Typical ranges:
-    - Well-sorted sandstone: 2.5-4.0
-    - Moderately sorted sandstone: 2.0-2.5
-    - Poorly sorted sandstone: 1.5-2.0
-    - Vuggy carbonate: 1.0-2.0
-    - Tight rock: 1.5-2.5
-    
-    Default: 2.0 (moderate sorting, typical sandstone)
-
-    This parameter characterizes the distribution of pore sizes in the rock that affects capillary pressure.
-    The value is typically higher than that for oil-wet reservoirs, indicating a different pore structure.
-    The higher the value, the more uniform the pore sizes are, which affects how fluids interact with the rock.
-    """
-    oil_water_entry_pressure_water_wet: float = 0.3
-    """
-    Oil-water entry pressure (psi) for oil-wet rock.
-    
-    Note: Oil-wet systems typically have LOWER entry pressures than water-wet
-    because oil preferentially wets the rock surface.
-    
-    Typical ranges:
-    - High permeability: 0.1-0.3 psi
-    - Medium permeability: 0.3-1.0 psi
-    - Low permeability: 1.0-5.0 psi
-    
-    Default: 0.3 psi (30-50% lower than water-wet equivalent)
-
-    It is the pressure (psi) at which oil starts to displace water in a water-wet reservoir.
-
-    This is the entry pressure for oil in a water-wet system.
-    Large entry pressure means stronger capillary forces are needed for oil to enter the pores.
-    """
-    oil_water_pore_size_distribution_index_oil_wet: float = 1.8
-    """
-    Pore size distribution index for oil-wet rock.
-    
-    Note: Oil-wet systems typically have LOWER λ than water-wet
-    because wettability alteration often occurs in larger pores first.
-    
-    Typical ranges:
-    - Well-sorted: 2.0-3.0
-    - Moderately sorted: 1.5-2.0
-    - Poorly sorted: 1.0-1.5
-    
-    Default: 1.8 (slightly lower than water-wet)
-
-    This parameter characterizes the distribution of pore sizes in the rock that affects capillary pressure.
-    The value is typically lower than that for water-wet reservoirs, indicating a different pore structure.
-    The lower the value, the more varied the pore sizes are, which affects how fluids interact with the rock.
-    """
-    gas_oil_entry_pressure: float = 0.2
-    """
-    Gas-oil entry pressure (psi).
-    
-    Gas-oil capillary pressure is typically MUCH LOWER than oil-water
-    because:
-    - Lower interfacial tension (gas-oil: ~20-30 dyne/cm vs oil-water: ~30-50 dyne/cm)
-    - Gas is non-wetting phase in both water-wet and oil-wet systems
-    
-    Typical ranges by rock type:
-    - High permeability (>500 mD): 0.05-0.2 psi
-    - Medium permeability (100-500 mD): 0.2-1.0 psi
-    - Low permeability (10-100 mD): 1.0-5.0 psi
-    - Tight rock (<10 mD): 5.0-20.0 psi
-    
-    Rule of thumb: P_entry(gas-oil) ≈ 0.3-0.5 x P_entry(oil-water)
-    
-    Default: 0.2 psi (good quality reservoir)
-
-    This is the pressure (psi) at which gas starts to displace oil in the reservoir in a oil-wet or water-wet system.
-
-    This is the entry pressure for gas in an oil system.
-    Large entry pressure means stronger capillary forces are needed for gas to enter the pores.
-    """
-    gas_oil_pore_size_distribution_index: float = 2.0
-    """
-    Pore size distribution index for gas-oil system.
-    
-    Typically similar to oil-water λ since it reflects the same pore structure.
-    May be slightly lower due to gas accessing smaller pores more easily.
-    
-    Typical ranges:
-    - Well-sorted: 2.0-3.5
-    - Moderately sorted: 1.8-2.5
-    - Poorly sorted: 1.5-2.0
-    
-    Default: 2.0 (moderate sorting)
-
-    This parameter characterizes the distribution of pore sizes in the rock that affects capillary pressure.
-    The value is typically lower than that for water-wet reservoirs, indicating a different pore structure.
-    The lower the value, the more varied the pore sizes are, which affects how fluids interact with the rock.
-    """
-    mixed_wet_water_fraction: float = 0.5
-    """
-    Fraction of pore space that is water-wet in mixed-wet systems (0 to 1).
-    
-    Physical interpretation:
-    - 0.0: Fully oil-wet (all pores prefer oil contact)
-    - 0.3: Predominantly oil-wet (fractured carbonates)
-    - 0.5: Neutral mixed-wet (equal water/oil preference) - DEFAULT
-    - 0.7: Predominantly water-wet (aged sandstones)
-    - 1.0: Fully water-wet (clean sandstones)
-    
-    Typical values by reservoir type:
-    - Fresh sandstone: 0.9-1.0 (strongly water-wet)
-    - Aged sandstone with some oil: 0.6-0.8 (moderately water-wet)
-    - Carbonate with oil aging: 0.3-0.6 (mixed-wet)
-    - Heavy oil carbonate: 0.1-0.3 (predominantly oil-wet)
-    
-    Effect on capillary pressure:
-    - Higher fraction → stronger water imbibition
-    - Lower fraction → weaker water imbibition, may even repel water
-    - 0.5 → balanced system with minimal net capillary drive
-
-    Default: 0.5 (neutral mixed-wet)
-    """
 
 
 @attrs.define(slots=True, frozen=True)
@@ -489,12 +322,10 @@ class RockFluidProperties:
     These properties include both rock and fluid characteristics necessary for reservoir simulation.
     """
 
-    relative_permeability_func: RelativePermeabilityFunc
+    relative_permeability_table: RelativePermeabilityTable
     """Callable that evaluates the relative permeability curves based on fluid saturations."""
-    capillary_pressure_params: CapillaryPressureParameters = attrs.field(
-        factory=CapillaryPressureParameters
-    )
-    """Parameters for capillary pressure curve."""
+    capillary_pressure_table: CapillaryPressureTable
+    """Callable that evaluates the capillary pressure curves based on fluid saturations."""
 
 
 @attrs.define(slots=True, frozen=True)

@@ -25,6 +25,7 @@ __all__ = [
     "Interpolator",
     "MixingRule",
     "RelativePermeabilities",
+    "CapillaryPressures",
     "FluidPhase",
     "Wettability",
     "WettabilityType",
@@ -85,15 +86,12 @@ class FluidPhase(enum.Enum):
 WellFluidType = typing.Literal["water", "oil", "gas"]
 """Types of fluids that can be injected in the simulation"""
 
-EvolutionScheme = typing.Literal["impes", "expes", "adaptive"]
+EvolutionScheme = typing.Literal["impes", "expes"]
 """
 Discretization methods for numerical simulations
 
 - "impes": Implicit pressure, Explicit saturation
 - "expes": Both pressure and saturation are treated explicitly
-- "adaptive": Adaptive method for pressure and explicit for saturation.
-    Adaptive method dynamically switches between explicit and implicit
-    based on stability criteria to optimize performance and accuracy.
 """
 
 FluidMiscibility = typing.Literal["logarithmic", "linear", "harmonic"]
@@ -165,6 +163,13 @@ class RelativePermeabilities(TypedDict):
     gas: float
 
 
+class CapillaryPressures(typing.TypedDict):
+    """Dictionary containing capillary pressures for different phase pairs."""
+
+    oil_water: float  # Pcow = Po - Pw
+    gas_oil: float  # Pcgo = Pg - Po
+
+
 class WettabilityType(str, enum.Enum):
     """Enum representing the wettability type of the reservoir rock."""
 
@@ -177,9 +182,9 @@ Wettability = WettabilityType  # Alias for backward compatibility
 
 
 @typing.runtime_checkable
-class RelativePermeabilityFunc(typing.Protocol):
+class RelativePermeabilityTable(typing.Protocol):
     """
-    Protocol for a relative permeability function that computes
+    Protocol for a relative permeability table that computes
     relative permeabilities based on fluid saturations.
     """
 
@@ -189,6 +194,23 @@ class RelativePermeabilityFunc(typing.Protocol):
 
         :param kwargs: Additional parameters for the relative permeability function.
         :return: A dictionary containing relative permeabilities for water, oil, and gas phases.
+        """
+        ...
+
+
+@typing.runtime_checkable
+class CapillaryPressureTable(typing.Protocol):
+    """
+    Protocol for a capillary pressure table that computes
+    capillary pressures based on fluid saturations.
+    """
+
+    def __call__(self, **kwargs: typing.Any) -> CapillaryPressures:
+        """
+        Computes capillary pressures based on fluid saturations.
+
+        :param kwargs: Saturation parameters (water_saturation, oil_saturation, gas_saturation).
+        :return: A dictionary containing capillary pressures for oil-water and gas-oil systems.
         """
         ...
 
@@ -242,9 +264,7 @@ class Range:
         elif index == 1:
             return self.max
         else:
-            raise IndexError(
-                "Index out of range for Range. Valid indices are 0 and 1."
-            )
+            raise IndexError("Index out of range for Range. Valid indices are 0 and 1.")
 
 
 class RelativeMobilityRange(TypedDict):
@@ -280,19 +300,19 @@ class Options:
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
     scheme: EvolutionScheme = "impes"
-    """Evolution scheme to use for the simulation ('impes', 'expes', 'adaptive')."""
+    """Evolution scheme to use for the simulation ('impes', 'expes')."""
     diffusion_number_threshold: float = attrs.field(
         default=0.24,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
     )
     """Threshold for the diffusion number to determine stability of the simulation (default is 0.24)."""
-    use_pseudo_pressure: bool = False
-    """Whether to use pseudo-pressure for gas wells."""
+    use_pseudo_pressure: bool = True
+    """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default={
-            "oil": Range(min=1e-10, max=1e6),
-            "water": Range(min=1e-11, max=1e6),
-            "gas": Range(min=1e-9, max=1e6),
+            "oil": Range(min=1e-12, max=1e6),
+            "water": Range(min=1e-12, max=1e6),
+            "gas": Range(min=1e-12, max=1e6),
         }
     )
     """
@@ -301,7 +321,7 @@ class Options:
     Each phase has a `Range` object defining its minimum and maximum relative mobility.
     Adjust minimum or maximum values to constrain phase mobilities during simulation.
     """
-    capillary_pressure_stability_factor: float = attrs.field(
+    capillary_strength_factor: float = attrs.field(
         default=1.0,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
     )
@@ -314,6 +334,8 @@ class Options:
 
     Set to 0 to disable capillary effects entirely (not recommended).
     """
+    disable_capillary_effects: bool = False
+    """Whether to include capillary pressure effects in the simulation."""
     apply_dip: bool = attrs.field(default=True)
     """Whether to apply reservoir dip effects in the simulation."""
     miscibility_model: MiscibilityModel = "immiscible"
@@ -322,7 +344,6 @@ class Options:
         factory=lambda: {
             "impes": 10.0,
             "expes": 1.0,
-            "adaptive": 5.0,
         }
     )
     """
@@ -331,7 +352,6 @@ class Options:
     Adjust these values based on the chosen evolution scheme:
     - 'impes': Higher CFL number allowed due to implicit pressure treatment.
     - 'expes': Lower CFL number required due to explicit treatment of both pressure and saturation.
-    - 'adaptive': Moderate CFL number balancing stability and performance.
 
     Lowering these values increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
@@ -384,6 +404,63 @@ class SupportsSetItem(typing.Generic[K_con, V_con], typing.Protocol):
     def __setitem__(self, key: K_con, value: V_con, /) -> None:
         """Sets the item at the specified key to the given value."""
         ...
+
+
+@attrs.define(frozen=True, slots=True)
+class RelPermGrids(typing.Generic[NDimension]):
+    """
+    Wrapper for n-dimensional grids representing relative permeabilities
+    for different fluid phases (oil, water, gas).
+    """
+
+    kro: NDimensionalGrid[NDimension]
+    """Grid representing oil relative permeability."""
+    krw: NDimensionalGrid[NDimension]
+    """Grid representing water relative permeability."""
+    krg: NDimensionalGrid[NDimension]
+    """Grid representing gas relative permeability."""
+
+    def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
+        yield self.krw
+        yield self.kro
+        yield self.krg
+
+
+@attrs.define(frozen=True, slots=True)
+class RelativeMobilityGrids(typing.Generic[NDimension]):
+    """
+    Wrapper for n-dimensional grids representing relative mobilities
+    for different fluid phases (oil, water, gas).
+    """
+
+    oil_relative_mobility: NDimensionalGrid[NDimension]
+    """Grid representing oil relative mobility."""
+    water_relative_mobility: NDimensionalGrid[NDimension]
+    """Grid representing water relative mobility."""
+    gas_relative_mobility: NDimensionalGrid[NDimension]
+    """Grid representing gas relative mobility."""
+
+    def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
+        yield self.water_relative_mobility
+        yield self.oil_relative_mobility
+        yield self.gas_relative_mobility
+
+
+@attrs.define(frozen=True, slots=True)
+class CapillaryPressureGrids(typing.Generic[NDimension]):
+    """
+    Wrapper for n-dimensional grids representing capillary pressures
+    for different fluid phases (oil-water, oil-gas).
+    """
+
+    oil_water_capillary_pressure: NDimensionalGrid[NDimension]
+    """Grid representing oil-water capillary pressure."""
+    gas_oil_capillary_pressure: NDimensionalGrid[NDimension]
+    """Grid representing gas-oil capillary pressure."""
+
+    def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
+        yield self.oil_water_capillary_pressure
+        yield self.gas_oil_capillary_pressure
 
 
 @attrs.define(frozen=True, slots=True)

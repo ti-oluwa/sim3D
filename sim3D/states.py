@@ -10,13 +10,52 @@ from sim3D.constants import c
 from sim3D.grids import uniform_grid
 from sim3D.properties import compute_hydrocarbon_in_place
 from sim3D.models import ReservoirModel
-from sim3D.types import NDimension, RateGrids
+from sim3D.types import (
+    NDimension,
+    RateGrids,
+    RelPermGrids,
+    RelativeMobilityGrids,
+    CapillaryPressureGrids,
+)
 from sim3D.wells import Wells, _expand_intervals
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = ["ModelState", "ProductionAnalyst"]
+
+
+@attrs.define(frozen=True, slots=True)
+class ModelState(typing.Generic[NDimension]):
+    """
+    The state of the reservoir model at a specific time step during a simulation.
+    """
+
+    time_step: int
+    """The time step index of the model state."""
+    time_step_size: float
+    """The time step size in seconds."""
+    model: ReservoirModel[NDimension]
+    """The reservoir model at this state."""
+    wells: Wells[NDimension]
+    """The wells configuration at this state."""
+    injection: RateGrids[NDimension]
+    """Fluids injection rates at this state in ft³/day."""
+    production: RateGrids[NDimension]
+    """Fluids production rates at this state in ft³/day."""
+    relative_permeabilities: RelPermGrids[NDimension]
+    """Relative permeabilities at this state."""
+    relative_mobilities: RelativeMobilityGrids[NDimension]
+    """Relative mobilities at this state."""
+    capillary_pressures: CapillaryPressureGrids[NDimension]
+    """Capillary pressures at this state."""
+
+    @property
+    def time(self) -> float:
+        """
+        Returns the total simulation time at this state.
+        """
+        return self.time_step * self.time_step_size
 
 
 @attrs.define(frozen=True, slots=True)
@@ -147,33 +186,6 @@ class DeclineCurveResult:
     """Actual production rates in STB/day or SCF/day depending on phase."""
     predicted_rates: typing.Optional[typing.List[float]] = None
     """Predicted production rates from decline curve in STB/day or SCF/day depending on phase."""
-
-
-@attrs.define(frozen=True, slots=True)
-class ModelState(typing.Generic[NDimension]):
-    """
-    The state of the reservoir model at a specific time step during a simulation.
-    """
-
-    time_step: int
-    """The time step index of the model state."""
-    time_step_size: float
-    """The time step size in seconds."""
-    model: ReservoirModel[NDimension]
-    """The reservoir model at this state."""
-    wells: Wells[NDimension]
-    """The wells configuration at this state."""
-    injection: RateGrids[NDimension]
-    """Fluids injection rates at this state in ft³/day."""
-    production: RateGrids[NDimension]
-    """Fluids production rates at this state in ft³/day."""
-
-    @property
-    def time(self) -> float:
-        """
-        Returns the total simulation time at this state.
-        """
-        return self.time_step * self.time_step_size
 
 
 hcip_vectorized = np.vectorize(

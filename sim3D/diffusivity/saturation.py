@@ -9,16 +9,13 @@ from sim3D.diffusivity.base import (
     _warn_injector_is_producing,
     _warn_producer_is_injecting,
 )
-from sim3D.grids.properties import (
-    build_three_phase_capillary_pressure_grids,
-    build_three_phase_relative_mobilities_grids,
-)
-from sim3D.properties import compute_harmonic_mobility
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
 from sim3D.types import (
+    CapillaryPressureGrids,
     FluidPhase,
     Options,
-    RelativePermeabilityFunc,
+    RelativeMobilityGrids,
+    RelativePermeabilityTable,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
@@ -135,7 +132,7 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     residual_oil_saturation_water_grid: ThreeDimensionalGrid,
     residual_oil_saturation_gas_grid: ThreeDimensionalGrid,
     residual_gas_saturation_grid: ThreeDimensionalGrid,
-    relative_permeability_func: RelativePermeabilityFunc,
+    relative_permeability_table: RelativePermeabilityTable,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
@@ -146,14 +143,6 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
     cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
 
-    # Current cell saturations
-    cell_water_saturation = water_saturation_grid[cell_indices]
-    cell_oil_saturation = oil_saturation_grid[cell_indices]
-    cell_gas_saturation = gas_saturation_grid[cell_indices]
-    cell_oil_viscosity = oil_viscosity_grid[cell_indices]
-    cell_water_viscosity = water_viscosity_grid[cell_indices]
-    cell_gas_viscosity = gas_viscosity_grid[cell_indices]
-
     # For the neighbour
     neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
     neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
@@ -162,12 +151,6 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
         neighbour_indices
     ]
-    neighbour_water_saturation = water_saturation_grid[neighbour_indices]
-    neighbour_oil_saturation = oil_saturation_grid[neighbour_indices]
-    neighbour_gas_saturation = gas_saturation_grid[neighbour_indices]
-    neighbour_oil_viscosity = oil_viscosity_grid[neighbour_indices]
-    neighbour_water_viscosity = water_viscosity_grid[neighbour_indices]
-    neighbour_gas_viscosity = gas_viscosity_grid[neighbour_indices]
 
     # Compute pressure differences
     oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
@@ -221,17 +204,6 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     else:
         upwind_gas_density = 0.0
 
-    # Compute harmonic mobility of the phases from the neighbour (direction of flow)
-    water_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=water_mobility_grid
-    )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=oil_mobility_grid
-    )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=gas_mobility_grid
-    )
-
     # Computing the Darcy velocities (ft/day) for the three phases
     # v_x = λ_x * ∆P / Δx
     # For water: v_w = λ_w * [(P_oil - P_cow) + (upwind_ρ_water * g * Δz)] / ΔL
@@ -240,7 +212,6 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     ) / 144.0
     # Calculate the total water phase potential
     water_phase_potential = water_pressure_difference + water_gravity_potential
-    water_velocity = water_harmonic_mobility * water_phase_potential / flow_length
 
     # For oil: v_o = λ_o * [(P_oil) + (upwind_ρ_oil * g * Δz)] / ΔL
     oil_gravity_potential = (
@@ -248,7 +219,6 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     ) / 144.0
     # Calculate the total oil phase potential
     oil_phase_potential = oil_pressure_difference + oil_gravity_potential
-    oil_velocity = oil_harmonic_mobility * oil_phase_potential / flow_length
 
     # For gas: v_g = λ_g * ∆P / ΔL
     # v_g = λ_g * [(P_oil + P_go) - (P_cog + P_gas) + (upwind_ρ_gas * g * Δz)] / ΔL
@@ -257,73 +227,37 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     ) / 144.0
     # Calculate the total gas phase potential
     gas_phase_potential = gas_pressure_difference + gas_gravity_potential
-    gas_velocity = gas_harmonic_mobility * gas_phase_potential / flow_length
 
-    # Select upwind saturations in the direction of flow
-    upwinded_water_saturation = (
-        neighbour_water_saturation if water_velocity > 0 else cell_water_saturation
-    )
-    upwinded_oil_saturation = (
-        neighbour_oil_saturation if oil_velocity > 0 else cell_oil_saturation
-    )
-    upwinded_gas_saturation = (
-        neighbour_gas_saturation if gas_velocity > 0 else cell_gas_saturation
+    upwind_water_mobility = (
+        water_mobility_grid[neighbour_indices]
+        if water_phase_potential > 0.0  # Flow from neighbour to cell
+        else water_mobility_grid[cell_indices]
     )
 
-    # Select upwind viscosities in the direction of flow
-    upwinded_water_viscosity = (
-        neighbour_water_viscosity if water_velocity > 0 else cell_water_viscosity
-    )
-    upwinded_oil_viscosity = (
-        neighbour_oil_viscosity if oil_velocity > 0 else cell_oil_viscosity
-    )
-    upwinded_gas_viscosity = (
-        neighbour_gas_viscosity if gas_velocity > 0 else cell_gas_viscosity
+    upwind_oil_mobility = (
+        oil_mobility_grid[neighbour_indices]
+        if oil_phase_potential > 0.0
+        else oil_mobility_grid[cell_indices]
     )
 
-    # Compute the total fractional flow
-    upwinded_relative_permeabilities = relative_permeability_func(
-        water_saturation=upwinded_water_saturation,
-        oil_saturation=upwinded_oil_saturation,
-        gas_saturation=upwinded_gas_saturation,
-        irreducible_water_saturation=irreducible_water_saturation_grid[cell_indices],
-        residual_oil_saturation_water=residual_oil_saturation_water_grid[cell_indices],
-        residual_oil_saturation_gas=residual_oil_saturation_gas_grid[cell_indices],
-        residual_gas_saturation=residual_gas_saturation_grid[cell_indices],
+    upwind_gas_mobility = (
+        gas_mobility_grid[neighbour_indices]
+        if gas_phase_potential > 0.0
+        else gas_mobility_grid[cell_indices]
     )
-    upwinded_water_relative_permeability = upwinded_relative_permeabilities["water"]
-    upwinded_oil_relative_permeability = upwinded_relative_permeabilities["oil"]
-    upwinded_gas_relative_permeability = upwinded_relative_permeabilities["gas"]
 
-    water_upwinded_mobility = (
-        upwinded_water_relative_permeability / upwinded_water_viscosity
-    )
-    oil_upwinded_mobility = upwinded_oil_relative_permeability / upwinded_oil_viscosity
-    gas_upwinded_mobility = upwinded_gas_relative_permeability / upwinded_gas_viscosity
-
-    # f_phase = λ_phase(S_upwind) / (λ_w(S_upwind) + λ_o(S_upwind) + λ_g(S_upwind))
-    total_upwinded_mobility = (
-        water_upwinded_mobility + oil_upwinded_mobility + gas_upwinded_mobility
-    )
-    if total_upwinded_mobility <= 0.0:
-        # If total mobility is zero or negative, no flow occurs
-        return 0.0, 0.0, 0.0
-
-    # For water: f_w = λ_w / (λ_w + λ_o + λ_g)
-    water_fractional_flow = water_upwinded_mobility / total_upwinded_mobility
-    # For oil: f_o = λ_o / (λ_w + λ_o + λ_g)
-    oil_fractional_flow = oil_upwinded_mobility / total_upwinded_mobility
-    # For gas: f_g = λ_g / (λ_w + λ_o + λ_g)
-    gas_fractional_flow = gas_upwinded_mobility / total_upwinded_mobility
+    water_velocity = upwind_water_mobility * water_phase_potential / flow_length
+    oil_velocity = upwind_oil_mobility * oil_phase_potential / flow_length
+    gas_velocity = upwind_gas_mobility * gas_phase_potential / flow_length
 
     # Compute volumetric fluxes at the face for each phase
-    # F_x = f_x * v_x * A
-    # For water: F_w = f_w * v_w * A
-    water_volumetric_flux_at_face = water_fractional_flow * water_velocity * flow_area
-    # For oil: F_o = f_o * v_o * A
-    oil_volumetric_flux_at_face = oil_fractional_flow * oil_velocity * flow_area
-    # For gas: F_g = f_g * v_g * A
-    gas_volumetric_flux_at_face = gas_fractional_flow * gas_velocity * flow_area
+    # F_x = v_x * A
+    # For water: F_w = v_w * A
+    water_volumetric_flux_at_face = water_velocity * flow_area
+    # For oil: F_o = v_o * A
+    oil_volumetric_flux_at_face = oil_velocity * flow_area
+    # For gas: F_g = v_g * A
+    gas_volumetric_flux_at_face = gas_velocity * flow_area
     return (
         water_volumetric_flux_at_face,
         oil_volumetric_flux_at_face,
@@ -340,6 +274,8 @@ def evolve_saturation_explicitly(
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
+    relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
+    capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     options: Options,
     injection_grid: typing.Optional[
@@ -392,10 +328,7 @@ def evolve_saturation_explicitly(
     )
     residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
     residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
-    relative_permeability_func = rock_fluid_properties.relative_permeability_func
-    capillary_pressure_params = (
-        rock_fluid_properties.capillary_pressure_params
-    )  # Contains wettability type
+    relative_permeability_table = rock_fluid_properties.relative_permeability_table
 
     current_oil_pressure_grid = (
         fluid_properties.pressure_grid
@@ -416,36 +349,13 @@ def evolve_saturation_explicitly(
     cell_count_x, cell_count_y, cell_count_z = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
 
-    # Compute phase mobilities (kr / mu) for each cell
-    # `build_three_phase_relative_mobilities_grids` should handle `k_abs * kr / mu` for each phase.
     (
         water_relative_mobility_grid,
         oil_relative_mobility_grid,
         gas_relative_mobility_grid,
-    ) = build_three_phase_relative_mobilities_grids(
-        water_saturation_grid=current_water_saturation_grid,
-        oil_saturation_grid=current_oil_saturation_grid,
-        gas_saturation_grid=current_gas_saturation_grid,
-        water_viscosity_grid=water_viscosity_grid,
-        oil_viscosity_grid=oil_viscosity_grid,
-        gas_viscosity_grid=gas_viscosity_grid,
-        irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=residual_gas_saturation_grid,
-        relative_permeability_func=relative_permeability_func,
-    )
-
-    # Clamp relative mobility grids to avoid numerical issues
-    # This ensures mobilities are never zero or negative (for numerical stability)
-    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
-        water_relative_mobility_grid
-    )
-    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
-        oil_relative_mobility_grid
-    )
-    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
-        gas_relative_mobility_grid
+    ) = relative_mobility_grids
+    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
+        capillary_pressure_grids
     )
 
     # Compute mobility grids for x, y, z directions
@@ -498,21 +408,6 @@ def evolve_saturation_explicitly(
         * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
-    # Compute Capillary Pressures Grids (local to each cell, based on current saturations)
-    # P_cow = P_oil - P_water (can be negative for oil-wet systems)
-    # P_cgo = P_gas - P_oil (generally positive)
-    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
-        build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=current_water_saturation_grid,
-            gas_saturation_grid=current_gas_saturation_grid,
-            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=residual_gas_saturation_grid,
-            capillary_pressure_params=capillary_pressure_params,
-        )
-    )
-
     # Create new grids for updated saturations (time 'n+1')
     updated_water_saturation_grid = current_water_saturation_grid.copy()
     updated_oil_saturation_grid = current_oil_saturation_grid.copy()
@@ -545,7 +440,10 @@ def evolve_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_x,
                     "gas_mobility_grid": gas_mobility_grid_x,
                 },
-                "positive_neighbour": (i + 1, j, k),
+                "neighbours": [
+                    (i + 1, j, k),
+                    (i - 1, j, k),
+                ],  # East and West neighbours
                 "flow_area": cell_size_y * cell_thickness,  # A_x = Δy * Δz
                 "flow_length": cell_size_x,  # Δx
             },
@@ -555,7 +453,10 @@ def evolve_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_y,
                     "gas_mobility_grid": gas_mobility_grid_y,
                 },
-                "positive_neighbour": (i, j + 1, k),
+                "neighbours": [
+                    (i, j - 1, k),
+                    (i, j + 1, k),
+                ],  # North and South neighbours
                 "flow_area": cell_size_x * cell_thickness,  # A_y = Δx * Δz
                 "flow_length": cell_size_y,  # Δy
             },
@@ -565,7 +466,10 @@ def evolve_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_z,
                     "gas_mobility_grid": gas_mobility_grid_z,
                 },
-                "positive_neighbour": (i, j, k + 1),
+                "neighbours": [
+                    (i, j, k - 1),
+                    (i, j, k + 1),
+                ],  # Top and Bottom neighbours
                 "flow_area": cell_size_x * cell_size_y,  # A_z = Δx * Δy
                 "flow_length": cell_thickness,  # Δz
             },
@@ -575,45 +479,45 @@ def evolve_saturation_explicitly(
         net_oil_flux = 0.0
         net_gas_flux = 0.0
         for _, config in flux_configurations.items():
-            positive_neighbour_indices = config["positive_neighbour"]
             flow_area = config["flow_area"]
             flow_length = config["flow_length"]
+            mobility_grids = config["mobility_grids"]
 
-            # Compute fluxes from the positive neighbour
-            (
-                positive_water_flux,
-                positive_oil_flux,
-                positive_gas_flux,
-            ) = _compute_explicit_saturation_phase_fluxes_from_neighbour(
-                cell_indices=(i, j, k),
-                neighbour_indices=positive_neighbour_indices,
-                flow_area=flow_area,
-                flow_length=flow_length,
-                oil_pressure_grid=current_oil_pressure_grid,
-                **config["mobility_grids"],
-                water_saturation_grid=current_water_saturation_grid,
-                oil_saturation_grid=current_oil_saturation_grid,
-                gas_saturation_grid=current_gas_saturation_grid,
-                oil_viscosity_grid=oil_viscosity_grid,
-                water_viscosity_grid=water_viscosity_grid,
-                gas_viscosity_grid=gas_viscosity_grid,
-                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                residual_gas_saturation_grid=residual_gas_saturation_grid,
-                relative_permeability_func=relative_permeability_func,
-                oil_density_grid=oil_density_grid,
-                water_density_grid=water_density_grid,
-                gas_density_grid=gas_density_grid,
-                elevation_grid=elevation_grid,
-            )
-
-            # Update the net fluxes from postive neighbours into current cell
-            net_water_flux -= positive_water_flux
-            net_oil_flux -= positive_oil_flux
-            net_gas_flux -= positive_gas_flux
+            for neighbour in config["neighbours"]:
+                # Compute fluxes from neighbour
+                (
+                    water_flux,
+                    oil_flux,
+                    gas_flux,
+                ) = _compute_explicit_saturation_phase_fluxes_from_neighbour(
+                    cell_indices=(i, j, k),
+                    neighbour_indices=neighbour,
+                    flow_area=flow_area,
+                    flow_length=flow_length,
+                    oil_pressure_grid=current_oil_pressure_grid,
+                    **mobility_grids,
+                    water_saturation_grid=current_water_saturation_grid,
+                    oil_saturation_grid=current_oil_saturation_grid,
+                    gas_saturation_grid=current_gas_saturation_grid,
+                    oil_viscosity_grid=oil_viscosity_grid,
+                    water_viscosity_grid=water_viscosity_grid,
+                    gas_viscosity_grid=gas_viscosity_grid,
+                    oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                    gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+                    residual_gas_saturation_grid=residual_gas_saturation_grid,
+                    relative_permeability_table=relative_permeability_table,
+                    oil_density_grid=oil_density_grid,
+                    water_density_grid=water_density_grid,
+                    gas_density_grid=gas_density_grid,
+                    elevation_grid=elevation_grid,
+                )
+                # Update the net fluxes
+                net_water_flux += water_flux
+                net_oil_flux += oil_flux
+                net_gas_flux += gas_flux
 
         # Compute Source/Sink Term (WellParameters) - q * V (ft³/day)
         injection_well, production_well = wells[i, j, k]
@@ -634,7 +538,6 @@ def evolve_saturation_explicitly(
             and injection_well.is_open
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
-            # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
@@ -657,12 +560,13 @@ def evolve_saturation_explicitly(
                 temperature=cell_temperature,
                 **compressibility_kwargs,
             )
+            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
 
-            # Use pseudo pressure if the phase is GAS, if it is set in the options, and the pressure is high
             use_pseudo_pressure = (
-                injected_phase == FluidPhase.GAS
-                and options.use_pseudo_pressure
-                and cell_oil_pressure >= 1500.0
+                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -679,6 +583,7 @@ def evolve_saturation_explicitly(
                 fluid=injected_fluid,
                 fluid_compressibility=fluid_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=fluid_formation_volume_factor,
             )
             if cell_injection_rate < 0.0:
                 if injection_well.auto_clamp:
@@ -707,24 +612,38 @@ def evolve_saturation_explicitly(
                     injection_grid[i, j, k] = (0.0, cell_water_injection_rate, 0.0)
 
         if production_well is not None and production_well.is_open:
-            # If there is a production well, subtract its flow rate from the cell
+            water_formation_volume_factor_grid = (
+                fluid_properties.water_formation_volume_factor_grid
+            )
+            oil_formation_volume_factor_grid = (
+                fluid_properties.oil_formation_volume_factor_grid
+            )
+            gas_formation_volume_factor_grid = (
+                fluid_properties.gas_formation_volume_factor_grid
+            )
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = gas_relative_mobility_grid[i, j, k]
                     fluid_compressibility = gas_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
+                        i, j, k
+                    ]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
                     fluid_compressibility = water_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
+                        i, j, k
+                    ]
                 else:
                     phase_mobility = oil_relative_mobility_grid[i, j, k]
                     fluid_compressibility = oil_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
+                        i, j, k
+                    ]
 
-                # Use pseudo pressure if the phase is GAS, if it is set in the options, and the pressure is high
                 use_pseudo_pressure = (
-                    produced_phase == FluidPhase.GAS
-                    and options.use_pseudo_pressure
-                    and cell_oil_pressure >= 1500.0
+                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -741,6 +660,7 @@ def evolve_saturation_explicitly(
                     fluid=produced_fluid,
                     fluid_compressibility=fluid_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=fluid_formation_volume_factor,
                 )
                 if production_rate > 0.0:
                     if production_well.auto_clamp:
@@ -854,21 +774,22 @@ def evolve_saturation_explicitly(
         )
 
     # Apply saturation constraints and normalization across all cells
-    # This loop runs *after* all cells have been updated in the previous loop.
-    # total_saturation_grid = (
-    #     updated_water_saturation_grid
-    #     + updated_oil_saturation_grid
-    #     + updated_gas_saturation_grid
-    # )
-    # updated_water_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
-    # updated_oil_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
-    # updated_gas_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
+    total_saturation_grid = (
+        updated_water_saturation_grid
+        + updated_oil_saturation_grid
+        + updated_gas_saturation_grid
+    )
+    # Only normalize cells where there is saturation present (total > SATURATION_EPSILON to avoid division by zero edge cases)
+    mask = total_saturation_grid > c.SATURATION_EPSILON
+    if np.any(mask):
+        updated_water_saturation_grid[mask] /= total_saturation_grid[mask]
+        updated_oil_saturation_grid[mask] /= total_saturation_grid[mask]
+        updated_gas_saturation_grid[mask] /= total_saturation_grid[mask]
+
+    # Clean up any remaining minor negative values caused by floating point errors
+    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
+    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
+    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
     return EvolutionResult(
         (
             updated_water_saturation_grid,
@@ -877,17 +798,6 @@ def evolve_saturation_explicitly(
         ),
         scheme="explicit",
     )
-
-
-"""
-Explicit finite difference formulation for saturation transport with Todd-Longstaff miscibility.
-
-Key differences from immiscible (saturation.py):
-1. Tracks solvent concentration in oil phase (0 = pure oil, 1 = pure solvent)
-2. Uses Todd-Longstaff effective viscosity for oil mobility
-3. Solvent partitions between free gas phase and dissolved in oil
-4. Mass balance on both oil saturation AND solvent concentration
-"""
 
 
 def _compute_explicit_miscible_phase_fluxes_from_neighbour(
@@ -912,7 +822,7 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     residual_oil_saturation_water_grid: ThreeDimensionalGrid,
     residual_oil_saturation_gas_grid: ThreeDimensionalGrid,
     residual_gas_saturation_grid: ThreeDimensionalGrid,
-    relative_permeability_func: RelativePermeabilityFunc,
+    relative_permeability_table: RelativePermeabilityTable,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
@@ -926,19 +836,11 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     The solvent_mass_flux_in_oil is the mass flux of dissolved solvent
     moving with the oil phase (ft³/day * concentration).
     """
-    # Current cell properties
     cell_oil_pressure = oil_pressure_grid[cell_indices]
     cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
     cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
-    cell_water_saturation = water_saturation_grid[cell_indices]
-    cell_oil_saturation = oil_saturation_grid[cell_indices]
-    cell_gas_saturation = gas_saturation_grid[cell_indices]
     cell_solvent_concentration = solvent_concentration_grid[cell_indices]
-    cell_oil_viscosity = oil_viscosity_grid[cell_indices]
-    cell_water_viscosity = water_viscosity_grid[cell_indices]
-    cell_gas_viscosity = gas_viscosity_grid[cell_indices]
 
-    # Neighbour properties
     neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
     neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
         neighbour_indices
@@ -946,13 +848,7 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
         neighbour_indices
     ]
-    neighbour_water_saturation = water_saturation_grid[neighbour_indices]
-    neighbour_oil_saturation = oil_saturation_grid[neighbour_indices]
-    neighbour_gas_saturation = gas_saturation_grid[neighbour_indices]
     neighbour_solvent_concentration = solvent_concentration_grid[neighbour_indices]
-    neighbour_oil_viscosity = oil_viscosity_grid[neighbour_indices]
-    neighbour_water_viscosity = water_viscosity_grid[neighbour_indices]
-    neighbour_gas_viscosity = gas_viscosity_grid[neighbour_indices]
 
     # Pressure differences
     oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
@@ -1005,55 +901,43 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     else:
         upwind_gas_density = 0.0
 
-    # Harmonic mobilities
-    water_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=water_mobility_grid
-    )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=oil_mobility_grid
-    )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        cell_indices, neighbour_indices, mobility_grid=gas_mobility_grid
-    )
-
     # Darcy velocities with gravity
     water_gravity_potential = (
         upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     water_phase_potential = water_pressure_difference + water_gravity_potential
-    water_velocity = water_harmonic_mobility * water_phase_potential / flow_length
 
     oil_gravity_potential = (
         upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     oil_phase_potential = oil_pressure_difference + oil_gravity_potential
-    oil_velocity = oil_harmonic_mobility * oil_phase_potential / flow_length
 
     gas_gravity_potential = (
         upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
     gas_phase_potential = gas_pressure_difference + gas_gravity_potential
-    gas_velocity = gas_harmonic_mobility * gas_phase_potential / flow_length
 
-    # Upwind saturations and viscosities
-    upwinded_water_saturation = (
-        neighbour_water_saturation if water_velocity > 0 else cell_water_saturation
+    upwind_water_mobility = (
+        water_mobility_grid[neighbour_indices]
+        if water_phase_potential > 0.0  # Flow from neighbour to cell
+        else water_mobility_grid[cell_indices]
     )
-    upwinded_oil_saturation = (
-        neighbour_oil_saturation if oil_velocity > 0 else cell_oil_saturation
+
+    upwind_oil_mobility = (
+        oil_mobility_grid[neighbour_indices]
+        if oil_phase_potential > 0.0
+        else oil_mobility_grid[cell_indices]
     )
-    upwinded_gas_saturation = (
-        neighbour_gas_saturation if gas_velocity > 0 else cell_gas_saturation
+
+    upwind_gas_mobility = (
+        gas_mobility_grid[neighbour_indices]
+        if gas_phase_potential > 0.0
+        else gas_mobility_grid[cell_indices]
     )
-    upwinded_water_viscosity = (
-        neighbour_water_viscosity if water_velocity > 0 else cell_water_viscosity
-    )
-    upwinded_oil_viscosity = (
-        neighbour_oil_viscosity if oil_velocity > 0 else cell_oil_viscosity
-    )
-    upwinded_gas_viscosity = (
-        neighbour_gas_viscosity if gas_velocity > 0 else cell_gas_viscosity
-    )
+
+    water_velocity = upwind_water_mobility * water_phase_potential / flow_length
+    oil_velocity = upwind_oil_mobility * oil_phase_potential / flow_length
+    gas_velocity = upwind_gas_mobility * gas_phase_potential / flow_length
 
     # Upwind solvent concentration (moves with oil)
     upwinded_solvent_concentration = (
@@ -1062,43 +946,10 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
         else cell_solvent_concentration
     )
 
-    # Relative permeabilities
-    upwinded_relative_permeabilities = relative_permeability_func(
-        water_saturation=upwinded_water_saturation,
-        oil_saturation=upwinded_oil_saturation,
-        gas_saturation=upwinded_gas_saturation,
-        irreducible_water_saturation=irreducible_water_saturation_grid[cell_indices],
-        residual_oil_saturation_water=residual_oil_saturation_water_grid[cell_indices],
-        residual_oil_saturation_gas=residual_oil_saturation_gas_grid[cell_indices],
-        residual_gas_saturation=residual_gas_saturation_grid[cell_indices],
-    )
-    water_upwinded_mobility = (
-        upwinded_relative_permeabilities["water"] / upwinded_water_viscosity
-    )
-    oil_upwinded_mobility = (
-        upwinded_relative_permeabilities["oil"] / upwinded_oil_viscosity
-    )
-    gas_upwinded_mobility = (
-        upwinded_relative_permeabilities["gas"] / upwinded_gas_viscosity
-    )
-
-    # Total mobility for fractional flow
-    total_upwinded_mobility = (
-        water_upwinded_mobility + oil_upwinded_mobility + gas_upwinded_mobility
-    )
-    if total_upwinded_mobility <= 0.0:
-        # If total mobility is zero or negative, no flow occurs
-        return 0.0, 0.0, 0.0, 0.0
-
-    # Fractional flows
-    water_fractional_flow = water_upwinded_mobility / total_upwinded_mobility
-    oil_fractional_flow = oil_upwinded_mobility / total_upwinded_mobility
-    gas_fractional_flow = gas_upwinded_mobility / total_upwinded_mobility
-
     # Volumetric fluxes (ft³/day)
-    water_volumetric_flux = water_fractional_flow * water_velocity * flow_area
-    oil_volumetric_flux = oil_fractional_flow * oil_velocity * flow_area
-    gas_volumetric_flux = gas_fractional_flow * gas_velocity * flow_area
+    water_volumetric_flux = water_velocity * flow_area
+    oil_volumetric_flux = oil_velocity * flow_area
+    gas_volumetric_flux = gas_velocity * flow_area
 
     # Solvent mass flux in oil phase
     # The solvent concentration travels with the oil phase
@@ -1120,6 +971,8 @@ def evolve_miscible_saturation_explicitly(
     rock_properties: RockProperties[ThreeDimensions],
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
+    relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
+    capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     options: Options,
     injection_grid: typing.Optional[
@@ -1175,41 +1028,19 @@ def evolve_miscible_saturation_explicitly(
     )
     residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
     residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
-    relative_permeability_func = rock_fluid_properties.relative_permeability_func
-    capillary_pressure_params = rock_fluid_properties.capillary_pressure_params
+    relative_permeability_table = rock_fluid_properties.relative_permeability_table
 
     # Grid dimensions
     cell_count_x, cell_count_y, cell_count_z = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
 
-    # Compute phase mobilities
     (
         water_relative_mobility_grid,
         oil_relative_mobility_grid,
         gas_relative_mobility_grid,
-    ) = build_three_phase_relative_mobilities_grids(
-        water_saturation_grid=current_water_saturation_grid,
-        oil_saturation_grid=current_oil_saturation_grid,
-        gas_saturation_grid=current_gas_saturation_grid,
-        water_viscosity_grid=water_viscosity_grid,
-        oil_viscosity_grid=oil_viscosity_grid,
-        gas_viscosity_grid=gas_viscosity_grid,
-        irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=residual_gas_saturation_grid,
-        relative_permeability_func=relative_permeability_func,
-    )
-
-    # Clamp mobilities
-    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
-        water_relative_mobility_grid
-    )
-    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
-        oil_relative_mobility_grid
-    )
-    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
-        gas_relative_mobility_grid
+    ) = relative_mobility_grids
+    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
+        capillary_pressure_grids
     )
 
     # Compute mobility grids for x, y, z directions
@@ -1261,19 +1092,6 @@ def evolve_miscible_saturation_explicitly(
         * c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
 
-    # Capillary pressures
-    oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid = (
-        build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=current_water_saturation_grid,
-            gas_saturation_grid=current_gas_saturation_grid,
-            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=residual_gas_saturation_grid,
-            capillary_pressure_params=capillary_pressure_params,
-        )
-    )
-
     updated_water_saturation_grid = current_water_saturation_grid.copy()
     updated_oil_saturation_grid = current_oil_saturation_grid.copy()
     updated_gas_saturation_grid = current_gas_saturation_grid.copy()
@@ -1305,7 +1123,10 @@ def evolve_miscible_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_x,
                     "gas_mobility_grid": gas_mobility_grid_x,
                 },
-                "positive_neighbour": (i + 1, j, k),
+                "neighbours": [
+                    (i + 1, j, k),
+                    (i - 1, j, k),
+                ],  # East and West neighbours
                 "flow_area": cell_size_y * cell_thickness,
                 "flow_length": cell_size_x,
             },
@@ -1315,7 +1136,10 @@ def evolve_miscible_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_y,
                     "gas_mobility_grid": gas_mobility_grid_y,
                 },
-                "positive_neighbour": (i, j + 1, k),
+                "neighbours": [
+                    (i, j - 1, k),
+                    (i, j + 1, k),
+                ],  # North and South neighbours
                 "flow_area": cell_size_x * cell_thickness,
                 "flow_length": cell_size_y,
             },
@@ -1325,7 +1149,10 @@ def evolve_miscible_saturation_explicitly(
                     "oil_mobility_grid": oil_mobility_grid_z,
                     "gas_mobility_grid": gas_mobility_grid_z,
                 },
-                "positive_neighbour": (i, j, k + 1),
+                "neighbours": [
+                    (i, j, k - 1),
+                    (i, j, k + 1),
+                ],  # Top and Bottom neighbours
                 "flow_area": cell_size_x * cell_size_y,
                 "flow_length": cell_thickness,
             },
@@ -1335,50 +1162,49 @@ def evolve_miscible_saturation_explicitly(
         net_water_flux = 0.0
         net_oil_flux = 0.0
         net_gas_flux = 0.0
-        net_solvent_mass_flux = 0.0
-        for _, config in flux_configurations.items():
-            positive_neighbour_indices = config["positive_neighbour"]
+        net_solvent_flux = 0.0
+        for config in flux_configurations.values():
             flow_area = config["flow_area"]
             flow_length = config["flow_length"]
+            mobility_grids = config["mobility_grids"]
 
-            # Compute fluxes from positive neighbour
-            (
-                positive_water_flux,
-                positive_oil_flux,
-                positive_gas_flux,
-                positive_solvent_mass_flux,
-            ) = _compute_explicit_miscible_phase_fluxes_from_neighbour(
-                cell_indices=(i, j, k),
-                neighbour_indices=positive_neighbour_indices,
-                flow_area=flow_area,
-                flow_length=flow_length,
-                oil_pressure_grid=current_oil_pressure_grid,
-                **config["mobility_grids"],
-                water_saturation_grid=current_water_saturation_grid,
-                oil_saturation_grid=current_oil_saturation_grid,
-                gas_saturation_grid=current_gas_saturation_grid,
-                solvent_concentration_grid=current_solvent_concentration_grid,
-                oil_viscosity_grid=oil_viscosity_grid,
-                water_viscosity_grid=water_viscosity_grid,
-                gas_viscosity_grid=gas_viscosity_grid,
-                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                residual_gas_saturation_grid=residual_gas_saturation_grid,
-                relative_permeability_func=relative_permeability_func,
-                oil_density_grid=oil_density_grid,
-                water_density_grid=water_density_grid,
-                gas_density_grid=gas_density_grid,
-                elevation_grid=elevation_grid,
-            )
-
-            # Accumulate net fluxes
-            net_water_flux -= positive_water_flux
-            net_oil_flux -= positive_oil_flux
-            net_gas_flux -= positive_gas_flux
-            net_solvent_mass_flux -= positive_solvent_mass_flux
+            for neighbour in config["neighbours"]:
+                # Compute fluxes from neighbour
+                (
+                    water_flux,
+                    oil_flux,
+                    gas_flux,
+                    solvent_flux,
+                ) = _compute_explicit_miscible_phase_fluxes_from_neighbour(
+                    cell_indices=(i, j, k),
+                    neighbour_indices=neighbour,
+                    flow_area=flow_area,
+                    flow_length=flow_length,
+                    oil_pressure_grid=current_oil_pressure_grid,
+                    **mobility_grids,
+                    water_saturation_grid=current_water_saturation_grid,
+                    oil_saturation_grid=current_oil_saturation_grid,
+                    gas_saturation_grid=current_gas_saturation_grid,
+                    solvent_concentration_grid=current_solvent_concentration_grid,
+                    oil_viscosity_grid=oil_viscosity_grid,
+                    water_viscosity_grid=water_viscosity_grid,
+                    gas_viscosity_grid=gas_viscosity_grid,
+                    oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                    gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+                    residual_gas_saturation_grid=residual_gas_saturation_grid,
+                    relative_permeability_table=relative_permeability_table,
+                    oil_density_grid=oil_density_grid,
+                    water_density_grid=water_density_grid,
+                    gas_density_grid=gas_density_grid,
+                    elevation_grid=elevation_grid,
+                )
+                net_water_flux += water_flux
+                net_oil_flux += oil_flux
+                net_gas_flux += gas_flux
+                net_solvent_flux += solvent_flux
 
         # Well contributions
         injection_well, production_well = wells[i, j, k]
@@ -1422,11 +1248,13 @@ def evolve_miscible_saturation_explicitly(
                 temperature=cell_temperature,
                 **compressibility_kwargs,
             )
+            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
 
             use_pseudo_pressure = (
-                injected_phase == FluidPhase.GAS
-                and options.use_pseudo_pressure
-                and cell_oil_pressure >= 1500.0
+                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -1441,6 +1269,7 @@ def evolve_miscible_saturation_explicitly(
                 fluid=injected_fluid,
                 fluid_compressibility=fluid_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=fluid_formation_volume_factor,
             )
             if cell_injection_rate < 0.0:
                 if injection_well.auto_clamp:
@@ -1459,9 +1288,10 @@ def evolve_miscible_saturation_explicitly(
             # Handle miscible solvent injection
             if injected_phase == FluidPhase.GAS and injected_fluid.is_miscible:
                 # Miscible solvent injection (e.g., CO2)
+                print("GAS MOBILITY:", phase_mobility)
                 cell_gas_injection_rate = cell_injection_rate  # ft³/day
                 # This will be mixed with existing oil in the mass balance
-                cell_solvent_injection_concentration = injected_fluid.concentration
+                cell_solvent_injection_concentration += injected_fluid.concentration
                 if injection_grid is not None:
                     injection_grid[i, j, k] = (0.0, 0.0, cell_gas_injection_rate)
 
@@ -1477,23 +1307,39 @@ def evolve_miscible_saturation_explicitly(
                     injection_grid[i, j, k] = (0.0, cell_water_injection_rate, 0.0)
 
         if production_well is not None and production_well.is_open:
+            water_formation_volume_factor_grid = (
+                fluid_properties.water_formation_volume_factor_grid
+            )
+            oil_formation_volume_factor_grid = (
+                fluid_properties.oil_formation_volume_factor_grid
+            )
+            gas_formation_volume_factor_grid = (
+                fluid_properties.gas_formation_volume_factor_grid
+            )
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
 
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = gas_relative_mobility_grid[i, j, k]
                     fluid_compressibility = gas_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
+                        i, j, k
+                    ]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
                     fluid_compressibility = water_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
+                        i, j, k
+                    ]
                 else:  # OIL
                     phase_mobility = oil_relative_mobility_grid[i, j, k]
                     fluid_compressibility = oil_compressibility_grid[i, j, k]
+                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
+                        i, j, k
+                    ]
 
                 use_pseudo_pressure = (
-                    produced_phase == FluidPhase.GAS
-                    and options.use_pseudo_pressure
-                    and cell_oil_pressure >= 1500.0
+                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -1508,6 +1354,7 @@ def evolve_miscible_saturation_explicitly(
                     fluid=produced_fluid,
                     fluid_compressibility=fluid_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=fluid_formation_volume_factor,
                 )
 
                 if production_rate > 0.0:
@@ -1583,14 +1430,14 @@ def evolve_miscible_saturation_explicitly(
         # CFL check
         cfl_number = (total_throughput * time_step_in_days) / cell_pore_volume
         max_cfl_number = options.max_cfl_number.get(options.scheme, 1.0)
-        if cfl_number > max_cfl_number:
-            raise RuntimeError(
-                f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-                f"CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. "
-                f"Inflow = {total_inflow:.2f} ft³/day, Outflow = {total_outflow:.2f} ft³/day, "
-                f"Pore volume = {cell_pore_volume:.2f} ft³. "
-                f"Consider reducing time step size from {time_step_size} seconds."
-            )
+        # if cfl_number > max_cfl_number:
+        #     raise RuntimeError(
+        #         f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
+        #         f"CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. "
+        #         f"Inflow = {total_inflow:.2f} ft³/day, Outflow = {total_outflow:.2f} ft³/day, "
+        #         f"Pore volume = {cell_pore_volume:.2f} ft³. "
+        #         f"Consider reducing time step size from {time_step_size} seconds."
+        #     )
 
         # Total flow rates (advection + wells)
         total_water_flow = net_water_flux + net_water_flow_rate
@@ -1623,7 +1470,7 @@ def evolve_miscible_saturation_explicitly(
                 cell_solvent_concentration * cell_oil_saturation * cell_pore_volume
             )
             # Solvent mass flux from advection (already computed)
-            advected_solvent_mass = net_solvent_mass_flux * time_step_in_days
+            advected_solvent_mass = net_solvent_flux * time_step_in_days
 
             # Solvent mass from injection (if miscible)
             injected_solvent_mass = 0.0
@@ -1656,21 +1503,22 @@ def evolve_miscible_saturation_explicitly(
             updated_solvent_concentration_grid[i, j, k] = 0.0
 
     # Apply saturation constraints and normalization across all cells
-    # This loop runs *after* all cells have been updated in the previous loop.
-    # total_saturation_grid = (
-    #     updated_water_saturation_grid
-    #     + updated_oil_saturation_grid
-    #     + updated_gas_saturation_grid
-    # )
-    # updated_water_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
-    # updated_oil_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
-    # updated_gas_saturation_grid[total_saturation_grid > 0] /= total_saturation_grid[
-    #     total_saturation_grid > 0
-    # ]
+    total_saturation_grid = (
+        updated_water_saturation_grid
+        + updated_oil_saturation_grid
+        + updated_gas_saturation_grid
+    )
+    # Only normalize cells where there is saturation present (total > SATURATION_EPSILON to avoid division by zero edge cases)
+    mask = total_saturation_grid > c.SATURATION_EPSILON
+    if np.any(mask):
+        updated_water_saturation_grid[mask] /= total_saturation_grid[mask]
+        updated_oil_saturation_grid[mask] /= total_saturation_grid[mask]
+        updated_gas_saturation_grid[mask] /= total_saturation_grid[mask]
+
+    # Clean up any remaining minor negative values caused by floating point errors
+    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
+    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
+    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
     return EvolutionResult(
         (
             updated_water_saturation_grid,

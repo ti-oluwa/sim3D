@@ -28,7 +28,6 @@ from sim3D.grids.properties import (
     build_water_viscosity_grid,
 )
 from sim3D.models import (
-    CapillaryPressureParameters,
     FluidProperties,
     ReservoirModel,
     RockFluidProperties,
@@ -43,7 +42,8 @@ from sim3D.properties import (
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
-    RelativePermeabilityFunc,
+    RelativePermeabilityTable,
+    CapillaryPressureTable,
     WellLocation,
 )
 from sim3D.wells import (
@@ -262,7 +262,8 @@ def reservoir_model(
     residual_gas_saturation_grid: NDimensionalGrid[NDimension],
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
     connate_water_saturation_grid: NDimensionalGrid[NDimension],
-    relative_permeability_func: RelativePermeabilityFunc,
+    relative_permeability_table: RelativePermeabilityTable,
+    capillary_pressure_table: CapillaryPressureTable,
     gas_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_compressibility_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
@@ -277,7 +278,6 @@ def reservoir_model(
     water_bubble_point_pressure_grid: typing.Optional[
         NDimensionalGrid[NDimension]
     ] = None,
-    capillary_pressure_params: typing.Optional[CapillaryPressureParameters] = None,
     solution_gas_to_oil_ratio_grid: typing.Optional[
         NDimensionalGrid[NDimension]
     ] = None,
@@ -340,7 +340,6 @@ def reservoir_model(
     :param water_bubble_point_pressure_grid: Water bubble point pressure grid (psi), optional.
     :param connate_water_saturation_grid: Connate water saturation grid (fraction).
     :param irreducible_water_saturation_grid: Irreducible water saturation grid (fraction).
-    :param capillary_pressure_params: Capillary pressure parameters, optional.
     :param solution_gas_to_oil_ratio_grid: Solution gas to oil ratio grid (scf/bbl), optional.
     :param gas_solubility_in_water_grid: Gas solubility in water grid (scf/bbl), optional.
     :param oil_formation_volume_factor_grid: Oil formation volume factor grid (bbl/scf), optional.
@@ -626,9 +625,8 @@ def reservoir_model(
         connate_water_saturation_grid=connate_water_saturation_grid,
     )
     rock_fluid_properties = RockFluidProperties(
-        relative_permeability_func=relative_permeability_func,
-        capillary_pressure_params=capillary_pressure_params
-        or CapillaryPressureParameters(),
+        relative_permeability_table=relative_permeability_table,
+        capillary_pressure_table=capillary_pressure_table,
     )
     if boundary_conditions is None:
         boundary_conditions = BoundaryConditions(
@@ -731,5 +729,7 @@ def wells(
     :return: ``Wells`` instance
     """
     return Wells(
-        injection_wells=injectors or [], production_wells=producers or [], **kwargs
+        injection_wells=injectors or [],
+        production_wells=producers or [],
+        **kwargs,
     )

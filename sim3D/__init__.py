@@ -13,6 +13,7 @@ from sim3D.boundaries import *  # noqa
 from sim3D.wells import *  # noqa
 from sim3D.types import *  # noqa
 from sim3D.relperm import *  # noqa
+from sim3D.capillary_pressures import *  # noqa
 from sim3D.visualization import *  # noqa
 from sim3D.grids import *  # noqa
 from sim3D.states import *  # noqa

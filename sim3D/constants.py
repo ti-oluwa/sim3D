@@ -55,6 +55,12 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     "STANDARD_TEMPERATURE_IMPERIAL": Constant(
         value=60.0, description="Standard temperature", unit="°F"
     ),
+    "STANDARD_TEMPERATURE_RANKINE": Constant(
+        value=518.67, description="Standard temperature (15.6°C)", unit="°R"
+    ),
+    "STANDARD_TEMPERATURE_CELSIUS": Constant(
+        value=15.6, description="Standard temperature", unit="°C"
+    ),
     # Thermal and Compressibility Properties
     "OIL_THERMAL_EXPANSION_COEFFICIENT": Constant(
         value=9.7e-4, description="Thermal expansion coefficient for oil", unit="1/K"
@@ -394,6 +400,11 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Conversion factor from mD/cP to ft²/(psi·s)",
         unit="(ft²/(psi·s))/(mD/cP)",
     ),
+    "MILLIDARCIES_FT_PER_CENTIPOISE_TO_FT3_PER_PSI_PER_DAY": Constant(
+        value=0.001127,
+        unit="(ft³/(psi·day))/(mD·ft/cP)",
+        description="Conversion factor from mD·ft/cP to ft³/(psi·day)",
+    ),
     # Gravity
     "ACCELERATION_DUE_TO_GRAVITY_M_PER_S2": Constant(
         value=9.80665, description="Standard acceleration due to gravity", unit="m/s²"
@@ -438,6 +449,21 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Maximum valid temperature (above this, fluid model may be non-reservoir like)",
         unit="°F",
     ),
+    "GAS_PSEUDO_PRESSURE_THRESHOLD": Constant(
+        value=1500.0,
+        description="Pressure threshold above which gas pseudo-pressure is used (psi)",
+        unit="psi",
+    ),
+    "GAS_PSEUDO_PRESSURE_POINTS": Constant(
+        value=5000,
+        description="Number of points to compute when generating gas pseudo-pressure table internally",
+        unit="points",
+    ),
+    "SATURATION_EPSILON": Constant(
+        value=1e-6,
+        description="Small epsilon value to prevent numerical issues with saturations at 0 or 1",
+        unit="fraction",
+    ),
 }
 
 
@@ -452,7 +478,6 @@ class Constants:
     __slots__ = ("_store",)
 
     def __new__(cls) -> "Constants":
-        """Create a new Constants instance."""
         instance = super().__new__(cls)
         instance._store = {}
         return instance
@@ -665,14 +690,14 @@ class _ConstantsProvider:
 
     @property
     def constants(self) -> Constants:
-        """Get the current Constants instance.
+        """Get the current context's `Constants` instance.
 
-        :return: Current Constants instance
+        :return: Current `Constants` instance
         """
         return _constants_context.get()
 
     def __getattr__(self, name: str) -> typing.Any:
-        """Get a constant's value from the current Constants instance.
+        """Get a constant's value from the current context's `Constants` instance.
 
         :param name: Name of the constant
         :return: Value of the constant
@@ -681,7 +706,7 @@ class _ConstantsProvider:
         return getattr(self.constants, name)
 
     def __getitem__(self, name: str) -> Constant:
-        """Get a Constant object from the current Constants instance.
+        """Get a Constant object from the current context's `Constants` instance.
 
         :param name: Name of the constant
         :return: Constant object

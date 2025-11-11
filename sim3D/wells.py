@@ -2,12 +2,15 @@ import functools
 import itertools
 import math
 import typing
+import logging
 
 import attrs
 import numpy as np
 from scipy.integrate import quad
+from scipy.interpolate import interp1d
 from typing_extensions import Self
 
+from sim3D.constants import c
 from sim3D.properties import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
@@ -15,10 +18,15 @@ from sim3D.properties import (
     compute_gas_free_water_formation_volume_factor,
     compute_gas_viscosity,
     compute_water_compressibility,
+    compute_water_density,
     compute_water_viscosity,
+    fahrenheit_to_rankine,
+    compute_gas_formation_volume_factor,
+    compute_water_formation_volume_factor,
 )
 from sim3D.types import ActionFunc, FluidPhase, HookFunc, Orientation, WellLocation
 
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "WellFluid",
@@ -35,7 +43,8 @@ __all__ = [
     "compute_well_index",
     "compute_3D_effective_drainage_radius",
     "compute_2D_effective_drainage_radius",
-    "compute_well_rate",
+    "compute_oil_well_rate",
+    "compute_gas_well_rate",
     "_expand_intervals",
 ]
 
@@ -52,6 +61,54 @@ class WellFluid:
     """Specific gravity of the fluid in (lbm/ft³)."""
     molecular_weight: float = attrs.field(validator=attrs.validators.ge(0))
     """Molecular weight of the fluid in (g/mol)."""
+
+    @functools.cache
+    def get_pseudo_pressure_table(
+        self,
+        temperature: float = 60.0,
+        reference_pressure: float = 14.7,
+        pressure_range: typing.Tuple[float, float] = (14.7, 147000.0),
+        points: int = 1000,
+    ) -> "GasPseudoPressureTable":
+        """
+        Gas pseudo-pressure table for this fluid.
+
+        :param temperature: The temperature at which to evaluate the pseudo-pressure table (°F).
+        :param reference_pressure: The reference pressure for the pseudo-pressure table (psi).
+        :param pressure_range: The pressure range for the pseudo-pressure table (psi).
+        :param points: The number of points in the pseudo-pressure table.
+        :return: A `GasPseudoPressureTable` instance for the fluid.
+        """
+        if self.phase != FluidPhase.GAS:
+            raise ValueError("Pseudo-pressure table is only applicable for gas phase.")
+
+        @functools.lru_cache(maxsize=1024)
+        def z_factor_func(pressure: float) -> float:
+            return compute_gas_compressibility_factor(
+                pressure=pressure,
+                temperature=temperature,
+                gas_gravity=self.specific_gravity,
+            )
+
+        def viscosity_func(pressure: float) -> float:
+            return compute_gas_viscosity(
+                temperature=temperature,
+                gas_density=compute_gas_density(
+                    pressure=pressure,
+                    temperature=temperature,
+                    gas_gravity=self.specific_gravity,
+                    gas_compressibility_factor=z_factor_func(pressure),
+                ),
+                gas_molecular_weight=self.molecular_weight,
+            )
+
+        return GasPseudoPressureTable(
+            z_factor_func=z_factor_func,
+            viscosity_func=viscosity_func,
+            reference_pressure=reference_pressure,
+            pressure_range=pressure_range,
+            points=points,
+        )
 
 
 @attrs.define(slots=True, frozen=True)
@@ -100,12 +157,15 @@ class InjectedFluid(WellFluid):
                     "Miscible fluids must have either `minimum_miscibility_pressure` or `todd_longstaff_omega` defined."
                 )
 
-    def get_viscosity(self, pressure: float, temperature: float) -> float:
+    def get_viscosity(
+        self, pressure: float, temperature: float, **kwargs: typing.Any
+    ) -> float:
         """
         Get the viscosity of the fluid at given pressure and temperature.
 
         :param pressure: The pressure at which to evaluate the viscosity (psi).
         :param temperature: The temperature at which to evaluate the viscosity (°F).
+        :kwargs: Additional parameters for viscosity calculations.
         :return: The viscosity of the fluid (cP).
         """
         if self.phase == FluidPhase.WATER:
@@ -114,17 +174,22 @@ class InjectedFluid(WellFluid):
                 temperature=temperature,
                 salinity=self.salinity or 0.0,
             )
-        gas_z_factor = compute_gas_compressibility_factor(
-            pressure=pressure,
-            temperature=temperature,
-            gas_gravity=self.specific_gravity,
-        )
-        gas_density = compute_gas_density(
-            pressure=pressure,
-            temperature=temperature,
-            gas_gravity=self.specific_gravity,
-            gas_compressibility_factor=gas_z_factor,
-        )
+
+        gas_density = kwargs.get("gas_density", None)
+        if gas_density is None:
+            gas_z_factor = kwargs.get("gas_compressibility_factor", None)
+            if gas_z_factor is None:
+                gas_z_factor = compute_gas_compressibility_factor(
+                    pressure=pressure,
+                    temperature=temperature,
+                    gas_gravity=self.specific_gravity,
+                )
+            gas_density = compute_gas_density(
+                pressure=pressure,
+                temperature=temperature,
+                gas_gravity=self.specific_gravity,
+                gas_compressibility_factor=gas_z_factor,
+            )
         return compute_gas_viscosity(
             temperature=temperature,
             gas_density=gas_density,
@@ -140,6 +205,7 @@ class InjectedFluid(WellFluid):
         :param pressure: The pressure at which to evaluate the compressibility (psi).
         :param temperature: The temperature at which to evaluate the compressibility (°F).
         :kwargs: Additional parameters for compressibility calculations.
+
         For water:
             :kwarg bubble_point_pressure: The bubble point pressure (psi).
             :kwarg gas_formation_volume_factor: The gas formation volume factor (ft³/scf).
@@ -153,12 +219,15 @@ class InjectedFluid(WellFluid):
         :return: The compressibility of the fluid (psi⁻¹).
         """
         if self.phase == FluidPhase.WATER:
-            gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
-                pressure=pressure, temperature=temperature
+            gas_free_water_fvf = kwargs.get(
+                "gas_free_water_formation_volume_factor", None
             )
-            kwargs.setdefault(
-                "gas_free_water_formation_volume_factor", gas_free_water_fvf
-            )
+            if gas_free_water_fvf is None:
+                gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
+                    pressure=pressure, temperature=temperature
+                )
+                kwargs["gas_free_water_formation_volume_factor"] = gas_free_water_fvf
+
             return compute_water_compressibility(
                 pressure=pressure,
                 temperature=temperature,
@@ -169,6 +238,45 @@ class InjectedFluid(WellFluid):
         kwargs.setdefault("gas_gravity", self.specific_gravity)
         return compute_gas_compressibility(
             pressure=pressure, temperature=temperature, **kwargs
+        )
+
+    def get_formation_volume_factor(
+        self, pressure: float, temperature: float, **kwargs: typing.Any
+    ) -> float:
+        """
+        Get the formation volume factor of the fluid at given pressure and temperature.
+
+        :param pressure: The pressure at which to evaluate the formation volume factor (psi).
+        :param temperature: The temperature at which to evaluate the formation volume factor (°F).
+        :kwargs: Additional parameters for formation volume factor calculations.
+        :return: The formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        """
+        if self.phase == FluidPhase.WATER:
+            water_density = kwargs.get("water_density", None)
+            if water_density is None:
+                # Not need for gas free fvf or gas fvf, since injection water
+                # is typically gas free fresh water or degassed formation water
+                water_density = compute_water_density(
+                    pressure=pressure,
+                    temperature=temperature,
+                    salinity=self.salinity or 0.0,
+                )
+            return compute_water_formation_volume_factor(
+                salinity=self.salinity or 0.0,
+                water_density=water_density,
+            )
+
+        gas_z_factor = kwargs.get("gas_compressibility_factor", None)
+        if gas_z_factor is None:
+            gas_z_factor = compute_gas_compressibility_factor(
+                pressure=pressure,
+                temperature=temperature,
+                gas_gravity=self.specific_gravity,
+            )
+        return compute_gas_formation_volume_factor(
+            pressure=pressure,
+            temperature=temperature,
+            gas_compressibility_factor=gas_z_factor,
         )
 
 
@@ -420,11 +528,10 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         temperature: float,
         phase_mobility: float,
         well_index: float,
-        fluid: typing.Optional[WellFluidT] = None,
+        fluid: WellFluidT,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
-        z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
-        viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
+        formation_volume_factor: typing.Optional[float] = None,
     ) -> float:
         """
         Compute the flow rate for the well using Darcy's law.
@@ -434,67 +541,49 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         :param phase_mobility: The relative mobility of the fluid phase being produced or injected.
         :param well_index: The well index (md*ft).
         :param fluid: The fluid being produced or injected. If None, uses the well's injected_fluid.
+        :param formation_volume_factor: The formation volume factor of the fluid (bbl/STB or ft³/SCF).
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
-        :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
-        :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: The flow rate in (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobility.
+        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :return: The flow rate in (bbl/day or ft³/day).
         """
         # If no fluid is injected, return 0 flow rate
         if fluid is None or phase_mobility <= 0.0 or not self.is_open:
             return 0.0
 
-        compressibility_factor = 1.0
-
-        if use_pseudo_pressure and z_factor_func is None and viscosity_func is None:
-            specific_gravity = fluid.specific_gravity
-
-            @functools.cache
-            def _z_factor_func(pressure: float) -> float:
-                nonlocal specific_gravity, temperature
-
-                return compute_gas_compressibility_factor(
-                    pressure=pressure,
-                    temperature=temperature,
-                    gas_gravity=specific_gravity,
+        if fluid.phase == FluidPhase.GAS:
+            pseudo_pressure_table = None
+            # Only use pseudo-pressure for gas wells above threshold
+            if use_pseudo_pressure and pressure > c.GAS_PSEUDO_PRESSURE_THRESHOLD:
+                pseudo_pressure_table = fluid.get_pseudo_pressure_table(
+                    temperature=temperature, points=c.GAS_PSEUDO_PRESSURE_POINTS
                 )
 
-            @functools.cache
-            def _viscosity_func(pressure: float) -> float:
-                nonlocal specific_gravity, temperature
+            avg_pressure = (pressure + self.bottom_hole_pressure) * 0.5
+            avg_compressibility_factor = compute_gas_compressibility_factor(
+                pressure=avg_pressure,
+                temperature=temperature,
+                gas_gravity=fluid.specific_gravity,
+            )
+            return compute_gas_well_rate(
+                well_index=well_index,
+                pressure=pressure,
+                temperature=temperature,
+                bottom_hole_pressure=self.bottom_hole_pressure,
+                phase_mobility=phase_mobility,
+                use_pseudo_pressure=bool(use_pseudo_pressure),
+                pseudo_pressure_table=pseudo_pressure_table,
+                average_compressibility_factor=avg_compressibility_factor,
+                formation_volume_factor=formation_volume_factor,
+            )
 
-                z_factor = compute_gas_compressibility_factor(
-                    pressure=pressure,
-                    temperature=temperature,
-                    gas_gravity=specific_gravity,
-                )
-                density = compute_gas_density(
-                    pressure=pressure,
-                    temperature=temperature,
-                    gas_gravity=specific_gravity,
-                    gas_compressibility_factor=z_factor,
-                )
-                return compute_gas_viscosity(
-                    temperature=temperature,
-                    gas_density=density,
-                    gas_molecular_weight=fluid.molecular_weight,
-                )
-
-            z_factor_func = _z_factor_func
-            viscosity_func = _viscosity_func
-
-        if z_factor_func is not None:
-            compressibility_factor = z_factor_func(pressure)
-        return compute_well_rate(
+        # For water and oil wells
+        return compute_oil_well_rate(
             well_index=well_index,
             pressure=pressure,
             bottom_hole_pressure=self.bottom_hole_pressure,
             phase_mobility=phase_mobility,
-            use_pseudo_pressure=bool(use_pseudo_pressure),
-            compressibility_factor=compressibility_factor,
             fluid_compressibility=fluid_compressibility,
-            z_factor_func=z_factor_func,
-            viscosity_func=viscosity_func,
         )
 
     def shut_in(self) -> None:
@@ -672,11 +761,10 @@ class InjectionWell(Well[WellLocation, InjectedFluid]):
         temperature: float,
         phase_mobility: float,
         well_index: float,
-        fluid: typing.Optional[InjectedFluid] = None,
+        fluid: InjectedFluid,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
-        z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
-        viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
+        formation_volume_factor: typing.Optional[float] = None,
     ) -> float:
         """
         Compute the flow rate for the injection well using Darcy's law.
@@ -688,20 +776,18 @@ class InjectionWell(Well[WellLocation, InjectedFluid]):
         :param fluid: The fluid being injected into the well. If None, uses the well's injected_fluid property.
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
-        :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
-        :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: The flow rate (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobilities.
+        :param formation_volume_factor: The formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :return: The flow rate (bbl/day or ft³/day)
         """
         return super().get_flow_rate(
             pressure=pressure,
             temperature=temperature,
             phase_mobility=phase_mobility,
             well_index=well_index,
-            fluid=fluid or self.injected_fluid,
+            fluid=fluid,
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
-            z_factor_func=z_factor_func,
-            viscosity_func=viscosity_func,
+            formation_volume_factor=formation_volume_factor,
         )
 
 
@@ -715,46 +801,6 @@ class ProductionWell(Well[WellLocation, ProducedFluid]):
 
     produced_fluids: typing.Sequence[ProducedFluid] = attrs.field(factory=list)
     """List of fluids produced by the well. This can include multiple phases (e.g., oil, gas, water)."""
-
-    def get_flow_rates(
-        self,
-        pressure: float,
-        temperature: float,
-        phase_mobilities: typing.Sequence[float],
-        well_index: float,
-        use_pseudo_pressure: bool = False,
-        fluid_compressibility: typing.Optional[float] = None,
-        z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
-        viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
-    ) -> typing.Generator[float]:
-        """
-        Compute the flow rates for the produced fluids using Darcy's law.
-
-        :param pressure: The reservoir pressure at the well location (psi).
-        :param temperature: The reservoir temperature at the well location (°F).
-        :param phase_mobilities: The relative mobilities of the fluid phases being produced.
-            This should be a sequence with the same length as produced_fluids.
-        :param well_index: The well index (md*ft).
-        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
-        :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
-        :param z_factor_func: Function to compute the gas compressibility factor (dimensionless) at a given pressure. Required if use_pseudo_pressure is True.
-        :param viscosity_func: Function to compute the gas viscosity (cP) at a given pressure. Required if use_pseudo_pressure is True.
-        :return: A list of flow rates (bbl/day or ft³/day). Or (STB/day or SCF/day), if formation volume factor is incorporated into the phase mobilities.
-        """
-        return (
-            self.get_flow_rate(
-                pressure=pressure,
-                temperature=temperature,
-                phase_mobility=phase_mobility,
-                well_index=well_index,
-                fluid=fluid,
-                use_pseudo_pressure=use_pseudo_pressure,
-                fluid_compressibility=fluid_compressibility,
-                z_factor_func=z_factor_func,
-                viscosity_func=viscosity_func,
-            )
-            for fluid, phase_mobility in zip(self.produced_fluids, phase_mobilities)
-        )
 
 
 InjectionWellT = typing.TypeVar("InjectionWellT", bound=InjectionWell)
@@ -1151,107 +1197,204 @@ def compute_gas_pseudo_pressure(
     pressure: float,
     z_factor_func: typing.Callable[[float], float],
     viscosity_func: typing.Callable[[float], float],
+    reference_pressure: float = 14.7,
 ) -> float:
     """
-    Compute the gas pseudo-pressure.
+    Compute the gas pseudo-pressure using Al-Hussainy real-gas potential.
 
-    The formula for the gas pseudo-pressure is:
+    The pseudo-pressure is defined as:
+        m(P) = ∫[P_ref to P] (2*P' / (μ(P') * Z(P'))) dP'
 
-        m(p) = ∫(2 * p / μ(p) * z(p)) dp
+    This formulation accounts for gas compressibility and non-Darcy effects,
+    allowing the use of standard liquid-like flow equations for gas.
 
-    where:
-        - m(p) is the gas pseudo-pressure (psi²)
-        - p is the pressure (psi)
-        - z(p) is the gas compressibility factor (dimensionless)
+    Physical Interpretation:
+        - m(P) transforms the nonlinear gas diffusivity equation into a linear form
+        - At low pressure: m(P) ≈ P² (ideal gas limit)
+        - At high pressure: deviations due to Z-factor and viscosity changes
 
-    :param pressure: The pressure (psi).
-    :param compressibility_factor: The gas compressibility factor (dimensionless) at the given pressure.
-    :return: The gas pseudo-pressure (psi²).
+    :param pressure: Current pressure (psi)
+    :param z_factor_func: Function returning Z-factor at given pressure Z(P)
+    :param viscosity_func: Function returning viscosity at given pressure μ(P) in cP
+    :param reference_pressure: Reference pressure for integration (psi), typically 14.7
+    :return: Pseudo-pressure m(P) in psi²/cP
+
+    References:
+        Al-Hussainy, R., Ramey, H.J., and Crawford, P.B. (1966).
+        "The Flow of Real Gases Through Porous Media."
+        JPT, May 1966, pp. 624-636.
     """
     if pressure <= 0:
+        raise ValueError(f"Pressure must be positive, got {pressure}")
+    if reference_pressure <= 0:
+        raise ValueError(
+            f"Reference pressure must be positive, got {reference_pressure}"
+        )
+
+    # If pressure equals reference, pseudo-pressure is zero by definition
+    if abs(pressure - reference_pressure) < 1e-6:
         return 0.0
 
-    def integrand(pressure: float) -> float:
-        return 2 * pressure / (viscosity_func(pressure) * z_factor_func(pressure))
+    # Define the integrand: 2*P / (μ*Z)
+    def integrand(P: float) -> float:
+        """Integrand for pseudo-pressure calculation."""
+        # Add safety checks to prevent division by zero
+        Z = z_factor_func(P)
+        mu = viscosity_func(P)
 
-    result, _ = quad(integrand, 0, pressure)
-    return typing.cast(float, result)
+        if Z <= 0 or mu <= 0:
+            raise ValueError(f"Invalid Z={Z} or μ={mu} at P={P}")
+
+        return 2.0 * P / (mu * Z)
+
+    # Perform numerical integration
+    # Use higher accuracy for gas (epsabs, epsrel)
+    try:
+        if pressure > reference_pressure:
+            result, error = quad(
+                integrand,
+                reference_pressure,
+                pressure,
+                epsabs=1e-8,  # Absolute error tolerance
+                epsrel=1e-6,  # Relative error tolerance
+                limit=100,  # Maximum number of subintervals
+            )
+            return float(result)
+        else:
+            # Integrate backwards and negate
+            result, error = quad(
+                integrand,
+                pressure,
+                reference_pressure,
+                epsabs=1e-8,
+                epsrel=1e-6,
+                limit=100,
+            )
+            return -float(result)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to compute pseudo-pressure at P={pressure} psi: {exc}"
+        )
 
 
-def compute_well_rate(
+class GasPseudoPressureTable:
+    """
+    Pre-computed gas pseudo-pressure table for fast lookup during simulation.
+    """
+
+    def __init__(
+        self,
+        z_factor_func: typing.Callable[[float], float],
+        viscosity_func: typing.Callable[[float], float],
+        pressure_range: typing.Tuple[float, float] = (14.7, 14700.0),
+        points: int = 1000,
+        reference_pressure: float = 14.7,
+    ):
+        """
+        Build pseudo-pressure lookup table.
+
+        :param z_factor_func: Z-factor correlation Z(P)
+        :param viscosity_func: Gas viscosity correlation μ(P)
+        :param pressure_range: (P_min, P_max) for table
+        :param points: Number of points in table
+        :param reference_pressure: Reference pressure (psi)
+        """
+        self.reference_pressure = reference_pressure
+        self.z_factor_func = z_factor_func
+        self.viscosity_func = viscosity_func
+
+        # Create pressure grid (log-spaced for better resolution at low P)
+        min_pressure, max_pressure = pressure_range
+        self.pressures = np.logspace(
+            np.log10(min_pressure), np.log10(max_pressure), points
+        )
+
+        # Compute pseudo-pressure at each point
+        logger.debug(f"Building pseudo-pressure table with {points} points...")
+        self.pseudo_pressures = np.zeros(points)
+        for i, pressure in enumerate(self.pressures):
+            self.pseudo_pressures[i] = compute_gas_pseudo_pressure(
+                pressure=pressure,
+                z_factor_func=z_factor_func,
+                viscosity_func=viscosity_func,
+                reference_pressure=reference_pressure,
+            )
+
+        # Build cubic spline interpolator for fast lookup
+        self.interpolator = interp1d(
+            self.pressures,
+            self.pseudo_pressures,
+            kind="cubic",
+            bounds_error=False,
+            fill_value="extrapolate",  # type: ignore  # Extrapolate outside table range
+        )
+        logger.debug(
+            f"Pseudo-pressure table built: P ∈ [{min_pressure:.1f}, {max_pressure:.1f}] psi"
+        )
+
+    def __call__(self, pressure: float) -> float:
+        """
+        Fast lookup of pseudo-pressure via interpolation.
+
+        :param pressure: Pressure (psi)
+        :return: Pseudo-pressure m(P) (psi²/cP)
+        """
+        return float(self.interpolator(pressure))
+
+    def gradient(self, pressure: float) -> float:
+        """
+        Compute dm/dP = 2P/(μ*Z) for use in well models.
+
+        :param pressure: Pressure (psi)
+        :return: dm/dP (psi/cP)
+        """
+        Z = self.z_factor_func(pressure)
+        mu = self.viscosity_func(pressure)
+        return 2.0 * pressure / (mu * Z)
+
+
+def compute_oil_well_rate(
     well_index: float,
     pressure: float,
     bottom_hole_pressure: float,
-    phase_mobility: float = 1.0,
-    use_pseudo_pressure: bool = False,
-    compressibility_factor: float = 1.0,
+    phase_mobility: float,
     fluid_compressibility: typing.Optional[float] = None,
-    z_factor_func: typing.Optional[typing.Callable[[float], float]] = None,
-    viscosity_func: typing.Optional[typing.Callable[[float], float]] = None,
 ) -> float:
     """
     Compute the well rate using the well index and pressure drop.
 
-    This assume radial steady-state flow to/from the wellbore.
+    This assumes radial flow to/from the wellbore.
+    May be steady-state or pseudo-steady-state flow depending on the well index calculation.
 
     The formula for the well rate is:
 
         Q = 7.08e-3 * W * (P_bhp - P) * M
-
-    Or for gas wells:
-
-        Q = 7.08e-3 * W * (m(P_bhp) - m(P)) * M
 
     or for slightly compressible fluids:
 
         Q = 7.08e-3 * W * M * ln(1 + c_f * (P_bhp - P)) / c_f
 
     where:
-        - Q is the well rate (STB/day) or (SCF/day), or (bbl/day) or (ft³/day)
+        - Q is the well rate (bbl/day)
         - W is the well index (mD*ft)
         - P is the reservoir pressure (psi)
         - P_bhp is the bottom-hole pressure (psi)
-        - M is the phase mobility (dimensionless, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
+        - M is the phase mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
 
     Negative rate result indicates that the well is producing, while positive rates indicate injection.
 
     :param well_index: The well index (mD*ft).
     :param pressure: The reservoir pressure (psi).
     :param bottom_hole_pressure: The bottom-hole pressure (psi).
-    :param phase_mobility: The phase relative mobility (dimensionless, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
-    :param use_pseudo_pressure: If True, use the real gas pseudo-pressure difference instead of simple pressure difference.
-        This is typically used for gas wells to account for the non-linear relationship.
-    :param compressibility_factor: The gas compressibility factor (dimensionless, default is 1.0).
-        Only required if `use_pseudo_pressure` is True.
+    :param phase_mobility: The phase relative mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
     :param fluid_compressibility: The fluid compressibility (1/psi). For slightly compressible fluids.
-    :param z_factor_func: A callable function that returns the gas compressibility factor (z) at a given pressure.
-        Only required if `use_pseudo_pressure` is True.
-    :param viscosity_func: A callable function that returns the gas viscosity (μ) at a given pressure.
-        Only required if `use_pseudo_pressure` is True.
-    :return: The well rate (STB/day) or (SCF/day) if phase mobility incorporates the formation volume factor.
-        i.e phase_mobility = (k_r / (μ * B)).
-        Else, the rate is in reservoir volume units (bbl/day or ft³/day).
+    :return: The well rate in bbl/day.
     """
     if well_index <= 0:
         raise ValueError("Well index must be a positive value.")
 
-    if use_pseudo_pressure:
-        if z_factor_func is None or viscosity_func is None:
-            raise ValueError(
-                "z_factor_func and viscosity_func must be provided when use_pseudo_pressure is True."
-            )
-
-        bottom_hole_pseudo_pressure = compute_gas_pseudo_pressure(
-            bottom_hole_pressure, z_factor_func, viscosity_func
-        )
-        reservoir_pseudo_pressure = compute_gas_pseudo_pressure(
-            pressure, z_factor_func, viscosity_func
-        )
-        pressure_difference = bottom_hole_pseudo_pressure - reservoir_pseudo_pressure
-    else:
-        pressure_difference = bottom_hole_pressure - pressure
-
-    if not use_pseudo_pressure and fluid_compressibility:
+    pressure_difference = bottom_hole_pressure - pressure
+    if fluid_compressibility:
         well_rate = (
             7.08e-3
             * well_index
@@ -1261,4 +1404,105 @@ def compute_well_rate(
         )
     else:
         well_rate = 7.08e-3 * well_index * phase_mobility * pressure_difference
-    return well_rate / compressibility_factor
+    return well_rate
+
+
+def compute_gas_well_rate(
+    well_index: float,
+    pressure: float,
+    temperature: float,
+    bottom_hole_pressure: float,
+    phase_mobility: float,
+    average_compressibility_factor: float = 1.0,
+    use_pseudo_pressure: bool = True,
+    pseudo_pressure_table: typing.Optional[GasPseudoPressureTable] = None,
+    formation_volume_factor: typing.Optional[float] = None,
+) -> float:
+    """
+    Compute the gas well rate using the well index and pressure drop.
+
+    This assumes radial flow to/from the wellbore.
+    May be steady-state or pseudo-steady-state flow depending on the well index calculation.
+
+    The formula for the gas well rate is:
+
+    For pseudo-pressure formulation:
+
+        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * (m(P) - m(P_bhp))
+
+    For pressure squared formulation:
+
+        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * M * ((P² - P_bhp²) / Z)
+
+    where:
+        - Q is the gas well rate (SCF/day)
+        - W is the well index (mD*ft)
+        - P is the reservoir pressure (psi)
+        - P_bhp is the bottom-hole pressure (psi)
+        - m(P) is the pseudo-pressure at pressure P
+        - T is the reservoir temperature (°F)
+        - Tsc is the standard temperature (°R), typically 520 °R (60 °F)
+        - Psc is the standard pressure (psi), typically 14.7 psi
+        - M is the phase mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
+        - Z_avg is the average compressibility factor in the reservoir interval.
+
+    Negative rate result indicates that the well is producing, while positive rates indicate injection.
+
+    :param well_index: The well index (mD*ft).
+    :param pressure: The reservoir pressure (psi).
+    :param temperature: The reservoir temperature (°F).
+    :param bottom_hole_pressure: The bottom-hole pressure (psi).
+    :param phase_mobility: The phase relative mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
+    :param average_compressibility_factor: The average gas compressibility factor Z (default is 1.0).
+    :param use_pseudo_pressure: Whether to use pseudo-pressure formulation (default is True).
+    :param pseudo_pressure_table: Pre-computed pseudo-pressure table for fast lookup (required if use_pseudo_pressure is True).
+    :param formation_volume_factor: Gas formation volume factor (ft³/SCF). If provided, it will be used directly instead of calculating from Z, T, and P.
+    :return: The gas well rate (ft³/day).
+    """
+    if well_index <= 0:
+        raise ValueError("Well index must be a positive value.")
+
+    Tsc = c.STANDARD_TEMPERATURE_RANKINE
+    Psc = c.STANDARD_PRESSURE_IMPERIAL
+    temperature_rankine = fahrenheit_to_rankine(temperature)
+
+    if use_pseudo_pressure:
+        if pseudo_pressure_table is None:
+            raise ValueError(
+                "`pseudo_pressure_table` must be provided when use_pseudo_pressure is True."
+            )
+
+        bottom_hole_pseudo_pressure = pseudo_pressure_table(bottom_hole_pressure)
+        reservoir_pseudo_pressure = pseudo_pressure_table(pressure)
+        pseudo_pressure_difference = (
+            bottom_hole_pseudo_pressure - reservoir_pseudo_pressure
+        )
+        well_rate = (
+            1.9875e-2
+            * (Tsc / Psc)
+            * (well_index / temperature_rankine)
+            * pseudo_pressure_difference
+        )
+    else:
+        pressure_difference_squared = bottom_hole_pressure**2 - pressure**2
+        well_rate = (
+            1.9875e-2
+            * (Tsc / Psc)
+            * (well_index / temperature_rankine)
+            * phase_mobility
+            * (pressure_difference_squared / average_compressibility_factor)
+        )
+
+    if formation_volume_factor is not None:
+        gas_fvf = formation_volume_factor
+    else:
+        # Compute gas formation volume factor (ft³/SCF)
+        # Bg = 0.02827 * (Z_avg * T) / P_avg
+        average_pressure = 0.5 * (pressure + bottom_hole_pressure)
+        gas_fvf = (
+            0.02827
+            * average_compressibility_factor
+            * temperature_rankine
+            / average_pressure
+        )  # ft³/SCF
+    return well_rate * gas_fvf  # ft³/day

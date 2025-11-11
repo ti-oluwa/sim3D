@@ -443,48 +443,52 @@ class TwoPhaseRelPermTable:
     Two-phase relative permeability lookup table.
 
     Interpolates relative permeabilities for two fluid phases based on saturation values.
+
+    Example:
+    - Oil-Water system: oil is non-wetting, water is wetting
+    - Gas-Oil system: gas is non-wetting, oil is wetting
     """
 
-    phase1: FluidPhase
-    """The first fluid phase, e.g., 'oil' or 'water'."""
-    phase2: FluidPhase
-    """The second fluid phase, e.g., 'water' or 'gas'."""
-    saturation: ArrayLike[float]
-    """The saturation values for phase2, ranging from 0 to 1."""
-    phase1_relative_permeability: ArrayLike[float]
-    """Relative permeability values for phase1 corresponding to the saturation values."""
-    phase2_relative_permeability: ArrayLike[float]
-    """Relative permeability values for phase2 corresponding to the saturation values."""
+    wetting_phase: FluidPhase
+    """The wetting fluid phase, e.g., 'water' (for oil-water (water-wet)) or 'oil' (for gas-oil (oil-wet))."""
+    non_wetting_phase: FluidPhase
+    """The non-wetting fluid phase, e.g., 'oil' (for oil-water (water-wet)) or 'gas' (for gas-oil (oil-wet))."""
+    wetting_phase_saturation: ArrayLike[float]
+    """The saturation values for the wetting phase, ranging from 0 to 1."""
+    wetting_phase_relative_permeability: ArrayLike[float]
+    """Relative permeability values for wetting phase corresponding to the saturation values."""
+    non_wetting_phase_relative_permeability: ArrayLike[float]
+    """Relative permeability values for non-wetting phase corresponding to the saturation values."""
 
     @cached_property
-    def phase1_interpolator(self) -> Interpolator:
-        """Return the interpolator for phase1 relative permeability."""
+    def wetting_phase_interpolator(self) -> Interpolator:
+        """Return the interpolator for wetting phase relative permeability."""
         return interp1d(
-            self.saturation,
-            self.phase1_relative_permeability,
+            self.wetting_phase_saturation,
+            self.wetting_phase_relative_permeability,
             bounds_error=False,
             fill_value=(
-                self.phase1_relative_permeability[0],  # type: ignore
-                self.phase1_relative_permeability[-1],
+                self.wetting_phase_relative_permeability[0],  # type: ignore
+                self.wetting_phase_relative_permeability[-1],
             ),
         )
 
     @cached_property
-    def phase2_interpolator(self) -> Interpolator:
-        """Return the interpolator for phase2 relative permeability."""
+    def non_wetting_phase_interpolator(self) -> Interpolator:
+        """Return the interpolator for non-wetting phase relative permeability."""
         return interp1d(
-            self.saturation,
-            self.phase2_relative_permeability,
+            self.wetting_phase_saturation,
+            self.non_wetting_phase_relative_permeability,
             bounds_error=False,
             fill_value=(
-                self.phase2_relative_permeability[0],  # type: ignore
-                self.phase2_relative_permeability[-1],
+                self.non_wetting_phase_relative_permeability[0],  # type: ignore
+                self.non_wetting_phase_relative_permeability[-1],
             ),
         )
 
     def get_interpolators(self) -> typing.Tuple[Interpolator, Interpolator]:
-        """Return interpolators for both phases."""
-        return self.phase1_interpolator, self.phase2_interpolator
+        """Return interpolators for both phases (wetting, non-wetting)."""
+        return self.wetting_phase_interpolator, self.non_wetting_phase_interpolator
 
 
 @define(slots=True, frozen=True)
@@ -495,30 +499,53 @@ class ThreePhaseRelPermTable:
     Interpolates relative permeabilities for water, oil, and gas based on saturation values.
 
     This is the most common approach to handle three-phase relative permeabilities.
-    Uses two two-phase tables (oil-water and oil-gas) and a mixing rule for oil in three-phase system.
+    Uses two two-phase tables (oil-water and gas-oil) and a mixing rule for oil in three-phase system.
 
-    The values for the two-phase tables should be gotten from PVT experiments or literature.
+    The values for the two-phase tables should be obtained from PVT experiments or literature.
 
-    Supported mixing rules: min_rule, stone_I_rule, stone_II_rule. Additional rules can be defined as needed.
+    Supported mixing rules: `min_rule`, `stone_I_rule`, `stone_II_rule`, etc.
+    Additional custom rules can be defined as needed.
     """
 
     oil_water_table: TwoPhaseRelPermTable
-    """Relative permeability table for oil vs water."""
-    oil_gas_table: TwoPhaseRelPermTable
-    """Relative permeability table for oil vs gas."""
-    mixing_rule: typing.Optional[MixingRule] = stone_I_rule
+    """Relative permeability table for oil-water system (water = wetting, oil = non-wetting)."""
+    gas_oil_table: TwoPhaseRelPermTable
+    """Relative permeability table for gas-oil system (oil = wetting, gas = non-wetting)."""
+    mixing_rule: typing.Optional[MixingRule] = None
     """
     Mixing rule function to compute oil relative permeability in three-phase system.
 
     The function should take the following parameters in order:
     - kro_w: Oil relative permeability from oil-water table
-    - kro_g: Oil relative permeability from oil-gas table
+    - kro_g: Oil relative permeability from gas-oil table
     - Sw: Water saturation
     - So: Oil saturation
     - Sg: Gas saturation
     and return the mixed oil relative permeability.
     If None, a simple conservative rule (min(kro_w, kro_g)) is used.
     """
+
+    def __attrs_post_init__(self) -> None:
+        """Validate that the tables are set up correctly for three-phase flow."""
+        if {
+            self.oil_water_table.wetting_phase,
+            self.oil_water_table.non_wetting_phase,
+        } != {FluidPhase.WATER, FluidPhase.OIL}:
+            raise ValueError("`oil_water_table` must be between water and oil phases.")
+        if {self.gas_oil_table.wetting_phase, self.gas_oil_table.non_wetting_phase} != {
+            FluidPhase.OIL,
+            FluidPhase.GAS,
+        }:
+            raise ValueError("`gas_oil_table` must be between oil and gas phases.")
+
+        if self.oil_water_table.wetting_phase == self.gas_oil_table.non_wetting_phase:
+            raise ValueError(
+                "Wetting phase of `oil_water_table` cannot be the same as non-wetting phase of `gas_oil_table`."
+            )
+        if self.gas_oil_table.wetting_phase != FluidPhase.OIL:
+            raise ValueError(
+                "`gas_oil_table` wetting phase must be oil in three-phase system."
+            )
 
     def get_relative_permeabilities(
         self, water_saturation: float, oil_saturation: float, gas_saturation: float
@@ -533,16 +560,49 @@ class ThreePhaseRelPermTable:
         :return: A dictionary with relative permeabilities for water, oil, and gas.
         0 <= water_saturation, oil_saturation, gas_saturation <= 1
         """
-        water_relperm_interpolator = self.oil_water_table.phase2_interpolator
-        gas_relperm_interpolator = self.oil_gas_table.phase2_interpolator
-        oil_relperm_to_water_interpolator = self.oil_water_table.phase1_interpolator
-        oil_relperm_to_gas_interpolator = self.oil_gas_table.phase1_interpolator
+        if not (
+            0 <= water_saturation <= 1
+            and 0 <= oil_saturation <= 1
+            and 0 <= gas_saturation <= 1
+        ):
+            raise ValueError(
+                "Saturations must be between 0 and 1. "
+                f"Received: Sw={water_saturation}, So={oil_saturation}, Sg={gas_saturation}"
+            )
 
-        krw = float(water_relperm_interpolator(water_saturation))
-        krg = float(gas_relperm_interpolator(gas_saturation))
-        kro_w = float(oil_relperm_to_water_interpolator(water_saturation))
-        kro_g = float(oil_relperm_to_gas_interpolator(gas_saturation))
+        total_saturation = water_saturation + oil_saturation + gas_saturation
+        if abs(total_saturation - 1.0) > 1e-6 and total_saturation > 0.0:
+            # Normalize saturations if they do not sum to 1
+            water_saturation /= total_saturation
+            oil_saturation /= total_saturation
+            gas_saturation /= total_saturation
 
+        # For oil-water table
+        # krw = wetting phase kr at wetting phase saturation
+        # kro_w = non-wetting phase kr at wetting phase saturation
+        if self.oil_water_table.wetting_phase == FluidPhase.WATER:
+            krw = float(
+                self.oil_water_table.wetting_phase_interpolator(water_saturation)
+            )
+            kro_w = float(
+                self.oil_water_table.non_wetting_phase_interpolator(water_saturation)
+            )
+        else:
+            # Oil is wetting phase in oil-water table
+            kro_w = float(
+                self.oil_water_table.wetting_phase_interpolator(oil_saturation)
+            )
+            krw = float(
+                self.oil_water_table.non_wetting_phase_interpolator(oil_saturation)
+            )
+
+        # For gas-oil table: oil is wetting phase
+        # kro_g = wetting phase kr at oil saturation
+        # krg = non-wetting phase kr at oil saturation
+        kro_g = float(self.gas_oil_table.wetting_phase_interpolator(oil_saturation))
+        krg = float(self.gas_oil_table.non_wetting_phase_interpolator(oil_saturation))
+
+        # Apply mixing rule for three-phase oil relative permeability
         if self.mixing_rule is not None:
             kro = self.mixing_rule(
                 kro_w=kro_w,
@@ -552,8 +612,9 @@ class ThreePhaseRelPermTable:
                 gas_saturation=gas_saturation,
             )
         else:
-            # simple conservative rule if no mixing rule supplied
+            # Simple conservative rule if no mixing rule supplied
             kro = min(kro_w, kro_g)
+
         return RelativePermeabilities(water=krw, oil=kro, gas=krg)
 
     def __call__(
@@ -592,7 +653,7 @@ def compute_corey_three_phase_relative_permeabilities(
     oil_exponent: float,
     gas_exponent: float,
     wettability: WettabilityType = WettabilityType.WATER_WET,
-    mixing_rule: MixingRule = stone_I_rule,
+    mixing_rule: MixingRule = stone_II_rule,
 ) -> typing.Tuple[float, float, float]:
     """
     Computes relative permeability for water, oil, and gas in a three-phase system.
@@ -613,15 +674,21 @@ def compute_corey_three_phase_relative_permeabilities(
     :param wettability: Wettability type (water-wet or oil-wet).
     :return: (water_relative_permeability, oil_relative_permeability, gas_relative_permeability)
     """
-    water_sat = clip_scalar(water_saturation, 0.0, 1.0)
-    oil_sat = clip_scalar(oil_saturation, 0.0, 1.0)
-    gas_sat = clip_scalar(gas_saturation, 0.0, 1.0)
+    if not (
+        0 <= water_saturation <= 1
+        and 0 <= oil_saturation <= 1
+        and 0 <= gas_saturation <= 1
+    ):
+        raise ValueError(
+            "Saturations must be between 0 and 1. "
+            f"Received: Sw={water_saturation}, So={oil_saturation}, Sg={gas_saturation}"
+        )
 
-    total_saturation = water_sat + oil_sat + gas_sat
+    total_saturation = water_saturation + oil_saturation + gas_saturation
     if abs(total_saturation - 1.0) > 1e-6 and total_saturation > 0.0:
-        water_sat /= total_saturation
-        oil_sat /= total_saturation
-        gas_sat /= total_saturation
+        water_saturation /= total_saturation
+        oil_saturation /= total_saturation
+        gas_saturation /= total_saturation
 
     if wettability == WettabilityType.WATER_WET:
         # 1. Water relperm (wetting phase)
@@ -629,32 +696,36 @@ def compute_corey_three_phase_relative_permeabilities(
             1.0 - irreducible_water_saturation - residual_oil_saturation_water
         )
         if movable_water_range <= 1e-6:
-            effective_water_sat = 0.0
+            effective_water_saturation = 0.0
         else:
-            effective_water_sat = (
-                water_sat - irreducible_water_saturation
+            effective_water_saturation = (
+                water_saturation - irreducible_water_saturation
             ) / movable_water_range
-            effective_water_sat = clip_scalar(effective_water_sat, 0.0, 1.0)
-        krw = effective_water_sat**water_exponent
+            effective_water_saturation = clip_scalar(
+                effective_water_saturation, 0.0, 1.0
+            )
+        krw = effective_water_saturation**water_exponent
 
         # 2. Gas relperm (nonwetting)
         movable_gas_range = 1.0 - residual_gas_saturation - residual_oil_saturation_gas
         if movable_gas_range <= 1e-6:
-            effective_gas_sat = 0.0
+            effective_gas_saturation = 0.0
         else:
-            effective_gas_sat = (gas_sat - residual_gas_saturation) / movable_gas_range
-            effective_gas_sat = clip_scalar(effective_gas_sat, 0.0, 1.0)
-        krg = effective_gas_sat**gas_exponent
+            effective_gas_saturation = (
+                gas_saturation - residual_gas_saturation
+            ) / movable_gas_range
+            effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
+        krg = effective_gas_saturation**gas_exponent
 
         # 3. Oil relperm (intermediate phase) → Stone I blending
         kro = mixing_rule(
             kro_w=(1.0 - krw),
             kro_g=(1.0 - krg),
-            water_saturation=water_sat,
-            oil_saturation=oil_sat,
-            gas_saturation=gas_sat,
+            water_saturation=water_saturation,
+            oil_saturation=oil_saturation,
+            gas_saturation=gas_saturation,
         )
-        kro = kro**oil_exponent  # apply oil Corey exponent as a curvature control
+        kro = kro**oil_exponent  # Apply oil Corey exponent as a curvature control
 
     elif wettability == WettabilityType.OIL_WET:
         # Oil is wetting, water becomes intermediate
@@ -663,31 +734,33 @@ def compute_corey_three_phase_relative_permeabilities(
             1.0 - residual_oil_saturation_water - residual_oil_saturation_gas
         )
         if movable_oil_range <= 1e-6:
-            effective_oil_sat = 0.0
+            effective_oil_saturation = 0.0
         else:
-            effective_oil_sat = (
-                oil_sat
+            effective_oil_saturation = (
+                oil_saturation
                 - min(residual_oil_saturation_water, residual_oil_saturation_gas)
             ) / movable_oil_range
-            effective_oil_sat = clip_scalar(effective_oil_sat, 0.0, 1.0)
-        kro = effective_oil_sat**oil_exponent
+            effective_oil_saturation = clip_scalar(effective_oil_saturation, 0.0, 1.0)
+        kro = effective_oil_saturation**oil_exponent
 
         # 2. Gas relperm (nonwetting phase)
         movable_gas_range = 1.0 - residual_gas_saturation - irreducible_water_saturation
         if movable_gas_range <= 1e-6:
-            effective_gas_sat = 0.0
+            effective_gas_saturation = 0.0
         else:
-            effective_gas_sat = (gas_sat - residual_gas_saturation) / movable_gas_range
-            effective_gas_sat = clip_scalar(effective_gas_sat, 0.0, 1.0)
-        krg = effective_gas_sat**gas_exponent
+            effective_gas_saturation = (
+                gas_saturation - residual_gas_saturation
+            ) / movable_gas_range
+            effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
+        krg = effective_gas_saturation**gas_exponent
 
         # 3. Water relperm (intermediate phase, use Stone I style blending)
         krw = mixing_rule(
             kro_w=(1.0 - kro),  # treat oil as wetting
             kro_g=(1.0 - krg),  # treat gas as nonwetting
-            water_saturation=water_sat,
-            oil_saturation=oil_sat,
-            gas_saturation=gas_sat,
+            water_saturation=water_saturation,
+            oil_saturation=oil_saturation,
+            gas_saturation=gas_saturation,
         )
         krw = krw**water_exponent
 
@@ -712,13 +785,13 @@ class BrooksCoreyThreePhaseRelPermModel:
     Supports water-wet and oil-wet wettability assumptions.
     """
 
-    irreducible_water_saturation: float
+    irreducible_water_saturation: typing.Optional[float] = None
     """(Default) Irreducible water saturation (Swc)."""
-    residual_oil_saturation_water: float
+    residual_oil_saturation_water: typing.Optional[float] = None
     """(Default) Residual oil saturation after water flood (Sorw)."""
-    residual_oil_saturation_gas: float
+    residual_oil_saturation_gas: typing.Optional[float] = None
     """(Default) Residual oil saturation after gas flood (Sorg)."""
-    residual_gas_saturation: float
+    residual_gas_saturation: typing.Optional[float] = None
     """(Default) Residual gas saturation (Sgr)."""
     water_exponent: float = 2.0
     """Corey exponent for water relative permeability."""
@@ -728,7 +801,7 @@ class BrooksCoreyThreePhaseRelPermModel:
     """Corey exponent for gas relative permeability."""
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (water-wet or oil-wet)."""
-    mixing_rule: MixingRule = stone_I_rule
+    mixing_rule: MixingRule = stone_II_rule
     """
     Mixing rule function to compute oil relative permeability in three-phase system.
 
@@ -764,30 +837,40 @@ class BrooksCoreyThreePhaseRelPermModel:
         :return: A dictionary with relative permeabilities for water, oil, and gas.
         0 <= water_saturation, oil_saturation, gas_saturation <= 1
         """
+        Sorw = (
+            residual_oil_saturation_water
+            if residual_oil_saturation_water is not None
+            else self.residual_oil_saturation_water
+        )
+        Sorg = (
+            residual_oil_saturation_gas
+            if residual_oil_saturation_gas is not None
+            else self.residual_oil_saturation_gas
+        )
+        Srg = (
+            residual_gas_saturation
+            if residual_gas_saturation is not None
+            else self.residual_gas_saturation
+        )
+        Swc = (
+            irreducible_water_saturation
+            if irreducible_water_saturation is not None
+            else self.irreducible_water_saturation
+        )
+        if Swc is None or Sorw is None or Sorg is None or Srg is None:
+            raise ValueError(
+                "Residual saturations must be provided either as arguments or set in the model instance."
+                f"Missing values: Swc={Swc}, Sorw={Sorw}, Sorw={Sorg}, Srg={Srg}"
+            )
+
         krw, kro, krg = compute_corey_three_phase_relative_permeabilities(
             water_saturation=water_saturation,
             oil_saturation=oil_saturation,
             gas_saturation=gas_saturation,
-            irreducible_water_saturation=(
-                irreducible_water_saturation
-                if irreducible_water_saturation is not None
-                else self.irreducible_water_saturation
-            ),
-            residual_oil_saturation_water=(
-                residual_oil_saturation_water
-                if residual_oil_saturation_water is not None
-                else self.residual_oil_saturation_water
-            ),
-            residual_oil_saturation_gas=(
-                residual_oil_saturation_gas
-                if residual_oil_saturation_gas is not None
-                else self.residual_oil_saturation_gas
-            ),
-            residual_gas_saturation=(
-                residual_gas_saturation
-                if residual_gas_saturation is not None
-                else self.residual_gas_saturation
-            ),
+            irreducible_water_saturation=Swc,
+            residual_oil_saturation_water=Sorw,
+            residual_oil_saturation_gas=Sorg,
+            residual_gas_saturation=Srg,
             water_exponent=self.water_exponent,
             oil_exponent=self.oil_exponent,
             gas_exponent=self.gas_exponent,

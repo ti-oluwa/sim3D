@@ -10,7 +10,7 @@ import numpy as np
 from scipy.optimize import brentq, root_scalar
 
 from sim3D.constants import c
-from sim3D.types import NDimension, NDimensionalGrid, WettabilityType
+from sim3D.types import NDimension, NDimensionalGrid
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,6 @@ def clip_scalar(value: float, min_val: float, max_val: float) -> float:
 ##################################################
 
 
-@functools.lru_cache(maxsize=1024)
 def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid density from EOS using CoolProp.
@@ -131,7 +130,6 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
 
 
-@functools.lru_cache(maxsize=1024)
 def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> float:
     """
     Compute fluid dynamic viscosity from EOS using CoolProp.
@@ -154,7 +152,6 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
     return viscosity * c.PASCAL_SECONDS_TO_CENTIPOISE
 
 
-@functools.lru_cache(maxsize=1024)
 def compute_fluid_compressibility_factor(
     pressure: float, temperature: float, fluid: str
 ) -> float:
@@ -178,7 +175,6 @@ def compute_fluid_compressibility_factor(
     )
 
 
-@functools.lru_cache(maxsize=1024)
 def compute_fluid_compressibility(
     pressure: float,
     temperature: float,
@@ -211,7 +207,6 @@ def compute_fluid_compressibility(
     )
 
 
-@functools.lru_cache(maxsize=128)
 def compute_gas_gravity(gas: str) -> float:
     """
     Computes the specific gravity of a gas at a given pressure and temperature.
@@ -235,7 +230,6 @@ def compute_gas_gravity(gas: str) -> float:
 ####################################################
 
 
-@functools.lru_cache(maxsize=1024)
 def compute_gas_gravity_from_density(
     pressure: float,
     temperature: float,
@@ -366,135 +360,6 @@ def compute_harmonic_mobility(
     λ2: float = mobility_grid[index2]
     λ_harmonic = compute_harmonic_mean(λ1, λ2)
     return λ_harmonic
-
-
-def compute_three_phase_capillary_pressures(
-    water_saturation: float,
-    gas_saturation: float,
-    irreducible_water_saturation: float,
-    residual_oil_saturation_water: float,
-    residual_oil_saturation_gas: float,
-    residual_gas_saturation: float,
-    wettability: WettabilityType,
-    oil_water_entry_pressure_water_wet: float,
-    oil_water_entry_pressure_oil_wet: float,
-    oil_water_pore_size_distribution_index_water_wet: float,
-    oil_water_pore_size_distribution_index_oil_wet: float,
-    gas_oil_entry_pressure: float,
-    gas_oil_pore_size_distribution_index: float,
-    mixed_wet_water_fraction: float = 0.5,
-) -> typing.Tuple[float, float]:
-    """
-    Computes capillary pressures (Pcow, Pcgo) for a given set of saturations
-    using Brooks-Corey type models, considering rock wettability.
-
-    Pcow is defined as Po - Pw.
-    Pcgo is defined as Pg - Po.
-
-    Wettability behavior:
-    - WATER_WET: Pcow > 0, Pcgo > 0 (water preferentially wets rock)
-    - OIL_WET:   Pcow < 0, Pcgo > 0 (oil preferentially wets rock)
-    - MIXED_WET: Pcow varies with saturation (fraction of pore space is water-wet, rest is oil-wet)
-
-    The capillary pressures are calculated based on the effective saturations
-    relative to the mobile pore space, which is defined as:
-    total_mobile_pore_space = 1.0 - irreducible_water_saturation - residual_oil_saturation - residual_gas_saturation
-
-    :param water_saturation: Current water saturation (fraction, between 0 and 1).
-    :param gas_saturation: Current gas saturation (fraction, between 0 and 1).
-    :param irreducible_water_saturation: Irreducible water saturation (fraction).
-    :param residual_oil_saturation_water: Residual oil saturation during water flooding (fraction).
-    :param residual_oil_saturation_gas: Residual oil saturation during gas flooding (fraction).
-    :param residual_gas_saturation: Residual gas saturation (fraction).
-    :param wettability: Wettability type (WATER_WET, OIL_WET, or MIXED_WET).
-    :param oil_water_entry_pressure_water_wet: Entry pressure for oil-water in water-wet system (psi).
-    :param oil_water_entry_pressure_oil_wet: Entry pressure for oil-water in oil-wet system (psi).
-    :param oil_water_pore_size_distribution_index_water_wet: Pore size distribution index for oil-water in water-wet system.
-    :param oil_water_pore_size_distribution_index_oil_wet: Pore size distribution index for oil-water in oil-wet system.
-    :param gas_oil_entry_pressure: Entry pressure for gas-oil (psi).
-    :param gas_oil_pore_size_distribution_index: Pore size distribution index for gas-oil.
-    :param mixed_wet_water_fraction: Fraction of pore space that is water-wet in mixed-wet systems (0 to 1).
-        0.0 = fully oil-wet, 1.0 = fully water-wet, 0.5 = neutral/balanced mixed-wet (default).
-    :return: A tuple (oil_water_capillary_pressure, gas_oil_capillary_pressure) (psi).
-    """
-    # Clip saturations
-    water_saturation = clip_scalar(water_saturation, 0.0, 1.0)
-    gas_saturation = clip_scalar(gas_saturation, 0.0, 1.0)
-    oil_saturation = 1.0 - water_saturation - gas_saturation
-    oil_saturation = clip_scalar(oil_saturation, 0.0, 1.0)
-
-    # Effective pore spaces
-    total_mobile_pore_space_water = (
-        1.0
-        - irreducible_water_saturation
-        - residual_oil_saturation_water
-        - residual_gas_saturation
-    )
-    total_mobile_pore_space_gas = (
-        1.0
-        - irreducible_water_saturation
-        - residual_oil_saturation_gas
-        - residual_gas_saturation
-    )
-
-    # ---------------- Pcow (Po - Pw) ----------------
-    oil_water_capillary_pressure = 0.0
-    if total_mobile_pore_space_water > 1e-9:
-        effective_water_saturation = (
-            water_saturation - irreducible_water_saturation
-        ) / total_mobile_pore_space_water
-        effective_water_saturation = clip_scalar(effective_water_saturation, 1e-6, 1.0)
-
-        if effective_water_saturation < 1.0 - 1e-6:
-            if wettability == WettabilityType.WATER_WET:
-                # Pure water-wet: Pcow > 0
-                oil_water_capillary_pressure = oil_water_entry_pressure_water_wet * (
-                    effective_water_saturation
-                ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
-
-            elif wettability == WettabilityType.OIL_WET:
-                # Pure oil-wet: Pcow < 0
-                oil_water_capillary_pressure = -(
-                    oil_water_entry_pressure_oil_wet
-                    * effective_water_saturation
-                    ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
-                )
-
-            elif wettability == WettabilityType.MIXED_WET:
-                # Mixed-wet: Weighted average of water-wet and oil-wet contributions
-                # Approach 1: Linear interpolation (simple)
-                pcow_water_wet = oil_water_entry_pressure_water_wet * (
-                    effective_water_saturation
-                ) ** (-1.0 / oil_water_pore_size_distribution_index_water_wet)
-
-                pcow_oil_wet = -(
-                    oil_water_entry_pressure_oil_wet
-                    * effective_water_saturation
-                    ** (-1.0 / oil_water_pore_size_distribution_index_oil_wet)
-                )
-
-                # Weighted by fraction of water-wet pore space
-                oil_water_capillary_pressure = (
-                    mixed_wet_water_fraction * pcow_water_wet
-                    + (1.0 - mixed_wet_water_fraction) * pcow_oil_wet
-                )
-
-    # ---------------- Pcgo (Pg - Po) ----------------
-    # Gas-oil capillary pressure is typically positive regardless of wettability
-    # (gas is non-wetting to both oil and water)
-    gas_oil_capillary_pressure = 0.0
-    if total_mobile_pore_space_gas > 1e-9:
-        effective_gas_saturation = (
-            gas_saturation - residual_gas_saturation
-        ) / total_mobile_pore_space_gas
-        effective_gas_saturation = clip_scalar(effective_gas_saturation, 1e-6, 1.0)
-
-        if effective_gas_saturation < 1.0 - 1e-6:
-            gas_oil_capillary_pressure = gas_oil_entry_pressure * (
-                effective_gas_saturation
-            ) ** (-1.0 / gas_oil_pore_size_distribution_index)
-
-    return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
 def compute_oil_specific_gravity_from_density(
@@ -1519,6 +1384,11 @@ def fahrenheit_to_kelvin(temp_F: float) -> float:
 def fahrenheit_to_celsius(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Celsius."""
     return (temp_F - 32) * 5 / 9
+
+
+def fahrenheit_to_rankine(temp_F: float) -> float:
+    """Converts temperature from Fahrenheit to Rankine."""
+    return temp_F + 459.67
 
 
 def _compute_water_viscosity(
@@ -2670,47 +2540,73 @@ def compute_todd_longstaff_effective_viscosity(
     oil_viscosity: float,
     solvent_viscosity: float,
     solvent_concentration: float,
-    omega: float = 0.0,
+    omega: float = 0.67,
 ) -> float:
     """
     Compute effective viscosity using Todd-Longstaff mixing model.
 
-    Formula:
-        μ_eff = (C_s * μ_s^(1/4) + C_o * μ_o^(1/4))^4                    (ω = 0, fully miscible)
-        μ_eff = C_s * μ_s + C_o * μ_o                                     (ω = 1, immiscible)
-        μ_eff = [(C_s * μ_s^(1/4) + C_o * μ_o^(1/4))^4]^(1-ω) * [C_s*μ_s + C_o*μ_o]^ω
+    Standard Formula (Todd & Longstaff, 1972):
+        μ_mix = C_s * μ_s + C_o * μ_o                           (arithmetic mean - fully mixed)
+        μ_seg = 1 / (C_s/μ_s + C_o/μ_o)                        (harmonic mean - segregated flow)
+        μ_eff = μ_mix^ω * μ_seg^(1-ω)                          (Todd-Longstaff interpolation)
 
     Where:
         C_s = solvent concentration (0 to 1)
         C_o = oil concentration = 1 - C_s
-        ω = mixing parameter (0=fully miscible, 1=immiscible)
+        ω = mixing parameter (0=fully segregated, 1=fully mixed)
 
-    :param oil_viscosity: Oil viscosity (cP)
-    :param solvent_viscosity: Solvent viscosity (cP)
+    Physical Interpretation:
+        ω = 0.0: Immiscible-like behavior (parallel flow, harmonic mean)
+        ω = 0.5: Partial mixing (geometric mean)
+        ω = 0.67: Typical for CO2-oil systems (from history matching)
+        ω = 1.0: Fully mixed (ideal miscibility, linear mean)
+
+    :param oil_viscosity: Oil viscosity (cP), must be > 0
+    :param solvent_viscosity: Solvent viscosity (cP), must be > 0
     :param solvent_concentration: Solvent concentration (fraction 0-1)
-    :param omega: Todd-Longstaff mixing parameter (0-1)
+    :param omega: Todd-Longstaff mixing parameter (0-1), default 0.67
     :return: Effective mixture viscosity (cP)
+
+    References:
+        Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
+        Application of a Numerical Simulator for Predicting Miscible Flood Performance."
+        JPT, July 1972, pp. 874-882.
     """
-    solvent_concentration = clip_scalar(solvent_concentration, 0.0, 1.0)
-    oil_concentration = 1.0 - solvent_concentration
+    # Validate inputs
+    if not (0.0 <= solvent_concentration <= 1.0):
+        raise ValueError(
+            f"Solvent concentration must be in [0,1], got {solvent_concentration}"
+        )
+    if not (0.0 <= omega <= 1.0):
+        raise ValueError(f"Omega must be in [0,1], got {omega}")
+    if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
+        raise ValueError("Viscosities must be positive")
 
-    # Fully miscible mixing (quarter-power mixing)
-    quarter_power_mix = (
-        solvent_concentration * (solvent_viscosity**0.25)
-        + oil_concentration * (oil_viscosity**0.25)
-    ) ** 4
+    C_s = solvent_concentration
+    C_o = 1.0 - C_s
 
-    # Immiscible mixing (linear)
-    linear_mix = (
-        solvent_concentration * solvent_viscosity + oil_concentration * oil_viscosity
-    )
+    # Handle edge cases
+    if C_s >= 1.0:
+        return solvent_viscosity
+    if C_s <= 0.0:
+        return oil_viscosity
 
-    # Todd-Longstaff combination
-    if omega == 0.0:
-        return quarter_power_mix
-    elif omega == 1.0:
-        return linear_mix
-    return (quarter_power_mix ** (1 - omega)) * (linear_mix**omega)
+    # Fully mixed viscosity (arithmetic/linear mean)
+    # Represents ideal miscibility - single homogeneous phase
+    mu_mix = C_s * solvent_viscosity + C_o * oil_viscosity
+
+    # Fully segregated viscosity (harmonic mean)
+    # Represents parallel flow of two immiscible phases
+    # Equivalent to: μ_seg = μ_s * μ_o / (C_s * μ_o + C_o * μ_s)
+    mu_segregated = 1.0 / (C_s / solvent_viscosity + C_o / oil_viscosity)
+
+    # Todd-Longstaff interpolation (weighted geometric mean)
+    # Special cases:
+    #   ω = 0: μ_eff = μ_segregated (immiscible)
+    #   ω = 1: μ_eff = μ_mix (fully mixed)
+    #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
+    mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
+    return mu_effective
 
 
 def compute_miscibility_function(
@@ -2719,23 +2615,49 @@ def compute_miscibility_function(
     transition_width: float = 500.0,
 ) -> float:
     """
-    Compute miscibility function based on pressure.
+    Compute Todd-Longstaff omega parameter based on pressure.
 
-    Returns a smooth transition from immiscible (ω=1) at low pressure
-    to miscible (ω=0) above minimum miscibility pressure.
+    Returns a smooth transition from immiscible (ω=0) at low pressure
+    to miscible (ω=1) above minimum miscibility pressure.
+
+    Physical Behavior:
+        - P << MMP: ω → 0 (fully segregated, immiscible behavior)
+        - P ≈ MMP: ω ≈ 0.5 (transition zone, partial miscibility)
+        - P >> MMP: ω → 1 (fully mixed, first-contact miscible)
 
     Uses hyperbolic tangent for smooth transition:
-        ω(P) = 0.5 * (1 - tanh((P - MMP) / ΔP))
+        ω(P) = 0.5 * (1 + tanh((P - MMP) / ΔP))
+
+    This ensures:
+        - At P = MMP - transition_width: ω ≈ 0.12 (nearly immiscible)
+        - At P = MMP: ω = 0.5 (transitional)
+        - At P = MMP + transition_width: ω ≈ 0.88 (nearly miscible)
 
     :param pressure: Current pressure (psi)
-    :param minimum_miscibility_pressure: Minimum miscibility pressure (psi)
-    :param transition_width: Pressure width of transition zone (psi)
-    :return: Effective omega parameter (0=miscible, 1=immiscible)
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi)
+    :param transition_width: Pressure width of transition zone (psi), default 500
+    :return: Todd-Longstaff omega parameter (0=immiscible, 1=miscible)
+
+    Example:
+    ```python
+    compute_miscibility_function(1000, 2000, 500)  # Well below MMP
+    # 0.12  # Nearly immiscible
+    compute_miscibility_function(2000, 2000, 500)  # At MMP
+    # 0.5   # Transitional
+    compute_miscibility_function(3000, 2000, 500)  # Above MMP
+    # 0.88  # Nearly miscible
+    ```
     """
-    if pressure >= minimum_miscibility_pressure + transition_width:
-        return 0.0  # Fully miscible
-    elif pressure <= minimum_miscibility_pressure - transition_width:
-        return 1.0  # Fully immiscible
-    # Smooth transition
+    # Fast path for extreme cases
+    if pressure >= minimum_miscibility_pressure + 2.0 * transition_width:
+        return 1.0  # Fully miscible (well above MMP)
+    elif pressure <= minimum_miscibility_pressure - 2.0 * transition_width:
+        return 0.0  # Fully immiscible (well below MMP)
+
+    # Smooth transition using hyperbolic tangent
+    # Normalize pressure relative to MMP
     normalized = (pressure - minimum_miscibility_pressure) / transition_width
-    return 0.5 * (1.0 - np.tanh(normalized))
+
+    # omega varies from 0 (immiscible) to 1 (miscible)
+    omega = 0.5 * (1.0 + np.tanh(normalized))
+    return omega
