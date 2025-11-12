@@ -32,17 +32,17 @@ __all__ = [
 class BoundaryDirection(enum.Enum):
     """Enumeration for boundary directions."""
 
-    X_MINUS = "x_minus"
+    X_MINUS = "left"
     """The negative X direction (left/west face)."""
-    X_PLUS = "x_plus"
+    X_PLUS = "right"
     """The positive X direction (right/east face)."""
-    Y_MINUS = "y_minus"
+    Y_MINUS = "front"
     """The negative Y direction (bottom/south face)."""
-    Y_PLUS = "y_plus"
+    Y_PLUS = "back"
     """The positive Y direction (top/north face)."""
-    Z_MINUS = "z_minus"
+    Z_MINUS = "bottom"
     """The negative Z direction (bottom face)."""
-    Z_PLUS = "z_plus"
+    Z_PLUS = "top"
     """The positive Z direction (top face)."""
 
 
@@ -56,7 +56,7 @@ def get_neighbor_indices(
     corresponding neighboring interior cell indices.
 
     :param boundary_indices: Slice indices defining the boundary region
-    :param direction: The boundary direction (x_minus, x_plus, etc.)
+    :param direction: The boundary direction (left, right, etc.)
     :return: Tuple of slice indices for the neighboring interior cells
 
     Example usage:
@@ -294,7 +294,7 @@ class BoundaryCondition(typing.Protocol):
 
         :param grid: The full grid (including ghost cells)
         :param boundary_indices: Slice indices defining the boundary region
-        :param direction: The boundary direction (x_minus, x_plus, etc.)
+        :param direction: The boundary direction (left, right, etc.)
         :param metadata: Optional metadata for advanced boundary conditions
         """
         ...
@@ -318,10 +318,10 @@ class NoFlowBoundary(typing.Generic[NDimension]):
 
     # Use in a grid boundary condition for pressure
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=NoFlowBoundary(),  # Left side sealed
-        x_plus=NoFlowBoundary(),   # Right side sealed
-        y_minus=NoFlowBoundary(),  # Front sealed
-        y_plus=NoFlowBoundary(),   # Back sealed
+        left=NoFlowBoundary(),  # Left side sealed
+        right=NoFlowBoundary(),   # Right side sealed
+        front=NoFlowBoundary(),  # Front sealed
+        back=NoFlowBoundary(),   # Back sealed
     )
 
     # Apply to a 2D pressure grid with ghost cells
@@ -369,10 +369,10 @@ class ConstantBoundary(typing.Generic[NDimension]):
 
     # Use in reservoir simulation (pressure property only)
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=ConstantBoundary(constant=2500.0),  # High pressure injection
-        x_plus=ConstantBoundary(constant=1000.0),   # Low pressure production
-        y_minus=NoFlowBoundary(),                   # Sealed sides
-        y_plus=NoFlowBoundary(),
+        left=ConstantBoundary(constant=2500.0),  # High pressure injection
+        right=ConstantBoundary(constant=1000.0),   # Low pressure production
+        front=NoFlowBoundary(),                   # Sealed sides
+        back=NoFlowBoundary(),
     )
 
     pressure_grid = np.full((52, 52), 1500.0)
@@ -429,10 +429,10 @@ class VariableBoundary(typing.Generic[NDimension]):
 
     # Use in simulation (pressure property)
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=var_boundary,
-        x_plus=var_boundary,
-        y_minus=var_boundary,
-        y_plus=var_boundary,
+        left=var_boundary,
+        right=var_boundary,
+        front=var_boundary,
+        back=var_boundary,
     )
 
     pressure_grid = np.full((52, 52), 2000.0)
@@ -513,9 +513,9 @@ class SpatialBoundary(typing.Generic[NDimension]):
 
     # Apply to boundaries (pressure property only)
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=pressure_gradient,  # West boundary with linear gradient
-        y_minus=depth_pressure,     # South boundary with depth-based pressure
-        x_plus=radial_pressure,     # East boundary with radial pattern
+        left=pressure_gradient,  # West boundary with linear gradient
+        front=depth_pressure,     # South boundary with depth-based pressure
+        right=radial_pressure,     # East boundary with radial pattern
     )
 
     pressure_grid = np.full((53, 28), 1800.0)  # Grid with ghost cells
@@ -609,10 +609,10 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
     metadata = BoundaryMetadata(time=43200.0)  # 12 hours in seconds
 
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=daily_cycle,     # Cyclic injection
-        x_plus=pressure_ramp,    # Gradual pressure increase
-        y_minus=pressure_decay,  # Exponential decay
-        y_plus=step_pressure,    # Step function
+        left=daily_cycle,     # Cyclic injection
+        right=pressure_ramp,    # Gradual pressure increase
+        front=pressure_decay,  # Exponential decay
+        back=step_pressure,    # Step function
     )
 
     pressure_grid = np.full((52, 52), 1800.0)
@@ -691,9 +691,9 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
 
     # Apply to 3D grid boundaries (pressure property only)
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=pressure_drop,     # West boundary: pressure drop west-east
-        y_minus=depth_pressure,    # South boundary: pressure with depth
-        z_plus=pressure_ns_gradient, # Top boundary: pressure north-south
+        left=pressure_drop,     # West boundary: pressure drop west-east
+        front=depth_pressure,    # South boundary: pressure with depth
+        top=pressure_ns_gradient, # Top boundary: pressure north-south
     )
 
     pressure_grid = np.full((53, 28, 13), 2000.0)  # 3D grid with ghost cells
@@ -788,10 +788,10 @@ class FluxBoundary(typing.Generic[NDimension]):
 
     # Set up reservoir with injection/production boundaries (pressure property)
     pressure_boundary_config = GridBoundaryCondition(
-        x_minus=water_injector,  # West: water injection
-        x_plus=oil_producer,     # East: oil production
-        y_minus=FluxBoundary(flux_value=0.0),    # South: no flux
-        y_plus=gas_vent,         # North: gas production
+        left=water_injector,  # West: water injection
+        right=oil_producer,     # East: oil production
+        front=FluxBoundary(flux_value=0.0),    # South: no flux
+        back=gas_vent,         # North: gas production
     )
 
     # Apply to pressure grid (psi)
@@ -895,17 +895,17 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
     Defaults to no-flow boundary for all sides if not specified.
     """
 
-    x_minus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    left: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the left face (x-)."""
-    x_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    right: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the right face (x+)."""
-    y_minus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    front: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the front face (y-)."""
-    y_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    back: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the back face (y+)."""
-    z_minus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    bottom: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the bottom face (z-)."""
-    z_plus: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
+    top: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
     """Boundary condition for the top face (z+)."""
 
     def apply(
@@ -920,62 +920,62 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
         - For 3D grids (shape: [nx+2, ny+2, nz+2]), x, y, and z boundaries are applied.
         """
         if padded_grid.ndim == 2:
-            self.x_minus.apply(
+            self.left.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(0, 1), slice(None)),
                 direction=BoundaryDirection.X_MINUS,
                 metadata=metadata,
             )
-            self.x_plus.apply(
+            self.right.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(-1, None), slice(None)),
                 direction=BoundaryDirection.X_PLUS,
                 metadata=metadata,
             )
-            self.y_minus.apply(
+            self.front.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(0, 1)),
                 direction=BoundaryDirection.Y_MINUS,
                 metadata=metadata,
             )
-            self.y_plus.apply(
+            self.back.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(-1, None)),
                 direction=BoundaryDirection.Y_PLUS,
                 metadata=metadata,
             )
         elif padded_grid.ndim == 3:
-            self.x_minus.apply(
+            self.left.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(0, 1), slice(None), slice(None)),
                 direction=BoundaryDirection.X_MINUS,
                 metadata=metadata,
             )
-            self.x_plus.apply(
+            self.right.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(-1, None), slice(None), slice(None)),
                 direction=BoundaryDirection.X_PLUS,
                 metadata=metadata,
             )
-            self.y_minus.apply(
+            self.front.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(0, 1), slice(None)),
                 direction=BoundaryDirection.Y_MINUS,
                 metadata=metadata,
             )
-            self.y_plus.apply(
+            self.back.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(-1, None), slice(None)),
                 direction=BoundaryDirection.Y_PLUS,
                 metadata=metadata,
             )
-            self.z_minus.apply(
+            self.bottom.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(None), slice(0, 1)),
                 direction=BoundaryDirection.Z_MINUS,
                 metadata=metadata,
             )
-            self.z_plus.apply(
+            self.top.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(None), slice(-1, None)),
                 direction=BoundaryDirection.Z_PLUS,
@@ -1009,32 +1009,32 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
         conditions={
             # Pressure boundary conditions
             "pressure": GridBoundaryCondition(
-                x_minus=ConstantBoundary(constant=2000.0),  # Fixed pressure inlet
-                x_plus=NoFlowBoundary(),  # Sealed boundary
-                y_minus=LinearGradientBoundary(  # Pressure gradient
+                left=ConstantBoundary(constant=2000.0),  # Fixed pressure inlet
+                right=NoFlowBoundary(),  # Sealed boundary
+                front=LinearGradientBoundary(  # Pressure gradient
                     start_value=2000.0,
                     end_value=1800.0,
                     gradient_direction="x"
                 ),
-                y_plus=FluxBoundary(flux_value=-100.0),  # Production
+                back=FluxBoundary(flux_value=-100.0),  # Production
             ),
             # Temperature boundary conditions (separate from pressure)
             "temperature": GridBoundaryCondition(
-                x_minus=SpatialBoundary(
+                left=SpatialBoundary(
                     spatial_func=lambda x, y: 60 + 0.025 * y  # Geothermal gradient
                 ),
-                x_plus=NoFlowBoundary(),
-                y_minus=TimeDependentBoundary(
+                right=NoFlowBoundary(),
+                front=TimeDependentBoundary(
                     time_func=lambda t: 80 + 10 * np.sin(t / 3600)  # Daily cycle
                 ),
-                y_plus=ConstantBoundary(constant=70.0),
+                back=ConstantBoundary(constant=70.0),
             )
         },
         factory=lambda: GridBoundaryCondition(  # Default: all no-flow
-            x_minus=NoFlowBoundary(),
-            x_plus=NoFlowBoundary(),
-            y_minus=NoFlowBoundary(),
-            y_plus=NoFlowBoundary(),
+            left=NoFlowBoundary(),
+            right=NoFlowBoundary(),
+            front=NoFlowBoundary(),
+            back=NoFlowBoundary(),
         ),
     )
 

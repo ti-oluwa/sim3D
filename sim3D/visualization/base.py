@@ -589,6 +589,7 @@ def merge_plots(
     width: typing.Optional[int] = None,
     title: typing.Optional[str] = None,
     show_legend: bool = True,
+    hovermode: typing.Optional[str] = None,
 ) -> go.Figure:
     """
     Display multiple Plotly figures in a single unified plot with subplots.
@@ -636,13 +637,20 @@ def merge_plots(
         of the visualization. If None, no main title is shown.
     :param show_legend: If True, displays legends for all traces. If False, hides
         all legends to reduce clutter (default: True).
+    :param hovermode: Hover interaction mode for the plot. Options include:
+        - "x unified": All traces show hover info together when hovering (2D only)
+        - "x": Hover shows closest point on x-axis per trace
+        - "y": Hover shows closest point on y-axis per trace
+        - "closest": Hover shows single closest point across all traces
+        - False/None: No hover interaction
+        Default is None, which preserves original figure hover modes.
     :return: Combined Plotly Figure object with all input figures as subplots.
         Can be displayed with .show() or saved with .write_html() / .write_image().
     :raises ValueError: If subplot_titles length doesn't match number of figures,
         or if rows * cols is insufficient for the number of figures.
     :raises TypeError: If any input is not a valid Plotly Figure object.
 
-    **Example Usage:**
+    Example Usage:
 
     ```python
     # Basic usage with automatic layout:
@@ -874,9 +882,12 @@ def merge_plots(
 
                         # Position colorbar to the right of its specific subplot with gaps
                         # Calculate horizontal position based on column
-                        col_fraction = col / cols
-                        colorbar_x_position = col_fraction - 0.5 / cols + 0.95 / cols
-
+                        # Place colorbar outside the subplot area with proper spacing
+                        col_end = col / cols
+                        
+                        # Position colorbar at the right edge of subplot with padding
+                        colorbar_x_position = col_end - 0.01  # Just inside the subplot boundary
+                        
                         # Calculate vertical position based on row (for multi-row layouts)
                         row_fraction = (
                             rows - row + 1
@@ -885,10 +896,13 @@ def merge_plots(
                         colorbar_y_position = row_fraction - subplot_height / 2
 
                         # Add vertical padding to create gaps between colorbars
-                        vertical_padding = 0.05  # 5% padding on each side
+                        vertical_padding = 0.08  # Increased padding for better separation
                         colorbar_length = max(
-                            0.3, (0.8 / rows) - (2 * vertical_padding)
+                            0.25, (subplot_height * 0.85) - (2 * vertical_padding)
                         )
+                        
+                        # Reduce thickness to prevent overlap
+                        colorbar_thickness = min(12, int(15 / cols))  # Scale with number of columns
 
                         # Set colorbar position and size to fit within subplot bounds with gaps
                         colorbar_dict.update(
@@ -896,9 +910,10 @@ def merge_plots(
                                 "x": colorbar_x_position,
                                 "y": colorbar_y_position,
                                 "len": colorbar_length,  # Reduced length to create vertical gaps
-                                "thickness": 15,  # Consistent thickness
+                                "thickness": colorbar_thickness,  # Thinner for multiple columns
                                 "xanchor": "left",
                                 "yanchor": "middle",
+                                "xpad": 10,  # Add padding from plot
                             }
                         )
                         combined_fig.data[combined_trace_idx].colorbar = colorbar_dict
@@ -909,6 +924,11 @@ def merge_plots(
         width=width,
         showlegend=show_legend,
     )
+
+    # Set hovermode if specified (for 2D plots with unified hover behavior)
+    if hovermode is not None:
+        combined_fig.update_layout(hovermode=hovermode)
+
     # Add main title if provided
     if title:
         combined_fig.update_layout(

@@ -156,9 +156,6 @@ def _compute_explicit_pressure_pseudo_flux_from_neighbour(
     :param gas_mobility_grid: N-Dimensional numpy array representing the gas phase mobility grid (ft²/psi/day).
     :param oil_water_capillary_pressure_grid: N-Dimensional numpy array representing the oil-water capillary pressure grid (psi).
     :param gas_oil_capillary_pressure_grid: N-Dimensional numpy array representing the gas-oil capillary pressure grid (psi).
-
-    The following parameters are optional and are only necessary when computing flux in the z-direction:
-
     :param oil_density_grid: N-Dimensional numpy array representing the oil phase density grid (lb/ft³).
     :param water_density_grid: N-Dimensional numpy array representing the water phase density grid (lb/ft³).
     :param gas_density_grid: N-Dimensional numpy array representing the gas phase density grid (lb/ft³).
@@ -1199,11 +1196,7 @@ def evolve_pressure_implicitly(
             A[neighbour_1D, cell_1D_index] = -T_face
 
             # Add capillary/gravity contributions to RHS
-            cap_face = (
-                cap_flux
-                * geometric_factor
-                * options.capillary_strength_factor
-            )
+            cap_face = cap_flux * geometric_factor
             grav_face = grav_flux * geometric_factor
 
             rhs_face_term = cap_face + grav_face

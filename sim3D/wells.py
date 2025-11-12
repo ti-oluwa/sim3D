@@ -1058,6 +1058,14 @@ class Wells(typing.Generic[WellLocation]):
         for well in itertools.chain(self.injection_wells, self.production_wells):
             well.check_location(grid_dimensions)
 
+    def has_wells(self) -> bool:
+        """
+        Check if there are any wells in the reservoir model.
+
+        :return: True if there are injection or production wells, False otherwise.
+        """
+        return bool(self.injection_wells or self.production_wells)
+
 
 def compute_well_index(
     permeability: float,

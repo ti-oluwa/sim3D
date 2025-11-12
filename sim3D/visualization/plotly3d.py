@@ -13,9 +13,10 @@ import typing
 from attrs import asdict
 import numpy as np
 import plotly.graph_objects as go
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, Unpack
 
-from sim3D.simulation import ModelState
+from sim3D.states import ModelState
+from sim3D.wells import Wells
 from sim3D.grids.base import coarsen_grid
 from sim3D.types import (
     NDimension,
@@ -95,8 +96,40 @@ class LightPosition(TypedDict):
     """Z coordinate of the light source."""
 
 
+class WellKwargs(TypedDict, total=False):
+    """
+    Configuration options for well visualization in 3D plots.
+
+    All fields are optional. Default values are used if not specified.
+    """
+
+    show_wellbore: bool
+    """Whether to show wellbore trajectory as colored tubes (default: True)."""
+
+    show_surface_marker: bool
+    """Whether to show arrows at surface location (default: True)."""
+
+    show_perforations: bool
+    """Whether to highlight perforated intervals with thicker lines (default: False)."""
+
+    injection_color: str
+    """Color for injection wells - CSS color, hex, or rgb (default: "#ff4444")."""
+
+    production_color: str
+    """Color for production wells - CSS color, hex, or rgb (default: "#44dd44")."""
+
+    shut_in_color: str
+    """Color for shut-in/inactive wells - CSS color, hex, or rgb (default: "#888888")."""
+
+    wellbore_width: float
+    """Width of wellbore line representation in pixels (default: 15.0)."""
+
+    surface_marker_size: float
+    """Size scaling factor for surface markers (default: 2.0)."""
+
+
 DEFAULT_CAMERA_POSITION = CameraPosition(
-    eye=dict(x=1.5, y=1.5, z=1.25),
+    eye=dict(x=2.2, y=2.2, z=1.8),
     center=dict(x=0, y=0, z=0),
     up=dict(x=0, y=0, z=1),
 )
@@ -124,7 +157,7 @@ class PlotConfig:
     width: int = 1200
     """Plot width in pixels. Larger values provide higher resolution but may impact performance."""
 
-    height: int = 800
+    height: int = 960
     """Plot height in pixels. Larger values provide higher resolution but may impact performance."""
 
     plot_type: PlotType = PlotType.VOLUME_RENDER
@@ -135,7 +168,7 @@ class PlotConfig:
     """Default color scheme for data visualization. Professional color schemes are optimized
     for scientific data visualization and accessibility."""
 
-    opacity: float = 0.6
+    opacity: float = 0.85
     """Default opacity level for plot elements (0.0 = transparent, 1.0 = opaque).
     Lower values allow better visualization of internal structures."""
 
@@ -160,15 +193,15 @@ class PlotConfig:
     """Whether to show wireframe outlines around individual cell blocks in cell block plots.
     Helps distinguish individual cells but may impact performance with large datasets."""
 
-    cell_outline_color: str = "gray"
+    cell_outline_color: str = "#404040"
     """Color for cell block outlines when show_cell_outlines is True. 
-    Can be CSS color name, hex code, or rgb() string."""
+    Default is dark gray for better definition. Can be CSS color name, hex code, or rgb() string."""
 
-    cell_outline_width: float = 0.4
+    cell_outline_width: float = 1.0
     """Width/thickness of cell outline wireframes in pixels when show_cell_outlines is True.
-    Thicker lines are more visible but may obscure data details."""
+    Default 1.0 provides good visibility. Thicker lines are more visible but may obscure data details."""
 
-    use_opacity_scaling: bool = True
+    use_opacity_scaling: bool = False
     """Whether to apply data-driven opacity scaling for better depth perception.
     Higher data values become more opaque, lower values more transparent."""
 
@@ -196,6 +229,16 @@ class PlotConfig:
     """Position of the light source in 3D space. Controls where the light comes from,
     affecting shadows and highlights on surfaces. This can be adjusted to simulate different
     lighting conditions, such as overhead sunlight or side lighting for dramatic effects."""
+
+    paper_bgcolor: str = "#ffffff"
+    """Background color of entire figure (outer area)"""
+
+    scene_bgcolor: str = "#f8f9fa"
+    """Background color of the 3D scene (light gray for subtle contrast)"""
+
+    show_labels: bool = True
+    """Global toggle for all labels in plots. When False, disables labels even if labels parameter is provided.
+    Useful for clean visualizations without text annotations."""
 
 
 @dataclass(frozen=True)
@@ -1009,6 +1052,9 @@ class BaseRenderer(ABC):
         :param coordinate_offsets: Coordinate offsets for sliced data
         :param format_kwargs: Additional formatting values
         """
+        if not self.config.show_labels:
+            return
+
         if labels is None:
             return
 
@@ -1027,7 +1073,6 @@ class BaseRenderer(ABC):
             coordinate_offsets=coordinate_offsets,
             format_kwargs=format_kwargs,
         )
-
         # Add annotations to the figure
         if annotations:
             # Get existing annotations or create empty list
@@ -1053,11 +1098,767 @@ class BaseRenderer(ABC):
     def invert_z_axis(arr: np.ndarray) -> np.ndarray:
         """
         Invert the Z axis (last axis) of a 3D array so that data[:,:,0] becomes data[:,:,nz-1].
-        This ensures numpy convention (top layer is k=0) matches plotly's rendering (bottom is k=0).
+        This ensures numpy convention (top layer as k=0) matches plotly's rendering (bottom as k=0).
         """
         if arr.ndim == 3:
             return arr[:, :, ::-1]
         return arr
+
+    def render_wells(
+        self,
+        figure: go.Figure,
+        wells: typing.Optional[Wells[ThreeDimensions]] = None,
+        cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
+        thickness_grid: typing.Optional[np.ndarray] = None,
+        coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
+        z_scale: float = 1.0,
+        **kwargs: Unpack[WellKwargs],
+    ) -> None:
+        """
+        Add visual representation of wells to 3D plot.
+
+        This method renders a comprehensive 3D visualizations of wells on the figure including:
+        - Wellbore trajectories as colored lines/tubes
+        - Surface location markers with directional arrows
+        - Perforated interval highlights (optional)
+        - Interactive hover information
+
+        :param figure: Plotly figure to add well visualizations to
+        :param wells: Wells object containing injection and production wells
+        :param cell_dimension: Physical size of each cell in x and y directions (feet).
+            Required for physical coordinate conversion. If None, uses grid indices.
+        :param thickness_grid: 3D array with height of each cell (feet).
+            Required for physical coordinate conversion. If None, uses grid indices.
+        :param coordinate_offsets: Coordinate offsets for sliced data (i_offset, j_offset, k_offset).
+            Used to adjust well locations when visualizing a subset of the full grid.
+        :param z_scale: Scale factor for Z-axis to match volume rendering (default: 1.0).
+            Wells will be scaled to match the stretched/compressed volume visualization.
+        :param show_wellbore: Whether to show wellbore trajectory as colored tubes (default: True)
+        :param show_surface_marker: Whether to show arrows at surface location (default: True)
+        :param show_perforations: Whether to highlight perforated intervals with thicker lines (default: False)
+        :param injection_color: Color for injection wells (CSS color, hex, or rgb) (default: red)
+        :param production_color: Color for production wells (CSS color, hex, or rgb) (default: green)
+        :param shut_in_color: Color for shut-in/inactive wells (CSS color, hex, or rgb) (default: gray)
+        :param wellbore_width: Width of wellbore line representation in pixels (default: 15.0)
+        :param surface_marker_size: Size scaling factor for surface markers (default: 5.0)
+
+        **Usage Example:**
+
+        ```python
+        # Basic usage with default styling
+        renderer.render_wells(fig, model_state.wells)
+
+        # Custom styling
+        renderer.render_wells(
+            fig,
+            model_state.wells,
+            cell_dimension=(100, 100),
+            thickness_grid=thickness,
+            injection_color='#ff6b6b',
+            production_color='#51cf66',
+            wellbore_width=8.0,
+            show_surface_marker=True
+        )
+        ```
+
+        **Visual Elements:**
+        - Injection wells: Red/warm colors with upward flow indication
+        - Production wells: Green/cool colors with downward flow indication
+        - Shut-in wells: Gray/muted colors, partially transparent
+        - Surface markers: Cone/arrow shapes pointing into reservoir
+        - Wellbore: Continuous line through all perforating intervals
+
+        **Interactive Features:**
+        - Hover over wellbore: Shows well name, type, BHP, radius, skin factor
+        - Hover over surface marker: Shows well name and surface location
+        - Legend groups: Wells can be toggled on/off in plot legend
+        """
+        if wells is None:
+            logger.warning("render_wells called but wells parameter is None")
+            return
+
+        if not wells.has_wells():
+            logger.warning("`render_wells` called but wells.has_wells() returned False")
+            return
+
+        logger.debug(
+            f"Rendering {len(wells.injection_wells)} injection wells and {len(wells.production_wells)} production wells"
+        )
+
+        # Extract kwargs with defaults
+        show_wellbore = kwargs.get("show_wellbore", True)
+        show_surface_marker = kwargs.get("show_surface_marker", True)
+        show_perforations = kwargs.get("show_perforations", False)
+        injection_color = kwargs.get("injection_color", "#ff4444")
+        production_color = kwargs.get("production_color", "#44dd44")
+        shut_in_color = kwargs.get("shut_in_color", "#888888")
+        wellbore_width = kwargs.get("wellbore_width", 15.0)
+        surface_marker_size = kwargs.get("surface_marker_size", 5.0)
+
+        # Calculate Z mean for scaling (if z_scale != 1.0 and we have thickness data)
+        z_mean = 0.0
+        if z_scale != 1.0 and thickness_grid is not None:
+            # Calculate the mean Z position of the grid
+            # This matches how volume rendering scales Z coordinates
+            z_offset_val = coordinate_offsets[2] if coordinate_offsets else 0
+            # Sum thickness in ONE vertical column (all layers at i=0, j=0)
+            # This gives total vertical extent of the reservoir
+            total_depth = float(np.sum(thickness_grid[0, 0, :]))
+            # Mean Z is halfway down from surface
+            z_mean = z_offset_val - (total_depth / 2.0)  # Negative because Z goes down
+
+        def grid_to_physical(
+            i: int, j: int, k: int
+        ) -> typing.Optional[typing.Tuple[float, float, float]]:
+            """
+            Convert grid indices to physical coordinates.
+            Returns None if coordinates contain NaN.
+            Note: Z-axis is negative (depth increases downward in Plotly convention)
+            Z-scale is applied around z_mean to match volume rendering.
+            """
+            if cell_dimension is not None and thickness_grid is not None:
+                dx, dy = cell_dimension
+                x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
+
+                # Physical X and Y
+                x_phys = (x_offset + i) * dx
+                y_phys = (y_offset + j) * dy
+
+                # Physical Z (depth) - calculate to cell center
+                # Z is NEGATIVE (increases downward), matching volume rendering
+                # k=0 is top layer, larger k = deeper
+                z_phys = z_offset
+
+                if k > 0:
+                    # Sum thickness from top to this layer (excluding current)
+                    thickness_above = float(np.sum(thickness_grid[i, j, :k]))
+                    if np.isnan(thickness_above):
+                        return None
+                    # Subtract to go deeper (negative Z)
+                    z_phys -= thickness_above
+
+                # Add half of current cell thickness (to get to center)
+                cell_thickness = float(thickness_grid[i, j, k])
+                if np.isnan(cell_thickness):
+                    return None
+                # Subtract half thickness to get to cell center
+                z_phys -= cell_thickness / 2.0
+
+                # Apply z_scale around z_mean (same as volume rendering)
+                if z_scale != 1.0:
+                    z_phys = z_mean + (z_phys - z_mean) * z_scale
+
+                return x_phys, y_phys, z_phys
+            else:
+                # Use grid indices directly
+                return float(i), float(j), float(k)
+
+        # Process all injection wells
+        for well in wells.injection_wells:
+            # Determine color based on well state using is_shut_in() method
+            if well.is_shut_in:
+                color = shut_in_color
+                well_type = "Injection (Shut-in)"
+                opacity = 0.5
+            else:
+                color = injection_color
+                well_type = "Injection"
+                opacity = 1.0
+
+            # Extract well trajectory points from perforating intervals
+            if show_wellbore and well.perforating_intervals:
+                x_points, y_points, z_points = [], [], []
+
+                # Get the shallowest perforation (first one) for surface extension
+                first_perf_start = well.perforating_intervals[0][0]
+                first_perf_coords = grid_to_physical(*first_perf_start)
+
+                # Add surface-to-perforation segment (neutral color)
+                if first_perf_coords is not None and cell_dimension is not None:
+                    x_surf, y_surf, z_perf = first_perf_coords
+                    # Surface should be at z_offset (the top of the grid)
+                    # coordinate_offsets contains the base Z coordinate
+                    x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
+                    z_surface = float(z_offset)  # Top of volume
+
+                    # Apply z_scale to surface coordinate
+                    if z_scale != 1.0:
+                        z_surface = z_mean + (z_surface - z_mean) * z_scale
+
+                    # Add neutral-colored segment from surface to perforation
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_surf, x_surf],
+                            y=[y_surf, y_surf],
+                            z=[z_surface, z_perf],
+                            mode="lines",
+                            line=dict(
+                                color="#999999",  # Neutral gray
+                                width=wellbore_width * 0.7,  # Slightly thinner
+                                dash="dot",  # Dotted to distinguish from perforations
+                            ),
+                            opacity=0.6,
+                            name=f"{well.name} casing",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} Casing</b><br>"
+                                f"Non-perforated section<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+                for start_loc, end_loc in well.perforating_intervals:
+                    # Convert start and end to physical coordinates
+                    start_coords = grid_to_physical(*start_loc)
+                    end_coords = grid_to_physical(*end_loc)
+
+                    # Skip if coordinates contain NaN
+                    if start_coords is None or end_coords is None:
+                        continue
+
+                    x_start, y_start, z_start = start_coords
+                    x_end, y_end, z_end = end_coords
+
+                    # Handle single-cell perforations (start == end)
+                    # Create a small vertical line segment for visibility
+                    if start_loc == end_loc:
+                        if cell_dimension is not None and thickness_grid is not None:
+                            # Use half the cell thickness for the vertical extent
+                            cell_thickness = float(
+                                thickness_grid[start_loc[0], start_loc[1], start_loc[2]]
+                            )
+                            # Apply z_scale to the extension amount (already applied in grid_to_physical, but extension is raw)
+                            extension = (cell_thickness / 4.0) * z_scale
+                            z_start -= extension  # Extend upward
+                            z_end += extension  # Extend downward
+                        else:
+                            # For grid coordinates, extend by 0.5 in Z direction
+                            z_start -= 0.5
+                            z_end += 0.5
+
+                    x_points.extend([x_start, x_end])
+                    y_points.extend([y_start, y_end])
+                    z_points.extend([z_start, z_end])
+
+                # Add wellbore trajectory only if we have valid points
+                if x_points:
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=x_points,
+                            y=y_points,
+                            z=z_points,
+                            mode="lines",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width,
+                                dash="solid" if well.is_open else "dash",
+                            ),
+                            opacity=opacity,
+                            name=f"{well.name} ({well_type})",
+                            showlegend=True,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name}</b><br>"
+                                f"Type: {well_type}<br>"
+                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Radius: {well.radius:.2f} ft<br>"
+                                f"Skin: {well.skin_factor:.2f}<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+            # Add perforation highlights if requested (injection wells)
+            if show_perforations and well.perforating_intervals and well.is_open:
+                for start_loc, end_loc in well.perforating_intervals:
+                    # Convert to physical coordinates
+                    start_coords = grid_to_physical(*start_loc)
+                    end_coords = grid_to_physical(*end_loc)
+
+                    # Skip if coordinates contain NaN
+                    if start_coords is None or end_coords is None:
+                        continue
+
+                    x_start, y_start, z_start = start_coords
+                    x_end, y_end, z_end = end_coords
+
+                    # Add perforation interval as thicker, more opaque line with markers
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_start, x_end],
+                            y=[y_start, y_end],
+                            z=[z_start, z_end],
+                            mode="lines+markers",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width * 1.5,  # 50% thicker
+                            ),
+                            marker=dict(
+                                size=4,
+                                color=color,
+                                symbol="diamond",
+                            ),
+                            opacity=min(opacity * 1.2, 1.0),  # More opaque
+                            name=f"{well.name} perforations",
+                            showlegend=False,  # Don't clutter legend
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} Perforation</b><br>"
+                                f"Start: ({start_loc[0]}, {start_loc[1]}, {start_loc[2]})<br>"
+                                f"End: ({end_loc[0]}, {end_loc[1]}, {end_loc[2]})<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+            # Add surface marker with directional indicator
+            if show_surface_marker and well.perforating_intervals:
+                # Get surface location (X, Y from first perforation, but Z at surface)
+                start_loc = well.perforating_intervals[0][0]
+                surf_coords = grid_to_physical(*start_loc)
+
+                # Only add surface marker if coordinates are valid
+                if surf_coords is not None:
+                    x_surf, y_surf, _ = surf_coords
+
+                    # Surface should be at z_offset (the top of the grid)
+                    # coordinate_offsets contains the base Z coordinate
+                    x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
+                    z_surf = float(z_offset)  # Top of volume
+
+                    # Apply z_scale to surface coordinate
+                    if z_scale != 1.0:
+                        z_surf = z_mean + (z_surf - z_mean) * z_scale
+
+                    # Add cone/arrow pointing into reservoir at the SURFACE
+                    # Build fluid info for hover text
+                    if well.injected_fluid is not None:
+                        fluid_info = f"Injected Fluid: <b>{well.injected_fluid.name}</b>  ({well.injected_fluid.phase.value})"
+                    else:
+                        fluid_info = "Injected Fluid: N/A"
+
+                    status = "Open" if well.is_open else "Shut-in"
+
+                    # Calculate appropriate cone size based on grid dimensions
+                    # For aspectmode="data", scale relative to cell size
+                    cone_size_multiplier = 2.0  # Default multiplier for cube mode
+                    if cell_dimension is not None:
+                        dx, dy = cell_dimension
+                        # Scale cone size to be a reasonable fraction of cell size
+                        # Typical cone should be about 5% of cell dimension
+                        cone_size_multiplier = max(dx, dy) * 0.05 * z_scale / surface_marker_size
+
+                    # Arrow sizing - base it on actual grid thickness for proportionality
+                    if thickness_grid is not None:
+                        # Use average layer thickness as base unit
+                        avg_layer_thickness = float(np.mean(thickness_grid))
+                        # Make arrow about 1.5x average layer thickness (reasonable visibility)
+                        base_arrow_length = avg_layer_thickness * 1.5
+                    else:
+                        # Fallback to marker size
+                        base_arrow_length = surface_marker_size
+
+                    # Apply z_scale
+                    total_arrow_length = base_arrow_length * z_scale
+
+                    # Split: 60% stem, 40% cone
+                    stem_length = total_arrow_length * 0.6
+                    cone_length = total_arrow_length * 0.4
+
+                    # For injection wells, arrow points DOWN but starts ABOVE surface
+                    # Arrow tip should reach the surface, so we start above
+                    arrow_top = z_surf + total_arrow_length  # Start above surface
+                    arrow_stem_bottom = (
+                        z_surf + cone_length
+                    )  # Stem ends where cone starts
+                    arrow_cone_tip = z_surf  # Cone tip AT the surface
+
+                    # Add cylindrical stem (arrow shaft) starting from above
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_surf, x_surf],
+                            y=[y_surf, y_surf],
+                            z=[arrow_top, arrow_stem_bottom],
+                            mode="lines",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width * 0.8,  # Make stem more visible
+                            ),
+                            opacity=opacity,
+                            name=f"{well.name} arrow stem",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hoverinfo="skip",
+                        )
+                    )
+
+                    # Add cone (arrowhead) at the bottom of stem, pointing down to surface
+                    figure.add_trace(
+                        go.Cone(
+                            x=[x_surf],
+                            y=[y_surf],
+                            z=[arrow_stem_bottom],  # Cone starts where stem ends
+                            u=[0],
+                            v=[0],
+                            w=[-cone_length],  # Points down, tip reaches surface
+                            sizemode="absolute",
+                            sizeref=surface_marker_size * cone_size_multiplier,
+                            colorscale=[[0, color], [1, color]],
+                            showscale=False,
+                            opacity=opacity,
+                            name=f"{well.name} surface",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} - Surface Location</b><br>"
+                                f"Type: {well_type}<br>"
+                                f"Status: {status}<br>"
+                                f"{fluid_info}<br>"
+                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Wellbore Radius: {well.radius:.2f} ft<br>"
+                                f"Skin Factor: {well.skin_factor:.2f}<br>"
+                                f"<br>"
+                                f"Surface Coords:<br>"
+                                f"  X: {x_surf:.1f} ft<br>"
+                                f"  Y: {y_surf:.1f} ft<br>"
+                                f"  Z: {z_surf:.1f} ft<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+        # Process all production wells (similar logic)
+        for well in wells.production_wells:
+            logger.debug(
+                f"Processing production well: {well.name}, is_active={well.is_active}, perforations={well.perforating_intervals}"
+            )
+            # Determine color based on well state using is_shut_in() method
+            if well.is_shut_in:
+                color = shut_in_color
+                well_type = "Production (Shut-in)"
+                opacity = 0.5
+            else:
+                color = production_color
+                well_type = "Production"
+                opacity = 1.0
+
+            # Extract well trajectory points from perforating intervals
+            if show_wellbore and well.perforating_intervals:
+                x_points, y_points, z_points = [], [], []
+                logger.debug(
+                    f"  Extracting wellbore trajectory for {well.name}, show_wellbore={show_wellbore}"
+                )
+
+                # Get the shallowest perforation (first one) for surface extension
+                first_perf_start = well.perforating_intervals[0][0]
+                first_perf_coords = grid_to_physical(*first_perf_start)
+
+                # Add surface-to-perforation segment (neutral color)
+                if first_perf_coords is not None and cell_dimension is not None:
+                    x_surf, y_surf, z_perf = first_perf_coords
+                    # Surface should be at z_offset (the top of the grid)
+                    # coordinate_offsets contains the base Z coordinate
+                    x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
+                    z_surface = float(z_offset)  # Top of volume
+
+                    # Apply z_scale to surface coordinate
+                    if z_scale != 1.0:
+                        z_surface = z_mean + (z_surface - z_mean) * z_scale
+
+                    # Add neutral-colored segment from surface to perforation
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_surf, x_surf],
+                            y=[y_surf, y_surf],
+                            z=[z_surface, z_perf],
+                            mode="lines",
+                            line=dict(
+                                color="#999999",  # Neutral gray
+                                width=wellbore_width * 0.7,  # Slightly thinner
+                                dash="dot",  # Dotted to distinguish from perforations
+                            ),
+                            opacity=0.6,
+                            name=f"{well.name} casing",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} Casing</b><br>"
+                                f"Non-perforated section<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+                for start_loc, end_loc in well.perforating_intervals:
+                    # Convert start and end to physical coordinates
+                    start_coords = grid_to_physical(*start_loc)
+                    end_coords = grid_to_physical(*end_loc)
+
+                    logger.debug(
+                        f"    Production perforation: {start_loc} -> {end_loc}, coords: {start_coords} -> {end_coords}"
+                    )
+
+                    # Skip if coordinates contain NaN
+                    if start_coords is None or end_coords is None:
+                        logger.debug("    Skipping perforation due to None coordinates")
+                        continue
+
+                    x_start, y_start, z_start = start_coords
+                    x_end, y_end, z_end = end_coords
+
+                    # Handle single-cell perforations (start == end)
+                    # Create a small vertical line segment for visibility
+                    if start_loc == end_loc:
+                        logger.debug(
+                            f"    Single-cell perforation detected at {start_loc}, extending vertically"
+                        )
+                        if cell_dimension is not None and thickness_grid is not None:
+                            # Use half the cell thickness for the vertical extent
+                            cell_thickness = float(
+                                thickness_grid[start_loc[0], start_loc[1], start_loc[2]]
+                            )
+                            # Apply z_scale to the extension amount
+                            extension = (cell_thickness / 4.0) * z_scale
+                            z_start -= extension  # Extend upward
+                            z_end += extension  # Extend downward
+                        else:
+                            # For grid coordinates, extend by 0.5 in Z direction
+                            z_start -= 0.5
+                            z_end += 0.5
+
+                    x_points.extend([x_start, x_end])
+                    y_points.extend([y_start, y_end])
+                    z_points.extend([z_start, z_end])
+
+                # Add wellbore trajectory only if we have valid points
+                if x_points:
+                    logger.debug(
+                        f"  Adding production wellbore trace for {well.name} with {len(x_points)} points"
+                    )
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=x_points,
+                            y=y_points,
+                            z=z_points,
+                            mode="lines",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width,
+                                dash="solid" if well.is_open else "dash",
+                            ),
+                            opacity=opacity,
+                            name=f"{well.name} ({well_type})",
+                            showlegend=True,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name}</b><br>"
+                                f"Type: {well_type}<br>"
+                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Radius: {well.radius:.2f} ft<br>"
+                                f"Skin: {well.skin_factor:.2f}<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+                else:
+                    logger.warning(
+                        f"  No valid points found for production well {well.name} wellbore trajectory"
+                    )
+
+            # Add perforation highlights if requested (production wells)
+            if show_perforations and well.perforating_intervals and well.is_open:
+                for start_loc, end_loc in well.perforating_intervals:
+                    # Convert to physical coordinates
+                    start_coords = grid_to_physical(*start_loc)
+                    end_coords = grid_to_physical(*end_loc)
+
+                    # Skip if coordinates contain NaN
+                    if start_coords is None or end_coords is None:
+                        continue
+
+                    x_start, y_start, z_start = start_coords
+                    x_end, y_end, z_end = end_coords
+
+                    # Add perforation interval as thicker, more opaque line with markers
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_start, x_end],
+                            y=[y_start, y_end],
+                            z=[z_start, z_end],
+                            mode="lines+markers",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width * 1.5,  # 50% thicker
+                            ),
+                            marker=dict(
+                                size=4,
+                                color=color,
+                                symbol="diamond",
+                            ),
+                            opacity=min(opacity * 1.2, 1.0),  # More opaque
+                            name=f"{well.name} perforations",
+                            showlegend=False,  # Don't clutter legend
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} Perforation</b><br>"
+                                f"Start: ({start_loc[0]}, {start_loc[1]}, {start_loc[2]})<br>"
+                                f"End: ({end_loc[0]}, {end_loc[1]}, {end_loc[2]})<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+            # Add surface marker with directional indicator (PRODUCTION WELLS)
+            if show_surface_marker and well.perforating_intervals:
+                # Get surface location (X, Y from first perforation, but Z at surface)
+                start_loc = well.perforating_intervals[0][0]
+                surf_coords = grid_to_physical(*start_loc)
+
+                # Only add surface marker if coordinates are valid
+                if surf_coords is not None:
+                    x_surf, y_surf, _ = surf_coords
+
+                    # Surface should be at z_offset (the top of the grid)
+                    # coordinate_offsets contains the base Z coordinate
+                    x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
+                    z_surf = float(z_offset)  # Top of volume
+
+                    # Apply z_scale to surface coordinate
+                    if z_scale != 1.0:
+                        z_surf = z_mean + (z_surf - z_mean) * z_scale
+
+                    # Add cone/arrow pointing OUT OF reservoir at the SURFACE (production = outflow)
+                    # Build fluid info for hover text (production wells can have multiple fluids)
+                    fluid_names = []
+                    if well.produced_fluids:
+                        for fluid in well.produced_fluids:
+                            fluid_name = f"<b>{fluid.name}</b> ({fluid.phase.value})"
+                            fluid_names.append(fluid_name)
+
+                    fluid_info = (
+                        "Produced Fluids: " + ", ".join(fluid_names)
+                        if fluid_names
+                        else "Produced Fluids: N/A"
+                    )
+                    status = "Open" if well.is_open else "Shut-in"
+
+                    # Calculate appropriate cone size based on grid dimensions
+                    # For aspectmode="data", scale relative to cell size
+                    cone_size_multiplier = 2.0  # Default multiplier for cube mode
+                    if cell_dimension is not None:
+                        dx, dy = cell_dimension
+                        # Scale cone size to be a reasonable fraction of cell size
+                        # Typical cone should be about 5% of cell dimension
+                        cone_size_multiplier = max(dx, dy) * 0.05 * z_scale / surface_marker_size
+
+                    # Arrow sizing - base it on actual grid thickness for proportionality
+                    if thickness_grid is not None:
+                        # Use average layer thickness as base unit
+                        avg_layer_thickness = float(np.mean(thickness_grid))
+                        # Make arrow about 1.5x average layer thickness (reasonable visibility)
+                        base_arrow_length = avg_layer_thickness * 1.5
+                    else:
+                        # Fallback to marker size
+                        base_arrow_length = surface_marker_size
+
+                    # Apply z_scale
+                    total_arrow_length = base_arrow_length * z_scale
+
+                    # Split: 60% stem, 40% cone
+                    stem_length = total_arrow_length * 0.6
+                    cone_length = total_arrow_length * 0.4
+
+                    # Add cylindrical stem (arrow shaft) pointing up from surface
+                    figure.add_trace(
+                        go.Scatter3d(
+                            x=[x_surf, x_surf],
+                            y=[y_surf, y_surf],
+                            z=[z_surf, z_surf + stem_length],
+                            mode="lines",
+                            line=dict(
+                                color=color,
+                                width=wellbore_width * 0.8,  # Make stem more visible
+                            ),
+                            opacity=opacity,
+                            name=f"{well.name} arrow stem",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hoverinfo="skip",
+                        )
+                    )
+
+                    # Add cone (arrowhead) at the end of stem pointing up
+                    figure.add_trace(
+                        go.Cone(
+                            x=[x_surf],
+                            y=[y_surf],
+                            z=[z_surf + stem_length],  # Position at end of stem
+                            u=[0],
+                            v=[0],
+                            w=[cone_length],  # Arrow pointing UP (production/outflow)
+                            sizemode="absolute",
+                            sizeref=surface_marker_size * cone_size_multiplier,
+                            colorscale=[[0, color], [1, color]],
+                            showscale=False,
+                            opacity=opacity,
+                            name=f"{well.name} surface",
+                            showlegend=False,
+                            legendgroup=well.name,
+                            hovertemplate=(
+                                f"<b>{well.name} - Surface Location</b><br>"
+                                f"Type: {well_type}<br>"
+                                f"Status: {status}<br>"
+                                f"{fluid_info}<br>"
+                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Wellbore Radius: {well.radius:.2f} ft<br>"
+                                f"Skin Factor: {well.skin_factor:.2f}<br>"
+                                f"<br>"
+                                f"Surface Coords:<br>"
+                                f"  X: {x_surf:.1f} ft<br>"
+                                f"  Y: {y_surf:.1f} ft<br>"
+                                f"  Z: {z_surf:.1f} ft<br>"
+                                "<extra></extra>"
+                            ),
+                        )
+                    )
+
+        # Position legend to avoid overlap with colorbar
+        # Check if there's a colorbar (most volume/isosurface plots have one on the right)
+        has_colorbar = any(
+            hasattr(trace, "colorbar")
+            and trace.colorbar is not None
+            or (hasattr(trace, "showscale") and trace.showscale)
+            for trace in figure.data
+        )
+
+        if has_colorbar:
+            # Colorbar is typically on the right, position legend on the left
+            figure.update_layout(
+                legend=dict(
+                    x=0.01,  # Left side
+                    y=0.99,  # Top
+                    xanchor="left",
+                    yanchor="top",
+                    bgcolor="rgba(255, 255, 255, 0.8)",  # Semi-transparent white background
+                    bordercolor="gray",
+                    borderwidth=1,
+                )
+            )
+        else:
+            # No colorbar, use default right side position
+            figure.update_layout(
+                legend=dict(
+                    x=0.99,  # Right side
+                    y=0.99,  # Top
+                    xanchor="right",
+                    yanchor="top",
+                    bgcolor="rgba(255, 255, 255, 0.8)",
+                    bordercolor="gray",
+                    borderwidth=1,
+                )
+            )
 
 
 class VolumeRenderer(BaseRenderer):
@@ -1080,6 +1881,7 @@ class VolumeRenderer(BaseRenderer):
         cmax: typing.Optional[float] = None,
         use_opacity_scaling: typing.Optional[bool] = None,
         aspect_mode: typing.Optional[str] = "auto",
+        z_scale: float = 1.0,
         labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
@@ -1106,6 +1908,8 @@ class VolumeRenderer(BaseRenderer):
 
         :param use_opacity_scaling: Whether to use built-in opacity scaling for better depth perception (defaults to config)
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param z_scale: Scale factor for Z-axis (thickness) to make layers appear thicker.
+            Values > 1.0 exaggerate vertical thickness, < 1.0 compress it. Default is 1.0 (true scale).
         :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with volume rendering
         """
@@ -1171,6 +1975,13 @@ class VolumeRenderer(BaseRenderer):
             x_coords, y_coords, z_coords = self.create_physical_coordinates(
                 cell_dimension, thickness_grid, coordinate_offsets
             )
+
+            # Apply Z-scaling to make layers appear thicker/thinner
+            if z_scale != 1.0:
+                # Scale Z coordinates relative to their mean to preserve overall position
+                z_mean = np.mean(z_coords)
+                z_coords = z_mean + (z_coords - z_mean) * z_scale
+
             # For volume rendering, we need cell centers
             nx, ny, nz = data.shape
             x_centers = (x_coords[:-1] + x_coords[1:]) / 2
@@ -1324,6 +2135,7 @@ class VolumeRenderer(BaseRenderer):
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
+            paper_bgcolor=self.config.paper_bgcolor,
             scene=dict(
                 xaxis_title=x_title,
                 yaxis_title=y_title,
@@ -1331,23 +2143,24 @@ class VolumeRenderer(BaseRenderer):
                 camera=self.config.camera_position,
                 aspectmode=aspect_mode,
                 dragmode="orbit",  # Allow orbital rotation around all axes
+                bgcolor=self.config.scene_bgcolor,
                 xaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 yaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 zaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
             ),
         )
@@ -1372,6 +2185,7 @@ class IsosurfaceRenderer(BaseRenderer):
         surface_count: int = 50,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "auto",
+        z_scale: float = 1.0,
         labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
@@ -1397,6 +2211,8 @@ class IsosurfaceRenderer(BaseRenderer):
         :param surface_count: Number of isosurfaces to generate
         :param opacity: Opacity of the isosurface (defaults to config value). Lower values allow better visualization of internal structures.
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param z_scale: Scale factor for Z-axis (thickness) to make layers appear thicker.
+            Values > 1.0 exaggerate vertical thickness, < 1.0 compress it. Default is 1.0 (true scale).
         :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with isosurface plot
         """
@@ -1458,6 +2274,13 @@ class IsosurfaceRenderer(BaseRenderer):
                 thickness_grid=thickness_grid,
                 coordinate_offsets=coordinate_offsets,
             )
+
+            # Apply Z-scaling to make layers appear thicker/thinner
+            if z_scale != 1.0:
+                # Scale Z coordinates relative to their mean to preserve overall position
+                z_mean = np.mean(z_coords)
+                z_coords = z_mean + (z_coords - z_mean) * z_scale
+
             # For isosurface, we need cell centers
             nx, ny, nz = data.shape
             x_centers = (x_coords[:-1] + x_coords[1:]) / 2
@@ -1604,6 +2427,7 @@ class IsosurfaceRenderer(BaseRenderer):
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
+            paper_bgcolor=self.config.paper_bgcolor,
             scene=dict(
                 xaxis_title=x_title,
                 yaxis_title=y_title,
@@ -1611,23 +2435,24 @@ class IsosurfaceRenderer(BaseRenderer):
                 camera=self.config.camera_position,
                 aspectmode=aspect_mode,
                 dragmode="orbit",  # Allow orbital rotation around all axes
+                bgcolor=self.config.scene_bgcolor,
                 xaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 yaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 zaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
             ),
         )
@@ -1668,6 +2493,7 @@ class CellBlockRenderer(BaseRenderer):
         outline_color: typing.Optional[str] = None,
         outline_width: typing.Optional[float] = None,
         use_opacity_scaling: bool = True,
+        z_scale: float = 1.0,
         labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
@@ -1699,6 +2525,9 @@ class CellBlockRenderer(BaseRenderer):
         :param outline_color: Color of the cell block outlines (CSS color name, hex, or rgb, defaults to config)
         :param outline_width: Width/thickness of the outline wireframes in pixels (defaults to config)
         :param use_opacity_scaling: Whether to apply data-based opacity scaling for better depth perception
+        :param z_scale: Scale factor for Z-axis (thickness) to make layers appear thicker.
+            Values > 1.0 exaggerate vertical thickness, < 1.0 compress it. Default is 1.0 (true scale).
+            Useful with aspect_mode="data" when layers appear too thin.
         :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with cell block visualization
         """
@@ -1727,6 +2556,12 @@ class CellBlockRenderer(BaseRenderer):
             cell_dimension, thickness_grid, coordinate_offsets
         )
 
+        # Apply Z-scaling to make layers appear thicker/thinner
+        if z_scale != 1.0:
+            # Scale Z coordinates relative to their mean to preserve overall position
+            z_mean = np.mean(z_coords)
+            z_coords = z_mean + (z_coords - z_mean) * z_scale
+
         normalized_data, display_data = self.normalize_data(
             data, metadata=metadata, normalize_range=False
         )
@@ -1754,9 +2589,13 @@ class CellBlockRenderer(BaseRenderer):
             data_max = float(np.nanmax(normalized_data))
             if data_max > data_min:
                 cell_opacities = (normalized_data - data_min) / (data_max - data_min)
+                # Scale the opacity values to the range [base_opacity * 0.3, base_opacity]
+                # This ensures opacity scales with data while respecting the base value
                 cell_opacities = interpolate_opacity(
                     cell_opacities, self.config.opacity_scale_values
                 )
+                # Scale to user's desired opacity range
+                cell_opacities = cell_opacities * base_opacity
             else:
                 cell_opacities = np.full_like(display_data, base_opacity)
         else:
@@ -1789,6 +2628,12 @@ class CellBlockRenderer(BaseRenderer):
             # For non-log scale, use values as-is
             cmin = original_cmin
             cmax = original_cmax
+
+        # If cmin/cmax not provided, calculate from normalized data
+        if cmin is None:
+            cmin = float(np.nanmin(normalized_data))
+        if cmax is None:
+            cmax = float(np.nanmax(normalized_data))
 
         # Get data range for colorbar mapping using ORIGINAL values
         data_min = (
@@ -1925,9 +2770,9 @@ class CellBlockRenderer(BaseRenderer):
                     lightposition=self.config.light_position,
                     text=vertex_hover_text,  # Enables hover on all vertices
                     hovertemplate="%{text}<extra></extra>",
-                    # Properties for better rendering
-                    flatshading=False,  # Smooth shading
-                    alphahull=0.5,  # Force solid rendering
+                    # Properties for better rendering, sharper, more defined blocks
+                    flatshading=True,  # Flat shading for more defined edges
+                    alphahull=0,  # Disable alphahull to reduce haloing
                 )
             )
 
@@ -2027,6 +2872,7 @@ class CellBlockRenderer(BaseRenderer):
             scale_title = f"{metadata.display_name} ({metadata.unit})" + (
                 " - Log Scale" if metadata.log_scale else ""
             )
+
             figure.add_trace(
                 go.Scatter3d(
                     x=[None],
@@ -2035,7 +2881,7 @@ class CellBlockRenderer(BaseRenderer):
                     mode="markers",
                     marker=dict(
                         size=0.1,
-                        color=[cmin, cmax],  # Use normalized range
+                        color=[cmin, cmax],  # Use normalized range (already set above)
                         colorscale=colorscale,
                         cmin=cmin,  # Match cell blocks
                         cmax=cmax,  # Match cell blocks
@@ -2093,6 +2939,7 @@ class CellBlockRenderer(BaseRenderer):
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
+            paper_bgcolor=self.config.paper_bgcolor,
             scene=dict(
                 xaxis_title=x_title,
                 yaxis_title=y_title,
@@ -2100,23 +2947,24 @@ class CellBlockRenderer(BaseRenderer):
                 camera=self.config.camera_position,
                 aspectmode="data",  # Preserve actual aspect ratios
                 dragmode="orbit",  # Allow orbital rotation around all axes
+                bgcolor=self.config.scene_bgcolor,
                 xaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 yaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 zaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
             ),
         )
@@ -2141,6 +2989,7 @@ class Scatter3DRenderer(BaseRenderer):
         cmax: typing.Optional[float] = None,
         opacity: typing.Optional[float] = None,
         aspect_mode: typing.Optional[str] = "auto",
+        z_scale: float = 1.0,
         labels: typing.Optional["Labels"] = None,
         **kwargs,
     ) -> go.Figure:
@@ -2165,6 +3014,9 @@ class Scatter3DRenderer(BaseRenderer):
         Use cmin/cmax to control value to color mapping in the colorbar.
 
         :param opacity: Opacity of the markers (defaults to config value)
+        :param aspect_mode: Aspect mode for the 3D plot (default is "auto"). Could be any of "cube", "auto", or "data".
+        :param z_scale: Scale factor for Z-axis (thickness) to make layers appear thicker.
+            Values > 1.0 exaggerate vertical thickness, < 1.0 compress it. Default is 1.0 (true scale).
         :param labels: Optional collection of labels to add to the plot
         :return: Plotly figure object with 3D scatter plot
         """
@@ -2253,6 +3105,13 @@ class Scatter3DRenderer(BaseRenderer):
                 thickness_grid=thickness_grid,
                 coordinate_offsets=coordinate_offsets,
             )
+
+            # Apply Z-scaling to make layers appear thicker/thinner
+            if z_scale != 1.0:
+                # Scale Z coordinates relative to their mean to preserve overall position
+                z_mean = np.mean(z_boundaries)
+                z_boundaries = z_mean + (z_boundaries - z_mean) * z_scale
+
             z_physical = np.array(
                 [
                     (z_boundaries[x, y, z] + z_boundaries[x, y, z + 1]) / 2
@@ -2383,6 +3242,7 @@ class Scatter3DRenderer(BaseRenderer):
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
+            paper_bgcolor=self.config.paper_bgcolor,
             scene=dict(
                 xaxis_title=x_title,
                 yaxis_title=y_title,
@@ -2390,21 +3250,22 @@ class Scatter3DRenderer(BaseRenderer):
                 camera=self.config.camera_position,
                 aspectmode=aspect_mode or self.config.aspect_mode or "auto",
                 dragmode="orbit",  # Allow orbital rotation around all axes
+                bgcolor=self.config.scene_bgcolor,
                 xaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 yaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
-                    zerolinecolor="white",
+                    zerolinecolor="gray",
                 ),
                 zaxis=dict(
                     backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="white",
+                    gridcolor="lightgray",
                     showbackground=True,
                     zerolinecolor="white",
                 ),
@@ -2427,7 +3288,7 @@ class ModelVisualizer:
     3D visualizer for reservoir model state and properties.
     """
 
-    default_dashboard_title: str = "Reservoir Model Properties"
+    default_dashboard_title: typing.ClassVar[str] = "Model Properties"
 
     def __init__(
         self,
@@ -2633,7 +3494,7 @@ class ModelVisualizer:
         self,
         model_state: ModelState[ThreeDimensions],
         property: str,
-        plot_type: typing.Optional[PlotType] = None,
+        plot_type: typing.Optional[typing.Union[PlotType, str]] = None,
         figure: typing.Optional[go.Figure] = None,
         title: typing.Optional[str] = None,
         width: typing.Optional[int] = None,
@@ -2648,7 +3509,8 @@ class ModelVisualizer:
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
         labels: typing.Optional["Labels"] = None,
-        **kwargs,
+        show_wells: bool = False,
+        **kwargs: typing.Any,
     ) -> go.Figure:
         """
         Plot a specific model property available on the model state in 3D with optional data slicing.
@@ -2668,25 +3530,55 @@ class ModelVisualizer:
         :param y_slice: Y dimension slice specification (same format as x_slice)
         :param z_slice: Z dimension slice specification (same format as x_slice)
         :param labels: Optional collection of labels to add to the plot
-        :param kwargs: Additional plotting parameters specific to the plot type
+        :param show_wells: Whether to add well visualizations to the plot (default: False)
+        :param kwargs: Additional plotting parameters specific to the plot type. Can also include
+            well visualization kwargs: injection_color, production_color, shut_in_color,
+            wellbore_width, surface_marker_size, show_wellbore, show_surface_marker, show_perforations.
+            See WellKwargs TypedDict for details.
         :return: Plotly figure object containing the 3D visualization
 
         Usage Examples:
 
         ```python
-            # Plot only cells 10-20 in X direction
-            viz.make_plot(state, "pressure", x_slice=(10, 20))
+        # Plot only cells 10-20 in X direction
+        viz.make_plot(state, "pressure", x_slice=(10, 20))
 
-            # Plot single layer at Z index 5
-            viz.make_plot(state, "oil_saturation", z_slice=5)
+        # Plot with string plot type (converted internally)
+        viz.make_plot(state, "pressure", plot_type="volume_render")
+        viz.make_plot(state, "pressure", plot_type="cell_blocks")
 
-            # Plot corner section
-            viz.make_plot(state, "temperature", x_slice=(0, 25), y_slice=(0, 25), z_slice=(0, 10))
+        # Plot single layer at Z index 5
+        viz.make_plot(state, "oil_saturation", z_slice=5)
 
-            # Use slice objects for advanced slicing
-            viz.make_plot(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
+        # Plot corner section
+        viz.make_plot(state, "temperature", x_slice=(0, 25), y_slice=(0, 25), z_slice=(0, 10))
+
+        # Use slice objects for advanced slicing
+        viz.make_plot(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
+
+        # Add well visualization with default styling
+        viz.make_plot(state, "pressure", show_wells=True)
+
+        # Customize well visualization using kwargs
+        viz.make_plot(
+            state, "oil_saturation",
+            show_wells=True,
+            injection_color='#ff6b6b',
+            production_color='#51cf66',
+            wellbore_width=8.0,
+            show_surface_marker=True
+        )
         ```
         """
+        if isinstance(plot_type, str):
+            try:
+                plot_type = PlotType(plot_type)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid plot_type string: '{plot_type}'. "
+                    f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
+                )
+
         metadata = self.registry[property]
         data = self._get_state(model_state, metadata.name)
 
@@ -2757,6 +3649,32 @@ class ModelVisualizer:
         else:
             fig = renderer.render(fig, data, metadata, **kwargs)
 
+        # Add well visualization if requested
+        if show_wells and model_state.has_wells():
+            # Extract z_scale for well rendering (default to 1.0 if not specified)
+            z_scale = kwargs.get("z_scale", 1.0)
+
+            # Extract well visualization kwargs from the kwargs dict using TypedDict keys
+            well_kwargs: WellKwargs = {}
+            for key in WellKwargs.__annotations__.keys():
+                if key in kwargs:
+                    well_kwargs[key] = kwargs.pop(key)  # type: ignore
+
+            # Add wells to the figure using the renderer's method
+            logger.debug(
+                f"Rendering wells: {len(model_state.wells.injection_wells)} injection, "
+                f"{len(model_state.wells.production_wells)} production"
+            )
+            renderer.render_wells(
+                figure=fig,
+                wells=model_state.wells,
+                cell_dimension=cell_dimension,
+                thickness_grid=thickness_grid,
+                coordinate_offsets=coordinate_offsets,
+                z_scale=z_scale,
+                **well_kwargs,
+            )
+
         final_title = self.get_title(plot_type, metadata, title)
 
         # Apply final layout updates
@@ -2773,7 +3691,7 @@ class ModelVisualizer:
         self,
         model_states: typing.Sequence[ModelState[ThreeDimensions]],
         property: str,
-        plot_type: typing.Optional[PlotType] = None,
+        plot_type: typing.Optional[typing.Union[PlotType, str]] = None,
         frame_duration: int = 200,
         step_size: int = 1,
         width: typing.Optional[int] = None,
@@ -2816,6 +3734,16 @@ class ModelVisualizer:
         if not model_states:
             raise ValueError("No model states provided")
 
+        # Convert string plot_type to PlotType enum if needed
+        if isinstance(plot_type, str):
+            try:
+                plot_type = PlotType(plot_type)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid plot_type string: '{plot_type}'. "
+                    f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
+                )
+
         metadata = self.registry[property]
         plot_type = plot_type or PlotType.VOLUME_RENDER
 
@@ -2844,7 +3772,7 @@ class ModelVisualizer:
             **kwargs,
         )
 
-        # Create frames for animation - ensure we get ALL states
+        # Create frames for animation. Ensure we get all states
         frames = []
         state_count = len(model_states)
         for i in range(0, state_count, step_size):
@@ -3014,4 +3942,4 @@ class ModelVisualizer:
 
 
 viz = ModelVisualizer()
-"""Default 3D visualizer instance for reservoir model states."""
+"""Default 3D reservoir model visualizer instance."""

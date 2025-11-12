@@ -1288,7 +1288,6 @@ def evolve_miscible_saturation_explicitly(
             # Handle miscible solvent injection
             if injected_phase == FluidPhase.GAS and injected_fluid.is_miscible:
                 # Miscible solvent injection (e.g., CO2)
-                print("GAS MOBILITY:", phase_mobility)
                 cell_gas_injection_rate = cell_injection_rate  # ft³/day
                 # This will be mixed with existing oil in the mass balance
                 cell_solvent_injection_concentration += injected_fluid.concentration
@@ -1430,14 +1429,14 @@ def evolve_miscible_saturation_explicitly(
         # CFL check
         cfl_number = (total_throughput * time_step_in_days) / cell_pore_volume
         max_cfl_number = options.max_cfl_number.get(options.scheme, 1.0)
-        # if cfl_number > max_cfl_number:
-        #     raise RuntimeError(
-        #         f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-        #         f"CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. "
-        #         f"Inflow = {total_inflow:.2f} ft³/day, Outflow = {total_outflow:.2f} ft³/day, "
-        #         f"Pore volume = {cell_pore_volume:.2f} ft³. "
-        #         f"Consider reducing time step size from {time_step_size} seconds."
-        #     )
+        if cfl_number > max_cfl_number:
+            raise RuntimeError(
+                f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
+                f"CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. "
+                f"Inflow = {total_inflow:.2f} ft³/day, Outflow = {total_outflow:.2f} ft³/day, "
+                f"Pore volume = {cell_pore_volume:.2f} ft³. "
+                f"Consider reducing time step size from {time_step_size} seconds."
+            )
 
         # Total flow rates (advection + wells)
         total_water_flow = net_water_flux + net_water_flow_rate

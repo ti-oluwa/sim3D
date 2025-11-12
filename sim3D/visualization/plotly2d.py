@@ -46,7 +46,13 @@ class PlotConfig:
     """Whether to show grid lines"""
 
     grid_color: str = "lightgray"
-    """Color of grid lines"""
+    """Color of grid lines (use 'lightgray', 'gray', 'white', etc. for contrast control)"""
+
+    xaxis_grid_color: typing.Optional[str] = None
+    """Color of x-axis grid lines (if None, uses grid_color)"""
+
+    yaxis_grid_color: typing.Optional[str] = None
+    """Color of y-axis grid lines (if None, uses grid_color)"""
 
     axis_line_color: str = "black"
     """Color of axis lines"""
@@ -101,10 +107,10 @@ class PlotConfig:
     """Bottom margin in pixels"""
 
     # Background
-    plot_bgcolor: str = "white"
-    """Background color of plot area"""
+    plot_bgcolor: str = "#f8f9fa"
+    """Background color of plot area (light gray for subtle contrast)"""
 
-    paper_bgcolor: str = "white"
+    paper_bgcolor: str = "#ffffff"
     """Background color of entire figure"""
 
 
@@ -839,7 +845,7 @@ class DataVisualizer:
     def make_plot(
         self,
         data: typing.Union[TwoDimensionalGrid, np.typing.NDArray[np.floating]],
-        plot_type: PlotType = PlotType.HEATMAP,
+        plot_type: typing.Union[PlotType, str] = PlotType.HEATMAP,
         metadata: typing.Optional[PropertyMetadata] = None,
         figure: typing.Optional[go.Figure] = None,
         title: typing.Optional[str] = None,
@@ -872,6 +878,12 @@ class DataVisualizer:
         """
         if data.ndim != 2:
             raise ValueError("2D visualization requires 2D data array")
+
+        if isinstance(plot_type, str):
+            try:
+                plot_type = PlotType(plot_type)
+            except ValueError:
+                raise ValueError(f"Invalid plot type: {plot_type}")
 
         data = typing.cast(TwoDimensionalGrid, data)
 
@@ -958,7 +970,9 @@ class DataVisualizer:
         data_list: typing.Sequence[
             typing.Union[TwoDimensionalGrid, np.typing.NDArray[np.floating]]
         ],
-        plot_types: typing.Union[PlotType, typing.Sequence[PlotType]],
+        plot_types: typing.Union[
+            PlotType, str, typing.Sequence[typing.Union[PlotType, str]]
+        ],
         metadata_list: typing.Optional[typing.Sequence[PropertyMetadata]] = None,
         titles: typing.Optional[typing.Sequence[str]] = None,
         rows: int = 1,
@@ -994,10 +1008,21 @@ class DataVisualizer:
                 f"Too many plots ({len(data_list)}) for {rows}x{cols} subplot grid"
             )
 
+        if isinstance(plot_types, str):
+            try:
+                plot_types = PlotType(plot_types)
+            except ValueError:
+                raise ValueError(f"Invalid plot type: {plot_types}")
+
         # Handle plot types
         if isinstance(plot_types, PlotType):
             plot_types = [plot_types] * len(data_list)
-        elif len(plot_types) != len(data_list):
+        elif isinstance(plot_types, collections.abc.Sequence):
+            plot_types = [
+                PlotType(pt) if isinstance(pt, str) else pt for pt in plot_types
+            ]
+
+        if len(plot_types) != len(data_list):
             raise ValueError("Number of plot types must match number of data arrays")
 
         # Create subplot figure
@@ -1136,6 +1161,8 @@ def make_series_plot(
     fill_area: typing.Optional[typing.Union[bool, typing.Sequence[bool]]] = None,
     fill_colors: typing.Optional[typing.Union[str, typing.Sequence[str]]] = None,
     fill_opacity: float = 0.3,
+    xaxis_grid_color: str = "lightgray",
+    yaxis_grid_color: str = "lightgray",
     **kwargs: typing.Any,
 ) -> go.Figure:
     """
@@ -1176,6 +1203,8 @@ def make_series_plot(
     :param fill_area: Whether to fill area under curves
     :param fill_colors: Colors for filled areas
     :param fill_opacity: Opacity for filled areas
+    :param xaxis_grid_color: Color for x-axis grid lines (default: 'lightgray')
+    :param yaxis_grid_color: Color for y-axis grid lines (default: 'lightgray')
     :param kwargs: Additional parameters passed to go.Scatter
     :return: Plotly figure for the series plot
 
@@ -1381,14 +1410,14 @@ def make_series_plot(
         xaxis=dict(
             showgrid=grid,
             gridwidth=1,
-            gridcolor="lightgray",
+            gridcolor=xaxis_grid_color,
             range=x_range,
             type="log" if log_x else "linear",
         ),
         yaxis=dict(
             showgrid=grid,
             gridwidth=1,
-            gridcolor="lightgray",
+            gridcolor=yaxis_grid_color,
             range=y_range,
             type="log" if log_y else "linear",
         ),

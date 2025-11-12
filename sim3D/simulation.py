@@ -58,6 +58,7 @@ from sim3D.types import (
     RelativeMobilityGrids,
     ThreeDimensions,
     _RateGridsProxy,
+    default_options,
 )
 from sim3D.wells import Wells
 
@@ -235,18 +236,42 @@ def build_rock_fluid_properties_grids(
     )
 
     logger.debug("Building capillary pressure grids...")
-    (
-        oil_water_capillary_pressure_grid,
-        gas_oil_capillary_pressure_grid,
-    ) = build_three_phase_capillary_pressure_grids(
-        water_saturation_grid=fluid_properties.water_saturation_grid,
-        gas_saturation_grid=fluid_properties.gas_saturation_grid,
-        irreducible_water_saturation_grid=rock_properties.irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=rock_properties.residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=rock_properties.residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=rock_properties.residual_gas_saturation_grid,
-        capillary_pressure_table=rock_fluid_properties.capillary_pressure_table,
-    )
+    if options.disable_capillary_effects:
+        logger.debug("Capillary effects disabled; using zero capillary pressure grids")
+        oil_water_capillary_pressure_grid = build_uniform_grid(
+            grid_shape=fluid_properties.water_saturation_grid.shape,
+            value=0.0,
+        )
+        gas_oil_capillary_pressure_grid = build_uniform_grid(
+            grid_shape=fluid_properties.water_saturation_grid.shape,
+            value=0.0,
+        )
+    else:
+        (
+            oil_water_capillary_pressure_grid,
+            gas_oil_capillary_pressure_grid,
+        ) = build_three_phase_capillary_pressure_grids(
+            water_saturation_grid=fluid_properties.water_saturation_grid,
+            gas_saturation_grid=fluid_properties.gas_saturation_grid,
+            irreducible_water_saturation_grid=rock_properties.irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=rock_properties.residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=rock_properties.residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=rock_properties.residual_gas_saturation_grid,
+            capillary_pressure_table=rock_fluid_properties.capillary_pressure_table,
+        )
+        if options.capillary_strength_factor != 1.0:
+            logger.debug(
+                f"Scaling capillary pressure grids by factor {options.capillary_strength_factor}"
+            )
+            oil_water_capillary_pressure_grid = typing.cast(
+                NDimensionalGrid[ThreeDimensions],
+                oil_water_capillary_pressure_grid * options.capillary_strength_factor,
+            )
+            gas_oil_capillary_pressure_grid = typing.cast(
+                NDimensionalGrid[ThreeDimensions],
+                gas_oil_capillary_pressure_grid * options.capillary_strength_factor,
+            )
+
     relperm_grids = RelPermGrids[ThreeDimensions](
         kro=kro_grid, krw=krw_grid, krg=krg_grid
     )
@@ -267,8 +292,8 @@ def build_rock_fluid_properties_grids(
 
 def run(
     model: ReservoirModel[ThreeDimensions],
-    wells: Wells[ThreeDimensions],
-    options: Options,
+    wells: typing.Optional[Wells[ThreeDimensions]] = None,
+    options: typing.Optional[Options] = None,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     """
     Runs a dynamic simulation on a 3D reservoir model with specified properties and wells.
@@ -281,6 +306,11 @@ def run(
     :param options: Simulation run options and parameters.
     :yield: Yields the model state at specified output intervals.
     """
+    if options is None:
+        options = default_options
+    if wells is None:
+        wells = Wells()
+    
     logger.info("Starting 3D reservoir simulation")
     logger.debug(f"Grid dimensions: {model.grid_shape}")
     logger.debug(f"Cell dimensions: {model.cell_dimension}")

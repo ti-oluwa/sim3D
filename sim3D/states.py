@@ -57,6 +57,9 @@ class ModelState(typing.Generic[NDimension]):
         """
         return self.time_step * self.time_step_size
 
+    def has_wells(self) -> bool:
+        return self.wells.has_wells()
+
 
 @attrs.define(frozen=True, slots=True)
 class ReservoirVolumetrics:
@@ -1363,9 +1366,9 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             * state.model.rock_properties.porosity_grid
             * state.model.rock_properties.net_to_gross_ratio_grid  # Include net-to-gross ratio
             * initial_oil_saturation
-            / initial_state.model.fluid_properties.oil_formation_volume_factor_grid
             * c.ACRE_FT_TO_FT3
-            / c.FT3_TO_BBL  # Convert to STB
+            * c.FT3_TO_BBL  # Convert to STB
+            / initial_state.model.fluid_properties.oil_formation_volume_factor_grid
         )
         contacted_oil = np.sum(oil_volume_grid[contacted_cells])
         uncontacted_oil = np.sum(oil_volume_grid[~contacted_cells])
@@ -1417,7 +1420,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         self,
         time_step: int = -1,
         ipr_method: typing.Literal["vogel", "linear", "fetkovich", "jones"] = "vogel",
-        phase: typing.Literal["oil", "gas"] = "oil",
+        phase: typing.Literal["oil", "gas", "water"] = "oil",
     ) -> ProductivityAnalysis:
         """
         Well productivity analysis using actual well model data with multiple IPR methods.
@@ -1488,6 +1491,17 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                     )
                     cell_flow_rate = (
                         state.production.oil[i, j, k] * c.FT3_TO_BBL / oil_fvf
+                    )  # stb/day
+                elif phase == "water":
+                    if state.production.water is None:
+                        continue
+                    water_fvf = float(
+                        state.model.fluid_properties.water_formation_volume_factor_grid[
+                            i, j, k
+                        ]
+                    )
+                    cell_flow_rate = (
+                        state.production.water[i, j, k] * c.FT3_TO_BBL / water_fvf
                     )  # stb/day
                 else:
                     if state.production.gas is None:
@@ -1751,7 +1765,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         return float(linear_rate + vogel_portion)
 
     def compare_ipr_methods(
-        self, time_step: int = -1
+        self, time_step: int = -1, phase: typing.Literal["oil", "gas", "water"] = "oil"
     ) -> typing.Dict[str, ProductivityAnalysis]:
         """
         Compare all available IPR methods for the same reservoir conditions.
@@ -1761,14 +1775,16 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         and method validation.
 
         :param time_step: The time step to analyze
+        :param phase: The production phase to analyze ('oil', 'gas', 'water')
         :return: Mapping of IPR method names to their analysis results
         """
-        methods: typing.List[str] = ["vogel", "linear", "fetkovich", "jones"]
+        methods = ["vogel", "linear", "fetkovich", "jones"]
         results = {}
         for method in methods:
             results[method] = self.productivity_analysis(
                 time_step=time_step,
                 ipr_method=method,  # type: ignore
+                phase=phase,
             )
         return results
 
