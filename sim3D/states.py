@@ -1,6 +1,6 @@
 import functools
-import typing
 import logging
+import typing
 
 import attrs
 import numpy as np
@@ -8,14 +8,14 @@ from scipy.optimize import curve_fit
 
 from sim3D.constants import c
 from sim3D.grids import uniform_grid
-from sim3D.properties import compute_hydrocarbon_in_place
 from sim3D.models import ReservoirModel
+from sim3D.properties import compute_hydrocarbon_in_place
 from sim3D.types import (
+    CapillaryPressureGrids,
     NDimension,
     RateGrids,
     RelPermGrids,
     RelativeMobilityGrids,
-    CapillaryPressureGrids,
 )
 from sim3D.wells import Wells, _expand_intervals
 
@@ -1318,6 +1318,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             aquifer_influx=float(aquifer_influx),
         )
 
+    mbal = material_balance_analysis
+
     def sweep_efficiency_analysis(self, time_step: int = -1) -> SweepEfficiencyAnalysis:
         """
         Sweep efficiency analysis to evaluate reservoir contact and displacement.
@@ -1900,6 +1902,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         voidage_replacement_ratio = total_injected_volume / total_produced_volume
         return float(voidage_replacement_ratio)
 
+    vrr = voidage_replacement_ratio
+
     def recommend_decline_model(
         self,
         from_time_step: int = 0,
@@ -2338,6 +2342,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             predicted_rates=predicted_hyperbolic_rates.tolist(),
         )
 
+    dca = decline_curve_analysis
+
     def forecast_production(
         self,
         decline_result: DeclineCurveResult,
@@ -2561,6 +2567,89 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         return float(cumulative)
 
+    def mobility_ratio(
+        self,
+        displaced_phase: typing.Literal["oil", "water"] = "oil",
+        displacing_phase: typing.Literal["oil", "water", "gas"] = "water",
+        time_step: int = -1,
+    ) -> float:
+        """
+        Calculate the mobility ratio between two fluid phases in the reservoir.
+
+        Mobility ratio (M) is defined as the ratio of the mobility of the displacing
+        phase to the mobility of the displaced phase:
+
+            M = λd / λr
+
+        Where:
+        - λd = mobility of displacing phase (e.g., water)
+        - λr = mobility of displaced phase (e.g., oil)
+
+        Mobility (λ) is calculated as:
+
+            λ = kα / μ
+
+        Where:
+        - kα = Relative permeability of the phase (fraction)
+        - μ = viscosity of the phase (cP)
+
+        A mobility ratio less than 1 (M < 1) indicates a stable displacement,
+        while a mobility ratio greater than 1 (M > 1) indicates an unstable displacement
+
+        :param displaced_phase: The phase being displaced ('oil' or 'water').
+        :param displacing_phase: The phase doing the displacing ('oil' or 'water').
+        :param time_step: Time step index to analyze. Use -1 for the most recent time step.
+        :return: Mobility ratio (M). Returns float('inf') if calculation is not possible.
+        """
+        if displaced_phase not in {"oil", "water"}:
+            raise ValueError("Invalid displaced phase specified for mobility ratio.")
+
+        if displacing_phase not in {"oil", "water", "gas"}:
+            raise ValueError("Invalid displacing phase specified for mobility ratio.")
+
+        state = self.get_state(time_step)
+        fluid_properties = state.model.fluid_properties
+        relative_permeabilities = state.relative_permeabilities
+
+        if displacing_phase == "water":
+            displacing_viscosity_grid = fluid_properties.water_viscosity_grid
+            displacing_rel_perm_grid = relative_permeabilities.krw
+        elif displacing_phase == "oil":
+            displacing_viscosity_grid = fluid_properties.oil_viscosity_grid
+            displacing_rel_perm_grid = relative_permeabilities.kro
+        else:  # displacing_phase == "gas"
+            displacing_viscosity_grid = fluid_properties.gas_viscosity_grid
+            displacing_rel_perm_grid = relative_permeabilities.krg
+
+        if displaced_phase == "water":
+            displaced_viscosity_grid = fluid_properties.water_viscosity_grid
+            displaced_rel_perm_grid = relative_permeabilities.krw
+        else:  # displaced_phase == "oil"
+            displaced_viscosity_grid = fluid_properties.oil_viscosity_grid
+            displaced_rel_perm_grid = relative_permeabilities.kro
+
+        # Calculate average mobility for displacing phase
+        displacing_mobility_grid = np.divide(
+            displacing_rel_perm_grid,
+            displacing_viscosity_grid,
+            out=np.zeros_like(displacing_rel_perm_grid),
+            where=displacing_viscosity_grid != 0,
+        )
+        avg_displacing_mobility = np.mean(displacing_mobility_grid)
+        # Calculate average mobility for displaced phase
+        displaced_mobility_grid = np.divide(
+            displaced_rel_perm_grid,
+            displaced_viscosity_grid,
+            out=np.zeros_like(displaced_rel_perm_grid),
+            where=displaced_viscosity_grid != 0,
+        )
+        avg_displaced_mobility = np.mean(displaced_mobility_grid)
+        # Calculate mobility ratio
+        if avg_displaced_mobility == 0:
+            return float("inf")
+
+        return float(avg_displacing_mobility / avg_displaced_mobility)
+    
     def reservoir_volumetrics_history(
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
     ) -> typing.Generator[typing.Tuple[int, ReservoirVolumetrics], None, None]:
@@ -2699,3 +2788,34 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.voidage_replacement_ratio(t))
+
+    def mobility_ratio_history(
+        self,
+        displaced_phase: typing.Literal["oil", "water"] = "oil",
+        displacing_phase: typing.Literal["oil", "water", "gas"] = "water",
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Generator for mobility ratio history over time.
+
+        :param displaced_phase: The phase being displaced ('oil' or 'water').
+        :param displacing_phase: The phase doing the displacing ('oil', 'water', or 'gas').
+        :param from_time_step: Starting time step index.
+        :param to_time_step: Ending time step index.
+        :param interval: Time step interval.
+        :return: Generator yielding (time_step, mobility_ratio) tuples.
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        for t in range(from_time_step, to_time_step + 1, interval):
+            yield (
+                t,
+                self.mobility_ratio(
+                    displaced_phase=displaced_phase,
+                    displacing_phase=displacing_phase,
+                    time_step=t,
+                ),
+            )

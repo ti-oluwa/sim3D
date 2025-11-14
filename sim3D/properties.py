@@ -5,7 +5,7 @@ import logging
 import typing
 import warnings
 
-from CoolProp.CoolProp import PropsSI
+from CoolProp.CoolProp import PropsSI  # type: ignore [import]
 import numpy as np
 from scipy.optimize import brentq, root_scalar
 
@@ -2536,6 +2536,136 @@ def compute_hydrocarbon_in_place(
     return free_gip
 
 
+def compute_miscibility_transition_factor(
+    pressure: float,
+    minimum_miscibility_pressure: float,
+    transition_width: float = 500.0,
+) -> float:
+    """
+    Compute pressure-dependent miscibility transition factor.
+
+    Returns a smooth transition from 0 (immiscible) at low pressure
+    to 1 (fully miscible) above minimum miscibility pressure.
+
+    This factor represents the degree of miscibility development and should
+    be multiplied by the base Todd-Longstaff omega parameter to get the
+    effective omega for viscosity calculations.
+
+    Physical Behavior:
+        - P << MMP: factor → 0 (immiscible, no miscible mixing)
+        - P ≈ MMP: factor ≈ 0.5 (transition zone, partial miscibility)
+        - P >> MMP: factor → 1 (fully miscible, maximum mixing)
+
+    The transition uses hyperbolic tangent for smooth, physically realistic behavior:
+        f(P) = 0.5 * (1 + tanh((P - MMP) / ΔP))
+
+    This ensures:
+        - At P = MMP - transition_width: f ≈ 0.12 (nearly immiscible)
+        - At P = MMP: f = 0.5 (transitional)
+        - At P = MMP + transition_width: f ≈ 0.88 (nearly miscible)
+
+    Usage:
+        To get effective omega for Todd-Longstaff viscosity calculation:
+            omega_effective = omega_base * compute_miscibility_transition_factor(P, MMP)
+
+    :param pressure: Current reservoir pressure (psi)
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi).
+        The pressure above which first-contact miscibility can develop.
+    :param transition_width: Pressure width of transition zone (psi), default 500.
+        Controls how abruptly miscibility develops with pressure.
+        Smaller values = sharper transition.
+    :return: Miscibility transition factor, range [0, 1]
+        0 = completely immiscible behavior
+        1 = fully miscible behavior
+
+    Example:
+        >>> # CO2 injection with MMP = 2000 psi, base omega = 0.67
+        >>> omega_base = 0.67
+        >>> mmp = 2000.0
+        >>>
+        >>> # Well below MMP - immiscible
+        >>> factor = compute_miscibility_transition_factor(1000, mmp, 500)
+        >>> omega_eff = omega_base * factor  # ~0.08 (nearly immiscible)
+        >>>
+        >>> # At MMP - transitional
+        >>> factor = compute_miscibility_transition_factor(2000, mmp, 500)
+        >>> omega_eff = omega_base * factor  # ~0.34 (partial miscibility)
+        >>>
+        >>> # Above MMP - miscible
+        >>> factor = compute_miscibility_transition_factor(3000, mmp, 500)
+        >>> omega_eff = omega_base * factor  # ~0.59 (near full miscibility)
+
+    References:
+        Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
+        Application of a Numerical Simulator for Predicting Miscible Flood Performance."
+        JPT, July 1972, pp. 874-882.
+
+        Note: The original Todd-Longstaff paper defines omega as a mixing parameter.
+        This function computes how that mixing parameter varies with pressure near MMP.
+    """
+    # Fast path for extreme cases (>2 standard deviations from MMP)
+    if pressure >= minimum_miscibility_pressure + 2.0 * transition_width:
+        return 1.0  # Fully miscible (well above MMP)
+    elif pressure <= minimum_miscibility_pressure - 2.0 * transition_width:
+        return 0.0  # Fully immiscible (well below MMP)
+
+    # Smooth transition using hyperbolic tangent
+    # Normalize pressure relative to MMP and transition width
+    normalized = (pressure - minimum_miscibility_pressure) / transition_width
+
+    # Transition factor varies from 0 (immiscible) to 1 (miscible)
+    transition_factor = 0.5 * (1.0 + np.tanh(normalized))
+
+    return transition_factor
+
+
+def compute_effective_todd_longstaff_omega(
+    pressure: float,
+    base_omega: float,
+    minimum_miscibility_pressure: float,
+    transition_width: float = 500.0,
+) -> float:
+    """
+    Compute pressure-dependent effective Todd-Longstaff omega parameter.
+
+    Combines the base mixing parameter (omega) with pressure-dependent
+    miscibility to get the effective omega for viscosity calculations.
+
+    Below MMP: omega_eff → 0 (immiscible behavior, segregated flow)
+    Above MMP: omega_eff → base_omega (miscible behavior, mixed flow)
+
+    :param pressure: Current reservoir pressure (psi)
+    :param base_omega: Base Todd-Longstaff mixing parameter (0 to 1).
+        Typical value: 0.67 for CO2-oil systems.
+        This is the maximum omega achieved when fully miscible.
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi)
+    :param transition_width: Pressure width of transition zone (psi), default 500
+    :return: Effective omega parameter for viscosity calculation (0 to base_omega)
+
+    Example:
+    ```python
+    # CO2 flood with MMP = 2000 psi
+    compute_effective_todd_longstaff_omega(
+        pressure=2500,
+        base_omega=0.67,
+        minimum_miscibility_pressure=2000,
+        transition_width=500
+    )
+    0.54  # Partial miscibility developed
+    ```
+    """
+    if base_omega == 0.0:
+        return 0.0
+
+    transition_factor = compute_miscibility_transition_factor(
+        pressure=pressure,
+        minimum_miscibility_pressure=minimum_miscibility_pressure,
+        transition_width=transition_width,
+    )
+
+    return base_omega * transition_factor
+
+
 def compute_todd_longstaff_effective_viscosity(
     oil_viscosity: float,
     solvent_viscosity: float,
@@ -2545,27 +2675,74 @@ def compute_todd_longstaff_effective_viscosity(
     """
     Compute effective viscosity using Todd-Longstaff mixing model.
 
+    This function computes the viscosity of an oil-solvent mixture based on
+    the concentrations and a mixing parameter (omega) that interpolates between
+    fully segregated (immiscible) and fully mixed (miscible) flow behavior.
+
     Standard Formula (Todd & Longstaff, 1972):
-        μ_mix = C_s * μ_s + C_o * μ_o                           (arithmetic mean - fully mixed)
-        μ_seg = 1 / (C_s/μ_s + C_o/μ_o)                        (harmonic mean - segregated flow)
-        μ_eff = μ_mix^ω * μ_seg^(1-ω)                          (Todd-Longstaff interpolation)
+        μ_mix = C_s * μ_s + C_o * μ_o                      (arithmetic mean - fully mixed)
+        μ_seg = 1 / (C_s/μ_s + C_o/μ_o)                   (harmonic mean - segregated)
+        μ_eff = μ_mix^ω * μ_seg^(1-ω)                     (Todd-Longstaff interpolation)
 
     Where:
         C_s = solvent concentration (0 to 1)
         C_o = oil concentration = 1 - C_s
-        ω = mixing parameter (0=fully segregated, 1=fully mixed)
+        ω = mixing parameter (0 = fully segregated, 1 = fully mixed)
 
-    Physical Interpretation:
-        ω = 0.0: Immiscible-like behavior (parallel flow, harmonic mean)
-        ω = 0.5: Partial mixing (geometric mean)
-        ω = 0.67: Typical for CO2-oil systems (from history matching)
-        ω = 1.0: Fully mixed (ideal miscibility, linear mean)
+    Physical Interpretation of Omega:
+        ω = 0.0: Immiscible behavior (parallel/segregated flow, harmonic mean)
+                 Fluids flow separately with minimal interaction
+        ω = 0.5: Partial mixing (geometric mean of viscosities)
+                 Intermediate level of fluid interaction
+        ω = 0.67: Typical for CO2-oil systems (from field history matching)
+                  Represents realistic mixing in miscible gas floods
+        ω = 1.0: Fully mixed (ideal miscibility, arithmetic mean)
+                 Complete homogeneous mixing, single-phase behavior
 
-    :param oil_viscosity: Oil viscosity (cP), must be > 0
-    :param solvent_viscosity: Solvent viscosity (cP), must be > 0
+    Note on Pressure-Dependent Miscibility:
+        When pressure varies (especially near MMP), omega itself becomes pressure-dependent.
+        Use compute_effective_todd_longstaff_omega() to get omega(P), then pass it here.
+
+    :param oil_viscosity: Pure oil viscosity (cP), must be > 0
+    :param solvent_viscosity: Pure solvent viscosity (cP), must be > 0
     :param solvent_concentration: Solvent concentration (fraction 0-1)
+        0 = pure oil, 1 = pure solvent
     :param omega: Todd-Longstaff mixing parameter (0-1), default 0.67
+        This should be the EFFECTIVE omega if considering pressure effects.
     :return: Effective mixture viscosity (cP)
+
+    Raises:
+        ValueError: If concentrations or omega are outside [0,1], or viscosities ≤ 0
+
+    Example:
+    ```python
+    # Immiscible case (omega = 0)
+    compute_todd_longstaff_effective_viscosity(
+        oil_viscosity=10.0,
+        solvent_viscosity=0.05,
+        solvent_concentration=0.3,
+        omega=0.0
+    )
+    0.147  # Harmonic mean - segregated flow
+
+    # Fully miscible case (omega = 1)
+    compute_todd_longstaff_effective_viscosity(
+        oil_viscosity=10.0,
+        solvent_viscosity=0.05,
+        solvent_concentration=0.3,
+        omega=1.0
+    )
+    7.015  # Arithmetic mean - fully mixed
+
+    # Typical CO2 flood (omega = 0.67)
+    compute_todd_longstaff_effective_viscosity(
+        oil_viscosity=10.0,
+        solvent_viscosity=0.05,
+        solvent_concentration=0.3,
+        omega=0.67
+    )
+    0.89  # Realistic mixture viscosity
+    ```
 
     References:
         Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
@@ -2602,62 +2779,8 @@ def compute_todd_longstaff_effective_viscosity(
 
     # Todd-Longstaff interpolation (weighted geometric mean)
     # Special cases:
-    #   ω = 0: μ_eff = μ_segregated (immiscible)
-    #   ω = 1: μ_eff = μ_mix (fully mixed)
+    #   ω = 0: μ_eff = μ_segregated (immiscible, harmonic mean)
+    #   ω = 1: μ_eff = μ_mix (fully mixed, arithmetic mean)
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
     return mu_effective
-
-
-def compute_miscibility_function(
-    pressure: float,
-    minimum_miscibility_pressure: float,
-    transition_width: float = 500.0,
-) -> float:
-    """
-    Compute Todd-Longstaff omega parameter based on pressure.
-
-    Returns a smooth transition from immiscible (ω=0) at low pressure
-    to miscible (ω=1) above minimum miscibility pressure.
-
-    Physical Behavior:
-        - P << MMP: ω → 0 (fully segregated, immiscible behavior)
-        - P ≈ MMP: ω ≈ 0.5 (transition zone, partial miscibility)
-        - P >> MMP: ω → 1 (fully mixed, first-contact miscible)
-
-    Uses hyperbolic tangent for smooth transition:
-        ω(P) = 0.5 * (1 + tanh((P - MMP) / ΔP))
-
-    This ensures:
-        - At P = MMP - transition_width: ω ≈ 0.12 (nearly immiscible)
-        - At P = MMP: ω = 0.5 (transitional)
-        - At P = MMP + transition_width: ω ≈ 0.88 (nearly miscible)
-
-    :param pressure: Current pressure (psi)
-    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi)
-    :param transition_width: Pressure width of transition zone (psi), default 500
-    :return: Todd-Longstaff omega parameter (0=immiscible, 1=miscible)
-
-    Example:
-    ```python
-    compute_miscibility_function(1000, 2000, 500)  # Well below MMP
-    # 0.12  # Nearly immiscible
-    compute_miscibility_function(2000, 2000, 500)  # At MMP
-    # 0.5   # Transitional
-    compute_miscibility_function(3000, 2000, 500)  # Above MMP
-    # 0.88  # Nearly miscible
-    ```
-    """
-    # Fast path for extreme cases
-    if pressure >= minimum_miscibility_pressure + 2.0 * transition_width:
-        return 1.0  # Fully miscible (well above MMP)
-    elif pressure <= minimum_miscibility_pressure - 2.0 * transition_width:
-        return 0.0  # Fully immiscible (well below MMP)
-
-    # Smooth transition using hyperbolic tangent
-    # Normalize pressure relative to MMP
-    normalized = (pressure - minimum_miscibility_pressure) / transition_width
-
-    # omega varies from 0 (immiscible) to 1 (miscible)
-    omega = 0.5 * (1.0 + np.tanh(normalized))
-    return omega

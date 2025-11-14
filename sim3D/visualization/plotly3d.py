@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 class PlotType(str, Enum):
     """Types of 3D plots available."""
 
-    VOLUME_RENDER = "volume_render"
+    VOLUME = "volume"
     """Volume rendering for scalar fields, showing continuous data distribution."""
     ISOSURFACE = "isosurface"
     """Isosurface plots for discrete value thresholds, showing surfaces at specific data values."""
@@ -129,9 +129,9 @@ class WellKwargs(TypedDict, total=False):
 
 
 DEFAULT_CAMERA_POSITION = CameraPosition(
-    eye=dict(x=2.2, y=2.2, z=1.8),
-    center=dict(x=0, y=0, z=0),
-    up=dict(x=0, y=0, z=1),
+    eye=dict(x=2.2, y=2.2, z=1.8),  # type: ignore
+    center=dict(x=0.0, y=0.0, z=0.0),  # type: ignore
+    up=dict(x=0.0, y=0.0, z=1.0),  # type: ignore
 )
 
 DEFAULT_OPACITY_SCALE_VALUES = [
@@ -160,7 +160,7 @@ class PlotConfig:
     height: int = 960
     """Plot height in pixels. Larger values provide higher resolution but may impact performance."""
 
-    plot_type: PlotType = PlotType.VOLUME_RENDER
+    plot_type: PlotType = PlotType.VOLUME
     """Default plot type to use when no specific type is requested. Different plot types offer 
     different visualization perspectives of the same 3D data."""
 
@@ -696,9 +696,9 @@ def coarsen_grid_and_coords(
     data: NDimensionalGrid[NDimension],
     x_coords: OneDimensionalGrid,
     y_coords: OneDimensionalGrid,
-    z_coords: None = None,
-    batch_size: NDimension = ...,
-    method: typing.Literal["mean", "sum", "max", "min"] = "mean",
+    z_coords: None,
+    batch_size: typing.Optional[NDimension],
+    method: typing.Literal["mean", "sum", "max", "min"],
 ) -> typing.Tuple[
     NDimensionalGrid[NDimension], OneDimensionalGrid, OneDimensionalGrid, None
 ]: ...
@@ -710,8 +710,8 @@ def coarsen_grid_and_coords(
     x_coords: OneDimensionalGrid,
     y_coords: OneDimensionalGrid,
     z_coords: NDimensionalGrid[NDimension],
-    batch_size: NDimension = ...,
-    method: typing.Literal["mean", "sum", "max", "min"] = "mean",
+    batch_size: typing.Optional[NDimension],
+    method: typing.Literal["mean", "sum", "max", "min"],
 ) -> typing.Tuple[
     NDimensionalGrid[NDimension],
     OneDimensionalGrid,
@@ -725,7 +725,7 @@ def coarsen_grid_and_coords(
     x_coords: OneDimensionalGrid,
     y_coords: OneDimensionalGrid,
     z_coords: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    batch_size: NDimension = (2, 2, 2),
+    batch_size: typing.Optional[NDimension] = None,
     method: typing.Literal["mean", "sum", "max", "min"] = "mean",
 ) -> typing.Tuple[
     NDimensionalGrid[NDimension],
@@ -745,6 +745,8 @@ def coarsen_grid_and_coords(
     :param method: Aggregation method for data blocks.
     :return: Tuple (coarsened_data, x_batch, y_batch, z_batch)
     """
+    if batch_size is None:
+        batch_size = typing.cast(NDimension, (2,) * data.ndim)
     # ---------------------------
     # 1. Pad data to be divisible by batch_size
     # ---------------------------
@@ -1448,7 +1450,9 @@ class BaseRenderer(ABC):
                         dx, dy = cell_dimension
                         # Scale cone size to be a reasonable fraction of cell size
                         # Typical cone should be about 5% of cell dimension
-                        cone_size_multiplier = max(dx, dy) * 0.05 * z_scale / surface_marker_size
+                        cone_size_multiplier = (
+                            max(dx, dy) * 0.05 * z_scale / surface_marker_size
+                        )
 
                     # Arrow sizing - base it on actual grid thickness for proportionality
                     if thickness_grid is not None:
@@ -1473,7 +1477,6 @@ class BaseRenderer(ABC):
                     arrow_stem_bottom = (
                         z_surf + cone_length
                     )  # Stem ends where cone starts
-                    arrow_cone_tip = z_surf  # Cone tip AT the surface
 
                     # Add cylindrical stem (arrow shaft) starting from above
                     figure.add_trace(
@@ -1751,7 +1754,9 @@ class BaseRenderer(ABC):
                         dx, dy = cell_dimension
                         # Scale cone size to be a reasonable fraction of cell size
                         # Typical cone should be about 5% of cell dimension
-                        cone_size_multiplier = max(dx, dy) * 0.05 * z_scale / surface_marker_size
+                        cone_size_multiplier = (
+                            max(dx, dy) * 0.05 * z_scale / surface_marker_size
+                        )
 
                     # Arrow sizing - base it on actual grid thickness for proportionality
                     if thickness_grid is not None:
@@ -2049,7 +2054,17 @@ class VolumeRenderer(BaseRenderer):
                 )
 
         # Use the normalized data for the scale values
-        scale_values = np.linspace(data_min, data_max, num=6)
+        # For log scale, create evenly-spaced values in LOG space for better visual distribution
+        if metadata.log_scale and data_min > 0 and data_max > 0:
+            # Create values evenly spaced in log space
+            log_min = np.log10(data_min)
+            log_max = np.log10(data_max)
+            log_scale_values = np.linspace(log_min, log_max, num=6)
+            scale_values = 10**log_scale_values  # Convert back to original units
+        else:
+            # For linear scale, use evenly spaced values
+            scale_values = np.linspace(data_min, data_max, num=6)
+
         scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
@@ -2344,7 +2359,17 @@ class IsosurfaceRenderer(BaseRenderer):
             )
 
         # Use the normalized data for the scale values
-        scale_values = np.linspace(data_min, data_max, num=6)
+        # For log scale, create evenly-spaced values in LOG space for better visual distribution
+        if metadata.log_scale and data_min > 0 and data_max > 0:
+            # Create values evenly spaced in log space
+            log_min = np.log10(data_min)
+            log_max = np.log10(data_max)
+            log_scale_values = np.linspace(log_min, log_max, num=6)
+            scale_values = 10**log_scale_values  # Convert back to original units
+        else:
+            # For linear scale, use evenly spaced values
+            scale_values = np.linspace(data_min, data_max, num=6)
+
         scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
@@ -2865,7 +2890,17 @@ class CellBlockRenderer(BaseRenderer):
         # Add a dummy trace for the colorbar
         if self.config.show_colorbar:
             # Use the normalized data for the scale values
-            scale_values = np.linspace(data_min, data_max, num=6)
+            # For log scale, create evenly-spaced values in LOG space for better visual distribution
+            if metadata.log_scale and data_min > 0 and data_max > 0:
+                # Create values evenly spaced in log space
+                log_min = np.log10(data_min)
+                log_max = np.log10(data_max)
+                log_scale_values = np.linspace(log_min, log_max, num=6)
+                scale_values = 10**log_scale_values  # Convert back to original units
+            else:
+                # For linear scale, use evenly spaced values
+                scale_values = np.linspace(data_min, data_max, num=6)
+
             scale_text = [
                 self.format_value(val, metadata=metadata) for val in scale_values
             ]
@@ -3162,7 +3197,17 @@ class Scatter3DRenderer(BaseRenderer):
             z_title = "Z Cell Index"
 
         # Use the normalized data for the scale values
-        scale_values = np.linspace(data_min, data_max, num=6)
+        # For log scale, create evenly-spaced values in LOG space for better visual distribution
+        if metadata.log_scale and data_min > 0 and data_max > 0:
+            # Create values evenly spaced in log space
+            log_min = np.log10(data_min)
+            log_max = np.log10(data_max)
+            log_scale_values = np.linspace(log_min, log_max, num=6)
+            scale_values = 10**log_scale_values  # Convert back to original units
+        else:
+            # For linear scale, use evenly spaced values
+            scale_values = np.linspace(data_min, data_max, num=6)
+
         scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
@@ -3274,7 +3319,7 @@ class Scatter3DRenderer(BaseRenderer):
 
 
 PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
-    PlotType.VOLUME_RENDER: "3D Volume",
+    PlotType.VOLUME: "3D Volume",
     PlotType.ISOSURFACE: "3D Isosurface",
     PlotType.SCATTER_3D: "3D Scatter",
     PlotType.CELL_BLOCKS: "3D Cell Blocks",
@@ -3303,7 +3348,7 @@ class ModelVisualizer:
         """
         self.config = config or PlotConfig()
         self._renderers: typing.Dict[PlotType, BaseRenderer] = {
-            PlotType.VOLUME_RENDER: VolumeRenderer(self.config),
+            PlotType.VOLUME: VolumeRenderer(self.config),
             PlotType.ISOSURFACE: IsosurfaceRenderer(self.config),
             PlotType.SCATTER_3D: Scatter3DRenderer(self.config),
             PlotType.CELL_BLOCKS: CellBlockRenderer(self.config),
@@ -3745,7 +3790,7 @@ class ModelVisualizer:
                 )
 
         metadata = self.registry[property]
-        plot_type = plot_type or PlotType.VOLUME_RENDER
+        plot_type = plot_type or PlotType.VOLUME
 
         if "cmin" not in kwargs:
             # Add cmin/cmax to kwargs for consistent color mapping across frames

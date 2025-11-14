@@ -310,7 +310,7 @@ def run(
         options = default_options
     if wells is None:
         wells = Wells()
-    
+
     logger.info("Starting 3D reservoir simulation")
     logger.debug(f"Grid dimensions: {model.grid_shape}")
     logger.debug(f"Cell dimensions: {model.cell_dimension}")
@@ -737,7 +737,7 @@ def update_pvt_properties(
     Updates PVT fluid properties across the simulation grid using the current pressure and temperature values.
     This function recalculates the fluid PVT properties in a physically consistent sequence:
 
-    ```
+    ```markdown
     ┌────────────┐
     │  PRESSURE  │
     └────┬───────┘
@@ -763,7 +763,7 @@ def update_pvt_properties(
     │  • Then compute oil compressibility, density, viscosity    │
     └────────────────────────────────────────────────────────────┘
 
-    === GAS PROPERTIES ===
+    # GAS PROPERTIES
     - Computes gas gravity from density.
     - Uses gas gravity to derive molecular weight.
     - Computes gas z-factor (compressibility factor) from pressure, temperature, and gas gravity.
@@ -773,7 +773,7 @@ def update_pvt_properties(
         - Density (ρg)
         - Viscosity (μg)
 
-    === WATER PROPERTIES ===
+    # WATER PROPERTIES
     - Computes gas solubility in water (Rs_w) based on salinity, pressure, and temperature.
     - Determines water bubble point pressure from solubility and salinity.
     - Computes gas-free water FVF (for use in density calculation).
@@ -783,7 +783,7 @@ def update_pvt_properties(
         - Water density (ρw)
         - Water viscosity (μw)
 
-    === OIL PROPERTIES ===
+    # OIL PROPERTIES
     - Computes oil specific gravity and API gravity from base density.
     - Recalculates bubble point pressure (Pb) using API, temperature, and gas gravity.
     - Determines GOR:
@@ -958,9 +958,10 @@ def update_pvt_properties(
                     oil_viscosity_grid=new_oil_effective_viscosity_grid,
                     solvent_viscosity_grid=injected_fluid_viscosity_grid,
                     solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
-                    omega=injected_fluid.todd_longstaff_omega,
+                    base_omega=injected_fluid.todd_longstaff_omega,
                     pressure_grid=fluid_properties.pressure_grid,
                     minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
+                    transition_width=injected_fluid.miscibility_transition_width,
                 )
 
     # Finally, update the fluid properties with all the new grids

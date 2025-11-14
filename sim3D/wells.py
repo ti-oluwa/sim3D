@@ -1,8 +1,8 @@
 import functools
 import itertools
+import logging
 import math
 import typing
-import logging
 
 import attrs
 import numpy as np
@@ -15,14 +15,14 @@ from sim3D.properties import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
     compute_gas_density,
+    compute_gas_formation_volume_factor,
     compute_gas_free_water_formation_volume_factor,
     compute_gas_viscosity,
     compute_water_compressibility,
     compute_water_density,
+    compute_water_formation_volume_factor,
     compute_water_viscosity,
     fahrenheit_to_rankine,
-    compute_gas_formation_volume_factor,
-    compute_water_formation_volume_factor,
 )
 from sim3D.types import ActionFunc, FluidPhase, HookFunc, Orientation, WellLocation
 
@@ -143,18 +143,14 @@ class InjectedFluid(WellFluid):
     def __attrs_post_init__(self) -> None:
         """Validate the fluid properties."""
         if self.phase not in (FluidPhase.GAS, FluidPhase.WATER):
-            raise ValueError(
-                "Only gas and water phase fluids are supported for injection."
-            )
+            raise ValueError("Only gases and water are supported for injection.")
 
         if self.is_miscible:
             if self.phase != FluidPhase.GAS:
                 raise ValueError("Only gas phase fluids can be miscible.")
-            elif (
-                not self.minimum_miscibility_pressure and not self.todd_longstaff_omega
-            ):
+            elif not self.minimum_miscibility_pressure or not self.todd_longstaff_omega:
                 raise ValueError(
-                    "Miscible fluids must have either `minimum_miscibility_pressure` or `todd_longstaff_omega` defined."
+                    "Miscible fluids must have both `minimum_miscibility_pressure` and `todd_longstaff_omega` defined."
                 )
 
     def get_viscosity(
@@ -342,7 +338,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
-    schedule: typing.Set["WellEvent[Self]"] = attrs.field(factory=set)
+    schedule: typing.Set["WellEvent[Self]"] = attrs.field(factory=set)  # type: ignore
     """Schedule of events for the well, mapping time steps to scheduled events."""
     auto_clamp: bool = True
     """

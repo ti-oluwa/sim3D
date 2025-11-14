@@ -31,6 +31,9 @@ class ColorScheme(str, Enum):
     BALANCE = "balance"
     EARTH = "earth"
 
+    def __str__(self) -> str:
+        return self.value
+
 
 @dataclass(frozen=True)
 class PropertyMetadata:
@@ -99,7 +102,7 @@ class PropertyMetadata:
 class PropertyRegistry:
     """Registry of all available model properties available for visualization."""
 
-    PROPERTIES = {
+    _default_properties = {
         # Pressure and Temperature
         "oil_pressure": PropertyMetadata(
             name="model.fluid_properties.pressure_grid",
@@ -425,6 +428,62 @@ class PropertyRegistry:
             color_scheme=ColorScheme.RdYlBu,
             aliases=["total_production"],
         ),
+        "oil_relative_permeability": PropertyMetadata(
+            name="relative_permeabilities.kro",
+            display_name="Oil Relative Permeability",
+            unit="fraction",
+            color_scheme=ColorScheme.MAGMA,
+            aliases=["kro", "oil_rel_perm"],
+        ),
+        "water_relative_permeability": PropertyMetadata(
+            name="relative_permeabilities.krw",
+            display_name="Water Relative Permeability",
+            unit="fraction",
+            color_scheme=ColorScheme.RdBu,
+            aliases=["krw", "water_rel_perm"],
+        ),
+        "gas_relative_permeability": PropertyMetadata(
+            name="relative_permeabilities.krg",
+            display_name="Gas Relative Permeability",
+            unit="fraction",
+            color_scheme=ColorScheme.TURBO,
+            aliases=["krg", "gas_rel_perm"],
+        ),
+        "oil_relative_mobility": PropertyMetadata(
+            name="relative_mobilities.oil",
+            display_name="Oil Relative Mobility",
+            unit="ft²/day·psi",
+            color_scheme=ColorScheme.MAGMA,
+            aliases=["moil", "oil_rel_mobility"],
+        ),
+        "water_relative_mobility": PropertyMetadata(
+            name="relative_mobilities.water",
+            display_name="Water Relative Mobility",
+            unit="ft²/day·psi",
+            color_scheme=ColorScheme.RdBu,
+            aliases=["mwater", "water_rel_mobility"],
+        ),
+        "gas_relative_mobility": PropertyMetadata(
+            name="relative_mobilities.gas",
+            display_name="Gas Relative Mobility",
+            unit="ft²/day·psi",
+            color_scheme=ColorScheme.TURBO,
+            aliases=["mgas", "gas_rel_mobility"],
+        ),
+        "oil_water_capillary_pressure": PropertyMetadata(
+            name="capillary_pressures.oil_water",
+            display_name="Oil-Water Capillary Pressure",
+            unit="psi",
+            color_scheme=ColorScheme.MAGMA,
+            aliases=["ow_cap", "oil_water_capillary", "pcow"],
+        ),
+        "gas_oil_capillary_pressure": PropertyMetadata(
+            name="capillary_pressures.gas_oil",
+            display_name="Gas-Oil Capillary Pressure",
+            unit="psi",
+            color_scheme=ColorScheme.MAGMA,
+            aliases=["go_cap", "gas_oil_capillary", "pcgo"],
+        ),
     }
 
     def __init__(self) -> None:
@@ -434,11 +493,12 @@ class PropertyRegistry:
         This class is a singleton and should not be instantiated directly.
         Use the class methods to access properties and metadata.
         """
-        self._properties = _get_expanded_aliases(type(self).PROPERTIES)
+        self._properties = _get_expanded_aliases(type(self)._default_properties)
 
-    def get_available_properties(self) -> typing.List[str]:
+    @property
+    def properties(self) -> typing.List[str]:
         """
-        Get list of all available property names.
+        A list of all available property names.
 
         :return: List of property names that can be used for visualization
         """
@@ -460,7 +520,7 @@ class PropertyRegistry:
         name = self.clean_property_name(name)
         if name not in self._properties:
             raise ValueError(
-                f"Unknown property: {name}. Available: {', '.join(self.get_available_properties())}"
+                f"Unknown property: {name}. Available: {', '.join(self.properties)}"
             )
         return self._properties[name]
 
@@ -884,10 +944,12 @@ def merge_plots(
                         # Calculate horizontal position based on column
                         # Place colorbar outside the subplot area with proper spacing
                         col_end = col / cols
-                        
+
                         # Position colorbar at the right edge of subplot with padding
-                        colorbar_x_position = col_end - 0.01  # Just inside the subplot boundary
-                        
+                        colorbar_x_position = (
+                            col_end - 0.01
+                        )  # Just inside the subplot boundary
+
                         # Calculate vertical position based on row (for multi-row layouts)
                         row_fraction = (
                             rows - row + 1
@@ -896,13 +958,17 @@ def merge_plots(
                         colorbar_y_position = row_fraction - subplot_height / 2
 
                         # Add vertical padding to create gaps between colorbars
-                        vertical_padding = 0.08  # Increased padding for better separation
+                        vertical_padding = (
+                            0.08  # Increased padding for better separation
+                        )
                         colorbar_length = max(
                             0.25, (subplot_height * 0.85) - (2 * vertical_padding)
                         )
-                        
+
                         # Reduce thickness to prevent overlap
-                        colorbar_thickness = min(12, int(15 / cols))  # Scale with number of columns
+                        colorbar_thickness = min(
+                            12, int(15 / cols)
+                        )  # Scale with number of columns
 
                         # Set colorbar position and size to fit within subplot bounds with gaps
                         colorbar_dict.update(

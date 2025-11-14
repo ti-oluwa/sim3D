@@ -34,7 +34,7 @@ from sim3D.properties import (
     compute_water_density,
     compute_water_formation_volume_factor,
     compute_water_viscosity,
-    compute_miscibility_function,
+    compute_miscibility_transition_factor,
     compute_todd_longstaff_effective_viscosity,
 )
 from sim3D.types import (
@@ -1073,8 +1073,8 @@ compute_todd_longstaff_effective_viscosity_vectorized = np.vectorize(
     compute_todd_longstaff_effective_viscosity, otypes=[np.float64]
 )
 
-compute_miscibility_function_vectorized = np.vectorize(
-    compute_miscibility_function, otypes=[np.float64]
+compute_miscibility_transition_factor_vectorized = np.vectorize(
+    compute_miscibility_transition_factor, otypes=[np.float64]
 )
 
 
@@ -1082,32 +1082,73 @@ def build_oil_effective_viscosity_grid(
     oil_viscosity_grid: NDimensionalGrid[NDimension],
     solvent_viscosity_grid: NDimensionalGrid[NDimension],
     solvent_concentration_grid: NDimensionalGrid[NDimension],
-    omega: float = 0.0,
+    base_omega: float,
     pressure_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     minimum_miscibility_pressure: typing.Optional[float] = None,
+    transition_width: float = 500.0,
 ) -> NDimensionalGrid[NDimension]:
     """
-    Build effective oil-solvent mixture viscosity grid using Todd-Longstaff.
+    Build effective oil-solvent mixture viscosity grid using Todd-Longstaff model.
+
+    Computes spatially-varying effective viscosity accounting for:
+    - Local oil and solvent viscosities
+    - Local solvent concentration
+    - Pressure-dependent miscibility (if pressure grid provided)
 
     :param oil_viscosity_grid: Pure oil viscosity grid (cP)
     :param solvent_viscosity_grid: Pure solvent viscosity grid (cP)
-    :param solvent_concentration_grid: Solvent concentration grid (fraction)
-    :param omega: Base Todd-Longstaff mixing parameter
-    :param pressure_grid: Optional pressure grid for pressure-dependent miscibility
-    :param minimum_miscibility_pressure: Optional MMP for transition
+    :param solvent_concentration_grid: Solvent concentration grid (fraction 0-1)
+    :param base_omega: Base Todd-Longstaff mixing parameter (0-1).
+        Typical: 0.67 for CO2-oil. This is the maximum omega achieved when fully miscible.
+    :param pressure_grid: Optional pressure grid (psi) for pressure-dependent miscibility.
+        If provided, omega varies spatially based on local pressure vs MMP.
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi).
+        Required if pressure_grid is provided.
+    :param transition_width: Pressure width of miscibility transition zone (psi), default 500.
+        Only used if pressure_grid is provided.
     :return: Effective mixture viscosity grid (cP)
-    """
-    # If pressure-dependent miscibility is enabled
-    if pressure_grid is not None and minimum_miscibility_pressure is not None:
-        omega_grid = compute_miscibility_function_vectorized(
-            pressure_grid, minimum_miscibility_pressure
-        )
-    else:
-        omega_grid = np.full_like(oil_viscosity_grid, omega)
 
-    return compute_todd_longstaff_effective_viscosity_vectorized(
+    Example:
+    ```python
+    # Simple case: constant omega everywhere (no pressure effects)
+    visc_grid = build_oil_effective_viscosity_grid(
+        oil_viscosity_grid=oil_visc,
+        solvent_viscosity_grid=solvent_visc,
+        solvent_concentration_grid=conc,
+        base_omega=0.67
+    )
+
+    # Advanced: pressure-dependent miscibility
+    visc_grid = build_oil_effective_viscosity_grid(
+        oil_viscosity_grid=oil_visc,
+        solvent_viscosity_grid=solvent_visc,
+        solvent_concentration_grid=conc,
+        base_omega=0.67,
+        pressure_grid=pressure,
+        minimum_miscibility_pressure=2000.0,
+        transition_width=500.0
+    )
+    ```
+    """
+    # Compute pressure-dependent omega if pressure grid provided
+    if pressure_grid is not None and minimum_miscibility_pressure is not None:
+        # Compute transition factor grid (0 to 1)
+        transition_factor_grid = compute_miscibility_transition_factor_vectorized(
+            pressure_grid,
+            minimum_miscibility_pressure,
+            transition_width,
+        )
+        # Scale by base omega to get effective omega grid
+        omega_grid = base_omega * transition_factor_grid
+    else:
+        # Use constant omega everywhere
+        omega_grid = np.full_like(oil_viscosity_grid, base_omega)
+
+    # Compute effective viscosity using Todd-Longstaff model
+    effective_viscosity_grid = compute_todd_longstaff_effective_viscosity_vectorized(
         oil_viscosity_grid,
         solvent_viscosity_grid,
         solvent_concentration_grid,
         omega_grid,
     )
+    return effective_viscosity_grid

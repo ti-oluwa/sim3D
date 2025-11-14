@@ -18,7 +18,6 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
 
-
     def main():
         # Grid dimensions - typical field scale
         cell_dimension = (500.0, 500.0)  # 500ft x 500ft cells
@@ -56,8 +55,7 @@ def _():
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
         oil_bubble_point_pressure_grid = sim3D.layered_grid(
             grid_shape=grid_shape,
-            layer_values=layer_pressures
-            - 200.0,  # 400 psi below formation pressure
+            layer_values=layer_pressures - 200.0,  # 400 psi below formation pressure
             orientation=sim3D.Orientation.Z,
         )
 
@@ -101,8 +99,7 @@ def _():
             sim3D.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
-                oil_water_contact=owc_depth
-                - reservoir_top_depth,  # 150 ft below top
+                oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
                 connate_water_saturation_grid=connate_water_saturation_grid,
                 residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
                 residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
@@ -201,9 +198,7 @@ def _():
 
         # Natural gas (associated gas) properties
         gas_gravity = 0.65  # Typical for associated gas
-        gas_gravity_grid = sim3D.uniform_grid(
-            grid_shape=grid_shape, value=gas_gravity
-        )
+        gas_gravity_grid = sim3D.uniform_grid(grid_shape=grid_shape, value=gas_gravity)
 
         # Realistic fault network - simplified
         fault_network = [
@@ -274,7 +269,7 @@ def _():
                 ((7, 3, 2), (7, 3, 3))  # Inject in gas cap zone
             ],
             radius=0.3542,  # 8.5 inch wellbore
-            bottom_hole_pressure=3600,
+            bottom_hole_pressure=3500,
             injected_fluid=sim3D.InjectedFluid(
                 name="CO2",
                 phase=sim3D.FluidPhase.GAS,
@@ -283,11 +278,11 @@ def _():
                 minimum_miscibility_pressure=2500,
                 is_miscible=True,
             ),
-            is_active=True,
+            is_active=False,
         )
         gas_injector.schedule_event(
             sim3D.WellEvent(
-                hook=sim3D.well_time_hook(time_step=200),
+                hook=sim3D.well_time_hook(time_step=3200),
                 action=sim3D.well_update_action(is_active=True),  # Activate well
             )
         )
@@ -297,7 +292,7 @@ def _():
         producer = sim3D.production_well(
             well_name="P-1",
             perforating_intervals=[
-                ((7, 11, 3), (7, 11, 3))  # Multiple layers
+                ((7, 11, 2), (7, 11, 3))  # Multiple layers
             ],
             radius=0.3542,
             bottom_hole_pressure=2700.0,
@@ -323,33 +318,34 @@ def _():
             ),
             skin_factor=2.5,
         )
-        # producer.schedule_event(
-        #     sim3D.WellEvent(
-        #         hook=sim3D.well_time_hook(time_step=800),
-        #         action=sim3D.update_well_action(bottom_hole_pressure=1450),
-        #     )
-        # )
-        # producer.schedule_event(
-        #     sim3D.WellEvent(
-        #         hook=sim3D.well_time_hook(time_step=1200),
-        #         action=sim3D.update_well_action(bottom_hole_pressure=800),
-        #     )
-        # )
+        producer.schedule_event(
+            sim3D.WellEvent(
+                hook=sim3D.well_time_hook(time_step=1800),
+                action=sim3D.well_update_action(bottom_hole_pressure=2500),
+            )
+        )
+        producer.schedule_event(
+            sim3D.WellEvent(
+                hook=sim3D.well_time_hook(time_step=3000),
+                action=sim3D.well_update_action(bottom_hole_pressure=2350),
+            )
+        )
 
         producers = [producer]
         wells = sim3D.wells(injectors=injectors, producers=producers)
 
         options = sim3D.Options(
             scheme="impes",
-            total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 4),
-            time_step_size=sim3D.Time(hours=24),
-            max_time_steps=400,
+            total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 16),
+            time_step_size=sim3D.Time(hours=30),
+            max_time_steps=100,
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
         )
         model_states = sim3D.run(model=model, wells=wells, options=options)
         return list(model_states)
+
     return main, np, pprint, sim3D
 
 
@@ -363,33 +359,28 @@ def _(main):
 def _(model_states, np, sim3D):
     analyst = sim3D.ProductionAnalyst(model_states)
     oil_production_history = analyst.oil_production_history(
-        interval=5, cumulative=False, from_time_step=7
+        interval=10, cumulative=False, from_time_step=7
     )
     water_production_history = analyst.water_production_history(
-        interval=5, cumulative=False, from_time_step=7
+        interval=10, cumulative=False, from_time_step=7
     )
     gas_production_history = analyst.free_gas_production_history(
-        interval=5, cumulative=False, from_time_step=7
+        interval=10, cumulative=False, from_time_step=7
     )
     water_injection_history = analyst.water_injection_history(
-        interval=5, cumulative=False, from_time_step=7
+        interval=10, cumulative=False, from_time_step=7
     )
     gas_injection_history = analyst.gas_injection_history(
-        interval=5, cumulative=False, from_time_step=7
+        interval=10, cumulative=False, from_time_step=7
     )
-    oil_in_place_history = analyst.oil_in_place_history(
-        interval=5, from_time_step=7
-    )
-    gas_in_place_history = analyst.gas_in_place_history(
-        interval=5, from_time_step=7
-    )
+    oil_in_place_history = analyst.oil_in_place_history(interval=10, from_time_step=7)
+    gas_in_place_history = analyst.gas_in_place_history(interval=10, from_time_step=7)
     water_in_place_history = analyst.water_in_place_history(
-        interval=5, from_time_step=7
+        interval=10, from_time_step=7
     )
     sweep_efficiency_history = analyst.sweep_efficiency_history(
-        interval=5, from_time_step=7
+        interval=10, from_time_step=7
     )
-
 
     oil_saturation_history = []
     water_saturation_history = []
@@ -407,8 +398,7 @@ def _(model_states, np, sim3D):
     displacement_efficiency_history = []
     recovery_efficiency_history = []
 
-
-    for i in range(7, len(model_states), 5):
+    for i in range(7, len(model_states), 10):
         state = model_states[i]
         model = state.model
         time_step = state.time_step
@@ -442,7 +432,6 @@ def _(model_states, np, sim3D):
             (time_step, result.displacement_efficiency)
         )
         recovery_efficiency_history.append((time_step, result.recovery_efficiency))
-
 
     # Production & Injection
     oil_production_fig = sim3D.plotly2d.make_series_plot(
@@ -681,30 +670,30 @@ def _(model_states, sim3D):
     well_positions = [*injector_locations, *producer_locations]
     well_names = [*injector_names, *producer_names]
     labels = sim3D.plotly3d.Labels()
-    # labels.add_well_labels(well_positions, well_names)
-    data = model_states[300]
+    labels.add_well_labels(well_positions, well_names)
+    data = model_states[40]
     shared_kwargs = dict(
-        plot_type="volume_render",
+        plot_type="isosurface",
         width=960,
         height=960,
-        # isomin=0.13,
+        # isomin=0.4,
         # cmin=600,
         # cmax=2700,
-        opacity=0.6,
-        surface_count=100,
+        opacity=0.7,
+        # surface_count=100,
         # subsampling_factor=2,
         # downsampling_factor=1,
         # x_slice=(6, 13),
         # y_slice=(6, 9),
-        # z_slice=(2, 5),
+        # z_slice=(2, 4),
         labels=labels,
-        aspect_mode="data",
+        aspect_mode="cube",
         # marker_size=12,
         # notebook=True,
         z_scale=3,
         show_wells=True,
         show_surface_marker=True,
-        show_perforations=False,
+        show_perforations=True,
     )
 
     # Animation
@@ -713,8 +702,12 @@ def _(model_states, sim3D):
     # )
 
     # Oil Plot
-    oil_pressure_fig = sim3D.plotly3d.viz.make_plot(data, property="pressure", **shared_kwargs)
-    oil_sat_fig = sim3D.plotly3d.viz.make_plot(data, property="gas-sat", **shared_kwargs)
+    oil_pressure_fig = sim3D.plotly3d.viz.make_plot(
+        data, property="oil-viscosity", isomin=0.36, **shared_kwargs
+    )
+    oil_sat_fig = sim3D.plotly3d.viz.make_plot(
+        data, property="solvent-conc", isomax=0.005, **shared_kwargs
+    )
 
     # # Water Plot
     # water_fig = sim3D.plotly3d.viz.make_plot(
