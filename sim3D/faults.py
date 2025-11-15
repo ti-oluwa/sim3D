@@ -1,5 +1,5 @@
 """
-Fault-application system for 3D reservoir models.
+Fault definition system for 3D reservoir models.
 """
 
 import copy

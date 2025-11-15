@@ -18,6 +18,8 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
 
+    sim3D.use_32bit_precision()
+
     def main():
         # Grid dimensions - typical field scale
         cell_dimension = (500.0, 500.0)  # 500ft x 500ft cells
@@ -338,14 +340,13 @@ def _():
             scheme="impes",
             total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 16),
             time_step_size=sim3D.Time(hours=30),
-            max_time_steps=100,
+            max_time_steps=5000,
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
         )
         model_states = sim3D.run(model=model, wells=wells, options=options)
         return list(model_states)
-
     return main, np, pprint, sim3D
 
 

@@ -56,14 +56,26 @@ Time: Forward Euler
 
 Space: First-order upwind scheme:
 
-    ∇ · (f_x * v ) ≈ [(F_x_east - F_x_west)/Δx + (F_y_north - F_y_south)/Δy + (F_z_top - F_z_bottom)/Δz]
+    ∇ · (f_x * v ) ≈ [(F_x_east + F_x_west)/Δx + (F_y_north + F_y_south)/Δy + (F_z_top + F_z_bottom)/Δz]
 
     Sⁿ⁺¹_ijk = Sⁿ_ijk + Δt / (φ * V_cell) * [
-        (F_x_east - F_x_west) + (F_y_north - F_y_south) + (F_z_top - F_z_bottom) + q_x_ijk * V_cell
+        (F_x_east + F_x_west) + (F_y_north + F_y_south) + (F_z_top + F_z_bottom) + q_x_ijk * V_cell
     ]
+
+    F_dir = phase volumetric flux at face in direction `dir` (ft³/day)
 
 Volumetric phase flux at face F_dir is computed as:
     F_dir = f_x(S_upwind) * v_dir * A_face (ft³/day)
+    f_x = phase fractional flow = [k_r(S_upwind) / μ] / λ_total
+    v_dir = Darcy velocity component in direction `dir` (ft/day)
+    v_dir = λ_total * ∂∅/∂dir
+    ∂∅/∂dir = (∅neighbour - ∅current) / ΔL_dir
+
+    where; 
+    λ_total = Σ [k_r(S_upwind) / μ] for all phases
+    A_face = face area perpendicular to flow direction (ft²)
+    ∅ = phase potential (pressure + gravity effects + capillary effects)
+
 
 Upwind saturation S_upwind is selected based on the sign of v_dir:
     - If v_dir < 0 → S_upwind = Sⁿ_current (flow from current cell)
@@ -317,7 +329,7 @@ def evolve_saturation_explicitly(
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
     absolute_permeability = rock_properties.absolute_permeability
     porosity_grid = rock_properties.porosity_grid
-    oil_density_grid = fluid_properties.oil_density_grid
+    oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
     irreducible_water_saturation_grid = (
@@ -1012,7 +1024,7 @@ def evolve_miscible_saturation_explicitly(
     water_viscosity_grid = fluid_properties.water_viscosity_grid
     gas_viscosity_grid = fluid_properties.gas_viscosity_grid
 
-    oil_density_grid = fluid_properties.oil_density_grid
+    oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 

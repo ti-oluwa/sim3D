@@ -15,9 +15,9 @@ import numpy as np
 import plotly.graph_objects as go
 from typing_extensions import TypedDict, Unpack
 
-from sim3D.states import ModelState
-from sim3D.wells import Wells
+from sim3D._precision import get_dtype
 from sim3D.grids.base import coarsen_grid
+from sim3D.states import ModelState
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
@@ -31,6 +31,7 @@ from sim3D.visualization.base import (
     PropertyRegistry,
     property_registry,
 )
+from sim3D.wells import Wells
 
 logger = logging.getLogger(__name__)
 
@@ -913,10 +914,11 @@ class BaseRenderer(ABC):
         :return: Tuple of (processed_data_for_plotting, original_data_for_display)
         """
         # Keep original data for display purposes (hover text, colorbar)
-        display_data = data.astype(np.float64)
+        dtype = get_dtype()
+        display_data = data.astype(dtype)
 
         # Process data for plotting
-        processed_data = data.astype(np.float64)
+        processed_data = data.astype(dtype)
 
         if metadata.log_scale:
             # Handle zero/negative values for log scale

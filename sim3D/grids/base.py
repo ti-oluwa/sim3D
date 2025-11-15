@@ -1,8 +1,8 @@
 import typing
 
 import numpy as np
-from numpy.typing import DTypeLike
 
+from sim3D._precision import get_dtype
 from sim3D.types import ArrayLike, NDimension, NDimensionalGrid, Orientation
 
 __all__ = [
@@ -25,17 +25,15 @@ __all__ = [
 def build_uniform_grid(
     grid_shape: NDimension,
     value: float = 0.0,
-    dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
     Constructs a N-Dimensional uniform grid with the specified initial value.
 
     :param grid_shape: Tuple of number of cells in all directions (x, y, z).
     :param value: Initial value to fill the grid with
-    :param dtype: Data type of the grid elements (default: np.float64)
     :return: Numpy array representing the grid
     """
-    return np.full(grid_shape, fill_value=value, dtype=dtype)
+    return np.full(grid_shape, fill_value=value, dtype=get_dtype())
 
 
 uniform_grid = build_uniform_grid  # Alias for convenience
@@ -45,7 +43,6 @@ def build_layered_grid(
     grid_shape: NDimension,
     layer_values: ArrayLike[float],
     orientation: Orientation,
-    dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
     Constructs a N-Dimensional layered grid with specified layer values.
@@ -63,7 +60,7 @@ def build_layered_grid(
     if len(layer_values) < 1:
         raise ValueError("At least one layer value must be provided.")
 
-    layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0, dtype=dtype)
+    layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0)
     if orientation == Orientation.X:  # Layering along x-axis
         if len(layer_values) != grid_shape[0]:
             raise ValueError(
@@ -125,7 +122,7 @@ def _build_elevation_grid(
         raise ValueError("direction must be 'downward' or 'upward'")
 
     nx, ny, nz = thickness_grid.shape  # Now Z is LAST
-    elevation_grid = np.zeros_like(thickness_grid, dtype=float)
+    elevation_grid = np.zeros_like(thickness_grid, dtype=get_dtype())
 
     if direction == "downward":
         # Iterate over Z in the LAST dimension
@@ -354,18 +351,20 @@ def coarsen_grid(
     :return: Coarsened numpy array.
     :raises ValueError: if batch_size length does not match data.ndim or if method is unsupported.
 
-    :example:
-    >>> data2d = np.arange(16).reshape(4,4)
-    >>> coarsen_grid(data2d, batch_size=(2,2))
-    array([[2.5, 4.5],
-           [10.5, 12.5]])
+    Example:
+    ```python
+    data2d = np.arange(16).reshape(4,4)
+    coarsen_grid(data2d, batch_size=(2,2))
+    # array([[2.5, 4.5],
+    #         [10.5, 12.5]])
 
-    >>> data3d = np.arange(64).reshape(4,4,4)
-    >>> coarsen_grid(data3d, batch_size=(2,2,2), method='max')
-    array([[[ 5,  7],
-            [13, 15]],
-           [[21, 23],
-            [29, 31]]])
+    data3d = np.arange(64).reshape(4,4,4)
+    coarsen_grid(data3d, batch_size=(2,2,2), method='max')
+    # array([[[ 5,  7],
+    #          [13, 15]],
+    #         [[21, 23],
+    #          [29, 31]]])
+    ```
     """
     if len(batch_size) != data.ndim:
         raise ValueError(
@@ -407,9 +406,9 @@ def coarsen_grid(
 
     # Apply aggregation
     if method == "mean":
-        coarsened = np.nanmean(data_reshaped, axis=agg_axes)
+        coarsened = np.nanmean(data_reshaped, axis=agg_axes, dtype=get_dtype())
     elif method == "sum":
-        coarsened = data_reshaped.sum(axis=agg_axes)
+        coarsened = data_reshaped.sum(axis=agg_axes, dtype=get_dtype())
     elif method == "max":
         coarsened = data_reshaped.max(axis=agg_axes)
     elif method == "min":

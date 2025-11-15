@@ -9,7 +9,7 @@ from scipy.optimize import curve_fit
 from sim3D.constants import c
 from sim3D.grids import uniform_grid
 from sim3D.models import ReservoirModel
-from sim3D.properties import compute_hydrocarbon_in_place
+from sim3D.pvt import compute_hydrocarbon_in_place
 from sim3D.types import (
     CapillaryPressureGrids,
     NDimension,
@@ -501,7 +501,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float64,
         )
         stoiip_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -528,7 +527,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float64,
         )
         stgiip_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -555,7 +553,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
-            dtype=np.float64,
         )
         water_in_place_grid = hcip_vectorized(
             area=cell_area_grid,
@@ -989,9 +986,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
         cell_area_grid = uniform_grid(
-            grid_shape=model.grid_shape,
-            value=cell_area_in_acres,
-            dtype=np.float64,
+            grid_shape=model.grid_shape, value=cell_area_in_acres
         )
         pore_volume_grid = (
             cell_area_grid
@@ -1358,9 +1353,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             *state.model.cell_dimension[:2]
         )
         cell_area_grid = uniform_grid(
-            grid_shape=state.model.grid_shape,
-            value=cell_area_in_acres,
-            dtype=np.float64,
+            grid_shape=state.model.grid_shape, value=cell_area_in_acres
         )
         oil_volume_grid = (
             cell_area_grid
@@ -2649,7 +2642,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             return float("inf")
 
         return float(avg_displacing_mobility / avg_displaced_mobility)
-    
+
     def reservoir_volumetrics_history(
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
     ) -> typing.Generator[typing.Tuple[int, ReservoirVolumetrics], None, None]:

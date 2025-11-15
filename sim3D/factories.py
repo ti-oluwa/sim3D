@@ -6,7 +6,7 @@ import numpy as np
 from sim3D.boundaries import BoundaryConditions, GridBoundaryCondition
 from sim3D.constants import c
 from sim3D.grids.base import build_uniform_grid
-from sim3D.grids.properties import (
+from sim3D.grids.pvt import (
     build_fluid_viscosity_grid,
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -34,7 +34,7 @@ from sim3D.models import (
     RockPermeability,
     RockProperties,
 )
-from sim3D.properties import (
+from sim3D.pvt import (
     compute_gas_to_oil_ratio_standing,
     validate_input_pressure,
     validate_input_temperature,
@@ -295,6 +295,7 @@ def reservoir_model(
     water_salinity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     solvent_concentration_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_effective_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    oil_effective_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
     faults: typing.Optional[typing.Iterable[Fault]] = None,
     reservoir_gas: typing.Optional[str] = None,
@@ -480,9 +481,7 @@ def reservoir_model(
         )
         # Try to estimate the GOR and then calculate the bubble point pressure from that
         # As either GOR or buble point is needed to build the model
-        estimated_gor_grid = np.vectorize(
-            compute_gas_to_oil_ratio_standing, otypes=[np.float64]
-        )(
+        estimated_gor_grid = np.vectorize(compute_gas_to_oil_ratio_standing)(
             pressure_grid,
             oil_api_gravity_grid,
             gas_gravity_grid,
@@ -576,12 +575,12 @@ def reservoir_model(
     )
 
     solvent_concentration_grid = solvent_concentration_grid or build_uniform_grid(
-        grid_shape=grid_shape,
-        value=0.0,
+        grid_shape=grid_shape, value=0.0
     )
     oil_effective_viscosity_grid = (
         oil_effective_viscosity_grid or oil_viscosity_grid.copy()
     )
+    oil_effective_density_grid = oil_effective_density_grid or oil_density_grid.copy()
     fluid_properties = FluidProperties(
         pressure_grid=pressure_grid,
         temperature_grid=temperature_grid,
@@ -611,6 +610,7 @@ def reservoir_model(
         water_salinity_grid=water_salinity_grid,
         solvent_concentration_grid=solvent_concentration_grid,
         oil_effective_viscosity_grid=oil_effective_viscosity_grid,
+        oil_effective_density_grid=oil_effective_density_grid,
         reservoir_gas=reservoir_gas,
     )
     rock_properties = RockProperties(

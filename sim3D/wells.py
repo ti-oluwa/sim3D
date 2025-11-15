@@ -11,7 +11,7 @@ from scipy.interpolate import interp1d
 from typing_extensions import Self
 
 from sim3D.constants import c
-from sim3D.properties import (
+from sim3D.pvt import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
     compute_gas_density,
@@ -123,7 +123,7 @@ class InjectedFluid(WellFluid):
         validator=attrs.validators.and_(
             attrs.validators.ge(0.0), attrs.validators.le(1.0)
         ),
-        default=0.0,
+        default=0.67,
     )
     """Todd-Longstaff mixing parameter for miscible displacement (0 to 1)."""
     minimum_miscibility_pressure: typing.Optional[float] = None

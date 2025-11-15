@@ -1,6 +1,7 @@
-"""Dynamic simulation on a 3-Dimensional reservoir model with specified properties and wells."""
+"""Run a simulation workflow on a N-Dimensional reservoir model."""
 
 import copy
+import gc
 import logging
 import math
 import typing
@@ -16,7 +17,7 @@ from sim3D.diffusivity import (
     evolve_saturation_explicitly,
 )
 from sim3D.grids.base import build_uniform_grid, pad_grid
-from sim3D.grids.properties import (
+from sim3D.grids.pvt import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
     build_gas_density_grid,
@@ -27,6 +28,7 @@ from sim3D.grids.properties import (
     build_live_oil_density_grid,
     build_oil_bubble_point_pressure_grid,
     build_oil_compressibility_grid,
+    build_oil_effective_density_grid,
     build_oil_effective_viscosity_grid,
     build_oil_formation_volume_factor_grid,
     build_oil_viscosity_grid,
@@ -311,7 +313,7 @@ def run(
     if wells is None:
         wells = Wells()
 
-    logger.info("Starting 3D reservoir simulation")
+    logger.info("Starting reservoir simulation workflow...")
     logger.debug(f"Grid dimensions: {model.grid_shape}")
     logger.debug(f"Cell dimensions: {model.cell_dimension}")
     logger.debug(f"Evolution scheme: {options.scheme}")
@@ -460,6 +462,7 @@ def run(
                     time=time_step * time_step_size,
                 )
             )
+            logger.debug("Boundary conditions applied.")
             # If the pressure boundary condition is not no-flow,
             # Then apply PVT update before pressure evolution
             # Since most PVT properties depend on pressure
@@ -474,6 +477,7 @@ def run(
                     wells=wells,
                     miscibility_model=miscibility_model,
                 )
+                logger.debug("PVT fluid properties updated.")
 
             # Build relative permeability, relative mobility, and capillary pressure grids
             relperm_grids, relative_mobility_grids, capillary_pressure_grids = (
@@ -578,6 +582,9 @@ def run(
                 relative_mobility_grids = typing.cast(
                     RelativeMobilityGrids[ThreeDimensions], relative_mobility_grids
                 )
+                logger.debug(
+                    "Relative mobility grids rebuilt for saturation evolution."
+                )
 
             else:
                 # For explicit schemes, we can re-use the current fluid properties
@@ -631,6 +638,7 @@ def run(
                 padded_fluid_properties = evolve(
                     padded_fluid_properties, pressure_grid=padded_pressure_grid
                 )
+                logger.debug("Fluid properties updated with new pressure grid.")
 
             logger.debug("Updating fluid properties with new saturation grids...")
             (
@@ -707,6 +715,7 @@ def run(
                     injection=injection_rates,
                     production=production_rates,
                 )
+                logger.debug("Yielding model state snapshot")
                 yield model_state
 
             # PVT update for next time step (or only update for explicit-explicit scheme)
@@ -717,10 +726,13 @@ def run(
                     wells=wells,
                     miscibility_model=miscibility_model,
                 )
+                logger.debug("PVT fluid properties updated.")
 
-            # Update the wells for the next time step
-            logger.debug("Updating wells for next time step")
-            wells.evolve(model_state)
+            if wells.has_wells():
+                # Update the wells for the next time step
+                logger.debug("Updating wells configuration for the next time step...")
+                wells.evolve(model_state)
+                logger.debug("Wells updated.")
 
     # Log completion outside the loop to avoid unbound variable issues
     logger.info(
@@ -933,6 +945,7 @@ def update_pvt_properties(
         solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
         formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
     )
+    new_oil_effective_density_grid = new_oil_density_grid
     new_oil_viscosity_grid = build_oil_viscosity_grid(
         pressure_grid=fluid_properties.pressure_grid,
         temperature_grid=fluid_properties.temperature_grid,
@@ -942,19 +955,30 @@ def update_pvt_properties(
         gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
     )
     new_oil_effective_viscosity_grid = new_oil_viscosity_grid
-    # If there are miscible injections, update the effective oil viscosity grid
+    # If there are miscible injections, update the effective oil viscosity and density grids
     if miscibility_model != "immiscible":
         for well in wells.injection_wells:
             injected_fluid = well.injected_fluid
             if injected_fluid and injected_fluid.is_miscible:
                 injected_fluid_viscosity_grid = np.vectorize(
-                    injected_fluid.get_viscosity, otypes=[np.float64]
+                    injected_fluid.get_viscosity
                 )(
                     pressure=fluid_properties.pressure_grid,
                     temperature=fluid_properties.temperature_grid,
                 )
                 # Update effective oil viscosity grid using Todd-Longstaff model
                 new_oil_effective_viscosity_grid = build_oil_effective_viscosity_grid(
+                    oil_viscosity_grid=new_oil_effective_viscosity_grid,
+                    solvent_viscosity_grid=injected_fluid_viscosity_grid,
+                    solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
+                    base_omega=injected_fluid.todd_longstaff_omega,
+                    pressure_grid=fluid_properties.pressure_grid,
+                    minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
+                    transition_width=injected_fluid.miscibility_transition_width,
+                )
+                new_oil_effective_density_grid = build_oil_effective_density_grid(
+                    oil_density_grid=new_oil_density_grid,
+                    solvent_density_grid=injected_fluid_viscosity_grid,
                     oil_viscosity_grid=new_oil_effective_viscosity_grid,
                     solvent_viscosity_grid=injected_fluid_viscosity_grid,
                     solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
@@ -982,6 +1006,7 @@ def update_pvt_properties(
         water_compressibility_grid=new_water_compressibility_grid,
         gas_compressibility_grid=new_gas_compressibility_grid,
         oil_density_grid=new_oil_density_grid,
+        oil_effective_density_grid=new_oil_effective_density_grid,
         water_density_grid=new_water_density_grid,
         gas_density_grid=new_gas_density_grid,
     )

@@ -1,4 +1,4 @@
-"""Static data models and schemas for the N-dimensional reservoir."""
+"""Static data models and schemas for an N-dimensional reservoir model."""
 
 import typing
 from typing_extensions import Self
@@ -155,6 +155,10 @@ class FluidProperties(PadMixin[NDimension]):
     - Water formation volume factor
     - Oil bubble point pressure
     - Water bubble point pressure
+    - Gas solubility in water
+    - Solvent concentration in oil phase
+    - Effective oil-solvent mixture viscosity
+    - Effective oil-solvent mixture density
 
     Constant properties include:
     - Oil specific gravity
@@ -162,6 +166,7 @@ class FluidProperties(PadMixin[NDimension]):
     - Water salinity
     - Gas gravity
     - Gas molecular weight
+
     These properties are typically constant for a given fluid type, e.g., light oil, seawater, methane.
     """
 
@@ -224,6 +229,12 @@ class FluidProperties(PadMixin[NDimension]):
     Effective oil-solvent mixture viscosity using miscible model (e.g Todd Longstaff) (cP).
 
     This will be same as `oil_viscosity_grid` for immiscible flow.
+    """
+    oil_effective_density_grid: NDimensionalGrid[NDimension]
+    """
+    Effective oil-solvent mixture density using miscible model (lbm/ft³).
+
+    This will be same as `oil_density_grid` for immiscible flow.
     """
     reservoir_gas: str = "Methane"
     """Name of the reservoir gas (e.g., Methane, Ethane, CO2, N2). Can also be the name of the gas injected into the reservoir."""

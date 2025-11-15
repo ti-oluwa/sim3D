@@ -154,6 +154,12 @@ class PropertyRegistry:
             unit="lbm/ft³",
             color_scheme=ColorScheme.PLASMA,
         ),
+        "oil_effective_density": PropertyMetadata(
+            name="model.fluid_properties.oil_effective_density_grid",
+            display_name="Oil Effective Density [Oil + Solvent (if any)]",
+            unit="lbm/ft³",
+            color_scheme=ColorScheme.PLASMA,
+        ),
         "oil_compressibility": PropertyMetadata(
             name="model.fluid_properties.oil_compressibility_grid",
             display_name="Oil Compressibility",

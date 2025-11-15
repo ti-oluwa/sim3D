@@ -7,7 +7,7 @@ import numpy as np
 from attrs import define
 from scipy.interpolate import interp1d
 
-from sim3D.properties import clip_scalar
+from sim3D.pvt import clip_scalar
 from sim3D.types import (
     ArrayLike,
     FluidPhase,

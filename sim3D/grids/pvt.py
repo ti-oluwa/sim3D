@@ -1,4 +1,4 @@
-"""Utils for building N-Dimensional cartesian grids for reservoir simulation."""
+"""Utils for building N-Dimensional cartesian grids for reservoir PVT properties."""
 
 import itertools
 import typing
@@ -6,7 +6,7 @@ import typing
 import numpy as np
 from numpy.typing import DTypeLike
 
-from sim3D.properties import (
+from sim3D.pvt import (
     compute_fluid_compressibility,
     compute_fluid_density,
     compute_fluid_viscosity,
@@ -36,6 +36,7 @@ from sim3D.properties import (
     compute_water_viscosity,
     compute_miscibility_transition_factor,
     compute_todd_longstaff_effective_viscosity,
+    compute_todd_longstaff_effective_density,
 )
 from sim3D.types import (
     NDimension,
@@ -61,16 +62,13 @@ __all__ = [
 ]
 
 
-v_compute_fluid_viscosity = np.vectorize(
-    compute_fluid_viscosity, otypes=[np.float64], excluded=["fluid"]
-)
+v_compute_fluid_viscosity = np.vectorize(compute_fluid_viscosity, excluded=["fluid"])
 
 
 def build_fluid_viscosity_grid(
     pressure_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
     fluid: typing.Union[str, str],
-    dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
     Builds a N-Dimensional grid of fluid viscosities.
@@ -86,7 +84,7 @@ def build_fluid_viscosity_grid(
 
 
 v_compute_fluid_compressibility = np.vectorize(
-    compute_fluid_compressibility, otypes=[np.float64], excluded=["fluid"]
+    compute_fluid_compressibility, excluded=["fluid"]
 )
 
 
@@ -94,7 +92,6 @@ def build_fluid_compressibility_grid(
     pressure_grid: NDimensionalGrid[NDimension],
     temperature_grid: NDimensionalGrid[NDimension],
     fluid: str,
-    dtype: DTypeLike = np.float64,
 ) -> NDimensionalGrid[NDimension]:
     """
     Builds a N-Dimensional grid of fluid compressibilities.
@@ -109,9 +106,7 @@ def build_fluid_compressibility_grid(
     return v_compute_fluid_compressibility(pressure_grid, temperature_grid, fluid=fluid)
 
 
-v_compute_fluid_density = np.vectorize(
-    compute_fluid_density, otypes=[np.float64], excluded=["fluid"]
-)
+v_compute_fluid_density = np.vectorize(compute_fluid_density, excluded=["fluid"])
 
 
 def build_fluid_density_grid(
@@ -133,7 +128,7 @@ def build_fluid_density_grid(
     return v_compute_fluid_density(pressure_grid, temperature_grid, fluid=fluid)
 
 
-v_compute_gas_gravity = np.vectorize(compute_gas_gravity, otypes=[np.float64])
+v_compute_gas_gravity = np.vectorize(compute_gas_gravity)
 
 
 def build_gas_gravity_grid(gas: str) -> NDimensionalGrid[NDimension]:
@@ -148,9 +143,7 @@ def build_gas_gravity_grid(gas: str) -> NDimensionalGrid[NDimension]:
     return v_compute_gas_gravity(gas)
 
 
-v_compute_gas_gravity_from_density = np.vectorize(
-    compute_gas_gravity_from_density, otypes=[np.float64]
-)
+v_compute_gas_gravity_from_density = np.vectorize(compute_gas_gravity_from_density)
 
 
 def build_gas_gravity_from_density_grid(
@@ -176,7 +169,7 @@ def build_gas_gravity_from_density_grid(
 
 
 v_compute_total_fluid_compressibility = np.vectorize(
-    compute_total_fluid_compressibility, otypes=[np.float64]
+    compute_total_fluid_compressibility
 )
 
 
@@ -247,14 +240,10 @@ def build_three_phase_capillary_pressure_grids(
         where each grid is a N-Dimensional numpy array of capillary pressures (psi).
     """
     oil_water_capillary_pressure_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape,
-        value=0.0,
-        dtype=np.float64,
+        grid_shape=water_saturation_grid.shape, value=0.0
     )
     gas_oil_capillary_pressure_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape,
-        value=0.0,
-        dtype=np.float64,
+        grid_shape=water_saturation_grid.shape, value=0.0
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):
@@ -314,19 +303,13 @@ def build_three_phase_relative_permeabilities_grids(
     :return: Tuple of (water_relative_permeability_grid, oil_relative_permeability_grid, gas_relative_permeability_grid) as fractions.
     """
     water_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape,
-        value=0.0,
-        dtype=np.float64,
+        grid_shape=water_saturation_grid.shape, value=0.0
     )
     oil_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape,
-        value=0.0,
-        dtype=np.float64,
+        grid_shape=water_saturation_grid.shape, value=0.0
     )
     gas_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape,
-        value=0.0,
-        dtype=np.float64,
+        grid_shape=water_saturation_grid.shape, value=0.0
     )
 
     for indices in itertools.product(*map(range, water_saturation_grid.shape)):
@@ -419,7 +402,7 @@ def build_three_phase_relative_mobilities_grids(
     )
 
 
-v_compute_oil_api_gravity = np.vectorize(compute_oil_api_gravity, otypes=[np.float64])
+v_compute_oil_api_gravity = np.vectorize(compute_oil_api_gravity)
 
 
 def build_oil_api_gravity_grid(
@@ -438,7 +421,7 @@ def build_oil_api_gravity_grid(
 
 
 v_compute_oil_specific_gravity_from_density = np.vectorize(
-    compute_oil_specific_gravity_from_density, otypes=[np.float64]
+    compute_oil_specific_gravity_from_density
 )
 
 
@@ -468,12 +451,7 @@ def build_oil_specific_gravity_grid(
 
 v_compute_gas_compressibility_factor = np.vectorize(
     compute_gas_compressibility_factor,
-    otypes=[np.float64],
-    excluded=[
-        "h2s_mole_fraction",
-        "co2_mole_fraction",
-        "n2_mole_fraction",
-    ],
+    excluded=["h2s_mole_fraction", "co2_mole_fraction", "n2_mole_fraction"],
 )
 
 
@@ -511,7 +489,7 @@ def build_gas_compressibility_factor_grid(
 
 
 v_compute_oil_formation_volume_factor = np.vectorize(
-    compute_oil_formation_volume_factor, otypes=[np.float64]
+    compute_oil_formation_volume_factor
 )
 
 
@@ -550,7 +528,7 @@ def build_oil_formation_volume_factor_grid(
 
 
 v_compute_water_formation_volume_factor = np.vectorize(
-    compute_water_formation_volume_factor, otypes=[np.float64]
+    compute_water_formation_volume_factor
 )
 
 
@@ -569,7 +547,7 @@ def build_water_formation_volume_factor_grid(
 
 
 v_compute_gas_formation_volume_factor = np.vectorize(
-    compute_gas_formation_volume_factor, otypes=[np.float64]
+    compute_gas_formation_volume_factor
 )
 
 
@@ -593,7 +571,7 @@ def build_gas_formation_volume_factor_grid(
     )
 
 
-v_compute_gas_to_oil_ratio = np.vectorize(compute_gas_to_oil_ratio, otypes=[np.float64])
+v_compute_gas_to_oil_ratio = np.vectorize(compute_gas_to_oil_ratio)
 
 
 def build_solution_gas_to_oil_ratio_grid(
@@ -630,9 +608,7 @@ def build_solution_gas_to_oil_ratio_grid(
     )
 
 
-v_compute_oil_bubble_point_pressure = np.vectorize(
-    compute_oil_bubble_point_pressure, otypes=[np.float64]
-)
+v_compute_oil_bubble_point_pressure = np.vectorize(compute_oil_bubble_point_pressure)
 
 
 def build_oil_bubble_point_pressure_grid(
@@ -660,7 +636,7 @@ def build_oil_bubble_point_pressure_grid(
 
 
 v_compute_gas_solubility_in_water = np.vectorize(
-    compute_gas_solubility_in_water, otypes=[np.float64], excluded=["gas"]
+    compute_gas_solubility_in_water, excluded=["gas"]
 )
 
 
@@ -689,7 +665,7 @@ def build_gas_solubility_in_water_grid(
 
 
 v_compute_water_bubble_point_pressure = np.vectorize(
-    compute_water_bubble_point_pressure, otypes=[np.float64], excluded=["gas"]
+    compute_water_bubble_point_pressure, excluded=["gas"]
 )
 
 
@@ -716,7 +692,7 @@ def build_water_bubble_point_pressure_grid(
     )
 
 
-v_compute_oil_viscosity = np.vectorize(compute_oil_viscosity, otypes=[np.float64])
+v_compute_oil_viscosity = np.vectorize(compute_oil_viscosity)
 
 
 def build_oil_viscosity_grid(
@@ -752,9 +728,7 @@ def build_oil_viscosity_grid(
     )
 
 
-v_compute_gas_molecular_weight = np.vectorize(
-    compute_gas_molecular_weight, otypes=[np.float64]
-)
+v_compute_gas_molecular_weight = np.vectorize(compute_gas_molecular_weight)
 
 
 def build_gas_molecular_weight_grid(
@@ -772,7 +746,7 @@ def build_gas_molecular_weight_grid(
     return v_compute_gas_molecular_weight(gas_gravity_grid)
 
 
-v_compute_gas_viscosity = np.vectorize(compute_gas_viscosity, otypes=[np.float64])
+v_compute_gas_viscosity = np.vectorize(compute_gas_viscosity)
 
 
 def build_gas_viscosity_grid(
@@ -795,7 +769,7 @@ def build_gas_viscosity_grid(
     )
 
 
-v_compute_water_viscosity = np.vectorize(compute_water_viscosity, otypes=[np.float64])
+v_compute_water_viscosity = np.vectorize(compute_water_viscosity)
 
 
 def build_water_viscosity_grid(
@@ -818,9 +792,7 @@ def build_water_viscosity_grid(
     return v_compute_water_viscosity(temperature_grid, salinity_grid, pressure_grid)
 
 
-v_compute_oil_compressibility = np.vectorize(
-    compute_oil_compressibility, otypes=[np.float64]
-)
+v_compute_oil_compressibility = np.vectorize(compute_oil_compressibility)
 
 
 def build_oil_compressibility_grid(
@@ -862,12 +834,7 @@ def build_oil_compressibility_grid(
 
 v_compute_gas_compressibility = np.vectorize(
     compute_gas_compressibility,
-    otypes=[np.float64],
-    excluded=[
-        "h2s_mole_fraction",
-        "co2_mole_fraction",
-        "n2_mole_fraction",
-    ],
+    excluded=["h2s_mole_fraction", "co2_mole_fraction", "n2_mole_fraction"],
 )
 
 
@@ -911,7 +878,7 @@ def build_gas_compressibility_grid(
 
 
 v_compute_gas_free_water_formation_volume_factor = np.vectorize(
-    compute_gas_free_water_formation_volume_factor, otypes=[np.float64]
+    compute_gas_free_water_formation_volume_factor
 )
 
 
@@ -935,9 +902,7 @@ def build_gas_free_water_formation_volume_factor_grid(
     )
 
 
-v_compute_water_compressibility = np.vectorize(
-    compute_water_compressibility, otypes=[np.float64]
-)
+v_compute_water_compressibility = np.vectorize(compute_water_compressibility)
 
 
 def build_water_compressibility_grid(
@@ -973,7 +938,7 @@ def build_water_compressibility_grid(
     )
 
 
-v_compute_live_oil_density = np.vectorize(compute_live_oil_density, otypes=[np.float64])
+v_compute_live_oil_density = np.vectorize(compute_live_oil_density)
 
 
 def build_live_oil_density_grid(
@@ -1001,7 +966,7 @@ def build_live_oil_density_grid(
     )
 
 
-v_compute_gas_density = np.vectorize(compute_gas_density, otypes=[np.float64])
+v_compute_gas_density = np.vectorize(compute_gas_density)
 
 
 def build_gas_density_grid(
@@ -1032,7 +997,7 @@ def build_gas_density_grid(
     )
 
 
-v_compute_water_density = np.vectorize(compute_water_density, otypes=[np.float64])
+v_compute_water_density = np.vectorize(compute_water_density)
 
 
 def build_water_density_grid(
@@ -1068,13 +1033,20 @@ def build_water_density_grid(
     )
 
 
-# Vectorized version for grid operations
 compute_todd_longstaff_effective_viscosity_vectorized = np.vectorize(
-    compute_todd_longstaff_effective_viscosity, otypes=[np.float64]
+    compute_todd_longstaff_effective_viscosity,
+    otypes=[np.float64],
+    excluded=["base_omega", "minimum_miscibility_pressure", "transition_width"],
+)
+
+compute_todd_longstaff_effective_density_vectorized = np.vectorize(
+    compute_todd_longstaff_effective_density,
+    excluded=["base_omega", "minimum_miscibility_pressure", "transition_width"],
 )
 
 compute_miscibility_transition_factor_vectorized = np.vectorize(
-    compute_miscibility_transition_factor, otypes=[np.float64]
+    compute_miscibility_transition_factor,
+    excluded=["minimum_miscibility_pressure", "transition_width"],
 )
 
 
@@ -1152,3 +1124,91 @@ def build_oil_effective_viscosity_grid(
         omega_grid,
     )
     return effective_viscosity_grid
+
+
+def build_oil_effective_density_grid(
+    oil_density_grid: NDimensionalGrid[NDimension],
+    solvent_density_grid: NDimensionalGrid[NDimension],
+    oil_viscosity_grid: NDimensionalGrid[NDimension],
+    solvent_viscosity_grid: NDimensionalGrid[NDimension],
+    solvent_concentration_grid: NDimensionalGrid[NDimension],
+    base_omega: float,
+    pressure_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    minimum_miscibility_pressure: typing.Optional[float] = None,
+    transition_width: float = 500.0,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Build effective oil-solvent mixture density grid using Todd-Longstaff model.
+
+    Computes spatially-varying effective density accounting for:
+    - Local oil and solvent densities
+    - Local oil and solvent viscosities (needed for flow fractions)
+    - Local solvent concentration
+    - Pressure-dependent miscibility (if pressure grid provided)
+
+    :param oil_density_grid: Pure oil density grid (lb/ft³ or kg/m³)
+    :param solvent_density_grid: Pure solvent density grid (lb/ft³ or kg/m³)
+    :param oil_viscosity_grid: Pure oil viscosity grid (cP)
+        Required to compute flow fractions for segregated density
+    :param solvent_viscosity_grid: Pure solvent viscosity grid (cP)
+        Required to compute flow fractions for segregated density
+    :param solvent_concentration_grid: Solvent concentration grid (fraction 0-1)
+    :param base_omega: Base Todd-Longstaff mixing parameter for density (0-1).
+        Typical: 0.67 for CO2-oil. Maximum omega when fully miscible.
+    :param pressure_grid: Optional pressure grid (psi) for pressure-dependent miscibility.
+        If provided, omega varies spatially based on local pressure vs MMP.
+    :param minimum_miscibility_pressure: Minimum miscibility pressure (MMP, psi).
+        Required if pressure_grid is provided.
+    :param transition_width: Pressure width of miscibility transition zone (psi), default 500.
+        Only used if pressure_grid is provided.
+    :return: Effective mixture density grid (same units as input density grids)
+
+    Example:
+    ```python
+    # Simple case: no pressure effects
+    density_grid = build_oil_effective_density_grid(
+        oil_density_grid=oil_dens,
+        solvent_density_grid=solvent_dens,
+        oil_viscosity_grid=oil_visc,
+        solvent_viscosity_grid=solvent_visc,
+        solvent_concentration_grid=conc,
+        base_omega=0.67
+    )
+
+    # With pressure-dependent miscibility
+    density_grid = build_oil_effective_density_grid(
+        oil_density_grid=oil_dens,
+        solvent_density_grid=solvent_dens,
+        oil_viscosity_grid=oil_visc,
+        solvent_viscosity_grid=solvent_visc,
+        solvent_concentration_grid=conc,
+        base_omega=0.67,
+        pressure_grid=pressure,
+        minimum_miscibility_pressure=2000.0
+    )
+    ```
+    """
+    # Compute pressure-dependent omega if pressure grid provided
+    if pressure_grid is not None and minimum_miscibility_pressure is not None:
+        # Compute transition factor grid (0 to 1)
+        transition_factor_grid = compute_miscibility_transition_factor_vectorized(
+            pressure_grid,
+            minimum_miscibility_pressure,
+            transition_width,
+        )
+        # Scale by base omega to get effective omega grid
+        omega_grid = base_omega * transition_factor_grid
+    else:
+        # Use constant omega everywhere
+        omega_grid = np.full_like(oil_density_grid, base_omega)
+
+    # Compute effective density using Todd-Longstaff model
+    effective_density_grid = compute_todd_longstaff_effective_density_vectorized(
+        oil_density_grid,
+        solvent_density_grid,
+        oil_viscosity_grid,
+        solvent_viscosity_grid,
+        solvent_concentration_grid,
+        omega_grid,
+    )
+    return effective_density_grid

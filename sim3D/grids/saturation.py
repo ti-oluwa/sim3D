@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 
+from sim3D._precision import get_dtype
 from sim3D.types import NDimension, NDimensionalGrid
 
 
@@ -103,9 +104,10 @@ def build_saturation_grids(
     )
 
     # Initialize saturation arrays
-    water_saturation = np.zeros_like(depth_grid, dtype=float)
-    oil_saturation = np.zeros_like(depth_grid, dtype=float)
-    gas_saturation = np.zeros_like(depth_grid, dtype=float)
+    dtype = get_dtype()
+    water_saturation = np.zeros_like(depth_grid, dtype=dtype)
+    oil_saturation = np.zeros_like(depth_grid, dtype=dtype)
+    gas_saturation = np.zeros_like(depth_grid, dtype=dtype)
     # Cast to NDimensionalGrid to please type checker
     water_saturation = typing.cast(NDimensionalGrid[NDimension], water_saturation)
     oil_saturation = typing.cast(NDimensionalGrid[NDimension], oil_saturation)
@@ -443,7 +445,6 @@ def _build_transition_zones(
     :param active: Boolean mask indicating active cells.
     :return: Tuple of (water_saturation, oil_saturation, gas_saturation) grids.
     """
-
     # Define transition boundaries
     gas_oil_contact_top = gas_oil_contact - gas_oil_transition_thickness / 2
     gas_oil_contact_bottom = gas_oil_contact + gas_oil_transition_thickness / 2

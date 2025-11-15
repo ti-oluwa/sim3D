@@ -7,15 +7,16 @@ import pyamg
 from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import gmres
 
+from sim3D._precision import get_dtype
 from sim3D.constants import c
 from sim3D.diffusivity.base import (
     EvolutionResult,
     _warn_injector_is_producing,
     _warn_producer_is_injecting,
 )
-from sim3D.grids.properties import build_total_fluid_compressibility_grid
+from sim3D.grids.pvt import build_total_fluid_compressibility_grid
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
-from sim3D.properties import compute_harmonic_mean, compute_harmonic_mobility
+from sim3D.pvt import compute_harmonic_mean, compute_harmonic_mobility
 from sim3D.types import (
     CapillaryPressureGrids,
     FluidPhase,
@@ -344,7 +345,7 @@ def evolve_pressure_explicitly(
     absolute_permeability = rock_properties.absolute_permeability
     porosity_grid = rock_properties.porosity_grid
     rock_compressibility = rock_properties.compressibility
-    oil_density_grid = fluid_properties.oil_density_grid
+    oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
@@ -1004,7 +1005,7 @@ def evolve_pressure_implicitly(
     absolute_permeability = rock_properties.absolute_permeability
     porosity_grid = rock_properties.porosity_grid
     rock_compressibility = rock_properties.compressibility
-    oil_density_grid = fluid_properties.oil_density_grid
+    oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
@@ -1095,8 +1096,9 @@ def evolve_pressure_implicitly(
 
     # Initialize sparse coefficient matrix and RHS vector
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
-    A = lil_matrix((interior_cell_count, interior_cell_count), dtype=np.float64)
-    b = np.zeros(interior_cell_count)
+    dtype = get_dtype()
+    A = lil_matrix((interior_cell_count, interior_cell_count), dtype=dtype)
+    b = np.zeros(interior_cell_count, dtype=dtype)
 
     _to_1D_index = functools.partial(
         to_1D_index_interior_only,
@@ -1392,7 +1394,13 @@ def evolve_pressure_implicitly(
     ml = pyamg.ruge_stuben_solver(A_csr)
     M = ml.aspreconditioner(cycle="V")
     new_1D_pressure_grid, info = gmres(
-        A_csr, b, M=M, rtol=1e-6, atol=1e-12, restart=50, maxiter=500
+        A=A_csr,
+        b=b,
+        M=M,
+        rtol=1e-6,
+        atol=1e-12,
+        restart=50,
+        maxiter=500,
     )
     if info != 0:
         raise RuntimeError(f"GMRES did not converge, info={info}")

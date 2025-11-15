@@ -1,4 +1,4 @@
-"""Utilities for computing reservoir rock and fluid properties."""
+"""Utilities for computing reservoir PVT properties."""
 
 import functools
 import logging
@@ -2784,3 +2784,146 @@ def compute_todd_longstaff_effective_viscosity(
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
     return mu_effective
+
+
+def compute_todd_longstaff_effective_density(
+    oil_density: float,
+    solvent_density: float,
+    oil_viscosity: float,
+    solvent_viscosity: float,
+    solvent_concentration: float = 1.0,
+    omega: float = 0.67,
+) -> float:
+    """
+    Compute effective density using Todd-Longstaff mixing model.
+
+    The Todd-Longstaff density formulation ensures that when phases are fully
+    miscible (ω=1), they flow with matched densities and viscosities, emulating
+    a single phase. The effective density depends on the effective viscosity
+    already calculated.
+
+    Standard Formula (Todd & Longstaff, 1972):
+        First compute effective viscosity:
+            μ_eff = compute_todd_longstaff_effective_viscosity(...)
+
+        Then compute phase fractions based on viscosity ratios:
+            f_s = (C_s * μ_o) / (C_s * μ_o + C_o * μ_s)      (solvent fraction)
+            f_o = (C_o * μ_s) / (C_s * μ_o + C_o * μ_s)      (oil fraction)
+
+        Fully mixed density (volume-weighted):
+            ρ_mix = C_s * ρ_s + C_o * ρ_o
+
+        Segregated density (flow-weighted by phase fractions):
+            ρ_seg = f_s * ρ_s + f_o * ρ_o
+
+        Todd-Longstaff interpolation:
+            ρ_eff = ρ_mix^ω * ρ_seg^(1-ω)
+
+    Where:
+        C_s, C_o = volume concentrations (sum to 1)
+        f_s, f_o = flow fractions based on mobility (sum to 1)
+        ω = mixing parameter (0=segregated, 1=fully mixed)
+
+    Physical Interpretation:
+        ω = 0: Density weighted by flow rates (mobility-based)
+        ω = 1: Density weighted by volumes (concentration-based)
+        ω = 0.67: Typical interpolation for CO2-oil systems
+
+    :param oil_density: Oil density (lb/ft³ or kg/m³), must be > 0
+    :param solvent_density: Solvent density (lb/ft³ or kg/m³), must be > 0
+    :param oil_viscosity: Oil viscosity (cP), must be > 0
+        This is needed to compute flow fractions for segregated density
+    :param solvent_viscosity: Solvent viscosity (cP), must be > 0
+        This is needed to compute flow fractions for segregated density
+    :param solvent_concentration: Solvent concentration (fraction 0-1)
+    :param omega: Todd-Longstaff mixing parameter (0-1), default 0.67
+    :return: Effective mixture density (same units as input densities)
+
+    Raises:
+        ValueError: If concentrations or omega are outside [0,1], or inputs ≤ 0
+
+    Example:
+    ```python
+    # CO2 (light) displacing oil (heavy)
+    compute_todd_longstaff_effective_density(
+        oil_density=50.0,        # lb/ft³
+        solvent_density=30.0,    # lb/ft³ (CO2 is lighter)
+        oil_viscosity=10.0,      # cP
+        solvent_viscosity=0.05,  # cP (CO2 is much less viscous)
+        solvent_concentration=0.3,
+        omega=0.67
+    )
+    44.2  # Effective density between pure values
+
+    # Fully segregated (omega=0): flow-weighted density
+    compute_todd_longstaff_effective_density(
+        oil_density=50.0, solvent_density=30.0,
+        oil_viscosity=10.0, solvent_viscosity=0.05,
+        solvent_concentration=0.3, omega=0.0
+    )
+    30.6  # Much closer to solvent (it flows more easily)
+
+    # Fully mixed (omega=1): volume-weighted density
+    compute_todd_longstaff_effective_density(
+        oil_density=50.0, solvent_density=30.0,
+        oil_viscosity=10.0, solvent_viscosity=0.05,
+        solvent_concentration=0.3, omega=1.0
+    )
+    44.0  # Simple volume average: 0.3*30 + 0.7*50
+    ```
+
+    References:
+        Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
+        Application of a Numerical Simulator for Predicting Miscible Flood Performance."
+        JPT, July 1972, pp. 874-882.
+    """
+    if not (0.0 <= solvent_concentration <= 1.0):
+        raise ValueError(
+            f"Solvent concentration must be in [0,1], got {solvent_concentration}"
+        )
+    if not (0.0 <= omega <= 1.0):
+        raise ValueError(f"Omega must be in [0,1], got {omega}")
+    if oil_density <= 0.0 or solvent_density <= 0.0:
+        raise ValueError("Densities must be positive")
+    if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
+        raise ValueError("Viscosities must be positive")
+
+    C_s = solvent_concentration
+    C_o = 1.0 - C_s
+
+    # Handle edge cases
+    if C_s >= 1.0:
+        return solvent_density
+    if C_s <= 0.0:
+        return oil_density
+
+    # Fully mixed density (volume-weighted, arithmetic mean)
+    # This is the density if phases are perfectly mixed by volume
+    rho_mix = C_s * solvent_density + C_o * oil_density
+
+    # Compute phase flow fractions for segregated density
+    # These represent how much each phase contributes to flow based on mobility
+    # f_s = fraction of flow that is solvent
+    # f_o = fraction of flow that is oil
+    # Note: More mobile phase (lower viscosity) gets higher flow fraction
+    denominator = C_s * oil_viscosity + C_o * solvent_viscosity
+
+    # Avoid division by zero (though should never happen with positive viscosities)
+    if denominator < 1e-15:
+        # If both viscosities are essentially zero, fall back to volume weighting
+        f_s = C_s
+        f_o = C_o
+    else:
+        f_s = (C_s * oil_viscosity) / denominator
+        f_o = (C_o * solvent_viscosity) / denominator
+
+    # Fully segregated density (flow-weighted)
+    # This is the density if phases flow separately, weighted by their mobilities
+    rho_segregated = f_s * solvent_density + f_o * oil_density
+
+    # Todd-Longstaff interpolation (weighted geometric mean)
+    # Special cases:
+    #   ω = 0: ρ_eff = ρ_segregated (flow-weighted, immiscible)
+    #   ω = 1: ρ_eff = ρ_mix (volume-weighted, fully mixed)
+    rho_effective = (rho_mix**omega) * (rho_segregated ** (1.0 - omega))
+    return rho_effective
