@@ -24,7 +24,15 @@ from sim3D.pvt import (
     compute_water_viscosity,
     fahrenheit_to_rankine,
 )
-from sim3D.types import ActionFunc, FluidPhase, HookFunc, Orientation, WellLocation
+from sim3D.types import (
+    ActionFunc,
+    FluidPhase,
+    HookFunc,
+    Orientation,
+    ThreeDimensions,
+    TwoDimensions,
+    WellLocation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +413,16 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         """
         self.schedule.add(event)
 
+    def schedule_events(self, *events: "WellEvent[Self]") -> None:
+        """
+        Add multiple `WellEvent`s to the well schedule.
+
+        :param events: An iterable of events to be scheduled for the well.
+            If an event has no hook, it will always be applied after each time step.
+        """
+        for event in events:
+            self.schedule.add(event)
+
     def evolve(self, model_state: typing.Any) -> None:
         """
         Evolve the well for the next time step.
@@ -453,9 +471,8 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         if dimensions == 2:
             if len(permeability) != 2:
                 raise ValueError("Permeability must be a 2D tuple for 2D locations")
-            interval_thickness = typing.cast(
-                typing.Tuple[float, float], interval_thickness
-            )
+            interval_thickness = typing.cast(TwoDimensions, interval_thickness)
+            permeability = typing.cast(TwoDimensions, permeability)
             return compute_2D_effective_drainage_radius(
                 interval_thickness=interval_thickness,
                 permeability=permeability,
@@ -464,9 +481,8 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
 
         if len(permeability) != 3:
             raise ValueError("Permeability must be a 3D tuple for 3D locations")
-        interval_thickness = typing.cast(
-            typing.Tuple[float, float, float], interval_thickness
-        )
+        interval_thickness = typing.cast(ThreeDimensions, interval_thickness)
+        permeability = typing.cast(ThreeDimensions, permeability)
         return compute_3D_effective_drainage_radius(
             interval_thickness=interval_thickness,
             permeability=permeability,
@@ -554,6 +570,8 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
                 pseudo_pressure_table = fluid.get_pseudo_pressure_table(
                     temperature=temperature, points=c.GAS_PSEUDO_PRESSURE_POINTS
                 )
+            else:
+                use_pseudo_pressure = False
 
             avg_pressure = (pressure + self.bottom_hole_pressure) * 0.5
             avg_compressibility_factor = compute_gas_compressibility_factor(
@@ -589,6 +607,58 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
     def open(self) -> None:
         """Open the well."""
         self.is_active = True
+
+    def duplicate(self: Self, *, name: typing.Optional[str] = None, **kwargs) -> Self:
+        """
+        Create a duplicate of the well with an optional new name.
+
+        :param name: The name for the duplicated well. If None, uses the original well's name.
+        :kwargs: Additional properties to override in the duplicated well.
+        :return: A new instance of the well with the same properties.
+        """
+        return attrs.evolve(self, name=name or self.name, **kwargs)
+
+    def __reduce_ex__(
+        self, protocol: typing.SupportsIndex
+    ) -> typing.Tuple[typing.Any, ...]:
+        """
+        Custom pickle reduction that excludes the schedule attribute.
+
+        Returns a tuple of (callable, args) where callable(*args) reconstructs the object.
+        The schedule is replaced with an empty set to avoid pickling non-serializable hooks.
+        Only init=True fields are included in the reconstruction.
+
+        :param protocol: The pickle protocol version.
+        :return: A tuple for pickle reconstruction.
+        """
+        # Get all init field values except schedule
+        field_values = {}
+        for field in attrs.fields(type(self)):
+            # Skip non-init fields (like orientation) and schedule
+            if not field.init:
+                continue
+
+            if field.name == "schedule":
+                # Replace schedule with empty set
+                field_values[field.name] = set()
+            else:
+                field_values[field.name] = getattr(self, field.name)
+
+        # Return constructor and kwargs for reconstruction
+        return (_reconstruct_well, (type(self), field_values))
+
+
+def _reconstruct_well(
+    cls: typing.Type, field_values: typing.Dict[str, typing.Any]
+) -> typing.Any:
+    """
+    Helper function to reconstruct a Well instance from pickled data.
+
+    :param cls: The Well class to instantiate.
+    :param field_values: Dictionary of field names to values.
+    :return: A reconstructed Well instance.
+    """
+    return cls(**field_values)
 
 
 WellT = typing.TypeVar("WellT", bound=Well)
@@ -1062,6 +1132,57 @@ class Wells(typing.Generic[WellLocation]):
         """
         return bool(self.injection_wells or self.production_wells)
 
+    def __reduce_ex__(
+        self, protocol: typing.SupportsIndex
+    ) -> typing.Tuple[typing.Any, ...]:
+        """
+        Custom pickle reduction that clears schedules from all wells.
+
+        Returns a tuple of (callable, args) where callable(*args) reconstructs the object.
+        All well schedules are cleared to avoid pickling non-serializable hooks.
+        Only fields with init=True are included.
+
+        :param protocol: The pickle protocol version.
+        :return: A tuple for pickle reconstruction.
+        """
+        # Clear schedules from all wells
+        injection_wells_cleared = [
+            attrs.evolve(well, schedule=set()) for well in self.injection_wells
+        ]
+        production_wells_cleared = [
+            attrs.evolve(well, schedule=set()) for well in self.production_wells
+        ]
+
+        # Get only init=True field values
+        field_values = {}
+        for field in attrs.fields(type(self)):
+            # Skip non-init fields (injectors, producers)
+            if not field.init:
+                continue
+
+            if field.name == "injection_wells":
+                field_values[field.name] = injection_wells_cleared
+            elif field.name == "production_wells":
+                field_values[field.name] = production_wells_cleared
+            else:
+                field_values[field.name] = getattr(self, field.name)
+
+        # Return constructor and kwargs for reconstruction
+        return (_reconstruct_wells, (type(self), field_values))
+
+
+def _reconstruct_wells(
+    cls: typing.Type, field_values: typing.Dict[str, typing.Any]
+) -> typing.Any:
+    """
+    Helper function to reconstruct a Wells instance from pickled data.
+
+    :param cls: The Wells class to instantiate.
+    :param field_values: Dictionary of field names to values.
+    :return: A reconstructed Wells instance.
+    """
+    return cls(**field_values)
+
 
 def compute_well_index(
     permeability: float,
@@ -1101,8 +1222,8 @@ def compute_well_index(
 
 
 def compute_3D_effective_drainage_radius(
-    interval_thickness: typing.Tuple[float, float, float],
-    permeability: typing.Tuple[float, float, float],
+    interval_thickness: ThreeDimensions,
+    permeability: ThreeDimensions,
     well_orientation: Orientation,
 ) -> float:
     """
@@ -1157,8 +1278,8 @@ def compute_3D_effective_drainage_radius(
 
 
 def compute_2D_effective_drainage_radius(
-    interval_thickness: typing.Tuple[float, float],
-    permeability: typing.Tuple[float, float],
+    interval_thickness: TwoDimensions,
+    permeability: TwoDimensions,
     well_orientation: Orientation,
 ) -> float:
     """

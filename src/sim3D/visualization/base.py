@@ -5,6 +5,7 @@ import typing
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.io as pio
 
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "PropertyMetadata",
     "ColorScheme",
     "merge_plots",
+    "image_config",
 ]
 
 
@@ -788,6 +790,7 @@ def merge_plots(
             raise ValueError("rows must be a positive integer")
         cols = int(np.ceil(num_figures / rows))
 
+    cols = typing.cast(int, cols)
     # Validate grid can accommodate all figures
     if rows * cols < num_figures:
         raise ValueError(
@@ -1012,3 +1015,28 @@ def merge_plots(
             }
         )
     return combined_fig
+
+
+def image_config(
+    format: typing.Literal["png", "jpeg", "webp", "svg", "pdf"] = "png",
+    scale: int = 2,
+    width: typing.Optional[int] = None,
+    height: typing.Optional[int] = None,
+) -> None:
+    """
+    Configure image export settings for a Plotly figure.
+
+    :param fig: Plotly Figure object to configure
+    :param file_path: Path to the output image file
+    :param format: Image format to save as (e.g., 'png', 'jpeg', 'webp', 'svg', 'pdf')
+        Default is 'png'.
+    :param scale: Scale factor for the image resolution. Default is 2 (double size).
+    :param width: Optional width of the output image in pixels. If None, uses figure width.
+    :param height: Optional height of the output image in pixels. If None, uses figure height.
+    """
+    pio.defaults.default_format = format
+    pio.defaults.default_scale = scale
+    if width is not None:
+        pio.defaults.default_width = width
+    if height is not None:
+        pio.defaults.default_height = height

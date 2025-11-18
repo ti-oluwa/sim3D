@@ -93,7 +93,7 @@ def _():
 
         # Fluid contacts
         # GOC at 8050 ft, OWC at 8150 ft (realistic spacing)
-        goc_depth = 8020.0
+        goc_depth = 8030.0
         owc_depth = 8120.0
 
         depth_grid = sim3D.depth_grid(thickness_grid)
@@ -110,7 +110,7 @@ def _():
                 use_transition_zones=True,
                 oil_water_transition_thickness=12.0,  # transition zone
                 gas_oil_transition_thickness=8.0,
-                transition_curvature_exponent=1.5,
+                transition_curvature_exponent=1.2,
             )
         )
 
@@ -193,7 +193,7 @@ def _():
         boundary_conditions = sim3D.BoundaryConditions(
             conditions={
                 "pressure": sim3D.GridBoundaryCondition(
-                    bottom=sim3D.ConstantBoundary(3500),  # Aquifer pressure
+                    bottom=sim3D.ConstantBoundary(4000),  # Aquifer pressure
                 ),
             }
         )
@@ -241,7 +241,7 @@ def _():
             connate_water_saturation_grid=connate_water_saturation_grid,
             residual_gas_saturation_grid=residual_gas_saturation_grid,
             net_to_gross_ratio_grid=net_to_gross_grid,
-            boundary_conditions=boundary_conditions,
+            # boundary_conditions=boundary_conditions,
             # faults=fault_network,
             relative_permeability_table=relative_permeability_table,
             capillary_pressure_table=capillary_pressure_table,
@@ -334,15 +334,15 @@ def _():
         )
 
         producers = [producer]
-        wells = sim3D.wells(injectors=injectors, producers=producers)
+        wells = sim3D.wells(injectors=None, producers=None)
 
         options = sim3D.Options(
-            scheme="impes",
-            total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 16),
-            time_step_size=sim3D.Time(hours=30),
-            max_time_steps=5000,
+            scheme="implicit",
+            total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 10),
+            time_step_size=sim3D.Time(hours=24),
+            max_time_steps=400,
             output_frequency=1,
-            miscibility_model="todd_longstaff",
+            miscibility_model="immiscible",
             use_pseudo_pressure=True,
         )
         model_states = sim3D.run(model=model, wells=wells, options=options)
@@ -360,27 +360,27 @@ def _(main):
 def _(model_states, np, sim3D):
     analyst = sim3D.ProductionAnalyst(model_states)
     oil_production_history = analyst.oil_production_history(
-        interval=10, cumulative=False, from_time_step=7
+        interval=2, cumulative=False, from_time_step=7
     )
     water_production_history = analyst.water_production_history(
-        interval=10, cumulative=False, from_time_step=7
+        interval=2, cumulative=False, from_time_step=7
     )
     gas_production_history = analyst.free_gas_production_history(
-        interval=10, cumulative=False, from_time_step=7
+        interval=2, cumulative=False, from_time_step=7
     )
     water_injection_history = analyst.water_injection_history(
-        interval=10, cumulative=False, from_time_step=7
+        interval=2, cumulative=False, from_time_step=7
     )
     gas_injection_history = analyst.gas_injection_history(
-        interval=10, cumulative=False, from_time_step=7
+        interval=2, cumulative=False, from_time_step=7
     )
-    oil_in_place_history = analyst.oil_in_place_history(interval=10, from_time_step=7)
-    gas_in_place_history = analyst.gas_in_place_history(interval=10, from_time_step=7)
+    oil_in_place_history = analyst.oil_in_place_history(interval=2, from_time_step=7)
+    gas_in_place_history = analyst.gas_in_place_history(interval=2, from_time_step=7)
     water_in_place_history = analyst.water_in_place_history(
-        interval=10, from_time_step=7
+        interval=2, from_time_step=7
     )
     sweep_efficiency_history = analyst.sweep_efficiency_history(
-        interval=10, from_time_step=7
+        interval=2, from_time_step=7
     )
 
     oil_saturation_history = []
@@ -435,40 +435,34 @@ def _(model_states, np, sim3D):
         recovery_efficiency_history.append((time_step, result.recovery_efficiency))
 
     # Production & Injection
-    oil_production_fig = sim3D.plotly2d.make_series_plot(
+    oil_production_fig = sim3D.make_series_plot(
         data={
             "Oil Production": np.array(list(oil_production_history)),
         },
         title="Oil Production Analysis",
         x_label="Time Step",
         y_label="Production (STB/day)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    water_production_fig = sim3D.plotly2d.make_series_plot(
+    water_production_fig = sim3D.make_series_plot(
         data={
             "Water Production": np.array(list(water_production_history)),
         },
         title="Water Production Analysis",
         x_label="Time Step",
         y_label="Production (STB/day)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    gas_production_fig = sim3D.plotly2d.make_series_plot(
+    gas_production_fig = sim3D.make_series_plot(
         data={
             "Gas Production": np.array(list(gas_production_history)),
         },
         title="Gas Production Analysis",
         x_label="Time Step",
         y_label="Production (SCF/day)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    gas_injection_fig = sim3D.plotly2d.make_series_plot(
+    gas_injection_fig = sim3D.make_series_plot(
         data={
             # "Water Injection": np.array(list(water_injection_history)),
             "Gas Injection": np.array(list(gas_injection_history)),
@@ -476,12 +470,10 @@ def _(model_states, np, sim3D):
         title="Gas Injection Analysis",
         x_label="Time Step",
         y_label="Injection (SCF/day)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Saturation
-    saturation_fig = sim3D.plotly2d.make_series_plot(
+    saturation_fig = sim3D.make_series_plot(
         data={
             "Avg. Oil Saturation": np.array(oil_saturation_history),
             "Avg. Water Saturation": np.array(water_saturation_history),
@@ -490,12 +482,10 @@ def _(model_states, np, sim3D):
         title="Saturation Analysis",
         x_label="Time Step",
         y_label="Saturation",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Capillary Pressure
-    capillary_pressure_fig = sim3D.plotly2d.make_series_plot(
+    capillary_pressure_fig = sim3D.make_series_plot(
         data={
             "Pcow": np.array(oil_water_capillary_pressure_history),
             "Pcgo": np.array(gas_oil_capillary_pressure_history),
@@ -503,12 +493,10 @@ def _(model_states, np, sim3D):
         title="Capillary Pressure Analysis",
         x_label="Time Step",
         y_label="Capillary Pressure",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Rel Perm
-    relperm_fig = sim3D.plotly2d.make_series_plot(
+    relperm_fig = sim3D.make_series_plot(
         data={
             "Krw": np.array(krw_history),
             "Kro": np.array(kro_history),
@@ -517,56 +505,46 @@ def _(model_states, np, sim3D):
         title="RelPerm Analysis",
         x_label="Time Step",
         y_label="Relative Permeability",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # RelPerm-Saturation
-    water_relperm_saturation_fig = sim3D.plotly2d.make_series_plot(
+    water_relperm_saturation_fig = sim3D.make_series_plot(
         data={
             "Krw/Sw": np.array(krg_saturation_history),
         },
         title="Water RelPerm-Saturation Analysis",
         x_label="Water Saturation",
         y_label="Relative Permeability",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    oil_relperm_saturation_fig = sim3D.plotly2d.make_series_plot(
+    oil_relperm_saturation_fig = sim3D.make_series_plot(
         data={
             "Kro/So": np.array(kro_saturation_history),
         },
         title="Oil RelPerm-Saturation Analysis",
         x_label="Oil Saturation",
         y_label="Relative Permeability",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    gas_relperm_saturation_fig = sim3D.plotly2d.make_series_plot(
+    gas_relperm_saturation_fig = sim3D.make_series_plot(
         data={
             "Krg/Sg": np.array(krg_saturation_history),
         },
         title="Gas RelPerm-Saturation Analysis",
         x_label="Gas Saturation",
         y_label="Relative Permeability",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Pressure
-    pressure_fig = sim3D.plotly2d.make_series_plot(
+    pressure_fig = sim3D.make_series_plot(
         data={"Avg. Reservoir Pressure": np.array(avg_pressure_history)},
         title="Pressure Analysis",
         x_label="Time Step",
         y_label="Avg. Pressure (psia)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Reserves
-    reserves_fig = sim3D.plotly2d.make_series_plot(
+    reserves_fig = sim3D.make_series_plot(
         data={
             "Oil In Place": np.array(list(oil_in_place_history)),
             "Water In Place": np.array(list(water_in_place_history)),
@@ -575,12 +553,10 @@ def _(model_states, np, sim3D):
         title="Reserves Analysis",
         x_label="Time Step",
         y_label="HCIP (STB or SCF)",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
     # Sweep Efficiency
-    vol_sweep_efficiency_fig = sim3D.plotly2d.make_series_plot(
+    vol_sweep_efficiency_fig = sim3D.make_series_plot(
         data={
             "Volumetric Sweep Efficiency": np.array(
                 volumetric_sweep_efficiency_history
@@ -588,28 +564,22 @@ def _(model_states, np, sim3D):
         },
         title="Volumetric Sweep Efficiency Analysis",
         x_label="Time Step",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    displacement_efficiency_fig = sim3D.plotly2d.make_series_plot(
+    displacement_efficiency_fig = sim3D.make_series_plot(
         data={
             "Displacement Efficiency": np.array(displacement_efficiency_history),
         },
         title="Displacement Efficiency Analysis",
         x_label="Time Step",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
-    recovery_efficiency_fig = sim3D.plotly2d.make_series_plot(
+    recovery_efficiency_fig = sim3D.make_series_plot(
         data={
             "Recovery Efficiency": np.array(recovery_efficiency_history),
         },
         title="Recovery Efficiency Analysis",
         x_label="Time Step",
-        width=1080,
-        height=580,
         marker_sizes=4,
     )
 
@@ -672,7 +642,7 @@ def _(model_states, sim3D):
     well_names = [*injector_names, *producer_names]
     labels = sim3D.plotly3d.Labels()
     labels.add_well_labels(well_positions, well_names)
-    data = model_states[40]
+    data = model_states[200]
     shared_kwargs = dict(
         plot_type="isosurface",
         width=960,
@@ -697,6 +667,13 @@ def _(model_states, sim3D):
         show_perforations=True,
     )
 
+    oil_sat_2d_grid = sim3D.flatten_multilayer_grid_to_surface(
+        data.model.fluid_properties.water_saturation_grid, strategy="mean"
+    )
+    oil_sat_2d_fig = sim3D.plotly2d.viz.make_plot(
+        oil_sat_2d_grid, plot_type=sim3D.plotly2d.PlotType.CONTOUR_FILLED
+    )
+    oil_sat_2d_fig.show()
     # Animation
     # sim3D.plotly3d.viz.animate(
     #     model_states, property="oil-sat", **shared_kwargs, z_slice=(2, 4)
@@ -704,10 +681,10 @@ def _(model_states, sim3D):
 
     # Oil Plot
     oil_pressure_fig = sim3D.plotly3d.viz.make_plot(
-        data, property="oil-viscosity", isomin=0.36, **shared_kwargs
+        data, property="pressure", **shared_kwargs
     )
     oil_sat_fig = sim3D.plotly3d.viz.make_plot(
-        data, property="solvent-conc", isomax=0.005, **shared_kwargs
+        data, property="oil-sat", **shared_kwargs
     )
 
     # # Water Plot
@@ -720,7 +697,7 @@ def _(model_states, sim3D):
     # )
     # viscosity_fig = sim3D.plotly3d.viz.make_plot(
     #     data, property="solvent_conc", **shared_kwargs
-    # )
+    # # )
     fig = sim3D.merge_plots(
         oil_pressure_fig,
         oil_sat_fig,
@@ -728,7 +705,7 @@ def _(model_states, sim3D):
         width=1080,
         height=2400,
     )
-    fig.show()
+    # fig.show()
     return
 
 

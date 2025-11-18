@@ -1,7 +1,6 @@
 """Run a simulation workflow on a N-Dimensional reservoir model."""
 
 import copy
-import gc
 import logging
 import math
 import typing
@@ -12,9 +11,11 @@ import numpy as np
 from sim3D.boundaries import BoundaryConditions, BoundaryMetadata
 from sim3D.diffusivity import (
     evolve_miscible_saturation_explicitly,
+    evolve_miscible_saturation_implicitly,
     evolve_pressure_explicitly,
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
+    evolve_saturation_implicitly,
 )
 from sim3D.grids.base import build_uniform_grid, pad_grid
 from sim3D.grids.pvt import (
@@ -335,7 +336,9 @@ def run(
         thickness_grid = model.thickness_grid
         padded_thickness_grid = pad_grid(thickness_grid, pad_width=1)
         padded_thickness_grid = _mirror_neighbour(padded_thickness_grid)
-        elevation_grid = model.get_elevation_grid(apply_dip=options.apply_dip)
+        elevation_grid = model.get_elevation_grid(
+            apply_dip=not options.disable_structural_dip
+        )
         padded_elevation_grid = pad_grid(elevation_grid, pad_width=1)
         padded_elevation_grid = _mirror_neighbour(padded_elevation_grid)
 
@@ -354,24 +357,32 @@ def run(
         wells.check_location(grid_dimensions=grid_shape)
         wells = copy.deepcopy(wells)
         scheme = options.scheme
-        if scheme == "impes":
-            logger.debug(
-                "Using implicit pressure, explicit saturation evolution scheme"
-            )
-            evolve_pressure = evolve_pressure_implicitly
-        else:
-            logger.debug("Using fully explicit evolution scheme")
+        if scheme == "explicit":
+            logger.debug("Using explicit pressure scheme")
             evolve_pressure = evolve_pressure_explicitly
+        else:
+            logger.debug("Using implicit pressure scheme")
+            evolve_pressure = evolve_pressure_implicitly
 
         miscibility_model = options.miscibility_model
         if miscibility_model != "immiscible":
             logger.debug(
                 f"Using miscible saturation evolution scheme: '{miscibility_model}'"
             )
-            evolve_saturation = evolve_miscible_saturation_explicitly
+            if scheme == "implicit":
+                logger.debug("Using implicit miscible saturation scheme")
+                evolve_saturation = evolve_miscible_saturation_implicitly
+            else:
+                logger.debug("Using explicit miscible saturation scheme")
+                evolve_saturation = evolve_miscible_saturation_explicitly
         else:
             logger.debug("Using immiscible saturation evolution scheme")
-            evolve_saturation = evolve_saturation_explicitly
+            if scheme == "implicit":
+                logger.debug("Using implicit saturation scheme")
+                evolve_saturation = evolve_saturation_implicitly
+            else:
+                logger.debug("Using explicit saturation scheme")
+                evolve_saturation = evolve_saturation_explicitly
 
         # Initialize fluid properties before starting the simulation
         # To ensure all dependent properties are consistent with initial pressure and saturation conditions
@@ -406,6 +417,7 @@ def run(
             time_step_size=time_step_size,
             model=model,
             wells=wells,
+            options=options,
             relative_mobilities=relative_mobility_grids,
             relative_permeabilities=relperm_grids,
             capillary_pressures=capillary_pressure_grids,
@@ -442,6 +454,12 @@ def run(
         for time_step in range(1, num_of_time_steps + 1):
             logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
 
+            if wells.has_wells():
+                # Update the wells for the next time step
+                logger.debug("Updating wells configuration for the next time step...")
+                wells.evolve(model_state)
+                logger.debug("Wells updated.")
+
             # Log simulation progress at regular intervals
             if time_step % max(1, int(num_of_time_steps // 10)) == 0:
                 progress_percent = (time_step / num_of_time_steps) * 100
@@ -450,44 +468,45 @@ def run(
                 )
 
             # Apply boundary conditions before pressure update
-            logger.debug("Applying boundary conditions before pressure evolution...")
-            padded_fluid_properties, padded_rock_properties = (
-                _apply_boundary_conditions(
-                    fluid_properties=padded_fluid_properties,
-                    rock_properties=padded_rock_properties,
-                    boundary_conditions=boundary_conditions,
-                    cell_dimension=cell_dimension,
-                    grid_shape=grid_shape,
-                    thickness_grid=thickness_grid,
-                    time=time_step * time_step_size,
+            if time_step != 1:
+                logger.debug("Applying boundary conditions before pressure evolution...")
+                padded_fluid_properties, padded_rock_properties = (
+                    _apply_boundary_conditions(
+                        fluid_properties=padded_fluid_properties,
+                        rock_properties=padded_rock_properties,
+                        boundary_conditions=boundary_conditions,
+                        cell_dimension=cell_dimension,
+                        grid_shape=grid_shape,
+                        thickness_grid=thickness_grid,
+                        time=time_step * time_step_size,
+                    )
                 )
-            )
-            logger.debug("Boundary conditions applied.")
-            # If the pressure boundary condition is not no-flow,
-            # Then apply PVT update before pressure evolution
-            # Since most PVT properties depend on pressure
-            # This is skipped for no-flow BCs to save computation.
-            # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
-            if not no_flow_pressure_boundary_condition:
-                logger.debug(
-                    "Updating PVT fluid properties before pressure evolution..."
-                )
-                padded_fluid_properties = update_pvt_properties(
-                    fluid_properties=padded_fluid_properties,
-                    wells=wells,
-                    miscibility_model=miscibility_model,
-                )
-                logger.debug("PVT fluid properties updated.")
+                logger.debug("Boundary conditions applied.")
+                # If the pressure boundary condition is not no-flow,
+                # Then apply PVT update before pressure evolution
+                # Since most PVT properties depend on pressure
+                # This is skipped for no-flow BCs to save computation.
+                # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
+                if not no_flow_pressure_boundary_condition:
+                    logger.debug(
+                        "Updating PVT fluid properties before pressure evolution..."
+                    )
+                    padded_fluid_properties = update_pvt_properties(
+                        fluid_properties=padded_fluid_properties,
+                        wells=wells,
+                        miscibility_model=miscibility_model,
+                    )
+                    logger.debug("PVT fluid properties updated.")
 
-            # Build relative permeability, relative mobility, and capillary pressure grids
-            relperm_grids, relative_mobility_grids, capillary_pressure_grids = (
-                build_rock_fluid_properties_grids(
-                    fluid_properties=padded_fluid_properties,
-                    rock_properties=padded_rock_properties,
-                    rock_fluid_properties=rock_fluid_properties,
-                    options=options,
+                # Build relative permeability, relative mobility, and capillary pressure grids
+                relperm_grids, relative_mobility_grids, capillary_pressure_grids = (
+                    build_rock_fluid_properties_grids(
+                        fluid_properties=padded_fluid_properties,
+                        rock_properties=padded_rock_properties,
+                        rock_fluid_properties=rock_fluid_properties,
+                        options=options,
+                    )
                 )
-            )
 
             logger.debug("Evolving pressure...")
             # Evolvers also return padded grids as output since padded grids were given as input
@@ -645,7 +664,7 @@ def run(
                 padded_water_saturation_grid,
                 padded_oil_saturation_grid,
                 *other_padded_saturation_grids,
-            ) = saturation_result.value
+            ) = saturation_result.value # type: ignore
             other_grids_size = len(other_padded_saturation_grids)
             if other_grids_size == 1:
                 padded_gas_saturation_grid = other_padded_saturation_grids[0]
@@ -709,6 +728,7 @@ def run(
                     time_step_size=time_step_size,
                     model=model_snapshot,
                     wells=wells_snapshot,
+                    options=options,
                     relative_mobilities=relative_mobility_grids,
                     relative_permeabilities=relperm_grids,
                     capillary_pressures=capillary_pressure_grids,
@@ -727,12 +747,6 @@ def run(
                     miscibility_model=miscibility_model,
                 )
                 logger.debug("PVT fluid properties updated.")
-
-            if wells.has_wells():
-                # Update the wells for the next time step
-                logger.debug("Updating wells configuration for the next time step...")
-                wells.evolve(model_state)
-                logger.debug("Wells updated.")
 
     # Log completion outside the loop to avoid unbound variable issues
     logger.info(

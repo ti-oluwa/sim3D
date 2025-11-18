@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "auto-mix-prep>=0.2.0",
     "marimo>=0.14.16",
     "mypy>=1.16.1",
     "rich>=14.0.0",
@@ -35,3 +36,8 @@ dev = [
 
 [tool.marimo.runtime]
 output_max_bytes = 10_000_000_000
+
+[[tool.uv.index]]
+url = "https://urob.github.io/numpy-mkl"
+
+

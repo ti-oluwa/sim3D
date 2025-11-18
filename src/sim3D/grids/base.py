@@ -1,9 +1,18 @@
 import typing
+import itertools
 
 import numpy as np
 
 from sim3D._precision import get_dtype
-from sim3D.types import ArrayLike, NDimension, NDimensionalGrid, Orientation
+from sim3D.types import (
+    ArrayLike,
+    NDimension,
+    NDimensionalGrid,
+    OneDimension,
+    Orientation,
+    ThreeDimensionalGrid,
+    TwoDimensionalGrid,
+)
 
 __all__ = [
     "uniform_grid",
@@ -19,6 +28,7 @@ __all__ = [
     "get_pad_mask",
     "unpad_grid",
     "coarsen_grid",
+    "flatten_multilayer_grid_to_surface",
 ]
 
 
@@ -184,96 +194,95 @@ def apply_structural_dip(
     cell_dimension: typing.Tuple[float, float],
     elevation_direction: typing.Literal["downward", "upward"],
     dip_angle: float,
-    dip_direction: typing.Literal["N", "S", "E", "W"],
+    dip_azimuth: float,
 ) -> NDimensionalGrid[NDimension]:
     """
-        Apply structural dip to a base elevation grid.
+    Apply structural dip to a base elevation grid using azimuth convention.
 
-        The dip is applied by adding a linear gradient in the dip direction.
-        The dip angle represents the angle of the reservoir surface from horizontal.
+    The dip is applied by adding a planar gradient in the specified azimuth direction.
+    The dip angle represents the angle of the reservoir surface from horizontal.
 
-        ---
+    ---
 
-        ## 🧭 **Dip Direction Convention:**
-        ```
-        Grid Coordinate System:
-        North (↑ +y)
-            |
-            |
-    West ←─────┼─────→ East
-    (-x)     |    (+x)
-            |
-        South (↓ -y)
+    ## 🧭 **Azimuth Convention:**
+    ```
+    Grid Coordinate System:
+    North (0°/360°)
+         ↑ (+y)
+         |
+         |
+    West ←─────┼─────→ East (90°)
+    (270°)  |    (+x)
+         |
+         ↓ (-y)
+    South (180°)
+    ```
 
-        ```
+    Azimuth Examples:
+    - 0° (North): Dips toward North
+    - 90° (East): Dips toward East
+    - 180° (South): Dips toward South
+    - 270° (West): Dips toward West
+    - 45° (NE): Dips toward Northeast
 
-        Dip Direction Examples:
-        - "N": Reservoir dips toward North → Higher elevation at South
-        - "S": Reservoir dips toward South → Higher elevation at North
-        - "E": Reservoir dips toward East → Higher elevation at West
-        - "W": Reservoir dips toward West → Higher elevation at East
+    The surface tilts DOWN in the azimuth direction, meaning elevation
+    DECREASES in that direction (or depth INCREASES for downward convention).
 
-        :param elevation_grid: Base flat elevation grid
-        :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet
-        :param elevation_direction: Whether elevation of the base grid is increasing "downward" (depth) or "upward" (elevation)
-        :param dip_angle: Dip angle in degrees
-        :param dip_direction: Direction of dip ("N", "S", "E", "W")
-        :return: Elevation grid with structural dip applied
+    :param elevation_grid: Base flat elevation grid (shape: [nx, ny, nz])
+    :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet
+    :param elevation_direction: Whether elevation is "upward" (elevation) or "downward" (depth)
+    :param dip_angle: Dip angle in degrees (0-90)
+    :param dip_azimuth: Dip azimuth in degrees (0-360), measured clockwise from North
+    :return: Elevation grid with structural dip applied
     """
+    if elevation_direction not in {"downward", "upward"}:
+        raise ValueError("`elevation_direction` must be 'downward' or 'upward'")
+
+    if not (0.0 <= dip_angle <= 90.0):
+        raise ValueError("`dip_angle` must be between 0 and 90 degrees")
+
+    if not (0.0 <= dip_azimuth < 360.0):
+        raise ValueError("`dip_azimuth` must be between 0 and 360 degrees")
+
     dipped_elevation_grid = elevation_grid.copy()
     dip_angle_radians = np.radians(dip_angle)
+    dip_azimuth_radians = np.radians(dip_azimuth)
+
     cell_size_x, cell_size_y = cell_dimension
     grid_shape = elevation_grid.shape
+    nx, ny = grid_shape[0], grid_shape[1]
 
-    # Determine dip direction in grid coordinates
-    # Grid convention: x = East-West, y = North-South
-    if dip_direction == "E":
-        # Dips toward East (positive x-direction)
-        # Elevation increases toward West (negative x)
-        for i in range(grid_shape[0]):
-            dip_offset = i * cell_size_x * np.tan(dip_angle_radians)
-            if elevation_direction == "upward":
-                # Upward elevation: increase offset toward positive x
-                dipped_elevation_grid[i, :, :] += dip_offset
-            else:
-                # Downward elevation (depth): increase depth toward positive x
-                dipped_elevation_grid[i, :, :] += dip_offset
+    # Convert azimuth to directional components
+    # Azimuth: 0° = North (+y), 90° = East (+x), 180° = South (-y), 270° = West (-x)
+    # Component in x-direction (East-West)
+    dx_component = np.sin(dip_azimuth_radians)  # Positive = East
+    # Component in y-direction (North-South)
+    dy_component = np.cos(dip_azimuth_radians)  # Positive = North
 
-    elif dip_direction == "W":
-        # Dips toward West (negative x-direction)
-        # Elevation increases toward East (positive x)
-        for i in range(grid_shape[0]):
-            dip_offset = (
-                (grid_shape[0] - 1 - i) * cell_size_x * np.tan(dip_angle_radians)
-            )
-            if elevation_direction == "upward":
-                dipped_elevation_grid[i, :, :] += dip_offset
-            else:
-                dipped_elevation_grid[i, :, :] += dip_offset
+    # Iterate through all grid cells using itertools.product
+    for i, j in itertools.product(range(nx), range(ny)):
+        # Distance from origin in each direction
+        x_distance = i * cell_size_x
+        y_distance = j * cell_size_y
 
-    elif dip_direction == "N":
-        # Dips toward North (positive y-direction)
-        # Elevation increases toward South (negative y)
-        for j in range(grid_shape[1]):
-            dip_offset = j * cell_size_y * np.tan(dip_angle_radians)
-            if elevation_direction == "upward":
-                dipped_elevation_grid[:, j, :] += dip_offset
-            else:
-                dipped_elevation_grid[:, j, :] += dip_offset
+        # Total distance along dip direction (dot product with unit vector)
+        distance_along_dip = x_distance * dx_component + y_distance * dy_component
 
-    elif dip_direction == "S":
-        # Dips toward South (negative y-direction)
-        # Elevation increases toward North (positive y)
-        for j in range(grid_shape[1]):
-            dip_offset = (
-                (grid_shape[1] - 1 - j) * cell_size_y * np.tan(dip_angle_radians)
-            )
-            if elevation_direction == "upward":
-                dipped_elevation_grid[:, j, :] += dip_offset
-            else:
-                dipped_elevation_grid[:, j, :] += dip_offset
+        # Calculate elevation change due to dip
+        # Positive distance along dip = moving in dip direction = elevation decreases
+        dip_offset = distance_along_dip * np.tan(dip_angle_radians)
 
-    return typing.cast(NDimensionalGrid[NDimension], dipped_elevation_grid)
+        # Apply offset based on elevation convention
+        if elevation_direction == "upward":
+            # Upward convention: higher values = higher elevation
+            # Moving in dip direction decreases elevation, so subtract offset
+            dipped_elevation_grid[i, j, :] -= dip_offset
+        else:
+            # Downward convention: higher values = greater depth
+            # Moving in dip direction increases depth, so add offset
+            dipped_elevation_grid[i, j, :] += dip_offset
+
+    return dipped_elevation_grid
 
 
 def pad_grid(
@@ -415,3 +424,44 @@ def coarsen_grid(
         coarsened = data_reshaped.min(axis=agg_axes)
 
     return typing.cast(NDimensionalGrid[NDimension], coarsened)
+
+
+FlattenStrategy = typing.Union[
+    typing.Callable[[NDimensionalGrid[OneDimension]], float],
+    typing.Literal["max", "min", "mean"],
+]
+
+
+def flatten_multilayer_grid_to_surface(
+    multilayer_grid: ThreeDimensionalGrid,
+    strategy: FlattenStrategy = "max",
+) -> TwoDimensionalGrid:
+    """
+    Vectorized flattening of a multilayer grid shaped (nx, ny, nz)
+    into a 2D surface (nx, ny) by collapsing the z-axis using the
+    provided strategy.
+
+    :param multilayer_grid: 3D numpy array with shape (nx, ny, nz)
+    :param strategy: Flattening strategy to apply along the z-axis.
+        Can be one of the built-in strategies: "max", "min", "mean",
+        or a custom callable that takes a 1D array and returns a float.
+    :return: 2D numpy array with shape (nx, ny) after flattening
+    """
+    if multilayer_grid.ndim != 3:
+        raise ValueError(
+            "multilayer_grid must be a three-dimensional array with shape (nx, ny, nz)"
+        )
+
+    if strategy == "max":
+        return np.max(multilayer_grid, axis=2)
+    elif strategy == "min":
+        return np.min(multilayer_grid, axis=2)
+    elif strategy == "mean":
+        return np.mean(multilayer_grid, axis=2)
+
+    elif callable(strategy):
+        # Apply function along z axis: shape → (nx, ny)
+        return np.apply_along_axis(strategy, axis=2, arr=multilayer_grid)
+
+    else:
+        raise ValueError(f"Unsupported flatten strategy: {strategy}")

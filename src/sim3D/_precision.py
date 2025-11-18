@@ -11,6 +11,7 @@ __all__ = [
     "use_64bit_precision",
     "use_32bit_precision",
     "use_16bit_precision",
+    "get_floating_point_info",
 ]
 
 _sim3d_dtype: ContextVar[np.typing.DTypeLike] = ContextVar(
@@ -64,6 +65,8 @@ def use_64bit_precision() -> None:
 def use_32bit_precision() -> None:
     """
     Set the default data type to float32 for sim3D computations.
+
+    Default precision for sim3D.
     """
     set_dtype(np.float32)
 
@@ -73,3 +76,13 @@ def use_16bit_precision() -> None:
     Set the default data type to float16 for sim3D computations.
     """
     set_dtype(np.float16)
+
+
+def get_floating_point_info() -> np.finfo[np.floating]:
+    """
+    Get the floating point information for the current data type used in sim3D computations.
+
+    :return: The floating point information.
+    """
+    dtype = get_dtype()
+    return np.finfo(dtype)  # type: ignore

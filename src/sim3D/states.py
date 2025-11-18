@@ -1,6 +1,7 @@
 import functools
 import logging
 import typing
+from os import PathLike
 
 import attrs
 import numpy as np
@@ -13,16 +14,19 @@ from sim3D.pvt import compute_hydrocarbon_in_place
 from sim3D.types import (
     CapillaryPressureGrids,
     NDimension,
+    NDimensionalGrid,
+    Options,
     RateGrids,
     RelPermGrids,
     RelativeMobilityGrids,
 )
 from sim3D.wells import Wells, _expand_intervals
+from sim3D.utils import save_as_pickle, load_from_pickle
 
 logger = logging.getLogger(__name__)
 
 
-__all__ = ["ModelState", "ProductionAnalyst"]
+__all__ = ["ModelState", "ProductionAnalyst", "dump_states", "load_states"]
 
 
 @attrs.define(frozen=True, slots=True)
@@ -39,6 +43,8 @@ class ModelState(typing.Generic[NDimension]):
     """The reservoir model at this state."""
     wells: Wells[NDimension]
     """The wells configuration at this state."""
+    options: Options
+    """Simulation options used for this state."""
     injection: RateGrids[NDimension]
     """Fluids injection rates at this state in ft³/day."""
     production: RateGrids[NDimension]
@@ -57,8 +63,97 @@ class ModelState(typing.Generic[NDimension]):
         """
         return self.time_step * self.time_step_size
 
+    @functools.cached_property
+    def depth_grid(self) -> NDimensionalGrid[NDimension]:
+        """
+        Returns the depth grid of the reservoir model at this state.
+        """
+        return self.model.get_depth_grid(
+            apply_dip=not self.options.disable_structural_dip
+        )
+
+    @functools.cached_property
+    def elevation_grid(self) -> NDimensionalGrid[NDimension]:
+        """
+        Returns the elevation grid of the reservoir model at this state.
+        """
+        return self.model.get_elevation_grid(
+            apply_dip=not self.options.disable_structural_dip
+        )
+
     def has_wells(self) -> bool:
         return self.wells.has_wells()
+
+    def dump(
+        self,
+        filepath: PathLike,
+        exist_ok: bool = True,
+        compression: typing.Optional[typing.Literal["gzip", "lzma"]] = "gzip",
+        compression_level: int = 6,
+    ) -> None:
+        """
+        Dumps the model state to a pickle file.
+
+        :param filepath: The path to the pickle file or a file-like object.
+        :param exist_ok: If True, will overwrite existing files.
+        :param compression: Compression method - "gzip" (fast, good compression),
+            "lzma" (slower, better compression), or None
+        :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
+        """
+        save_as_pickle(
+            self,
+            filepath,
+            exist_ok=exist_ok,
+            compression=compression,
+            compression_level=compression_level,
+        )
+
+    @classmethod
+    def load(cls, filepath: PathLike) -> "ModelState[NDimension]":
+        """
+        Loads a model state from a pickle file.
+
+        :param filepath: The path to the pickle file or a file-like object.
+        :return: The loaded ModelState instance.
+        """
+        return load_from_pickle(filepath)
+
+
+def dump_states(
+    states: typing.Iterable[ModelState],
+    filepath: PathLike,
+    exist_ok: bool = True,
+    compression: typing.Optional[typing.Literal["gzip", "lzma"]] = "gzip",
+    compression_level: int = 6,
+) -> None:
+    """
+    Dumps multiple model states to pickle files in a specified directory.
+
+    :param states: An iterable of `ModelState` instances to be dumped.
+    :param filepath: The path to the pickle file or a file-like object.
+    :param exist_ok: If True, will overwrite existing files.
+    :param compression: Compression method - "gzip" (fast, good compression),
+        "lzma" (slower, better compression), or None
+    :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
+    """
+    state_dicts = {state.time_step: state for state in states}
+    save_as_pickle(
+        state_dicts,
+        filepath,
+        exist_ok=exist_ok,
+        compression=compression,
+        compression_level=compression_level,
+    )
+
+
+def load_states(filepath: PathLike) -> typing.Dict[int, ModelState]:
+    """
+    Loads multiple model states from pickle files in a specified directory.
+
+    :param filepath: The path to the pickle file or a file-like object.
+    :return: A dictionary mapping time step indices to ModelState instances.
+    """
+    return load_from_pickle(filepath)
 
 
 @attrs.define(frozen=True, slots=True)
@@ -971,6 +1066,181 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
                 yield (t, self.water_injected(t, t))
+
+    def oil_recovery_factor_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the oil recovery factor history over time.
+
+        This function computes the oil recovery factor at each time step, showing
+        how the recovery factor evolves throughout the simulation. The recovery factor
+        at each time step is calculated as:
+
+        RF(t) = Cumulative Oil Produced(0, t) / Stock Tank Oil Initially in Place
+
+        This allows tracking of:
+        - Recovery factor growth rate over time
+        - Identification of plateau periods
+        - Evaluation of different recovery stages (primary, secondary, tertiary)
+        - Comparison of recovery efficiency between time periods
+
+        :param from_time_step: The starting time step index (inclusive). Default is 0.
+        :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
+        :param interval: Time step interval for sampling. Default is 1.
+        :return: A generator yielding tuples of (time_step, recovery_factor).
+
+        Example:
+        ```python
+        analyst = Analyst(states)
+
+        # Get full recovery factor history
+        for t, rf in analyst.oil_recovery_factor_history():
+            print(f"Time step {t}: RF = {rf:.2%}")
+
+        # Plot recovery factor evolution
+        times, rfs = zip(*analyst.oil_recovery_factor_history())
+        plt.plot(times, rfs)
+        plt.ylabel("Oil Recovery Factor")
+        plt.xlabel("Time Step")
+        ```
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        stoiip = self.stock_tank_oil_initially_in_place
+
+        if stoiip == 0:
+            # If no initial oil, recovery factor is always 0
+            for t in range(from_time_step, to_time_step + 1, interval):
+                yield (t, 0.0)
+        else:
+            for t in range(from_time_step, to_time_step + 1, interval):
+                cumulative_oil = self.oil_produced(0, t)
+                rf = cumulative_oil / stoiip
+                yield (t, rf)
+
+    def free_gas_recovery_factor_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the free gas recovery factor history over time.
+
+        This function computes the free gas recovery factor at each time step, showing
+        how the recovery of free gas (gas cap or gas phase) evolves throughout the simulation.
+
+        Free Gas RF(t) = Cumulative Free Gas Produced(0, t) / Initial Free Gas in Place
+
+        :param from_time_step: The starting time step index (inclusive). Default is 0.
+        :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
+        :param interval: Time step interval for sampling. Default is 1.
+        :return: A generator yielding tuples of (time_step, recovery_factor).
+
+        Example:
+        ```python
+        analyst = Analyst(states)
+
+        # Track gas cap depletion over time
+        for t, rf in analyst.free_gas_recovery_factor_history():
+            print(f"Time step {t}: Free Gas RF = {rf:.2%}")
+        ```
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        giip = self.stock_tank_gas_initially_in_place
+
+        if giip == 0:
+            for t in range(from_time_step, to_time_step + 1, interval):
+                yield (t, 0.0)
+        else:
+            for t in range(from_time_step, to_time_step + 1, interval):
+                cumulative_gas = self.free_gas_produced(0, t)
+                rf = cumulative_gas / giip
+                yield (t, rf)
+
+    def total_gas_recovery_factor_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the total gas recovery factor history over time.
+
+        This function computes the total gas recovery factor (free + solution gas) at each
+        time step, showing how total gas recovery evolves throughout the simulation.
+
+        Total Gas RF(t) = (Free Gas Produced(0,t) + Solution Gas Produced(0,t)) /
+                          (Initial Free Gas + Initial Solution Gas)
+
+        :param from_time_step: The starting time step index (inclusive). Default is 0.
+        :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
+        :param interval: Time step interval for sampling. Default is 1.
+        :return: A generator yielding tuples of (time_step, recovery_factor).
+
+        Example:
+        ```python
+        analyst = Analyst(states)
+
+        # Track total gas recovery (free + solution) over time
+        for t, rf in analyst.total_gas_recovery_factor_history():
+            print(f"Time step {t}: Total Gas RF = {rf:.2%}")
+        ```
+        """
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
+        # Get initial total gas
+        initial_free_gas = self.stock_tank_gas_initially_in_place
+        initial_state = self.get_state(0)
+        avg_initial_gor = np.nanmean(
+            initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
+        )
+        initial_oil = self.stock_tank_oil_initially_in_place
+        initial_solution_gas = initial_oil * avg_initial_gor
+        total_initial_gas = initial_free_gas + initial_solution_gas
+
+        if total_initial_gas == 0:
+            for t in range(from_time_step, to_time_step + 1, interval):
+                yield (t, 0.0)
+        else:
+            for t in range(from_time_step, to_time_step + 1, interval):
+                cumulative_free_gas = self.free_gas_produced(0, t)
+                cumulative_oil = self.oil_produced(0, t)
+                cumulative_solution_gas = cumulative_oil * avg_initial_gor
+                total_gas_produced = cumulative_free_gas + cumulative_solution_gas
+                rf = float(total_gas_produced / total_initial_gas)
+                yield (t, rf)
+
+    def gas_recovery_factor_history(
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
+        """
+        Get the gas recovery factor history over time.
+
+        This is an alias for free_gas_recovery_factor_history. For total gas recovery
+        including solution gas, use total_gas_recovery_factor_history.
+
+        :param from_time_step: The starting time step index (inclusive). Default is 0.
+        :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
+        :param interval: Time step interval for sampling. Default is 1.
+        :return: A generator yielding tuples of (time_step, recovery_factor).
+        """
+        yield from self.free_gas_recovery_factor_history(
+            from_time_step=from_time_step,
+            to_time_step=to_time_step,
+            interval=interval,
+        )
 
     def reservoir_volumetrics_analysis(
         self, time_step: int = -1

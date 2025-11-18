@@ -20,7 +20,7 @@ __all__ = [
     "Orientation",
     "WellFluidType",
     "EvolutionScheme",
-    "FluidMiscibility",
+    "MiscibilityModel",
     "ArrayLike",
     "Interpolator",
     "MixingRule",
@@ -33,6 +33,10 @@ __all__ = [
     "default_options",
     "RateGrids",
     "Time",
+    "PhaseFluxDerivatives",
+    "FluxDerivativesWithRespectToSaturations",
+    "MisciblePhaseFluxDerivatives",
+    "MiscibleFluxDerivativesWithRespectToSaturations",
 ]
 
 T = typing.TypeVar("T")
@@ -86,16 +90,14 @@ class FluidPhase(enum.Enum):
 WellFluidType = typing.Literal["water", "oil", "gas"]
 """Types of fluids that can be injected in the simulation"""
 
-EvolutionScheme = typing.Literal["impes", "expes"]
+EvolutionScheme = typing.Literal["impes", "explicit", "implicit"]
 """
 Discretization methods for numerical simulations
 
 - "impes": Implicit pressure, Explicit saturation
-- "expes": Both pressure and saturation are treated explicitly
+- "explicit": Both pressure and saturation are treated explicitly
+- "implicit": Both pressure and saturation are treated implicitly
 """
-
-FluidMiscibility = typing.Literal["logarithmic", "linear", "harmonic"]
-"""Miscibility models for fluid interactions in the simulation"""
 
 MiscibilityModel = typing.Literal["immiscible", "todd_longstaff"]
 """Miscibility models for fluid interactions in the simulation"""
@@ -168,6 +170,78 @@ class CapillaryPressures(typing.TypedDict):
 
     oil_water: float  # Pcow = Po - Pw
     gas_oil: float  # Pcgo = Pg - Po
+
+
+@attrs.define(slots=True, frozen=True)
+class PhaseFluxDerivatives:
+    """
+    Derivatives of a single phase flux with respect to saturations at cell and neighbour.
+
+    For a phase flux F_phase, stores:
+    - ∂F_phase/∂S_water_cell: derivative w.r.t. water saturation at the current cell
+    - ∂F_phase/∂S_water_neighbour: derivative w.r.t. water saturation at the neighbour cell
+    - ∂F_phase/∂S_oil_cell: derivative w.r.t. oil saturation at the current cell
+    - ∂F_phase/∂S_oil_neighbour: derivative w.r.t. oil saturation at the neighbour cell
+    """
+
+    derivative_wrt_water_saturation_at_cell: float
+    derivative_wrt_water_saturation_at_neighbour: float
+    derivative_wrt_oil_saturation_at_cell: float
+    derivative_wrt_oil_saturation_at_neighbour: float
+
+
+@attrs.define(slots=True, frozen=True)
+class FluxDerivativesWithRespectToSaturations:
+    """
+    Complete set of flux derivatives for all three phases.
+
+    Each phase (water, oil, gas) has derivatives with respect to all saturations
+    at both the current cell and its neighbour, for use in Jacobian assembly.
+    """
+
+    water_phase_flux_derivatives: PhaseFluxDerivatives
+    oil_phase_flux_derivatives: PhaseFluxDerivatives
+    gas_phase_flux_derivatives: PhaseFluxDerivatives
+
+
+@attrs.define(slots=True, frozen=True)
+class MisciblePhaseFluxDerivatives:
+    """
+    Derivatives of a single phase flux with respect to saturations AND solvent concentration.
+
+    For miscible displacement (e.g., CO2-EOR), the solvent can be:
+    1. Free gas phase (tracked by gas_saturation)
+    2. Dissolved in oil (tracked by solvent_concentration)
+
+    This includes all derivatives for the immiscible case plus solvent concentration terms.
+    """
+
+    derivative_wrt_water_saturation_at_cell: float
+    derivative_wrt_water_saturation_at_neighbour: float
+    derivative_wrt_oil_saturation_at_cell: float
+    derivative_wrt_oil_saturation_at_neighbour: float
+    derivative_wrt_gas_saturation_at_cell: float
+    derivative_wrt_gas_saturation_at_neighbour: float
+    derivative_wrt_solvent_concentration_at_cell: float
+    derivative_wrt_solvent_concentration_at_neighbour: float
+
+
+@attrs.define(slots=True, frozen=True)
+class MiscibleFluxDerivativesWithRespectToSaturations:
+    """
+    Complete set of flux derivatives for miscible displacement (4 equations).
+
+    Includes derivatives for:
+    - Three phase saturations (water, oil, gas)
+    - Solvent concentration in oil phase
+
+    Each flux has derivatives w.r.t. all four variables at both cell and neighbour.
+    """
+
+    water_phase_flux_derivatives: MisciblePhaseFluxDerivatives
+    oil_phase_flux_derivatives: MisciblePhaseFluxDerivatives
+    gas_phase_flux_derivatives: MisciblePhaseFluxDerivatives
+    solvent_mass_flux_derivatives: MisciblePhaseFluxDerivatives
 
 
 class WettabilityType(str, enum.Enum):
@@ -290,30 +364,23 @@ class Options:
     max_time_steps: int = attrs.field(default=1000, validator=attrs.validators.ge(1))
     """Maximum number of time steps to run for in the simulation."""
     convergence_tolerance: float = attrs.field(
-        default=1e-3, validator=attrs.validators.le(1e-2)
+        default=1e-6, validator=attrs.validators.le(1e-2)
     )
-    """Convergence tolerance for the simulation."""
-    max_iterations_per_evolution: int = attrs.field(
-        default=25, validator=attrs.validators.ge(1)
-    )
+    """Convergence tolerance for iterative solvers (default is 1e-6)."""
+    max_iterations: int = attrs.field(default=500, validator=attrs.validators.ge(1))
     """Maximum number of iterations allowed per time step for iterative solvers."""
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
     scheme: EvolutionScheme = "impes"
-    """Evolution scheme to use for the simulation ('impes', 'expes')."""
-    diffusion_number_threshold: float = attrs.field(
-        default=0.24,
-        validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
-    )
-    """Threshold for the diffusion number to determine stability of the simulation (default is 0.24)."""
+    """Evolution scheme to use for the simulation ('impes', 'explicit', 'implicit')."""
     use_pseudo_pressure: bool = True
     """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
-        default={
-            "oil": Range(min=1e-12, max=1e6),
-            "water": Range(min=1e-12, max=1e6),
-            "gas": Range(min=1e-12, max=1e6),
-        }
+        default=RelativeMobilityRange(
+            oil=Range(min=1e-12, max=1e6),
+            water=Range(min=1e-12, max=1e6),
+            gas=Range(min=1e-12, max=1e6),
+        )
     )
     """
     Relative mobility ranges for oil, water, and gas phases.
@@ -336,14 +403,16 @@ class Options:
     """
     disable_capillary_effects: bool = False
     """Whether to include capillary pressure effects in the simulation."""
-    apply_dip: bool = attrs.field(default=True)
-    """Whether to apply reservoir dip effects in the simulation."""
+    disable_structural_dip: bool = attrs.field(default=False)
+    """Whether to disable structural dip effects in reservoir modeling/simulation."""
     miscibility_model: MiscibilityModel = "immiscible"
     """Miscibility model: 'immiscible', 'todd_longstaff'"""
     max_cfl_number: typing.Dict[EvolutionScheme, float] = attrs.field(
         factory=lambda: {
             "impes": 10.0,
-            "expes": 1.0,
+            "explicit": 1.0,
+            # Fully implicit scheme can handle larger CFL numbers, but we set a conservative default
+            "implicit": 20.0,
         }
     )
     """
@@ -351,7 +420,7 @@ class Options:
 
     Adjust these values based on the chosen evolution scheme:
     - 'impes': Higher CFL number allowed due to implicit pressure treatment.
-    - 'expes': Lower CFL number required due to explicit treatment of both pressure and saturation.
+    - 'explicit': Lower CFL number required due to explicit treatment of both pressure and saturation.
 
     Lowering these values increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.

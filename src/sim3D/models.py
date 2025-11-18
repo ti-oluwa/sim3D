@@ -357,16 +357,34 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock-fluid properties of the reservoir model."""
     boundary_conditions: BoundaryConditions = attrs.field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
-    dip_angle: float = 0.0
-    """Dip angle of the reservoir in degrees (0 = horizontal, positive = dipping downward in dip_direction)."""
-    dip_direction: typing.Literal["N", "S", "E", "W"] = "N"
-    """
-    Dip direction of the reservoir:
-    - 'N': Reservoir dips toward North (positive y-direction)
-    - 'S': Reservoir dips toward South (negative y-direction)
-    - 'E': Reservoir dips toward East (positive x-direction)
-    - 'W': Reservoir dips toward West (negative x-direction)
-    """
+    dip_angle: float = attrs.field(
+        default=0.0,
+        validator=attrs.validators.and_(
+            attrs.validators.ge(0.0), attrs.validators.le(90.0)
+        ),
+    )
+    """Dip angle of the reservoir in degrees (0 = horizontal, 90 = vertical)."""
+    dip_azimuth: float = attrs.field(
+        default=0.0,
+        validator=attrs.validators.and_(
+            attrs.validators.ge(0.0), attrs.validators.lt(360.0)
+        ),
+    )
+    """Dip azimuth of the reservoir in degrees (0 = North, 90 = East, 180 = South, 270 = West)."""
+
+    @property
+    def dimensions(self) -> int:
+        """Return the number of dimensions of the reservoir model."""
+        return len(self.grid_shape)
+
+    @property
+    def volume(self) -> float:
+        """Return the total volume of the reservoir model."""
+        return (
+            np.prod(self.grid_shape)
+            * np.prod(self.cell_dimension)
+            * self.thickness_grid.sum()
+        )
 
     def get_elevation_grid(
         self, apply_dip: bool = False
@@ -400,7 +418,7 @@ class ReservoirModel(typing.Generic[NDimension]):
             cell_dimension=self.cell_dimension,
             elevation_direction="upward",
             dip_angle=self.dip_angle,
-            dip_direction=self.dip_direction,
+            dip_azimuth=self.dip_azimuth,
         )
 
     def get_depth_grid(self, apply_dip: bool = False) -> NDimensionalGrid[NDimension]:
@@ -433,5 +451,5 @@ class ReservoirModel(typing.Generic[NDimension]):
             cell_dimension=self.cell_dimension,
             elevation_direction="downward",
             dip_angle=self.dip_angle,
-            dip_direction=self.dip_direction,
+            dip_azimuth=self.dip_azimuth,
         )

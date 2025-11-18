@@ -1,8 +1,10 @@
 import itertools
+import logging
 import typing
 
 import numpy as np
 
+from sim3D._precision import get_floating_point_info
 from sim3D.constants import c
 from sim3D.diffusivity.base import (
     EvolutionResult,
@@ -15,7 +17,6 @@ from sim3D.types import (
     FluidPhase,
     Options,
     RelativeMobilityGrids,
-    RelativePermeabilityTable,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
@@ -23,6 +24,9 @@ from sim3D.types import (
 from sim3D.wells import Wells
 
 __all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation_explicitly"]
+
+logger = logging.getLogger(__name__)
+
 
 """
 Explicit finite difference formulation for saturation transport in a 3D reservoir
@@ -132,19 +136,8 @@ def _compute_explicit_saturation_phase_fluxes_from_neighbour(
     water_mobility_grid: ThreeDimensionalGrid,
     oil_mobility_grid: ThreeDimensionalGrid,
     gas_mobility_grid: ThreeDimensionalGrid,
-    water_saturation_grid: ThreeDimensionalGrid,
-    oil_saturation_grid: ThreeDimensionalGrid,
-    gas_saturation_grid: ThreeDimensionalGrid,
-    oil_viscosity_grid: ThreeDimensionalGrid,
-    water_viscosity_grid: ThreeDimensionalGrid,
-    gas_viscosity_grid: ThreeDimensionalGrid,
     oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
     gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    irreducible_water_saturation_grid: ThreeDimensionalGrid,
-    residual_oil_saturation_water_grid: ThreeDimensionalGrid,
-    residual_oil_saturation_gas_grid: ThreeDimensionalGrid,
-    residual_gas_saturation_grid: ThreeDimensionalGrid,
-    relative_permeability_table: RelativePermeabilityTable,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
@@ -332,15 +325,6 @@ def evolve_saturation_explicitly(
     oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
-    irreducible_water_saturation_grid = (
-        rock_properties.irreducible_water_saturation_grid
-    )
-    residual_oil_saturation_water_grid = (
-        rock_properties.residual_oil_saturation_water_grid
-    )
-    residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
-    residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
-    relative_permeability_table = rock_fluid_properties.relative_permeability_table
 
     current_oil_pressure_grid = (
         fluid_properties.pressure_grid
@@ -348,10 +332,6 @@ def evolve_saturation_explicitly(
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
-
-    water_viscosity_grid = fluid_properties.water_viscosity_grid
-    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
-    gas_viscosity_grid = fluid_properties.gas_viscosity_grid
 
     water_compressibility_grid = fluid_properties.water_compressibility_grid
     oil_compressibility_grid = fluid_properties.oil_compressibility_grid
@@ -491,11 +471,12 @@ def evolve_saturation_explicitly(
         net_oil_flux = 0.0
         net_gas_flux = 0.0
         for _, config in flux_configurations.items():
-            flow_area = config["flow_area"]
-            flow_length = config["flow_length"]
-            mobility_grids = config["mobility_grids"]
-
-            for neighbour in config["neighbours"]:
+            flow_area = typing.cast(float, config["flow_area"])
+            flow_length = typing.cast(float, config["flow_length"])
+            mobility_grids = typing.cast(
+                typing.Dict[str, ThreeDimensionalGrid], config["mobility_grids"]
+            )
+            for neighbour in config["neighbours"]:  # type: ignore
                 # Compute fluxes from neighbour
                 (
                     water_flux,
@@ -508,19 +489,8 @@ def evolve_saturation_explicitly(
                     flow_length=flow_length,
                     oil_pressure_grid=current_oil_pressure_grid,
                     **mobility_grids,
-                    water_saturation_grid=current_water_saturation_grid,
-                    oil_saturation_grid=current_oil_saturation_grid,
-                    gas_saturation_grid=current_gas_saturation_grid,
-                    oil_viscosity_grid=oil_viscosity_grid,
-                    water_viscosity_grid=water_viscosity_grid,
-                    gas_viscosity_grid=gas_viscosity_grid,
                     oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
                     gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                    residual_gas_saturation_grid=residual_gas_saturation_grid,
-                    relative_permeability_table=relative_permeability_table,
                     oil_density_grid=oil_density_grid,
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
@@ -821,20 +791,9 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     water_mobility_grid: ThreeDimensionalGrid,
     oil_mobility_grid: ThreeDimensionalGrid,
     gas_mobility_grid: ThreeDimensionalGrid,
-    water_saturation_grid: ThreeDimensionalGrid,
-    oil_saturation_grid: ThreeDimensionalGrid,
-    gas_saturation_grid: ThreeDimensionalGrid,
-    solvent_concentration_grid: ThreeDimensionalGrid,  # NEW
-    oil_viscosity_grid: ThreeDimensionalGrid,
-    water_viscosity_grid: ThreeDimensionalGrid,
-    gas_viscosity_grid: ThreeDimensionalGrid,
+    solvent_concentration_grid: ThreeDimensionalGrid,
     oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
     gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    irreducible_water_saturation_grid: ThreeDimensionalGrid,
-    residual_oil_saturation_water_grid: ThreeDimensionalGrid,
-    residual_oil_saturation_gas_grid: ThreeDimensionalGrid,
-    residual_gas_saturation_grid: ThreeDimensionalGrid,
-    relative_permeability_table: RelativePermeabilityTable,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
@@ -1020,10 +979,6 @@ def evolve_miscible_saturation_explicitly(
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
     current_solvent_concentration_grid = fluid_properties.solvent_concentration_grid
 
-    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
-    water_viscosity_grid = fluid_properties.water_viscosity_grid
-    gas_viscosity_grid = fluid_properties.gas_viscosity_grid
-
     oil_density_grid = fluid_properties.oil_effective_density_grid
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
@@ -1032,17 +987,6 @@ def evolve_miscible_saturation_explicitly(
     oil_compressibility_grid = fluid_properties.oil_compressibility_grid
     gas_compressibility_grid = fluid_properties.gas_compressibility_grid
 
-    irreducible_water_saturation_grid = (
-        rock_properties.irreducible_water_saturation_grid
-    )
-    residual_oil_saturation_water_grid = (
-        rock_properties.residual_oil_saturation_water_grid
-    )
-    residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
-    residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
-    relative_permeability_table = rock_fluid_properties.relative_permeability_table
-
-    # Grid dimensions
     cell_count_x, cell_count_y, cell_count_z = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
 
@@ -1176,11 +1120,13 @@ def evolve_miscible_saturation_explicitly(
         net_gas_flux = 0.0
         net_solvent_flux = 0.0
         for config in flux_configurations.values():
-            flow_area = config["flow_area"]
-            flow_length = config["flow_length"]
-            mobility_grids = config["mobility_grids"]
+            flow_area = typing.cast(float, config["flow_area"])
+            flow_length = typing.cast(float, config["flow_length"])
+            mobility_grids = typing.cast(
+                typing.Dict[str, ThreeDimensionalGrid], config["mobility_grids"]
+            )
 
-            for neighbour in config["neighbours"]:
+            for neighbour in config["neighbours"]:  # type: ignore
                 # Compute fluxes from neighbour
                 (
                     water_flux,
@@ -1194,20 +1140,9 @@ def evolve_miscible_saturation_explicitly(
                     flow_length=flow_length,
                     oil_pressure_grid=current_oil_pressure_grid,
                     **mobility_grids,
-                    water_saturation_grid=current_water_saturation_grid,
-                    oil_saturation_grid=current_oil_saturation_grid,
-                    gas_saturation_grid=current_gas_saturation_grid,
                     solvent_concentration_grid=current_solvent_concentration_grid,
-                    oil_viscosity_grid=oil_viscosity_grid,
-                    water_viscosity_grid=water_viscosity_grid,
-                    gas_viscosity_grid=gas_viscosity_grid,
                     oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
                     gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                    residual_gas_saturation_grid=residual_gas_saturation_grid,
-                    relative_permeability_table=relative_permeability_table,
                     oil_density_grid=oil_density_grid,
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,

@@ -15,3 +15,5 @@ __marimo__/
 .ruff_cache__/
 .mypy_cache/
 WELL_VISUALIZATION_GUIDE.md
+scenerios/
+.ruff_cache/

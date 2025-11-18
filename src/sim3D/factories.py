@@ -298,6 +298,8 @@ def reservoir_model(
     oil_effective_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
     faults: typing.Optional[typing.Iterable[Fault]] = None,
+    dip_angle: float = 0.0,
+    dip_azimuth: float = 0.0,
     reservoir_gas: typing.Optional[str] = None,
 ) -> ReservoirModel[NDimension]:
     """
@@ -646,6 +648,8 @@ def reservoir_model(
         rock_properties=rock_properties,
         rock_fluid_properties=rock_fluid_properties,
         boundary_conditions=boundary_conditions,
+        dip_angle=dip_angle,
+        dip_azimuth=dip_azimuth,
     )
     if faults is not None:
         model = apply_faults(model, *faults)

@@ -253,38 +253,41 @@ class LabelCoordinate:
     def as_physical(
         self,
         cell_dimension: typing.Tuple[float, float],
-        thickness_grid: ThreeDimensionalGrid,
+        depth_grid: ThreeDimensionalGrid,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Tuple[float, float, float]:
         """
         Convert index coordinates to physical coordinates.
 
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param coordinate_offsets: Optional cell index offsets to apply to the physical coordinates
         :return: Tuple of (x_physical, y_physical, z_physical) coordinates
         """
         offsets = coordinate_offsets or (0, 0, 0)
         dx, dy = cell_dimension
 
-        # For Z, we need to calculate cumulative depth
+        # Calculate actual grid indices
         actual_x = offsets[0] + self.x
         actual_y = offsets[1] + self.y
         actual_z = offsets[2] + self.z
+
         # Convert to physical coordinates
         x_physical = actual_x * dx
         y_physical = actual_y * dy
 
         if (
-            actual_x < thickness_grid.shape[0]
-            and actual_y < thickness_grid.shape[1]
-            and actual_z < thickness_grid.shape[2]
+            actual_x < depth_grid.shape[0]
+            and actual_y < depth_grid.shape[1]
+            and actual_z < depth_grid.shape[2]
         ):
-            # Calculate cumulative depth from surface
-            z_physical = -np.sum(thickness_grid[actual_x, actual_y, :actual_z])
+            # Use depth grid directly - negate because depth is positive downward
+            z_physical = -depth_grid[actual_x, actual_y, actual_z]
         else:
             # Fallback to simple index-based positioning
-            z_physical = -(offsets[2] + self.z) * 10.0  # Assume 10 ft average thickness
+            z_physical = (
+                -(offsets[2] + self.z) * 10.0
+            )  # Assume 10 ft average depth per layer
 
         return x_physical, y_physical, typing.cast(float, z_physical)
 
@@ -348,7 +351,7 @@ class Label:
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> str:
@@ -357,7 +360,7 @@ class Label:
 
         :param data_grid: 3D data array to extract values from
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param metadata: Property metadata for formatting
         :param format_kwargs: Additional values for string formatting
         :return: Formatted label text
@@ -385,10 +388,10 @@ class Label:
         if data_grid is not None:
             raw_value = data_grid[x_index, y_index, z_index]
 
-        if cell_dimension is not None and thickness_grid is not None:
+        if cell_dimension is not None and depth_grid is not None:
             x_physical, y_physical, z_physical = self.position.as_physical(
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 coordinate_offsets=None,  # Don't pass offset here, handle separately
             )
             # Apply the label's offset to the calculated physical coordinates
@@ -420,7 +423,7 @@ class Label:
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
@@ -430,7 +433,7 @@ class Label:
 
         :param data_grid: 3D data array for value extraction
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param metadata: Property metadata for formatting
         :param format_kwargs: Additional formatting values
         :param coordinate_offsets: Coordinate offsets for sliced data
@@ -440,15 +443,15 @@ class Label:
             return {}
 
         # Determine if we should use physical coordinates
-        use_physical = cell_dimension is not None and thickness_grid is not None
+        use_physical = cell_dimension is not None and depth_grid is not None
 
         if use_physical:
             cell_dimension = typing.cast(typing.Tuple[float, float], cell_dimension)
-            thickness_grid = typing.cast(ThreeDimensionalGrid, thickness_grid)
+            depth_grid = typing.cast(ThreeDimensionalGrid, depth_grid)
             # Convert to physical coordinates
             try:
                 x_physical, y_physical, z_physical = self.position.as_physical(
-                    cell_dimension, thickness_grid, coordinate_offsets
+                    cell_dimension, depth_grid, coordinate_offsets
                 )
                 # Apply offset in physical space
                 x_position = x_physical + self.offset[0]
@@ -486,7 +489,7 @@ class Label:
             "text": self.get_text(
                 data_grid=data_grid,
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 metadata=metadata,
                 format_kwargs=format_kwargs,
             ),
@@ -619,7 +622,7 @@ class Labels:
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> typing.List[typing.Dict[str, typing.Any]]:
@@ -629,7 +632,7 @@ class Labels:
         :param data_grid: 3D data array for value extraction
         :param metadata: Property metadata for formatting
         :param cell_dimension: Physical cell dimensions for coordinate conversion
-        :param thickness_grid: Height grid for physical coordinate conversion
+        :param depth_grid: Depth grid for physical coordinate conversion (feet, positive downward)
         :param coordinate_offsets: Coordinate offsets for sliced data
         :param format_kwargs: Additional formatting values
         :return: List of Plotly annotation dictionaries
@@ -659,7 +662,7 @@ class Labels:
                 annotation = label.as_annotation(
                     data_grid=data_grid,
                     cell_dimension=cell_dimension,
-                    thickness_grid=thickness_grid,
+                    depth_grid=depth_grid,
                     metadata=metadata,
                     format_kwargs=kwargs,
                     coordinate_offsets=coordinate_offsets,
@@ -837,7 +840,7 @@ class BaseRenderer(ABC):
     """Base class for 3D renders."""
 
     supports_physical_dimensions: typing.ClassVar[bool] = False
-    """Whether this renderer supports physical cell dimensions and height grids."""
+    """Whether this renderer supports physical cell dimensions and depth grids."""
 
     def __init__(self, config: PlotConfig) -> None:
         self.config = config
@@ -898,6 +901,98 @@ class BaseRenderer(ABC):
         # For values between 0 and 1, show up to 6 decimal places
         formatted = f"{value:.6f}".rstrip("0").rstrip(".")
         return formatted if formatted else "0"
+
+    def get_scene_config(
+        self,
+        x_title: str,
+        y_title: str,
+        z_title: str,
+        aspect_mode: str,
+        z_scale: float = 1.0,
+        x_range: typing.Optional[typing.Tuple[float, float]] = None,
+        y_range: typing.Optional[typing.Tuple[float, float]] = None,
+        z_range: typing.Optional[typing.Tuple[float, float]] = None,
+    ) -> typing.Dict[str, typing.Any]:
+        """
+        Prepare scene configuration with proper aspect ratio handling.
+
+        :param x_title: Title for X axis
+        :param y_title: Title for Y axis
+        :param z_title: Title for Z axis
+        :param aspect_mode: Base aspect mode ("auto", "cube", "data", or "manual")
+        :param z_scale: Scale factor for Z-axis visual spacing
+        :param x_range: Optional (min, max) range for X coordinates
+        :param y_range: Optional (min, max) range for Y coordinates
+        :param z_range: Optional (min, max) range for Z coordinates
+        :return: Scene configuration dictionary
+        """
+        scene_config: typing.Dict[str, typing.Any] = {
+            "xaxis_title": x_title,
+            "yaxis_title": y_title,
+            "zaxis_title": z_title,
+            "camera": self.config.camera_position,
+            "dragmode": "orbit",
+            "bgcolor": self.config.scene_bgcolor,
+            "xaxis": {
+                "backgroundcolor": "rgba(0,0,0,0)",
+                "gridcolor": "lightgray",
+                "showbackground": True,
+                "zerolinecolor": "gray",
+            },
+            "yaxis": {
+                "backgroundcolor": "rgba(0,0,0,0)",
+                "gridcolor": "lightgray",
+                "showbackground": True,
+                "zerolinecolor": "gray",
+            },
+            "zaxis": {
+                "backgroundcolor": "rgba(0,0,0,0)",
+                "gridcolor": "lightgray",
+                "showbackground": True,
+                "zerolinecolor": "gray",
+            },
+        }
+
+        # Apply aspect ratio based on mode and z_scale
+        if z_scale != 1.0:
+            if aspect_mode == "data" and all(
+                r is not None for r in [x_range, y_range, z_range]
+            ):
+                # Calculate aspect ratio from actual data extents
+                x_extent = x_range[1] - x_range[0]  # type: ignore
+                y_extent = y_range[1] - y_range[0]  # type: ignore
+                z_extent = z_range[1] - z_range[0]  # type: ignore
+
+                # Normalize to largest extent
+                max_extent = max(x_extent, y_extent, z_extent)
+                if max_extent > 0:
+                    x_ratio = x_extent / max_extent
+                    y_ratio = y_extent / max_extent
+                    z_ratio = (z_extent / max_extent) * z_scale
+                    scene_config["aspectmode"] = "manual"
+                    scene_config["aspectratio"] = {
+                        "x": x_ratio,
+                        "y": y_ratio,
+                        "z": z_ratio,
+                    }  # type: ignore[typeddict-item]
+                else:
+                    # Fallback to cube with z_scale
+                    scene_config["aspectmode"] = "manual"
+                    scene_config["aspectratio"] = {"x": 1, "y": 1, "z": z_scale}  # type: ignore[typeddict-item]
+            elif aspect_mode == "cube":
+                # Cube mode: equal ratios but scale z
+                scene_config["aspectmode"] = "manual"
+                scene_config["aspectratio"] = {"x": 1, "y": 1, "z": z_scale}  # type: ignore[typeddict-item]
+            else:
+                # Auto mode: let Plotly decide x and y, but scale z
+                # Use manual with equal x/y ratios
+                scene_config["aspectmode"] = "manual"
+                scene_config["aspectratio"] = {"x": 1, "y": 1, "z": z_scale}  # type: ignore[typeddict-item]
+        else:
+            # No z_scale, use the requested aspect mode as-is
+            scene_config["aspectmode"] = aspect_mode
+
+        return scene_config
 
     def normalize_data(
         self,
@@ -973,14 +1068,20 @@ class BaseRenderer(ABC):
             ThreeDimensionalGrid, display_data
         )
 
-    def create_physical_coordinates(
+    def get_physical_coordinates(
         self,
         cell_dimension: typing.Tuple[float, float],
-        thickness_grid: ThreeDimensionalGrid,
+        depth_grid: ThreeDimensionalGrid,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Tuple[OneDimensionalGrid, OneDimensionalGrid, ThreeDimensionalGrid]:
         """
-        Create physical coordinate arrays based on cell dimensions and height grid.
+        Prepare physical coordinate arrays based on cell dimensions and depth grid.
+
+        Returns cell boundary coordinates for all dimensions (not cell centers).
+        For a grid with shape (nx, ny, nz), returns:
+        - X boundaries: 1D array of length nx+1
+        - Y boundaries: 1D array of length ny+1  
+        - Z boundaries: 3D array of shape (nx, ny, nz+1)
 
         Implements numpy array indexing convention:
         - data[:, :, 0] (first array layer) appears at the TOP of the visualization
@@ -988,11 +1089,12 @@ class BaseRenderer(ABC):
         - data[:, :, -1] (last array layer) appears at the BOTTOM of the visualization
 
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward).
+                          Includes structural dip if model has dip_angle > 0.
         :param coordinate_offsets: Optional cell index offsets for sliced data (x_offset, y_offset, z_offset)
-        :return: Tuple of (X, Y, Z) coordinate arrays in physical units
+        :return: Tuple of (X, Y, Z) coordinate arrays in physical units (all boundaries, not centers)
         """
-        nx, ny, nz = thickness_grid.shape
+        nx, ny, nz = depth_grid.shape
         dx, dy = cell_dimension
 
         # Calculate physical coordinate offsets from cell index offsets
@@ -1002,28 +1104,41 @@ class BaseRenderer(ABC):
             x_start_offset = x_index_offset * dx
             y_start_offset = y_index_offset * dy
 
-            # Calculate Z offset from height grid
-            if z_index_offset > 0:
-                # Calculate cumulative depth to the starting Z slice
-                z_start_offset = -np.sum(
-                    thickness_grid[:, :, :z_index_offset], axis=2
-                ).mean()
-            else:
-                z_start_offset = 0.0
+            # No need to calculate Z offset from depth_grid - depths are absolute
+            physical_offsets = (x_start_offset, y_start_offset, 0.0)
 
-            physical_offsets = (x_start_offset, y_start_offset, z_start_offset)
+        # Apply physical offsets (for X and Y only, Z uses depth values directly)
+        x_offset, y_offset, _ = physical_offsets
 
-        # Apply physical offsets (for sliced data)
-        x_offset, y_offset, z_offset = physical_offsets
         # Create base coordinate grids with offsets
         x_coords = x_offset + np.arange(nx + 1) * dx  # Cell boundaries
         y_coords = y_offset + np.arange(ny + 1) * dy  # Cell boundaries
-        z_coords = np.zeros((nx, ny, nz + 1), dtype=np.float64)
 
-        # Build coordinates downward - each layer is lower in Z, starting from z_offset
-        z_coords[:, :, 0] = z_offset  # Start from the Z offset
-        for k in range(nz):
-            z_coords[:, :, k + 1] = z_coords[:, :, k] - thickness_grid[:, :, k]
+        # Calculate Z cell boundaries from depth grid (which contains cell centers)
+        # depth_grid[i,j,k] is the depth of the center of cell k
+        # We need to calculate boundaries (nz+1 values) from centers (nz values)
+        z_boundaries = np.zeros((nx, ny, nz + 1))
+        
+        for i, j in itertools.product(range(nx), range(ny)):
+            # For interior boundaries: midpoint between adjacent cell centers
+            for k in range(nz - 1):
+                z_boundaries[i, j, k + 1] = (depth_grid[i, j, k] + depth_grid[i, j, k + 1]) / 2
+            
+            # First boundary (top): extrapolate from first two centers
+            if nz > 1:
+                z_boundaries[i, j, 0] = depth_grid[i, j, 0] - (depth_grid[i, j, 1] - depth_grid[i, j, 0]) / 2
+            else:
+                # Only one layer - assume unit thickness
+                z_boundaries[i, j, 0] = depth_grid[i, j, 0] - 0.5
+            
+            # Last boundary (bottom): extrapolate from last two centers
+            if nz > 1:
+                z_boundaries[i, j, nz] = depth_grid[i, j, nz - 1] + (depth_grid[i, j, nz - 1] - depth_grid[i, j, nz - 2]) / 2
+            else:
+                z_boundaries[i, j, 1] = depth_grid[i, j, 0] + 0.5
+        
+        # Negate depths for Z-axis (positive upward in Plotly)
+        z_coords = -z_boundaries
 
         return (
             typing.cast(OneDimensionalGrid, x_coords),
@@ -1040,7 +1155,7 @@ class BaseRenderer(ABC):
         data: typing.Optional[ThreeDimensionalGrid] = None,
         metadata: typing.Optional[PropertyMetadata] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> None:
@@ -1052,7 +1167,7 @@ class BaseRenderer(ABC):
         :param data: 3D data array for value extraction
         :param metadata: Property metadata for formatting
         :param cell_dimension: Physical cell dimensions for coordinate conversion
-        :param thickness_grid: Height grid for physical coordinate conversion
+        :param depth_grid: Depth grid for physical coordinate conversion (feet, positive downward)
         :param coordinate_offsets: Coordinate offsets for sliced data
         :param format_kwargs: Additional formatting values
         """
@@ -1073,7 +1188,7 @@ class BaseRenderer(ABC):
             data_grid=data,
             metadata=metadata,
             cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
+            depth_grid=depth_grid,
             coordinate_offsets=coordinate_offsets,
             format_kwargs=format_kwargs,
         )
@@ -1113,7 +1228,7 @@ class BaseRenderer(ABC):
         figure: go.Figure,
         wells: typing.Optional[Wells[ThreeDimensions]] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[np.ndarray] = None,
+        depth_grid: typing.Optional[np.ndarray] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         z_scale: float = 1.0,
         **kwargs: Unpack[WellKwargs],
@@ -1131,7 +1246,7 @@ class BaseRenderer(ABC):
         :param wells: Wells object containing injection and production wells
         :param cell_dimension: Physical size of each cell in x and y directions (feet).
             Required for physical coordinate conversion. If None, uses grid indices.
-        :param thickness_grid: 3D array with height of each cell (feet).
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward).
             Required for physical coordinate conversion. If None, uses grid indices.
         :param coordinate_offsets: Coordinate offsets for sliced data (i_offset, j_offset, k_offset).
             Used to adjust well locations when visualizing a subset of the full grid.
@@ -1157,7 +1272,7 @@ class BaseRenderer(ABC):
             fig,
             model_state.wells,
             cell_dimension=(100, 100),
-            thickness_grid=thickness,
+            depth_grid=depth_grid,
             injection_color='#ff6b6b',
             production_color='#51cf66',
             wellbore_width=8.0,
@@ -1199,18 +1314,6 @@ class BaseRenderer(ABC):
         wellbore_width = kwargs.get("wellbore_width", 15.0)
         surface_marker_size = kwargs.get("surface_marker_size", 5.0)
 
-        # Calculate Z mean for scaling (if z_scale != 1.0 and we have thickness data)
-        z_mean = 0.0
-        if z_scale != 1.0 and thickness_grid is not None:
-            # Calculate the mean Z position of the grid
-            # This matches how volume rendering scales Z coordinates
-            z_offset_val = coordinate_offsets[2] if coordinate_offsets else 0
-            # Sum thickness in ONE vertical column (all layers at i=0, j=0)
-            # This gives total vertical extent of the reservoir
-            total_depth = float(np.sum(thickness_grid[0, 0, :]))
-            # Mean Z is halfway down from surface
-            z_mean = z_offset_val - (total_depth / 2.0)  # Negative because Z goes down
-
         def grid_to_physical(
             i: int, j: int, k: int
         ) -> typing.Optional[typing.Tuple[float, float, float]]:
@@ -1220,7 +1323,7 @@ class BaseRenderer(ABC):
             Note: Z-axis is negative (depth increases downward in Plotly convention)
             Z-scale is applied around z_mean to match volume rendering.
             """
-            if cell_dimension is not None and thickness_grid is not None:
+            if cell_dimension is not None and depth_grid is not None:
                 dx, dy = cell_dimension
                 x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
 
@@ -1228,29 +1331,14 @@ class BaseRenderer(ABC):
                 x_phys = (x_offset + i) * dx
                 y_phys = (y_offset + j) * dy
 
-                # Physical Z (depth) - calculate to cell center
-                # Z is NEGATIVE (increases downward), matching volume rendering
-                # k=0 is top layer, larger k = deeper
-                z_phys = z_offset
-
-                if k > 0:
-                    # Sum thickness from top to this layer (excluding current)
-                    thickness_above = float(np.sum(thickness_grid[i, j, :k]))
-                    if np.isnan(thickness_above):
-                        return None
-                    # Subtract to go deeper (negative Z)
-                    z_phys -= thickness_above
-
-                # Add half of current cell thickness (to get to center)
-                cell_thickness = float(thickness_grid[i, j, k])
-                if np.isnan(cell_thickness):
+                # Physical Z (depth) - use depth_grid directly
+                # Depth is positive downward, so negate for Z-axis (positive up)
+                # depth_grid already includes structural dip
+                depth_value = float(depth_grid[i, j, k])
+                if np.isnan(depth_value):
                     return None
-                # Subtract half thickness to get to cell center
-                z_phys -= cell_thickness / 2.0
 
-                # Apply z_scale around z_mean (same as volume rendering)
-                if z_scale != 1.0:
-                    z_phys = z_mean + (z_phys - z_mean) * z_scale
+                z_phys = -depth_value  # Negate because Plotly Z-axis positive up
 
                 return x_phys, y_phys, z_phys
             else:
@@ -1284,10 +1372,6 @@ class BaseRenderer(ABC):
                     # coordinate_offsets contains the base Z coordinate
                     x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
                     z_surface = float(z_offset)  # Top of volume
-
-                    # Apply z_scale to surface coordinate
-                    if z_scale != 1.0:
-                        z_surface = z_mean + (z_surface - z_mean) * z_scale
 
                     # Add neutral-colored segment from surface to perforation
                     figure.add_trace(
@@ -1328,13 +1412,10 @@ class BaseRenderer(ABC):
                     # Handle single-cell perforations (start == end)
                     # Create a small vertical line segment for visibility
                     if start_loc == end_loc:
-                        if cell_dimension is not None and thickness_grid is not None:
-                            # Use half the cell thickness for the vertical extent
-                            cell_thickness = float(
-                                thickness_grid[start_loc[0], start_loc[1], start_loc[2]]
-                            )
-                            # Apply z_scale to the extension amount (already applied in grid_to_physical, but extension is raw)
-                            extension = (cell_thickness / 4.0) * z_scale
+                        if cell_dimension is not None and depth_grid is not None:
+                            # Use a small vertical extent for single-cell perforations
+                            # Since depth_grid gives cell center, extend above and below
+                            extension = 5.0 * z_scale  # 5 ft extension, scaled
                             z_start -= extension  # Extend upward
                             z_end += extension  # Extend downward
                         else:
@@ -1432,10 +1513,6 @@ class BaseRenderer(ABC):
                     x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
                     z_surf = float(z_offset)  # Top of volume
 
-                    # Apply z_scale to surface coordinate
-                    if z_scale != 1.0:
-                        z_surf = z_mean + (z_surf - z_mean) * z_scale
-
                     # Add cone/arrow pointing into reservoir at the SURFACE
                     # Build fluid info for hover text
                     if well.injected_fluid is not None:
@@ -1456,12 +1533,12 @@ class BaseRenderer(ABC):
                             max(dx, dy) * 0.05 * z_scale / surface_marker_size
                         )
 
-                    # Arrow sizing - base it on actual grid thickness for proportionality
-                    if thickness_grid is not None:
-                        # Use average layer thickness as base unit
-                        avg_layer_thickness = float(np.mean(thickness_grid))
-                        # Make arrow about 1.5x average layer thickness (reasonable visibility)
-                        base_arrow_length = avg_layer_thickness * 1.5
+                    # Arrow sizing - base it on actual grid depth spacing for proportionality
+                    if depth_grid is not None:
+                        # Use average layer depth spacing as base unit
+                        avg_layer_depth = float(np.mean(np.diff(depth_grid, axis=2)))
+                        # Make arrow about 1.5x average layer depth spacing (reasonable visibility)
+                        base_arrow_length = avg_layer_depth * 1.5
                     else:
                         # Fallback to marker size
                         base_arrow_length = surface_marker_size
@@ -1568,10 +1645,6 @@ class BaseRenderer(ABC):
                     x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
                     z_surface = float(z_offset)  # Top of volume
 
-                    # Apply z_scale to surface coordinate
-                    if z_scale != 1.0:
-                        z_surface = z_mean + (z_surface - z_mean) * z_scale
-
                     # Add neutral-colored segment from surface to perforation
                     figure.add_trace(
                         go.Scatter3d(
@@ -1619,13 +1692,9 @@ class BaseRenderer(ABC):
                         logger.debug(
                             f"    Single-cell perforation detected at {start_loc}, extending vertically"
                         )
-                        if cell_dimension is not None and thickness_grid is not None:
-                            # Use half the cell thickness for the vertical extent
-                            cell_thickness = float(
-                                thickness_grid[start_loc[0], start_loc[1], start_loc[2]]
-                            )
-                            # Apply z_scale to the extension amount
-                            extension = (cell_thickness / 4.0) * z_scale
+                        if cell_dimension is not None and depth_grid is not None:
+                            # Use a small vertical extent for single-cell perforations
+                            extension = 5.0 * z_scale  # 5 ft extension, scaled
                             z_start -= extension  # Extend upward
                             z_end += extension  # Extend downward
                         else:
@@ -1730,10 +1799,6 @@ class BaseRenderer(ABC):
                     x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
                     z_surf = float(z_offset)  # Top of volume
 
-                    # Apply z_scale to surface coordinate
-                    if z_scale != 1.0:
-                        z_surf = z_mean + (z_surf - z_mean) * z_scale
-
                     # Add cone/arrow pointing OUT OF reservoir at the SURFACE (production = outflow)
                     # Build fluid info for hover text (production wells can have multiple fluids)
                     fluid_names = []
@@ -1760,12 +1825,12 @@ class BaseRenderer(ABC):
                             max(dx, dy) * 0.05 * z_scale / surface_marker_size
                         )
 
-                    # Arrow sizing - base it on actual grid thickness for proportionality
-                    if thickness_grid is not None:
-                        # Use average layer thickness as base unit
-                        avg_layer_thickness = float(np.mean(thickness_grid))
-                        # Make arrow about 1.5x average layer thickness (reasonable visibility)
-                        base_arrow_length = avg_layer_thickness * 1.5
+                    # Arrow sizing - base it on actual grid depth spacing for proportionality
+                    if depth_grid is not None:
+                        # Use average layer depth spacing as base unit
+                        avg_layer_depth = float(np.mean(np.diff(depth_grid, axis=2)))
+                        # Make arrow about 1.5x average layer depth spacing (reasonable visibility)
+                        base_arrow_length = avg_layer_depth * 1.5
                     else:
                         # Fallback to marker size
                         base_arrow_length = surface_marker_size
@@ -1835,8 +1900,8 @@ class BaseRenderer(ABC):
         # Check if there's a colorbar (most volume/isosurface plots have one on the right)
         has_colorbar = any(
             hasattr(trace, "colorbar")
-            and trace.colorbar is not None
-            or (hasattr(trace, "showscale") and trace.showscale)
+            and trace.colorbar is not None  # type: ignore[attr-defined]
+            or (hasattr(trace, "showscale") and trace.showscale)  # type: ignore[attr-defined]
             for trace in figure.data
         )
 
@@ -1879,7 +1944,7 @@ class VolumeRenderer(BaseRenderer):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         surface_count: int = 50,
         opacity: typing.Optional[float] = None,
         isomin: typing.Optional[float] = None,
@@ -1899,7 +1964,7 @@ class VolumeRenderer(BaseRenderer):
         :param data: 3D data array to render
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param surface_count: Number of isosurfaces to generate for volume rendering
         :param opacity: Opacity of the volume rendering (defaults to config value). Lower values allow better visualization of internal structures.
         :param isomin: Minimum isovalue for isosurface in ORIGINAL data units. Only values >= isomin will be shown.
@@ -1977,33 +2042,34 @@ class VolumeRenderer(BaseRenderer):
         )
 
         # Create coordinate grids - use physical coordinates if available
-        if cell_dimension is not None and thickness_grid is not None:
+        if cell_dimension is not None and depth_grid is not None:
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
-            x_coords, y_coords, z_coords = self.create_physical_coordinates(
-                cell_dimension, thickness_grid, coordinate_offsets
+            x_coords, y_coords, z_coords = self.get_physical_coordinates(
+                cell_dimension, depth_grid, coordinate_offsets
             )
-
-            # Apply Z-scaling to make layers appear thicker/thinner
-            if z_scale != 1.0:
-                # Scale Z coordinates relative to their mean to preserve overall position
-                z_mean = np.mean(z_coords)
-                z_coords = z_mean + (z_coords - z_mean) * z_scale
 
             # For volume rendering, we need cell centers
             nx, ny, nz = data.shape
             x_centers = (x_coords[:-1] + x_coords[1:]) / 2
             y_centers = (y_coords[:-1] + y_coords[1:]) / 2
+            # Calculate Z centers from Z boundaries
             z_centers = np.zeros((nx, ny, nz))
             for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
                 z_centers[i, j, k] = (z_coords[i, j, k] + z_coords[i, j, k + 1]) / 2
 
-            # Create meshgrid with physical coordinates - reverse Z to show 50-300 downwards
+            # Note: Plotly Volume traces require regular rectangular grids
+            # We average Z coordinates across X,Y to get a representative profile
+            # For full dip visualization, use CellBlockRenderer instead
+            z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
+            
+            # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
             x, y, z = np.meshgrid(
-                x_centers, y_centers, z_centers[0, 0, ::-1], indexing="ij"
+                x_centers, y_centers, z_profile[::-1], indexing="ij"
             )
+            
             x_title = "X Distance (ft)"
             y_title = "Y Distance (ft)"
-            z_title = "Z Distance (ft)"
+            z_title = "Z Distance (ft) [averaged profile]"
         else:
             # Fallback to index-based coordinates - reverse Z to show k=0 at top
             nx, ny, nz = data.shape
@@ -2036,7 +2102,7 @@ class VolumeRenderer(BaseRenderer):
             absolute_display_k = (
                 z_index_offset + display_k
             )  # Apply offset to display k as well
-            if cell_dimension is not None and thickness_grid is not None:
+            if cell_dimension is not None and depth_grid is not None:
                 hover_text.append(
                     f"Cell: ({absolute_i}, {absolute_j}, {absolute_display_k})<br>"  # Show absolute indices
                     f"X: {x.flatten()[flat_index]:.1f} ft<br>"
@@ -2108,6 +2174,12 @@ class VolumeRenderer(BaseRenderer):
                 else None,
             )
         )
+
+        # Calculate coordinate ranges for aspect ratio calculation
+        x_range = (float(x.min()), float(x.max())) if x.size > 0 else None
+        y_range = (float(y.min()), float(y.max())) if y.size > 0 else None
+        z_range = (float(z.min()), float(z.max())) if z.size > 0 else None
+
         self.update_layout(
             figure,
             metadata=metadata,
@@ -2115,6 +2187,10 @@ class VolumeRenderer(BaseRenderer):
             y_title=y_title,
             z_title=z_title,
             aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
         )
 
         if labels is not None:
@@ -2124,7 +2200,7 @@ class VolumeRenderer(BaseRenderer):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=coordinate_offsets,
             )
@@ -2138,6 +2214,10 @@ class VolumeRenderer(BaseRenderer):
         y_title: str = "Y Index",
         z_title: str = "Z Index",
         aspect_mode: typing.Optional[str] = None,
+        z_scale: float = 1.0,
+        x_range: typing.Optional[typing.Tuple[float, float]] = None,
+        y_range: typing.Optional[typing.Tuple[float, float]] = None,
+        z_range: typing.Optional[typing.Tuple[float, float]] = None,
     ):
         """
         Update figure layout with dimensions and scene configuration.
@@ -2147,39 +2227,28 @@ class VolumeRenderer(BaseRenderer):
         :param x_title: Title for X axis
         :param y_title: Title for Y axis
         :param z_title: Title for Z axis
+        :param z_scale: Scale factor for Z-axis visual spacing (affects display only, not coordinate values)
+        :param x_range: Tuple of (min, max) for x-axis data range
+        :param y_range: Tuple of (min, max) for y-axis data range
+        :param z_range: Tuple of (min, max) for z-axis data range
         """
         aspect_mode = aspect_mode or self.config.aspect_mode or "auto"
+
+        scene_config = self.get_scene_config(
+            x_title=x_title,
+            y_title=y_title,
+            z_title=z_title,
+            aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
+        )
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
             paper_bgcolor=self.config.paper_bgcolor,
-            scene=dict(
-                xaxis_title=x_title,
-                yaxis_title=y_title,
-                zaxis_title=z_title,
-                camera=self.config.camera_position,
-                aspectmode=aspect_mode,
-                dragmode="orbit",  # Allow orbital rotation around all axes
-                bgcolor=self.config.scene_bgcolor,
-                xaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                yaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                zaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-            ),
+            scene=scene_config,
         )
 
 
@@ -2194,7 +2263,7 @@ class IsosurfaceRenderer(BaseRenderer):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         isomin: typing.Optional[float] = None,
         isomax: typing.Optional[float] = None,
         cmin: typing.Optional[float] = None,
@@ -2213,7 +2282,7 @@ class IsosurfaceRenderer(BaseRenderer):
         :param data: 3D data array to create isosurfaces from
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param isomin: Minimum isovalue for isosurface in ORIGINAL data units. Only values >= isomin will be shown.
             For log-scale properties, provide the original value (e.g., 0.1 cP), not log₁₀(0.1).
         :param isomax: Maximum isovalue for isosurface in ORIGINAL data units. Only values <= isomax will be shown.
@@ -2284,32 +2353,36 @@ class IsosurfaceRenderer(BaseRenderer):
         )
 
         # Create coordinate grids - use physical coordinates if available
-        if cell_dimension is not None and thickness_grid is not None:
+        if cell_dimension is not None and depth_grid is not None:
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
-            x_coords, y_coords, z_coords = self.create_physical_coordinates(
+            x_coords, y_coords, z_coords = self.get_physical_coordinates(
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 coordinate_offsets=coordinate_offsets,
             )
-
-            # Apply Z-scaling to make layers appear thicker/thinner
-            if z_scale != 1.0:
-                # Scale Z coordinates relative to their mean to preserve overall position
-                z_mean = np.mean(z_coords)
-                z_coords = z_mean + (z_coords - z_mean) * z_scale
 
             # For isosurface, we need cell centers
             nx, ny, nz = data.shape
             x_centers = (x_coords[:-1] + x_coords[1:]) / 2
             y_centers = (y_coords[:-1] + y_coords[1:]) / 2
+            # Calculate Z centers from Z boundaries
             z_centers = np.zeros((nx, ny, nz))
             for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
                 z_centers[i, j, k] = (z_coords[i, j, k] + z_coords[i, j, k + 1]) / 2
 
-            # Create meshgrid with physical coordinates - reverse Z to show 50-300 downwards
+            # Note: Plotly Isosurface traces require regular rectangular grids
+            # We average Z coordinates across X,Y to get a representative profile
+            # For full dip visualization, use CellBlockRenderer instead
+            z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
+            
+            # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
             x, y, z = np.meshgrid(
-                x_centers, y_centers, z_centers[0, 0, ::-1], indexing="ij"
+                x_centers, y_centers, z_profile[::-1], indexing="ij"
             )
+            
+            x_title = "X Distance (ft)"
+            y_title = "Y Distance (ft)"
+            z_title = "Z Distance (ft) [averaged profile]"
             x_flat = x.flatten()
             y_flat = y.flatten()
             z_flat = z.flatten()
@@ -2409,6 +2482,17 @@ class IsosurfaceRenderer(BaseRenderer):
             )
         )
 
+        # Calculate coordinate ranges for aspect ratio calculation
+        x_range = (
+            (float(x_flat.min()), float(x_flat.max())) if x_flat.size > 0 else None
+        )
+        y_range = (
+            (float(y_flat.min()), float(y_flat.max())) if y_flat.size > 0 else None
+        )
+        z_range = (
+            (float(z_flat.min()), float(z_flat.max())) if z_flat.size > 0 else None
+        )
+
         self.update_layout(
             figure,
             metadata=metadata,
@@ -2416,6 +2500,10 @@ class IsosurfaceRenderer(BaseRenderer):
             y_title=y_title,
             z_title=z_title,
             aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
         )
 
         if labels is not None:
@@ -2425,7 +2513,7 @@ class IsosurfaceRenderer(BaseRenderer):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=coordinate_offsets,
             )
@@ -2439,6 +2527,10 @@ class IsosurfaceRenderer(BaseRenderer):
         y_title: str = "Y Index",
         z_title: str = "Z Index",
         aspect_mode: typing.Optional[str] = None,
+        z_scale: float = 1.0,
+        x_range: typing.Optional[typing.Tuple[float, float]] = None,
+        y_range: typing.Optional[typing.Tuple[float, float]] = None,
+        z_range: typing.Optional[typing.Tuple[float, float]] = None,
     ) -> None:
         """
         Update figure layout with dimensions and scene configuration for isosurface plots.
@@ -2449,39 +2541,28 @@ class IsosurfaceRenderer(BaseRenderer):
         :param y_title: Title for Y axis
         :param z_title: Title for Z axis
         :param aspect_mode: Aspect mode for the 3D plot (default is "cube"). Could be any of "cube", "auto", or "data".
+        :param z_scale: Scale factor for Z-axis visual spacing (affects display only, not coordinate values)
+        :param x_range: Tuple of (min, max) for x-axis data range
+        :param y_range: Tuple of (min, max) for y-axis data range
+        :param z_range: Tuple of (min, max) for z-axis data range
         """
         aspect_mode = aspect_mode or self.config.aspect_mode or "auto"
+
+        scene_config = self.get_scene_config(
+            x_title=x_title,
+            y_title=y_title,
+            z_title=z_title,
+            aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
+        )
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
             paper_bgcolor=self.config.paper_bgcolor,
-            scene=dict(
-                xaxis_title=x_title,
-                yaxis_title=y_title,
-                zaxis_title=z_title,
-                camera=self.config.camera_position,
-                aspectmode=aspect_mode,
-                dragmode="orbit",  # Allow orbital rotation around all axes
-                bgcolor=self.config.scene_bgcolor,
-                xaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                yaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                zaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-            ),
+            scene=scene_config,
         )
 
 
@@ -2509,7 +2590,7 @@ class CellBlockRenderer(BaseRenderer):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Tuple[float, float],
-        thickness_grid: ThreeDimensionalGrid,
+        depth_grid: ThreeDimensionalGrid,
         cmin: typing.Optional[float] = None,
         cmax: typing.Optional[float] = None,
         subsampling_factor: int = 1,
@@ -2531,7 +2612,7 @@ class CellBlockRenderer(BaseRenderer):
         :param data: 3D data array to render
         :param metadata: Property metadata for labeling and scaling
         :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param thickness_grid: 3D array with height of each cell (feet)
+        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
         :param cmin: Minimum data value for color mapping (defaults to data min).
             This should mosttimes be the minimum of the original data range (not normalized).
             When using log scale, cmin should be > 0.
@@ -2579,15 +2660,9 @@ class CellBlockRenderer(BaseRenderer):
 
         # Create physical coordinate grids
         coordinate_offsets = kwargs.get("coordinate_offsets", None)
-        x_coords, y_coords, z_coords = self.create_physical_coordinates(
-            cell_dimension, thickness_grid, coordinate_offsets
+        x_coords, y_coords, z_coords = self.get_physical_coordinates(
+            cell_dimension, depth_grid, coordinate_offsets
         )
-
-        # Apply Z-scaling to make layers appear thicker/thinner
-        if z_scale != 1.0:
-            # Scale Z coordinates relative to their mean to preserve overall position
-            z_mean = np.mean(z_coords)
-            z_coords = z_mean + (z_coords - z_mean) * z_scale
 
         normalized_data, display_data = self.normalize_data(
             data, metadata=metadata, normalize_range=False
@@ -2762,6 +2837,9 @@ class CellBlockRenderer(BaseRenderer):
             cell_value = display_data[i, j, k]  # For hover text
             cell_opacity = cell_opacities[i, j, k]
 
+            # Calculate cell thickness in Z direction (absolute value since z_max might be more negative)
+            cell_thickness_z = abs(z_max - z_min)
+
             # Create hover text for this cell
             hover_text = (
                 f"Cell ({x_index_offset + i}, {y_index_offset + j}, {z_index_offset + k})<br>"
@@ -2771,7 +2849,7 @@ class CellBlockRenderer(BaseRenderer):
                 f"{metadata.display_name}: {self.format_value(cell_value, metadata)} {metadata.unit}"
                 + (" (log scale)" if metadata.log_scale else "")
                 + "<br>"
-                f"Cell Size: {dx:.1f} x {dy:.1f} x {thickness_grid[i, j, k]:.2f} ft<br>"
+                f"Cell Size: {dx:.1f} x {dy:.1f} x {cell_thickness_z:.2f} ft<br>"
                 f"Opacity: {cell_opacity:.2f}"
             )
 
@@ -2935,12 +3013,33 @@ class CellBlockRenderer(BaseRenderer):
                 )
             )
 
+        # Calculate coordinate ranges for aspect ratio calculation
+        x_range = (
+            (float(x_coords.min()), float(x_coords.max()))
+            if x_coords.size > 0
+            else None
+        )
+        y_range = (
+            (float(y_coords.min()), float(y_coords.max()))
+            if y_coords.size > 0
+            else None
+        )
+        z_range = (
+            (float(z_coords.min()), float(z_coords.max()))
+            if z_coords.size > 0
+            else None
+        )
+
         self.update_layout(
             figure,
             metadata,
             x_title="X Distance (ft)",
             y_title="Y Distance (ft)",
             z_title="Z Distance (ft)",
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
         )
 
         if labels is not None:
@@ -2950,7 +3049,7 @@ class CellBlockRenderer(BaseRenderer):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 format_kwargs=kwargs.get("format_kwargs", None),
                 coordinate_offsets=kwargs.get("coordinate_offsets", None),
             )
@@ -2963,6 +3062,11 @@ class CellBlockRenderer(BaseRenderer):
         x_title: str = "X Distance (ft)",
         y_title: str = "Y Distance (ft)",
         z_title: str = "Z Distance (ft)",
+        aspect_mode: typing.Optional[str] = None,
+        z_scale: float = 1.0,
+        x_range: typing.Optional[typing.Tuple[float, float]] = None,
+        y_range: typing.Optional[typing.Tuple[float, float]] = None,
+        z_range: typing.Optional[typing.Tuple[float, float]] = None,
     ):
         """
         Update figure layout with dimensions and scene configuration for cell block plots.
@@ -2972,38 +3076,31 @@ class CellBlockRenderer(BaseRenderer):
         :param x_title: Title for X axis
         :param y_title: Title for Y axis
         :param z_title: Title for Z axis
+        :param aspect_mode: Aspect mode ("auto", "cube", "data", or "manual")
+        :param z_scale: Scale factor for Z-axis visual spacing (affects display only, not coordinate values)
+        :param x_range: Tuple of (min, max) for x-axis data range
+        :param y_range: Tuple of (min, max) for y-axis data range
+        :param z_range: Tuple of (min, max) for z-axis data range
         """
+        aspect_mode = (
+            aspect_mode or "data"
+        )  # CellBlock defaults to "data" to preserve physical dimensions
+
+        scene_config = self.get_scene_config(
+            x_title=x_title,
+            y_title=y_title,
+            z_title=z_title,
+            aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
+        )
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
             paper_bgcolor=self.config.paper_bgcolor,
-            scene=dict(
-                xaxis_title=x_title,
-                yaxis_title=y_title,
-                zaxis_title=z_title,
-                camera=self.config.camera_position,
-                aspectmode="data",  # Preserve actual aspect ratios
-                dragmode="orbit",  # Allow orbital rotation around all axes
-                bgcolor=self.config.scene_bgcolor,
-                xaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                yaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                zaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-            ),
+            scene=scene_config,
         )
 
 
@@ -3018,7 +3115,7 @@ class Scatter3DRenderer(BaseRenderer):
         data: ThreeDimensionalGrid,
         metadata: PropertyMetadata,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
-        thickness_grid: typing.Optional[ThreeDimensionalGrid] = None,
+        depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         threshold: float = 0.0,
         sample_rate: float = 1.0,
         marker_size: int = 4,
@@ -3128,7 +3225,7 @@ class Scatter3DRenderer(BaseRenderer):
         # Apply numpy convention: z=0 should be at top, z increases downward
         z_coords = data.shape[2] - 1 - z_coords_raw
 
-        if cell_dimension is not None and thickness_grid is not None:
+        if cell_dimension is not None and depth_grid is not None:
             # Convert indices to physical coordinates
             dx, dy = cell_dimension
             coordinate_offsets = kwargs.get("coordinate_offsets", None)
@@ -3137,17 +3234,11 @@ class Scatter3DRenderer(BaseRenderer):
             x_physical = x_offset * dx + x_coords * dx
             y_physical = y_offset * dy + y_coords * dy
 
-            _, _, z_boundaries = self.create_physical_coordinates(
+            _, _, z_boundaries = self.get_physical_coordinates(
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 coordinate_offsets=coordinate_offsets,
             )
-
-            # Apply Z-scaling to make layers appear thicker/thinner
-            if z_scale != 1.0:
-                # Scale Z coordinates relative to their mean to preserve overall position
-                z_mean = np.mean(z_boundaries)
-                z_boundaries = z_mean + (z_boundaries - z_mean) * z_scale
 
             z_physical = np.array(
                 [
@@ -3180,7 +3271,7 @@ class Scatter3DRenderer(BaseRenderer):
             # Use index coordinates directly
             x_physical = x_coords
             y_physical = y_coords
-            z_physical = z_coords_raw
+            z_physical = z_coords  # Use reversed z_coords, not z_coords_raw
 
             # Extract index offsets to show original dataset indices in hover text
             x_index_offset, y_index_offset, z_index_offset = kwargs.get(
@@ -3188,7 +3279,7 @@ class Scatter3DRenderer(BaseRenderer):
             ) or (0, 0, 0)
 
             hover_text = [
-                f"Cell: ({x_index_offset + x_coords[i]}, {y_index_offset + y_coords[i]}, {z_index_offset + z_coords[i]})<br>"  # Show absolute indices
+                f"Cell: ({x_index_offset + x_coords[i]}, {y_index_offset + y_coords[i]}, {z_index_offset + z_coords_raw[i]})<br>"  # Show absolute indices using raw z
                 f"{metadata.display_name}: {self.format_value(v, metadata)}"
                 + (" (log scale)" if metadata.log_scale else "")
                 for i, v in enumerate(values)
@@ -3245,6 +3336,23 @@ class Scatter3DRenderer(BaseRenderer):
             )
         )
 
+        # Calculate coordinate ranges for aspect ratio calculation
+        x_range = (
+            (float(np.min(x_physical)), float(np.max(x_physical)))
+            if len(x_physical) > 0
+            else None
+        )
+        y_range = (
+            (float(np.min(y_physical)), float(np.max(y_physical)))
+            if len(y_physical) > 0
+            else None
+        )
+        z_range = (
+            (float(np.min(z_physical)), float(np.max(z_physical)))
+            if len(z_physical) > 0
+            else None
+        )
+
         self.update_layout(
             figure,
             metadata=metadata,
@@ -3252,6 +3360,10 @@ class Scatter3DRenderer(BaseRenderer):
             x_title=x_title,
             y_title=y_title,
             z_title=z_title,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
         )
 
         if labels is not None:
@@ -3261,7 +3373,7 @@ class Scatter3DRenderer(BaseRenderer):
                 data=data,
                 metadata=metadata,
                 cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
+                depth_grid=depth_grid,
                 coordinate_offsets=kwargs.get("coordinate_offsets", None),
                 format_kwargs=kwargs.get("format_kwargs", None),
             )
@@ -3275,6 +3387,10 @@ class Scatter3DRenderer(BaseRenderer):
         y_title: str = "Y Cell Index",
         z_title: str = "Z Cell Index",
         aspect_mode: typing.Optional[str] = None,
+        z_scale: float = 1.0,
+        x_range: typing.Optional[typing.Tuple[float, float]] = None,
+        y_range: typing.Optional[typing.Tuple[float, float]] = None,
+        z_range: typing.Optional[typing.Tuple[float, float]] = None,
     ) -> None:
         """
         Update figure layout with dimensions and scene configuration for scatter plots.
@@ -3285,38 +3401,28 @@ class Scatter3DRenderer(BaseRenderer):
         :param y_title: Title for Y axis
         :param z_title: Title for Z axis
         :param aspect_mode: Aspect mode for the 3D plot (default is "auto"). Could be any of "cube", "auto", or "data".
+        :param z_scale: Scale factor for Z-axis visual spacing (affects display only, not coordinate values)
+        :param x_range: Tuple of (min, max) for x-axis data range
+        :param y_range: Tuple of (min, max) for y-axis data range
+        :param z_range: Tuple of (min, max) for z-axis data range
         """
+        aspect_mode = aspect_mode or self.config.aspect_mode or "auto"
+
+        scene_config = self.get_scene_config(
+            x_title=x_title,
+            y_title=y_title,
+            z_title=z_title,
+            aspect_mode=aspect_mode,
+            z_scale=z_scale,
+            x_range=x_range,
+            y_range=y_range,
+            z_range=z_range,
+        )
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
             paper_bgcolor=self.config.paper_bgcolor,
-            scene=dict(
-                xaxis_title=x_title,
-                yaxis_title=y_title,
-                zaxis_title=z_title,
-                camera=self.config.camera_position,
-                aspectmode=aspect_mode or self.config.aspect_mode or "auto",
-                dragmode="orbit",  # Allow orbital rotation around all axes
-                bgcolor=self.config.scene_bgcolor,
-                xaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                yaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="gray",
-                ),
-                zaxis=dict(
-                    backgroundcolor="rgba(0,0,0,0)",
-                    gridcolor="lightgray",
-                    showbackground=True,
-                    zerolinecolor="white",
-                ),
-            ),
+            scene=scene_config,
         )
 
 
@@ -3330,9 +3436,9 @@ PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
 _missing = object()
 
 
-class ModelVisualizer:
+class DataVisualizer:
     """
-    3D visualizer for reservoir model state and properties.
+    3D visualizer for three-dimensional (reservoir) data.
     """
 
     default_dashboard_title: typing.ClassVar[str] = "Model Properties"
@@ -3348,14 +3454,19 @@ class ModelVisualizer:
         :param config: Optional configuration for 3D rendering (uses defaults if None)
         :param registry: Optional fluid property registry (uses default if None)
         """
-        self.config = config or PlotConfig()
+        self._config = config or PlotConfig()
         self._renderers: typing.Dict[PlotType, BaseRenderer] = {
-            PlotType.VOLUME: VolumeRenderer(self.config),
-            PlotType.ISOSURFACE: IsosurfaceRenderer(self.config),
-            PlotType.SCATTER_3D: Scatter3DRenderer(self.config),
-            PlotType.CELL_BLOCKS: CellBlockRenderer(self.config),
+            PlotType.VOLUME: VolumeRenderer(self._config),
+            PlotType.ISOSURFACE: IsosurfaceRenderer(self._config),
+            PlotType.SCATTER_3D: Scatter3DRenderer(self._config),
+            PlotType.CELL_BLOCKS: CellBlockRenderer(self._config),
         }
         self.registry = registry or property_registry
+
+    @property
+    def config(self) -> PlotConfig:
+        """Get the current plot configuration."""
+        return self._config
 
     def add_renderer(
         self,
@@ -3471,7 +3582,7 @@ class ModelVisualizer:
             z_slice_obj,
         )
 
-    def _get_state(
+    def _get_property_data(
         self, model_state: ModelState[ThreeDimensions], name: str
     ) -> ThreeDimensionalGrid:
         """
@@ -3539,8 +3650,8 @@ class ModelVisualizer:
 
     def make_plot(
         self,
-        model_state: ModelState[ThreeDimensions],
-        property: str,
+        source: typing.Union[ModelState[ThreeDimensions], ThreeDimensionalGrid],
+        property: typing.Optional[str] = None,
         plot_type: typing.Optional[typing.Union[PlotType, str]] = None,
         figure: typing.Optional[go.Figure] = None,
         title: typing.Optional[str] = None,
@@ -3560,10 +3671,11 @@ class ModelVisualizer:
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
-        Plot a specific model property available on the model state in 3D with optional data slicing.
+        Plot a specific model property or raw 3D grid data in 3D with optional data slicing.
 
-        :param model_state: The model state containing the reservoir model data
-        :param property: Name of the property to plot (from `PropertyRegistry`)
+        :param source: Either a ModelState containing reservoir model data, or a raw ThreeDimensionalGrid
+        :param property: Name of the property to plot (from `PropertyRegistry`). Required when source is a ModelState,
+            optional when source is a ThreeDimensionalGrid (will use generic metadata if not provided)
         :param plot_type: Type of 3D plot to create (volume, isosurface, slice, scatter, cell_blocks)
         :param figure: Optional existing Plotly figure to add to (creates new if None)
         :param title: Custom title for this plot (overrides config title)
@@ -3577,7 +3689,7 @@ class ModelVisualizer:
         :param y_slice: Y dimension slice specification (same format as x_slice)
         :param z_slice: Z dimension slice specification (same format as x_slice)
         :param labels: Optional collection of labels to add to the plot
-        :param show_wells: Whether to add well visualizations to the plot (default: False)
+        :param show_wells: Whether to add well visualizations to the plot (default: False, only works with ModelState)
         :param kwargs: Additional plotting parameters specific to the plot type. Can also include
             well visualization kwargs: injection_color, production_color, shut_in_color,
             wellbore_width, surface_marker_size, show_wellbore, show_surface_marker, show_perforations.
@@ -3587,12 +3699,17 @@ class ModelVisualizer:
         Usage Examples:
 
         ```python
-        # Plot only cells 10-20 in X direction
+        # Plot ModelState with property name
         viz.make_plot(state, "pressure", x_slice=(10, 20))
+
+        # Plot raw ThreeDimensionalGrid directly
+        grid_data = np.random.rand(10, 10, 5)
+        viz.make_plot(grid_data)  # Uses generic metadata
+        viz.make_plot(grid_data, property="custom_prop")  # Uses registered property metadata if available
 
         # Plot with string plot type (converted internally)
         viz.make_plot(state, "pressure", plot_type="volume_render")
-        viz.make_plot(state, "pressure", plot_type="cell_blocks")
+        viz.make_plot(grid_data, plot_type="cell_blocks")
 
         # Plot single layer at Z index 5
         viz.make_plot(state, "oil_saturation", z_slice=5)
@@ -3603,10 +3720,10 @@ class ModelVisualizer:
         # Use slice objects for advanced slicing
         viz.make_plot(state, "viscosity", x_slice=slice(10, 50, 2))  # Every 2nd cell
 
-        # Add well visualization with default styling
+        # Add well visualization with default styling (ModelState only)
         viz.make_plot(state, "pressure", show_wells=True)
 
-        # Customize well visualization using kwargs
+        # Customize well visualization using kwargs (ModelState only)
         viz.make_plot(
             state, "oil_saturation",
             show_wells=True,
@@ -3626,12 +3743,40 @@ class ModelVisualizer:
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
-        metadata = self.registry[property]
-        data = self._get_state(model_state, metadata.name)
+        # Extract data and metadata based on source type
+        is_model_state = isinstance(source, ModelState)
 
-        # Get original cell dimensions and height grid
-        cell_dimension = model_state.model.cell_dimension
-        thickness_grid = model_state.model.thickness_grid
+        if is_model_state:
+            # Working with ModelState - property is required
+            if property is None:
+                raise ValueError(
+                    "property parameter is required when source is a ModelState"
+                )
+            metadata = self.registry[property]
+            data = self._get_property_data(source, metadata.name)
+
+            # Get original cell dimensions and depth grid from model
+            cell_dimension = source.model.cell_dimension
+            depth_grid = source.model.get_depth_grid(apply_dip=True)
+        else:
+            # Working with raw ThreeDimensionalGrid
+            data = source
+
+            # Create or retrieve metadata
+            if property is not None and property in self.registry:
+                metadata = self.registry[property]
+            else:
+                # Create generic metadata for raw grid data
+                metadata = PropertyMetadata(
+                    name=property or "data",
+                    display_name=property or "Data",
+                    unit="",
+                    color_scheme=ColorScheme.VIRIDIS,
+                )
+
+            # No physical dimensions available for raw grids
+            cell_dimension = None
+            depth_grid = None
 
         # Apply slicing if any slice parameters are provided
         coordinate_offsets = None
@@ -3667,9 +3812,9 @@ class ModelVisualizer:
                 z_slice_obj.start or 0,
             )
 
-            # If we sliced the data, we need to slice the thickness_grid as well for physical coordinates
-            if thickness_grid is not None:
-                thickness_grid = thickness_grid[x_slice_obj, y_slice_obj, z_slice_obj]  # type: ignore
+            # If we sliced the data, we need to slice the depth_grid as well for physical coordinates
+            if depth_grid is not None:
+                depth_grid = depth_grid[x_slice_obj, y_slice_obj, z_slice_obj]  # type: ignore
 
         plot_type = plot_type or self.config.plot_type
         renderer = self.get_renderer(plot_type)
@@ -3690,37 +3835,42 @@ class ModelVisualizer:
                 data,
                 metadata,
                 cell_dimension=kwargs.pop("cell_dimension", cell_dimension),
-                thickness_grid=kwargs.pop("thickness_grid", thickness_grid),
+                depth_grid=kwargs.pop("depth_grid", depth_grid),
                 **kwargs,
             )
         else:
             fig = renderer.render(fig, data, metadata, **kwargs)
 
-        # Add well visualization if requested
-        if show_wells and model_state.has_wells():
-            # Extract z_scale for well rendering (default to 1.0 if not specified)
-            z_scale = kwargs.get("z_scale", 1.0)
+        # Add well visualization if requested (only for ModelState data)
+        if show_wells:
+            if not is_model_state:
+                logger.warning(
+                    "show_wells=True ignored: wells can only be shown with ModelState data"
+                )
+            elif source.has_wells():  # type: ignore
+                # Extract z_scale for well rendering (default to 1.0 if not specified)
+                z_scale = kwargs.get("z_scale", 1.0)
 
-            # Extract well visualization kwargs from the kwargs dict using TypedDict keys
-            well_kwargs: WellKwargs = {}
-            for key in WellKwargs.__annotations__.keys():
-                if key in kwargs:
-                    well_kwargs[key] = kwargs.pop(key)  # type: ignore
+                # Extract well visualization kwargs from the kwargs dict using TypedDict keys
+                well_kwargs: WellKwargs = {}
+                for key in WellKwargs.__annotations__.keys():
+                    if key in kwargs:
+                        well_kwargs[key] = kwargs.pop(key)  # type: ignore
 
-            # Add wells to the figure using the renderer's method
-            logger.debug(
-                f"Rendering wells: {len(model_state.wells.injection_wells)} injection, "
-                f"{len(model_state.wells.production_wells)} production"
-            )
-            renderer.render_wells(
-                figure=fig,
-                wells=model_state.wells,
-                cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
-                coordinate_offsets=coordinate_offsets,
-                z_scale=z_scale,
-                **well_kwargs,
-            )
+                # Add wells to the figure using the renderer's method
+                logger.debug(
+                    f"Rendering wells: {len(source.wells.injection_wells)} injection, "  # type: ignore
+                    f"{len(source.wells.production_wells)} production"  # type: ignore
+                )
+                renderer.render_wells(
+                    figure=fig,
+                    wells=source.wells,  # type: ignore
+                    cell_dimension=cell_dimension,
+                    depth_grid=depth_grid,
+                    coordinate_offsets=coordinate_offsets,
+                    z_scale=z_scale,
+                    **well_kwargs,
+                )
 
         final_title = self.get_title(plot_type, metadata, title)
 
@@ -3736,8 +3886,11 @@ class ModelVisualizer:
 
     def animate(
         self,
-        model_states: typing.Sequence[ModelState[ThreeDimensions]],
-        property: str,
+        sequence: typing.Union[
+            typing.Sequence[ModelState[ThreeDimensions]],
+            typing.Sequence[ThreeDimensionalGrid],
+        ],
+        property: typing.Optional[str] = None,
         plot_type: typing.Optional[typing.Union[PlotType, str]] = None,
         frame_duration: int = 200,
         step_size: int = 1,
@@ -3759,8 +3912,9 @@ class ModelVisualizer:
         """
         Create an animated plot showing property evolution over time.
 
-        :param model_states: Sequence of model states representing time steps
-        :param property: Name of the property to animate
+        :param sequence: Sequence of ModelStates or ThreeDimensionalGrids representing time steps
+        :param property: Name of the property to animate. Required when sequence contains ModelStates,
+            optional when sequence contains raw grids
         :param plot_type: Type of 3D plot for animation frames
         :param frame_duration: Duration of each frame in milliseconds
         :param step_size: Step size to skip frames for performance (1 = every frame)
@@ -3778,8 +3932,16 @@ class ModelVisualizer:
         :param kwargs: Additional parameters for individual property plots.
         :return: Animated Plotly figure with time controls
         """
-        if not model_states:
-            raise ValueError("No model states provided")
+        if not sequence:
+            raise ValueError("No data provided")
+
+        # Determine if we're working with ModelStates or raw grids
+        is_model_state_sequence = isinstance(sequence[0], ModelState)
+
+        if is_model_state_sequence and property is None:
+            raise ValueError(
+                "property parameter is required when sequence contains ModelStates"
+            )
 
         # Convert string plot_type to PlotType enum if needed
         if isinstance(plot_type, str):
@@ -3791,23 +3953,46 @@ class ModelVisualizer:
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
-        metadata = self.registry[property]
+        # Get metadata
+        if is_model_state_sequence:
+            metadata = self.registry[property]  # type: ignore
+        else:
+            # For raw grids, create or retrieve metadata
+            if property is not None and property in self.registry:
+                metadata = self.registry[property]
+            else:
+                metadata = PropertyMetadata(
+                    name=property or "data",
+                    display_name=property or "Data",
+                    unit="",
+                    color_scheme=ColorScheme.VIRIDIS,
+                )
+
         plot_type = plot_type or PlotType.VOLUME
 
         if "cmin" not in kwargs:
             # Add cmin/cmax to kwargs for consistent color mapping across frames
-            data_list = [
-                self._get_state(state, metadata.name) for state in model_states
-            ]
+            if is_model_state_sequence:
+                sequence = typing.cast(
+                    typing.Sequence[ModelState[ThreeDimensions]], sequence
+                )
+                data_list: typing.List[ThreeDimensionalGrid] = [
+                    self._get_property_data(state, metadata.name) for state in sequence
+                ]
+            else:
+                data_list = typing.cast(
+                    typing.List[ThreeDimensionalGrid], list(sequence)
+                )
+
             cmin = float(np.nanmin([np.nanmin(data) for data in data_list]))
             cmax = float(np.nanmax([np.nanmax(data) for data in data_list]))
             kwargs["cmin"] = cmin
             kwargs["cmax"] = cmax
             logger.debug(f"Animation cmin: {cmin}, cmax: {cmax}")
 
-        # Create base figure from first state
+        # Create base figure from first state/grid
         base_fig = self.make_plot(
-            model_states[0],
+            sequence[0],  # type: ignore
             property=property,
             plot_type=plot_type,
             width=width,
@@ -3821,11 +4006,11 @@ class ModelVisualizer:
 
         # Create frames for animation. Ensure we get all states
         frames = []
-        state_count = len(model_states)
+        state_count = len(sequence)
         for i in range(0, state_count, step_size):
-            state = model_states[i]
+            data_item = sequence[i]
             frame_fig = self.make_plot(
-                state,
+                data_item,  # type: ignore
                 property=property,
                 plot_type=plot_type,
                 width=width,
@@ -3838,12 +4023,17 @@ class ModelVisualizer:
             )
 
             # Create frame title with appropriate time units
-            if state.time >= 3600:  # More than 1 hour
-                time_str = f"t={state.time / 3600:.2f} hours"
-            elif state.time >= 60:  # More than 1 minute
-                time_str = f"t={state.time / 60:.2f} minutes"
+            if is_model_state_sequence:
+                state = typing.cast(ModelState[ThreeDimensions], data_item)
+                if state.time >= 3600:  # More than 1 hour
+                    time_str = f"t={state.time / 3600:.2f} hours"
+                elif state.time >= 60:  # More than 1 minute
+                    time_str = f"t={state.time / 60:.2f} minutes"
+                else:
+                    time_str = f"t={state.time:.2f} seconds"
             else:
-                time_str = f"t={state.time:.2f} seconds"
+                # For raw grids, just use frame index
+                time_str = f"Frame {i}"
 
             # Extract annotations from the frame figure if they exist
             frame_layout: typing.Dict[str, typing.Any] = {
@@ -3980,7 +4170,7 @@ class ModelVisualizer:
                             "label": f"{i}",
                             "method": "animate",
                         }
-                        for i in range(len(model_states))
+                        for i in range(len(sequence))
                     ],
                 }
             ],
@@ -3988,5 +4178,5 @@ class ModelVisualizer:
         return base_fig
 
 
-viz = ModelVisualizer()
-"""Default 3D reservoir model visualizer instance."""
+viz = DataVisualizer()
+"""Global visualizer instance for 3D plots."""
