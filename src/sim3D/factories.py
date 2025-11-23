@@ -52,6 +52,7 @@ from sim3D.wells import (
     ProducedFluid,
     ProductionWell,
     Wells,
+    WellControl,
 )
 from sim3D.faults import Fault, apply_faults
 
@@ -59,7 +60,7 @@ __all__ = [
     "reservoir_model",
     "injection_well",
     "production_well",
-    "wells",
+    "wells_",
     "validate_saturation_grids",
 ]
 
@@ -660,7 +661,7 @@ def injection_well(
     well_name: str,
     perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
-    bottom_hole_pressure: float,
+    control: WellControl,
     injected_fluid: InjectedFluid,
     **kwargs: typing.Any,
 ) -> InjectionWell[WellLocation]:
@@ -671,7 +672,7 @@ def injection_well(
     :param perforating_intervals: Sequence of tuples representing the start and end locations of each interval in the grid
     :param radius: Radius of the well (ft)
     :param injected_fluid: The fluid being injected into the well, represented as a `WellFluid` instance.
-    :param bottom_hole_pressure: Bottom hole pressure of the well (psi)
+    :param control: Control parameters for the well, represented as a `WellControl` instance.
     :param kwargs: Additional keyword arguments to be passed to the `InjectionWell` constructor
     :return: `InjectionWell` instance
     """
@@ -679,7 +680,7 @@ def injection_well(
         name=well_name,
         perforating_intervals=perforating_intervals,
         radius=radius,
-        bottom_hole_pressure=bottom_hole_pressure,
+        control=control,
         injected_fluid=injected_fluid,
         **kwargs,
     )
@@ -689,7 +690,7 @@ def production_well(
     well_name: str,
     perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
     radius: float,
-    bottom_hole_pressure: float,
+    control: WellControl,
     produced_fluids: typing.Sequence[ProducedFluid],
     skin_factor: float = 0.0,
     **kwargs: typing.Any,
@@ -702,7 +703,7 @@ def production_well(
     :param radius: Radius of the well (ft)
     :param produced_fluids: List of fluids being produced by the well, represented as a sequence of `WellFluid` instances.
     :param skin_factor: Skin factor for the well, default is 0.0
-    :param bottom_hole_pressure: Bottom hole pressure of the well (psi)
+    :param control: Control parameters for the well, represented as a `WellControl` instance.
     :param kwargs: Additional keyword arguments to be passed to the `ProductionWell` constructor
     :return: `ProductionWell` instance
     """
@@ -713,13 +714,13 @@ def production_well(
         perforating_intervals=perforating_intervals,
         radius=radius,
         skin_factor=skin_factor,
-        bottom_hole_pressure=bottom_hole_pressure,
+        control=control,
         produced_fluids=produced_fluids,
         **kwargs,
     )
 
 
-def wells(
+def wells_(
     injectors: typing.Optional[typing.Sequence[InjectionWell[WellLocation]]] = None,
     producers: typing.Optional[typing.Sequence[ProductionWell[WellLocation]]] = None,
     **kwargs: typing.Any,

@@ -572,19 +572,16 @@ def evolve_pressure_explicitly(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
             )
-            if cell_injection_rate < 0.0:
-                if injection_well.auto_clamp:
-                    cell_injection_rate = 0.0
-                else:
-                    _warn_injector_is_producing(
-                        injection_rate=cell_injection_rate,
-                        well_name=injection_well.name,
-                        time=time_step * time_step_size,
-                        cell=(i, j, k),
-                        rate_unit="ft³/day"
-                        if injected_phase == FluidPhase.GAS
-                        else "bbls/day",
-                    )
+            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+                _warn_injector_is_producing(
+                    injection_rate=cell_injection_rate,
+                    well_name=injection_well.name,
+                    time=time_step * time_step_size,
+                    cell=(i, j, k),
+                    rate_unit="ft³/day"
+                    if injected_phase == FluidPhase.GAS
+                    else "bbls/day",
+                )
 
             if injected_phase != FluidPhase.GAS:
                 cell_injection_rate *= c.BBL_TO_FT3  # Convert bbls/day to ft³/day
@@ -640,19 +637,16 @@ def evolve_pressure_explicitly(
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
-                if production_rate > 0.0:
-                    if production_well.auto_clamp:
-                        production_rate = 0.0
-                    else:
-                        _warn_producer_is_injecting(
-                            production_rate=production_rate,
-                            well_name=production_well.name,
-                            time=time_step * time_step_size,
-                            cell=(i, j, k),
-                            rate_unit="ft³/day"
-                            if produced_phase == FluidPhase.GAS
-                            else "bbls/day",
-                        )
+                if production_rate > 0.0 and options.warn_rates_anomalies:
+                    _warn_producer_is_injecting(
+                        production_rate=production_rate,
+                        well_name=production_well.name,
+                        time=time_step * time_step_size,
+                        cell=(i, j, k),
+                        rate_unit="ft³/day"
+                        if produced_phase == FluidPhase.GAS
+                        else "bbls/day",
+                    )
 
                 if produced_fluid.phase != FluidPhase.GAS:
                     production_rate *= c.BBL_TO_FT3  # Convert bbls/day to ft³/day
@@ -685,4 +679,5 @@ def evolve_pressure_explicitly(
         # Apply the update to the pressure grid
         # P_oil^(n+1) = P_oil^n + dP_oil
         updated_oil_pressure_grid[i, j, k] += change_in_pressure
+    
     return EvolutionResult(updated_oil_pressure_grid, scheme="explicit")

@@ -8,6 +8,7 @@ import typing
 from attrs import evolve
 import numpy as np
 
+from sim3D._precision import get_dtype
 from sim3D.boundaries import BoundaryConditions, BoundaryMetadata
 from sim3D.diffusivity import (
     evolve_miscible_saturation_explicitly,
@@ -178,6 +179,17 @@ def _apply_boundary_conditions(
             property_name="temperature",
         ),
     )
+    # Clamp saturations to [0, 1] after applying BCs
+    dtype = get_dtype()
+    fluid_properties.oil_saturation_grid.clip(
+        min=0.0, max=1.0, out=fluid_properties.oil_saturation_grid, dtype=dtype
+    )
+    fluid_properties.water_saturation_grid.clip(
+        min=0.0, max=1.0, out=fluid_properties.water_saturation_grid, dtype=dtype
+    )
+    fluid_properties.gas_saturation_grid.clip(
+        min=0.0, max=1.0, out=fluid_properties.gas_saturation_grid, dtype=dtype
+    )
     excluded_fluid_properties = (
         "pressure_grid",
         "oil_saturation_grid",
@@ -203,16 +215,33 @@ def build_rock_fluid_properties_grids(
     CapillaryPressureGrids[ThreeDimensions],
 ]:
     """Builds the rock-fluid properties grids required for simulation."""
+    # Collect and clamp saturation grids
+    water_saturation_grid = fluid_properties.water_saturation_grid
+    oil_saturation_grid = fluid_properties.oil_saturation_grid
+    gas_saturation_grid = fluid_properties.gas_saturation_grid
+    irreducible_water_saturation_grid = (
+        rock_properties.irreducible_water_saturation_grid
+    )
+    residual_oil_saturation_water_grid = (
+        rock_properties.residual_oil_saturation_water_grid
+    )
+    residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
+    residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
+    water_viscosity_grid = fluid_properties.water_viscosity_grid
+    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
+    gas_viscosity_grid = fluid_properties.gas_viscosity_grid
+    relperm_table = rock_fluid_properties.relative_permeability_table
+    capillary_pressure_table = rock_fluid_properties.capillary_pressure_table
     logger.debug("Building relative permeability grids...")
     krw_grid, kro_grid, krg_grid = build_three_phase_relative_permeabilities_grids(
-        water_saturation_grid=fluid_properties.water_saturation_grid,
-        oil_saturation_grid=fluid_properties.oil_saturation_grid,
-        gas_saturation_grid=fluid_properties.gas_saturation_grid,
-        irreducible_water_saturation_grid=rock_properties.irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=rock_properties.residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=rock_properties.residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=rock_properties.residual_gas_saturation_grid,
-        relative_permeability_table=rock_fluid_properties.relative_permeability_table,
+        water_saturation_grid=water_saturation_grid,
+        oil_saturation_grid=oil_saturation_grid,
+        gas_saturation_grid=gas_saturation_grid,
+        irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+        residual_gas_saturation_grid=residual_gas_saturation_grid,
+        relative_permeability_table=relperm_table,
     )
     logger.debug("Building relative mobility grids...")
     (
@@ -223,9 +252,9 @@ def build_rock_fluid_properties_grids(
         oil_relative_permeability_grid=kro_grid,
         water_relative_permeability_grid=krw_grid,
         gas_relative_permeability_grid=krg_grid,
-        water_viscosity_grid=fluid_properties.water_viscosity_grid,
-        oil_viscosity_grid=fluid_properties.oil_effective_viscosity_grid,
-        gas_viscosity_grid=fluid_properties.gas_viscosity_grid,
+        water_viscosity_grid=water_viscosity_grid,
+        oil_viscosity_grid=oil_viscosity_grid,
+        gas_viscosity_grid=gas_viscosity_grid,
     )
     # Clamp relative mobility grids to avoid numerical issues
     water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
@@ -242,25 +271,23 @@ def build_rock_fluid_properties_grids(
     if options.disable_capillary_effects:
         logger.debug("Capillary effects disabled; using zero capillary pressure grids")
         oil_water_capillary_pressure_grid = build_uniform_grid(
-            grid_shape=fluid_properties.water_saturation_grid.shape,
-            value=0.0,
+            grid_shape=water_saturation_grid.shape, value=0.0
         )
         gas_oil_capillary_pressure_grid = build_uniform_grid(
-            grid_shape=fluid_properties.water_saturation_grid.shape,
-            value=0.0,
+            grid_shape=water_saturation_grid.shape, value=0.0
         )
     else:
         (
             oil_water_capillary_pressure_grid,
             gas_oil_capillary_pressure_grid,
         ) = build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=fluid_properties.water_saturation_grid,
-            gas_saturation_grid=fluid_properties.gas_saturation_grid,
-            irreducible_water_saturation_grid=rock_properties.irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=rock_properties.residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=rock_properties.residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=rock_properties.residual_gas_saturation_grid,
-            capillary_pressure_table=rock_fluid_properties.capillary_pressure_table,
+            water_saturation_grid=water_saturation_grid,
+            gas_saturation_grid=gas_saturation_grid,
+            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=residual_gas_saturation_grid,
+            capillary_pressure_table=capillary_pressure_table,
         )
         if options.capillary_strength_factor != 1.0:
             logger.debug(
@@ -275,22 +302,26 @@ def build_rock_fluid_properties_grids(
                 gas_oil_capillary_pressure_grid * options.capillary_strength_factor,
             )
 
-    relperm_grids = RelPermGrids[ThreeDimensions](
+    padded_relperm_grids = RelPermGrids[ThreeDimensions](
         kro=kro_grid, krw=krw_grid, krg=krg_grid
     )
-    relative_mobility_grids = RelativeMobilityGrids(
+    padded_relative_mobility_grids = RelativeMobilityGrids(
         water_relative_mobility=water_relative_mobility_grid,
         oil_relative_mobility=oil_relative_mobility_grid,
         gas_relative_mobility=gas_relative_mobility_grid,
     )
-    relative_mobility_grids = typing.cast(
-        RelativeMobilityGrids[ThreeDimensions], relative_mobility_grids
+    padded_relative_mobility_grids = typing.cast(
+        RelativeMobilityGrids[ThreeDimensions], padded_relative_mobility_grids
     )
-    capillary_pressure_grids = CapillaryPressureGrids[ThreeDimensions](
+    padded_capillary_pressure_grids = CapillaryPressureGrids[ThreeDimensions](
         oil_water_capillary_pressure=oil_water_capillary_pressure_grid,
         gas_oil_capillary_pressure=gas_oil_capillary_pressure_grid,
     )
-    return relperm_grids, relative_mobility_grids, capillary_pressure_grids
+    return (
+        padded_relperm_grids,
+        padded_relative_mobility_grids,
+        padded_capillary_pressure_grids,
+    )
 
 
 def run(
@@ -321,12 +352,12 @@ def run(
     logger.debug(f"Time step size: {options.time_step_size} seconds")
     logger.debug(f"Total simulation time: {options.total_time} seconds")
 
+    cell_dimension = model.cell_dimension
+    boundary_conditions = model.boundary_conditions
+    grid_shape = model.grid_shape
+    time_step_size = options.time_step_size
     # Use constants from options within the simulation
     with options.constants():
-        cell_dimension = model.cell_dimension
-        boundary_conditions = model.boundary_conditions
-        grid_shape = model.grid_shape
-        time_step_size = options.time_step_size
         # Pad fluid and rock properties grids and other necesary grids with ghost cells
         # for boundary condition application
         # Ensure ghost cells mirror neighbour values by default
@@ -404,14 +435,19 @@ def run(
         oil_production_grid = zeros_grid.copy()
         water_production_grid = zeros_grid.copy()
         gas_production_grid = zeros_grid.copy()
-        relperm_grids, relative_mobility_grids, capillary_pressure_grids = (
-            build_rock_fluid_properties_grids(
-                fluid_properties=padded_fluid_properties,
-                rock_properties=padded_rock_properties,
-                rock_fluid_properties=rock_fluid_properties,
-                options=options,
-            )
+        (
+            padded_relperm_grids,
+            padded_relative_mobility_grids,
+            padded_capillary_pressure_grids,
+        ) = build_rock_fluid_properties_grids(
+            fluid_properties=padded_fluid_properties,
+            rock_properties=padded_rock_properties,
+            rock_fluid_properties=rock_fluid_properties,
+            options=options,
         )
+        relative_mobility_grids = padded_relative_mobility_grids.unpad(pad_width=1)
+        relperm_grids = padded_relperm_grids.unpad(pad_width=1)
+        capillary_pressure_grids = padded_capillary_pressure_grids.unpad(pad_width=1)
         model_state = ModelState[ThreeDimensions](
             time_step=0,
             time_step_size=time_step_size,
@@ -453,300 +489,326 @@ def run(
 
         for time_step in range(1, num_of_time_steps + 1):
             logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
+            try:
+                if wells.exists():
+                    # Update the wells for the next time step
+                    logger.debug(
+                        "Updating wells configuration for the next time step..."
+                    )
+                    wells.evolve(model_state)
+                    logger.debug("Wells updated.")
 
-            if wells.has_wells():
-                # Update the wells for the next time step
-                logger.debug("Updating wells configuration for the next time step...")
-                wells.evolve(model_state)
-                logger.debug("Wells updated.")
+                # Log simulation progress at regular intervals
+                if time_step % max(1, int(num_of_time_steps // 10)) == 0:
+                    progress_percent = (time_step / num_of_time_steps) * 100
+                    logger.info(
+                        f"Simulation progress: {progress_percent:.1f}% (step {time_step}/{int(num_of_time_steps)})"
+                    )
 
-            # Log simulation progress at regular intervals
-            if time_step % max(1, int(num_of_time_steps // 10)) == 0:
-                progress_percent = (time_step / num_of_time_steps) * 100
-                logger.info(
-                    f"Simulation progress: {progress_percent:.1f}% (step {time_step}/{int(num_of_time_steps)})"
-                )
+                # Apply boundary conditions before pressure update
+                if time_step != 1:
+                    logger.debug(
+                        "Applying boundary conditions before pressure evolution..."
+                    )
+                    padded_fluid_properties, padded_rock_properties = (
+                        _apply_boundary_conditions(
+                            fluid_properties=padded_fluid_properties,
+                            rock_properties=padded_rock_properties,
+                            boundary_conditions=boundary_conditions,
+                            cell_dimension=cell_dimension,
+                            grid_shape=grid_shape,
+                            thickness_grid=thickness_grid,
+                            time=time_step * time_step_size,
+                        )
+                    )
+                    logger.debug("Boundary conditions applied.")
+                    # If the pressure boundary condition is not no-flow,
+                    # Then apply PVT update before pressure evolution
+                    # Since most PVT properties depend on pressure
+                    # This is skipped for no-flow BCs to save computation.
+                    # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
+                    if no_flow_pressure_boundary_condition is False:
+                        logger.debug(
+                            "Updating PVT fluid properties before pressure evolution..."
+                        )
+                        padded_fluid_properties = update_pvt_properties(
+                            fluid_properties=padded_fluid_properties,
+                            wells=wells,
+                            miscibility_model=miscibility_model,
+                        )
+                        logger.debug("PVT fluid properties updated.")
 
-            # Apply boundary conditions before pressure update
-            if time_step != 1:
-                logger.debug("Applying boundary conditions before pressure evolution...")
-                padded_fluid_properties, padded_rock_properties = (
-                    _apply_boundary_conditions(
+                    # Build relative permeability, relative mobility, and capillary pressure grids
+                    (
+                        padded_relperm_grids,
+                        padded_relative_mobility_grids,
+                        padded_capillary_pressure_grids,
+                    ) = build_rock_fluid_properties_grids(
                         fluid_properties=padded_fluid_properties,
                         rock_properties=padded_rock_properties,
-                        boundary_conditions=boundary_conditions,
-                        cell_dimension=cell_dimension,
-                        grid_shape=grid_shape,
-                        thickness_grid=thickness_grid,
-                        time=time_step * time_step_size,
+                        rock_fluid_properties=rock_fluid_properties,
+                        options=options,
                     )
+
+                logger.debug("Evolving pressure...")
+                # Evolvers also return padded grids as output since padded grids were given as input
+                pressure_result = evolve_pressure(
+                    cell_dimension=cell_dimension,
+                    thickness_grid=padded_thickness_grid,
+                    elevation_grid=padded_elevation_grid,
+                    time_step=time_step,
+                    time_step_size=time_step_size,
+                    rock_properties=padded_rock_properties,
+                    fluid_properties=padded_fluid_properties,
+                    rock_fluid_properties=rock_fluid_properties,
+                    relative_mobility_grids=padded_relative_mobility_grids,
+                    capillary_pressure_grids=padded_capillary_pressure_grids,
+                    wells=wells,
+                    options=options,
                 )
-                logger.debug("Boundary conditions applied.")
-                # If the pressure boundary condition is not no-flow,
-                # Then apply PVT update before pressure evolution
-                # Since most PVT properties depend on pressure
-                # This is skipped for no-flow BCs to save computation.
-                # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
-                if not no_flow_pressure_boundary_condition:
+                padded_pressure_grid = pressure_result.value
+                logger.debug(
+                    f"Pressure evolution completed! ({pressure_result.scheme} scheme)"
+                )
+
+                if (
+                    negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)
+                ).size > 0:
+                    logger.error(
+                        f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
+                    )
+                    logger.error(
+                        f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi"
+                    )
+                    logger.error(
+                        f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
+                    )
+                    raise RuntimeError(
+                        NEGATIVE_PRESSURE_ERROR.format(
+                            indices=negative_pressure_indices.tolist()
+                        )
+                        + f"\nAt Time Step {time_step}."
+                    )
+
+                # Update fluid properties with new pressure grid
+                if pressure_result.scheme == "implicit":
+                    logger.debug("Updating fluid properties with new pressure grid...")
+                    padded_fluid_properties = evolve(
+                        padded_fluid_properties, pressure_grid=padded_pressure_grid
+                    )
+                    # For implicit schemes, we need to update the fluid properties
+                    # before proceeding to saturation evolution.
+                    # Explicit pressure is strongly coupled with saturation update.
                     logger.debug(
-                        "Updating PVT fluid properties before pressure evolution..."
+                        "Updating PVT fluid properties for saturation evolution (implicit scheme)"
                     )
                     padded_fluid_properties = update_pvt_properties(
                         fluid_properties=padded_fluid_properties,
                         wells=wells,
                         miscibility_model=miscibility_model,
                     )
-                    logger.debug("PVT fluid properties updated.")
 
-                # Build relative permeability, relative mobility, and capillary pressure grids
-                relperm_grids, relative_mobility_grids, capillary_pressure_grids = (
-                    build_rock_fluid_properties_grids(
-                        fluid_properties=padded_fluid_properties,
-                        rock_properties=padded_rock_properties,
-                        rock_fluid_properties=rock_fluid_properties,
-                        options=options,
+                    # Recompute relative mobility grids with updated fluid properties
+                    # Since relative mobility depends on fluid viscosities which change with pressure
+                    logger.debug(
+                        "Rebuilding relative mobility grids for saturation evolution (implicit scheme)..."
                     )
-                )
-
-            logger.debug("Evolving pressure...")
-            # Evolvers also return padded grids as output since padded grids were given as input
-            pressure_result = evolve_pressure(
-                cell_dimension=cell_dimension,
-                thickness_grid=padded_thickness_grid,
-                elevation_grid=padded_elevation_grid,
-                time_step=time_step,
-                time_step_size=time_step_size,
-                rock_properties=padded_rock_properties,
-                fluid_properties=padded_fluid_properties,
-                rock_fluid_properties=rock_fluid_properties,
-                relative_mobility_grids=relative_mobility_grids,
-                capillary_pressure_grids=capillary_pressure_grids,
-                wells=wells,
-                options=options,
-            )
-            padded_pressure_grid = pressure_result.value
-            logger.debug(
-                f"Pressure evolution completed! ({pressure_result.scheme} scheme)"
-            )
-
-            if (
-                negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)
-            ).size > 0:
-                logger.error(
-                    f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
-                )
-                logger.error(
-                    f"Minimum pressure: {np.min(padded_pressure_grid):.2f} psi"
-                )
-                logger.error(
-                    f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
-                )
-                raise RuntimeError(
-                    NEGATIVE_PRESSURE_ERROR.format(
-                        indices=negative_pressure_indices.tolist()
+                    (
+                        padded_water_relative_mobility_grid,
+                        padded_oil_relative_mobility_grid,
+                        padded_gas_relative_mobility_grid,
+                    ) = build_three_phase_relative_mobilities_grids(
+                        oil_relative_permeability_grid=padded_relperm_grids.kro,
+                        water_relative_permeability_grid=padded_relperm_grids.krw,
+                        gas_relative_permeability_grid=padded_relperm_grids.krg,
+                        water_viscosity_grid=padded_fluid_properties.water_viscosity_grid,
+                        oil_viscosity_grid=padded_fluid_properties.oil_effective_viscosity_grid,
+                        gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
                     )
-                    + f"\nAt Time Step {time_step}."
-                )
+                    # Clamp relative mobility grids to avoid numerical issues
+                    padded_water_relative_mobility_grid = (
+                        options.relative_mobility_range["water"].arrayclip(
+                            padded_water_relative_mobility_grid
+                        )
+                    )
+                    padded_oil_relative_mobility_grid = options.relative_mobility_range[
+                        "oil"
+                    ].arrayclip(padded_oil_relative_mobility_grid)
+                    padded_gas_relative_mobility_grid = options.relative_mobility_range[
+                        "gas"
+                    ].arrayclip(padded_gas_relative_mobility_grid)
+                    padded_relative_mobility_grids = RelativeMobilityGrids(
+                        water_relative_mobility=padded_water_relative_mobility_grid,
+                        oil_relative_mobility=padded_oil_relative_mobility_grid,
+                        gas_relative_mobility=padded_gas_relative_mobility_grid,
+                    )
+                    padded_relative_mobility_grids = typing.cast(
+                        RelativeMobilityGrids[ThreeDimensions],
+                        padded_relative_mobility_grids,
+                    )
+                    logger.debug(
+                        "Relative mobility grids rebuilt for saturation evolution."
+                    )
 
-            # Update fluid properties with new pressure grid
-            if pressure_result.scheme == "implicit":
-                logger.debug("Updating fluid properties with new pressure grid...")
-                padded_fluid_properties = evolve(
-                    padded_fluid_properties, pressure_grid=padded_pressure_grid
-                )
-                # For implicit schemes, we need to update the fluid properties
-                # before proceeding to saturation evolution.
-                # Explicit pressure is strongly coupled with saturation update.
-                logger.debug(
-                    "Updating PVT fluid properties for saturation evolution (implicit scheme)"
-                )
-                padded_fluid_properties = update_pvt_properties(
-                    fluid_properties=padded_fluid_properties,
-                    wells=wells,
-                    miscibility_model=miscibility_model,
-                )
+                else:
+                    # For explicit schemes, we can re-use the current fluid properties
+                    # in the saturation evolution step.
+                    # Explicit pressure is fully decoupled from saturation update.
+                    logger.debug(
+                        "Using current PVT fluid properties for saturation evolution (explicit scheme)"
+                    )
 
-                # Recompute relative mobility grids with updated fluid properties
-                # Since relative mobility depends on fluid viscosities which change with pressure
-                logger.debug(
-                    "Rebuilding relative mobility grids for saturation evolution (implicit scheme)..."
-                )
-                (
-                    water_relative_mobility_grid,
-                    oil_relative_mobility_grid,
-                    gas_relative_mobility_grid,
-                ) = build_three_phase_relative_mobilities_grids(
-                    oil_relative_permeability_grid=relperm_grids.kro,
-                    water_relative_permeability_grid=relperm_grids.krw,
-                    gas_relative_permeability_grid=relperm_grids.krg,
-                    water_viscosity_grid=padded_fluid_properties.water_viscosity_grid,
-                    oil_viscosity_grid=padded_fluid_properties.oil_effective_viscosity_grid,
-                    gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
-                )
-                # Clamp relative mobility grids to avoid numerical issues
-                water_relative_mobility_grid = options.relative_mobility_range[
-                    "water"
-                ].arrayclip(water_relative_mobility_grid)
-                oil_relative_mobility_grid = options.relative_mobility_range[
-                    "oil"
-                ].arrayclip(oil_relative_mobility_grid)
-                gas_relative_mobility_grid = options.relative_mobility_range[
-                    "gas"
-                ].arrayclip(gas_relative_mobility_grid)
-                relative_mobility_grids = RelativeMobilityGrids(
-                    water_relative_mobility=water_relative_mobility_grid,
-                    oil_relative_mobility=oil_relative_mobility_grid,
-                    gas_relative_mobility=gas_relative_mobility_grid,
-                )
-                relative_mobility_grids = typing.cast(
-                    RelativeMobilityGrids[ThreeDimensions], relative_mobility_grids
-                )
-                logger.debug(
-                    "Relative mobility grids rebuilt for saturation evolution."
-                )
-
-            else:
-                # For explicit schemes, we can re-use the current fluid properties
-                # in the saturation evolution step.
-                # Explicit pressure is fully decoupled from saturation update.
-                logger.debug(
-                    "Using current PVT fluid properties for saturation evolution (explicit scheme)"
-                )
-
-            # Saturation evolution
-            logger.debug("Evolving saturation...")
-            # Build zeros grids to track production and injection at each time step
-            oil_injection_grid = zeros_grid.copy()  # No initial injection
-            water_injection_grid = zeros_grid.copy()
-            gas_injection_grid = zeros_grid.copy()
-            oil_production_grid = zeros_grid.copy()  # No initial production
-            water_production_grid = zeros_grid.copy()
-            gas_production_grid = zeros_grid.copy()
-            saturation_result = evolve_saturation(
-                cell_dimension=cell_dimension,
-                thickness_grid=padded_thickness_grid,
-                elevation_grid=padded_elevation_grid,
-                time_step=time_step,
-                time_step_size=time_step_size,
-                rock_properties=padded_rock_properties,
-                fluid_properties=padded_fluid_properties,
-                rock_fluid_properties=rock_fluid_properties,
-                relative_mobility_grids=relative_mobility_grids,
-                capillary_pressure_grids=capillary_pressure_grids,
-                wells=wells,
-                options=options,
-                # Wrap the grids in a proxy to allow item assignment
-                injection_grid=_RateGridsProxy(
-                    oil=oil_injection_grid,
-                    water=water_injection_grid,
-                    gas=gas_injection_grid,
-                ),
-                production_grid=_RateGridsProxy(
-                    oil=oil_production_grid,
-                    water=water_production_grid,
-                    gas=gas_production_grid,
-                ),
-            )
-            logger.debug("Saturation evolution completed!")
-
-            # Update fluid properties with new pressure after saturation update, for explicit-explicit scheme
-            if pressure_result.scheme == "explicit":
-                logger.debug(
-                    "Updating fluid properties with new pressure grid (explicit scheme)..."
-                )
-                padded_fluid_properties = evolve(
-                    padded_fluid_properties, pressure_grid=padded_pressure_grid
-                )
-                logger.debug("Fluid properties updated with new pressure grid.")
-
-            logger.debug("Updating fluid properties with new saturation grids...")
-            (
-                padded_water_saturation_grid,
-                padded_oil_saturation_grid,
-                *other_padded_saturation_grids,
-            ) = saturation_result.value # type: ignore
-            other_grids_size = len(other_padded_saturation_grids)
-            if other_grids_size == 1:
-                padded_gas_saturation_grid = other_padded_saturation_grids[0]
-                padded_fluid_properties = evolve(
-                    padded_fluid_properties,
-                    water_saturation_grid=padded_water_saturation_grid,
-                    oil_saturation_grid=padded_oil_saturation_grid,
-                    gas_saturation_grid=padded_gas_saturation_grid,
-                )
-            elif other_grids_size == 2:
-                padded_gas_saturation_grid, padded_solvent_concentration_grid = (
-                    other_padded_saturation_grids
-                )
-                padded_fluid_properties = evolve(
-                    padded_fluid_properties,
-                    water_saturation_grid=padded_water_saturation_grid,
-                    oil_saturation_grid=padded_oil_saturation_grid,
-                    gas_saturation_grid=padded_gas_saturation_grid,
-                    solvent_concentration_grid=padded_solvent_concentration_grid,
-                )
-            else:
-                raise RuntimeError(
-                    f"Unexpected number of saturation grids returned: {other_grids_size + 2}"
-                )
-
-            # Take a snapshot of the model state at specified intervals and at the last time step
-            if (time_step % output_frequency == 0) or (time_step == num_of_time_steps):
-                logger.debug(f"Capturing model state at time step {time_step}")
-                # The production rates are negative in the evolution
-                # so we need to negate them to report positive production values
-                logger.debug("Preparing injection and production rate grids for output")
-                oil_production_grid = typing.cast(
-                    NDimensionalGrid[ThreeDimensions], np.negative(oil_production_grid)
-                )
-                water_production_grid = typing.cast(
-                    NDimensionalGrid[ThreeDimensions],
-                    np.negative(water_production_grid),
-                )
-                gas_production_grid = typing.cast(
-                    NDimensionalGrid[ThreeDimensions], np.negative(gas_production_grid)
-                )
-                injection_rates = RateGrids(
-                    oil=oil_injection_grid,
-                    water=water_injection_grid,
-                    gas=gas_injection_grid,
-                )
-                production_rates = RateGrids(
-                    oil=oil_production_grid,
-                    water=water_production_grid,
-                    gas=gas_production_grid,
-                )
-                logger.debug("Creating model state snapshot")
-                # Capture the current state of the wells
-                wells_snapshot = copy.deepcopy(wells)
-                # Capture the current model with updated fluid properties
-                model_snapshot = evolve(
-                    model, fluid_properties=padded_fluid_properties.unpad(pad_width=1)
-                )
-                model_state = ModelState(
+                # Saturation evolution
+                logger.debug("Evolving saturation...")
+                # Build zeros grids to track production and injection at each time step
+                oil_injection_grid = zeros_grid.copy()  # No initial injection
+                water_injection_grid = zeros_grid.copy()
+                gas_injection_grid = zeros_grid.copy()
+                oil_production_grid = zeros_grid.copy()  # No initial production
+                water_production_grid = zeros_grid.copy()
+                gas_production_grid = zeros_grid.copy()
+                saturation_result = evolve_saturation(
+                    cell_dimension=cell_dimension,
+                    thickness_grid=padded_thickness_grid,
+                    elevation_grid=padded_elevation_grid,
                     time_step=time_step,
                     time_step_size=time_step_size,
-                    model=model_snapshot,
-                    wells=wells_snapshot,
-                    options=options,
-                    relative_mobilities=relative_mobility_grids,
-                    relative_permeabilities=relperm_grids,
-                    capillary_pressures=capillary_pressure_grids,
-                    injection=injection_rates,
-                    production=production_rates,
-                )
-                logger.debug("Yielding model state snapshot")
-                yield model_state
-
-            # PVT update for next time step (or only update for explicit-explicit scheme)
-            if pressure_result.scheme == "explicit":
-                logger.debug("Updating PVT fluid properties for next time step")
-                padded_fluid_properties = update_pvt_properties(
+                    rock_properties=padded_rock_properties,
                     fluid_properties=padded_fluid_properties,
+                    rock_fluid_properties=rock_fluid_properties,
+                    relative_mobility_grids=padded_relative_mobility_grids,
+                    capillary_pressure_grids=padded_capillary_pressure_grids,
                     wells=wells,
-                    miscibility_model=miscibility_model,
+                    options=options,
+                    # Wrap the grids in a proxy to allow item assignment
+                    injection_grid=_RateGridsProxy(
+                        oil=oil_injection_grid,
+                        water=water_injection_grid,
+                        gas=gas_injection_grid,
+                    ),
+                    production_grid=_RateGridsProxy(
+                        oil=oil_production_grid,
+                        water=water_production_grid,
+                        gas=gas_production_grid,
+                    ),
                 )
-                logger.debug("PVT fluid properties updated.")
+                logger.debug("Saturation evolution completed!")
+
+                # Update fluid properties with new pressure after saturation update, for explicit-explicit scheme
+                if pressure_result.scheme == "explicit":
+                    logger.debug(
+                        "Updating fluid properties with new pressure grid (explicit scheme)..."
+                    )
+                    padded_fluid_properties = evolve(
+                        padded_fluid_properties, pressure_grid=padded_pressure_grid
+                    )
+                    logger.debug("Fluid properties updated with new pressure grid.")
+
+                logger.debug("Updating fluid properties with new saturation grids...")
+                (
+                    padded_water_saturation_grid,
+                    padded_oil_saturation_grid,
+                    *other_padded_saturation_grids,
+                ) = saturation_result.value  # type: ignore
+                other_grids_size = len(other_padded_saturation_grids)
+                if other_grids_size == 1:
+                    padded_gas_saturation_grid = other_padded_saturation_grids[0]
+                    padded_fluid_properties = evolve(
+                        padded_fluid_properties,
+                        water_saturation_grid=padded_water_saturation_grid,
+                        oil_saturation_grid=padded_oil_saturation_grid,
+                        gas_saturation_grid=padded_gas_saturation_grid,
+                    )
+                elif other_grids_size == 2:
+                    padded_gas_saturation_grid, padded_solvent_concentration_grid = (
+                        other_padded_saturation_grids
+                    )
+                    padded_fluid_properties = evolve(
+                        padded_fluid_properties,
+                        water_saturation_grid=padded_water_saturation_grid,
+                        oil_saturation_grid=padded_oil_saturation_grid,
+                        gas_saturation_grid=padded_gas_saturation_grid,
+                        solvent_concentration_grid=padded_solvent_concentration_grid,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Unexpected number of saturation grids returned: {other_grids_size + 2}"
+                    )
+
+                # Take a snapshot of the model state at specified intervals and at the last time step
+                if (time_step % output_frequency == 0) or (
+                    time_step == num_of_time_steps
+                ):
+                    logger.debug(f"Capturing model state at time step {time_step}")
+                    # The production rates are negative in the evolution
+                    # so we need to negate them to report positive production values
+                    logger.debug(
+                        "Preparing injection and production rate grids for output"
+                    )
+                    oil_production_grid = typing.cast(
+                        NDimensionalGrid[ThreeDimensions],
+                        np.negative(oil_production_grid),
+                    )
+                    water_production_grid = typing.cast(
+                        NDimensionalGrid[ThreeDimensions],
+                        np.negative(water_production_grid),
+                    )
+                    gas_production_grid = typing.cast(
+                        NDimensionalGrid[ThreeDimensions],
+                        np.negative(gas_production_grid),
+                    )
+                    injection_rates = RateGrids(
+                        oil=oil_injection_grid,
+                        water=water_injection_grid,
+                        gas=gas_injection_grid,
+                    )
+                    production_rates = RateGrids(
+                        oil=oil_production_grid,
+                        water=water_production_grid,
+                        gas=gas_production_grid,
+                    )
+                    logger.debug("Creating model state snapshot")
+                    # Capture the current state of the wells
+                    wells_snapshot = copy.deepcopy(wells)
+                    # Capture the current model with updated fluid properties
+                    model_snapshot = evolve(
+                        model,
+                        fluid_properties=padded_fluid_properties.unpad(pad_width=1),
+                    )
+                    relative_mobility_grids = padded_relative_mobility_grids.unpad(
+                        pad_width=1
+                    )
+                    relperm_grids = padded_relperm_grids.unpad(pad_width=1)
+                    capillary_pressure_grids = padded_capillary_pressure_grids.unpad(
+                        pad_width=1
+                    )
+                    model_state = ModelState(
+                        time_step=time_step,
+                        time_step_size=time_step_size,
+                        model=model_snapshot,
+                        wells=wells_snapshot,
+                        options=options,
+                        relative_mobilities=relative_mobility_grids,
+                        relative_permeabilities=relperm_grids,
+                        capillary_pressures=capillary_pressure_grids,
+                        injection=injection_rates,
+                        production=production_rates,
+                    )
+                    logger.debug("Yielding model state snapshot")
+                    yield model_state
+
+                # PVT update for next time step (or only update for explicit-explicit scheme)
+                if pressure_result.scheme == "explicit":
+                    logger.debug("Updating PVT fluid properties for next time step")
+                    padded_fluid_properties = update_pvt_properties(
+                        fluid_properties=padded_fluid_properties,
+                        wells=wells,
+                        miscibility_model=miscibility_model,
+                    )
+                    logger.debug("PVT fluid properties updated.")
+            except Exception as exc:
+                logger.error(f"Error encountered at time step {time_step}: {exc}")
+                raise
 
     # Log completion outside the loop to avoid unbound variable issues
     logger.info(
@@ -975,7 +1037,7 @@ def update_pvt_properties(
             injected_fluid = well.injected_fluid
             if injected_fluid and injected_fluid.is_miscible:
                 injected_fluid_viscosity_grid = np.vectorize(
-                    injected_fluid.get_viscosity
+                    injected_fluid.get_viscosity, otypes=[get_dtype()]
                 )(
                     pressure=fluid_properties.pressure_grid,
                     temperature=fluid_properties.temperature_grid,

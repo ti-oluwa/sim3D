@@ -70,6 +70,7 @@ def build_layered_grid(
     if len(layer_values) < 1:
         raise ValueError("At least one layer value must be provided.")
 
+    dtype = get_dtype()
     layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0)
     if orientation == Orientation.X:  # Layering along x-axis
         if len(layer_values) != grid_shape[0]:
@@ -79,7 +80,7 @@ def build_layered_grid(
 
         for i, layer_value in enumerate(layer_values):
             layered_grid[i, :, :] = layer_value
-        return layered_grid
+        return layered_grid.astype(dtype)
 
     elif orientation == Orientation.Y:  # Layering along y-axis
         if len(layer_values) != grid_shape[1]:
@@ -89,7 +90,7 @@ def build_layered_grid(
 
         for j, layer_value in enumerate(layer_values):
             layered_grid[:, j, :] = layer_value
-        return layered_grid
+        return layered_grid.astype(dtype)
 
     elif orientation == Orientation.Z:  # Layering along z-axis
         if len(grid_shape) != 3:
@@ -104,7 +105,7 @@ def build_layered_grid(
 
         for k, layer_value in enumerate(layer_values):
             layered_grid[:, :, k] = layer_value
-        return layered_grid
+        return layered_grid.astype(dtype)
 
     raise ValueError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
 
@@ -244,7 +245,7 @@ def apply_structural_dip(
     if not (0.0 <= dip_azimuth < 360.0):
         raise ValueError("`dip_azimuth` must be between 0 and 360 degrees")
 
-    dipped_elevation_grid = elevation_grid.copy()
+    dipped_elevation_grid = elevation_grid.copy().astype(get_dtype())
     dip_angle_radians = np.radians(dip_angle)
     dip_azimuth_radians = np.radians(dip_azimuth)
 
@@ -463,5 +464,4 @@ def flatten_multilayer_grid_to_surface(
         # Apply function along z axis: shape → (nx, ny)
         return np.apply_along_axis(strategy, axis=2, arr=multilayer_grid)
 
-    else:
-        raise ValueError(f"Unsupported flatten strategy: {strategy}")
+    raise ValueError(f"Unsupported flatten strategy: {strategy}")

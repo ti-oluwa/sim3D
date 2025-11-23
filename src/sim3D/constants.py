@@ -430,12 +430,12 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     ),
     # Valid Ranges
     "MIN_VALID_PRESSURE": Constant(
-        value=1.45,
+        value=14.5,
         description="Minimum valid pressure (below this, fluid model may be non-reservoir like)",
         unit="psi",
     ),
     "MAX_VALID_PRESSURE": Constant(
-        value=14700.0,
+        value=14_700.0,
         description="Maximum valid pressure (above this, fluid model may be non-reservoir like)",
         unit="psi",
     ),
@@ -450,12 +450,12 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="°F",
     ),
     "GAS_PSEUDO_PRESSURE_THRESHOLD": Constant(
-        value=1500.0,
+        value=0.0,
         description="Pressure threshold above which gas pseudo-pressure is used (psi)",
         unit="psi",
     ),
     "GAS_PSEUDO_PRESSURE_POINTS": Constant(
-        value=4000,
+        value=1000,
         description="Number of points to compute when generating gas pseudo-pressure table internally",
         unit="points",
     ),

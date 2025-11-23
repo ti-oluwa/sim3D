@@ -458,35 +458,35 @@ class PropertyRegistry:
             aliases=["krg", "gas_rel_perm"],
         ),
         "oil_relative_mobility": PropertyMetadata(
-            name="relative_mobilities.oil",
+            name="relative_mobilities.oil_relative_mobility",
             display_name="Oil Relative Mobility",
-            unit="ft²/day·psi",
+            unit="cP⁻¹",
             color_scheme=ColorScheme.MAGMA,
             aliases=["moil", "oil_rel_mobility"],
         ),
         "water_relative_mobility": PropertyMetadata(
-            name="relative_mobilities.water",
+            name="relative_mobilities.water_relative_mobility",
             display_name="Water Relative Mobility",
-            unit="ft²/day·psi",
+            unit="cP⁻¹",
             color_scheme=ColorScheme.RdBu,
             aliases=["mwater", "water_rel_mobility"],
         ),
         "gas_relative_mobility": PropertyMetadata(
-            name="relative_mobilities.gas",
+            name="relative_mobilities.gas_relative_mobility",
             display_name="Gas Relative Mobility",
-            unit="ft²/day·psi",
+            unit="cP⁻¹",
             color_scheme=ColorScheme.TURBO,
             aliases=["mgas", "gas_rel_mobility"],
         ),
         "oil_water_capillary_pressure": PropertyMetadata(
-            name="capillary_pressures.oil_water",
+            name="capillary_pressures.oil_water_capillary_pressure",
             display_name="Oil-Water Capillary Pressure",
             unit="psi",
             color_scheme=ColorScheme.MAGMA,
             aliases=["ow_cap", "oil_water_capillary", "pcow"],
         ),
         "gas_oil_capillary_pressure": PropertyMetadata(
-            name="capillary_pressures.gas_oil",
+            name="capillary_pressures.gas_oil_capillary_pressure",
             display_name="Gas-Oil Capillary Pressure",
             unit="psi",
             color_scheme=ColorScheme.MAGMA,
@@ -642,6 +642,152 @@ def _copy_scene_properties(
     # Uirevision (for preserving user interactions)
     if hasattr(source_scene, "uirevision") and source_scene.uirevision:
         target_scene.uirevision = source_scene.uirevision
+
+
+def _copy_2d_axis_properties(
+    source_axis: typing.Any,
+    target_axis: typing.Any,
+) -> None:
+    """
+    Copy all 2D axis properties from source axis to target axis.
+
+    This function performs a comprehensive copy of all axis-related properties including
+    titles, ranges, colors, gridlines, tick settings, and fonts.
+
+    :param source_axis: Source axis object to copy properties from
+    :param target_axis: Target axis object to copy properties to
+    """
+    # Title
+    if hasattr(source_axis, "title") and source_axis.title:
+        target_axis.title = source_axis.title
+
+    # Axis type (linear, log, date, category)
+    if hasattr(source_axis, "type") and source_axis.type:
+        target_axis.type = source_axis.type
+
+    # Range
+    if hasattr(source_axis, "range") and source_axis.range:
+        target_axis.range = source_axis.range
+
+    # Autorange
+    if hasattr(source_axis, "autorange"):
+        target_axis.autorange = source_axis.autorange
+
+    # Fixed range (disable zoom/pan)
+    if hasattr(source_axis, "fixedrange"):
+        target_axis.fixedrange = source_axis.fixedrange
+
+    # Colors
+    if hasattr(source_axis, "color") and source_axis.color:
+        target_axis.color = source_axis.color
+
+    if hasattr(source_axis, "gridcolor") and source_axis.gridcolor:
+        target_axis.gridcolor = source_axis.gridcolor
+
+    if hasattr(source_axis, "zerolinecolor") and source_axis.zerolinecolor:
+        target_axis.zerolinecolor = source_axis.zerolinecolor
+
+    if hasattr(source_axis, "linecolor") and source_axis.linecolor:
+        target_axis.linecolor = source_axis.linecolor
+
+    # Line widths
+    if hasattr(source_axis, "gridwidth") and source_axis.gridwidth:
+        target_axis.gridwidth = source_axis.gridwidth
+
+    if hasattr(source_axis, "zerolinewidth") and source_axis.zerolinewidth:
+        target_axis.zerolinewidth = source_axis.zerolinewidth
+
+    if hasattr(source_axis, "linewidth") and source_axis.linewidth:
+        target_axis.linewidth = source_axis.linewidth
+
+    # Show/hide settings
+    if hasattr(source_axis, "showgrid"):
+        target_axis.showgrid = source_axis.showgrid
+
+    if hasattr(source_axis, "zeroline"):
+        target_axis.zeroline = source_axis.zeroline
+
+    if hasattr(source_axis, "showline"):
+        target_axis.showline = source_axis.showline
+
+    if hasattr(source_axis, "showticklabels"):
+        target_axis.showticklabels = source_axis.showticklabels
+
+    # Tick settings
+    if hasattr(source_axis, "ticks") and source_axis.ticks:
+        target_axis.ticks = source_axis.ticks
+
+    if hasattr(source_axis, "tickmode") and source_axis.tickmode:
+        target_axis.tickmode = source_axis.tickmode
+
+    if hasattr(source_axis, "tick0"):
+        target_axis.tick0 = source_axis.tick0
+
+    if hasattr(source_axis, "dtick"):
+        target_axis.dtick = source_axis.dtick
+
+    if hasattr(source_axis, "tickvals"):
+        target_axis.tickvals = source_axis.tickvals
+
+    if hasattr(source_axis, "ticktext"):
+        target_axis.ticktext = source_axis.ticktext
+
+    if hasattr(source_axis, "tickangle"):
+        target_axis.tickangle = source_axis.tickangle
+
+    if hasattr(source_axis, "tickcolor") and source_axis.tickcolor:
+        target_axis.tickcolor = source_axis.tickcolor
+
+    if hasattr(source_axis, "ticklen"):
+        target_axis.ticklen = source_axis.ticklen
+
+    if hasattr(source_axis, "tickwidth"):
+        target_axis.tickwidth = source_axis.tickwidth
+
+    if hasattr(source_axis, "tickformat") and source_axis.tickformat:
+        target_axis.tickformat = source_axis.tickformat
+
+    if hasattr(source_axis, "tickprefix") and source_axis.tickprefix:
+        target_axis.tickprefix = source_axis.tickprefix
+
+    if hasattr(source_axis, "ticksuffix") and source_axis.ticksuffix:
+        target_axis.ticksuffix = source_axis.ticksuffix
+
+    # Font settings
+    if hasattr(source_axis, "tickfont") and source_axis.tickfont:
+        target_axis.tickfont = source_axis.tickfont
+
+    # Spikes (hover lines)
+    if hasattr(source_axis, "showspikes"):
+        target_axis.showspikes = source_axis.showspikes
+
+    if hasattr(source_axis, "spikecolor") and source_axis.spikecolor:
+        target_axis.spikecolor = source_axis.spikecolor
+
+    if hasattr(source_axis, "spikethickness"):
+        target_axis.spikethickness = source_axis.spikethickness
+
+    if hasattr(source_axis, "spikedash") and source_axis.spikedash:
+        target_axis.spikedash = source_axis.spikedash
+
+    if hasattr(source_axis, "spikemode") and source_axis.spikemode:
+        target_axis.spikemode = source_axis.spikemode
+
+    # Side (placement of axis)
+    if hasattr(source_axis, "side") and source_axis.side:
+        target_axis.side = source_axis.side
+
+    # Overlaying
+    if hasattr(source_axis, "overlaying") and source_axis.overlaying:
+        target_axis.overlaying = source_axis.overlaying
+
+    # Mirror
+    if hasattr(source_axis, "mirror"):
+        target_axis.mirror = source_axis.mirror
+
+    # Anchor
+    if hasattr(source_axis, "anchor") and source_axis.anchor:
+        target_axis.anchor = source_axis.anchor
 
 
 def merge_plots(
@@ -878,6 +1024,14 @@ def merge_plots(
             f"Check that your grid dimensions ({rows}x{cols}) and spacing parameters are valid."
         ) from exc
 
+    # Track subplot-specific background colors and templates
+    subplot_backgrounds: typing.Dict[
+        typing.Tuple[int, int], typing.Dict[str, typing.Any]
+    ] = {}
+    subplot_fonts: typing.Dict[
+        typing.Tuple[int, int], typing.Dict[str, typing.Any]
+    ] = {}
+
     # Add traces from each figure to the combined figure
     for idx, fig in enumerate(valid_figures):
         row = idx // cols + 1
@@ -911,17 +1065,16 @@ def merge_plots(
                 )
                 _copy_scene_properties(fig, combined_fig, scene_key)
             else:
-                # Handle 2D x-axis and y-axis properties
+                # Handle 2D x-axis and y-axis properties - comprehensive copy
                 if hasattr(fig.layout, "xaxis") and fig.layout.xaxis:
                     xaxis_key = (
                         "xaxis"
                         if row == 1 and col == 1
                         else f"xaxis{(row - 1) * cols + col}"
                     )
-                    if hasattr(fig.layout.xaxis, "title") and fig.layout.xaxis.title:
-                        combined_fig.layout[xaxis_key].title = fig.layout.xaxis.title
-                    if hasattr(fig.layout.xaxis, "type"):
-                        combined_fig.layout[xaxis_key].type = fig.layout.xaxis.type
+                    _copy_2d_axis_properties(
+                        fig.layout.xaxis, combined_fig.layout[xaxis_key]
+                    )
 
                 if hasattr(fig.layout, "yaxis") and fig.layout.yaxis:
                     yaxis_key = (
@@ -929,10 +1082,25 @@ def merge_plots(
                         if row == 1 and col == 1
                         else f"yaxis{(row - 1) * cols + col}"
                     )
-                    if hasattr(fig.layout.yaxis, "title") and fig.layout.yaxis.title:
-                        combined_fig.layout[yaxis_key].title = fig.layout.yaxis.title
-                    if hasattr(fig.layout.yaxis, "type"):
-                        combined_fig.layout[yaxis_key].type = fig.layout.yaxis.type
+                    _copy_2d_axis_properties(
+                        fig.layout.yaxis, combined_fig.layout[yaxis_key]
+                    )
+
+                # Store background colors and font settings for this subplot
+                if hasattr(fig.layout, "plot_bgcolor") and fig.layout.plot_bgcolor:
+                    subplot_backgrounds[(row, col)] = {
+                        "plot_bgcolor": fig.layout.plot_bgcolor,
+                    }
+                if hasattr(fig.layout, "paper_bgcolor") and fig.layout.paper_bgcolor:
+                    if (row, col) not in subplot_backgrounds:
+                        subplot_backgrounds[(row, col)] = {}
+                    subplot_backgrounds[(row, col)]["paper_bgcolor"] = (
+                        fig.layout.paper_bgcolor
+                    )
+
+                # Store font settings for this subplot
+                if hasattr(fig.layout, "font") and fig.layout.font:
+                    subplot_fonts[(row, col)] = fig.layout.font.to_plotly_json()
 
             # Copy colorbar settings for heatmaps/contours with smart positioning
             for trace_idx, trace in enumerate(fig.data):
@@ -993,12 +1161,46 @@ def merge_plots(
                         )
                         combined_fig.data[combined_trace_idx].colorbar = colorbar_dict
 
-    # Apply global layout settings
+    # Apply subplot-specific background colors using shapes
+    # Plotly's plot_bgcolor is global, so we use shapes to create per-subplot backgrounds
+    shapes = []
+    for (row, col), bg_settings in subplot_backgrounds.items():
+        if "plot_bgcolor" in bg_settings:
+            # Get the axis references for this subplot
+            xaxis_key = "x" if row == 1 and col == 1 else f"x{(row - 1) * cols + col}"
+            yaxis_key = "y" if row == 1 and col == 1 else f"y{(row - 1) * cols + col}"
+
+            # Add a rectangle shape covering the subplot area using axis domain coordinates
+            shapes.append(
+                {
+                    "type": "rect",
+                    "xref": f"{xaxis_key} domain",
+                    "yref": f"{yaxis_key} domain",
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 1,
+                    "y1": 1,
+                    "fillcolor": bg_settings["plot_bgcolor"],
+                    "layer": "below",
+                    "line": {"width": 0},
+                }
+            )
+
+    # Apply font settings per subplot
+    for (row, col), font_settings in subplot_fonts.items():
+        combined_fig.update_xaxes(row=row, col=col, tickfont=font_settings)
+        combined_fig.update_yaxes(
+            row=row, col=col, tickfont=font_settings
+        )  # Apply global layout settings
     combined_fig.update_layout(
         height=height,
         width=width,
         showlegend=show_legend,
     )
+
+    # Add background color shapes if any were created
+    if shapes:
+        combined_fig.update_layout(shapes=shapes)
 
     # Set hovermode if specified (for 2D plots with unified hover behavior)
     if hovermode is not None:

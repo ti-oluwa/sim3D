@@ -1055,10 +1055,6 @@ def compute_gas_to_oil_ratio(
         if gor_at_bubble_point_pressure is not None:
             return gor_at_bubble_point_pressure
 
-        if pressure > bubble_point_pressure:
-            logger.debug(
-                f"GOR estimated at bubble point since pressure ({pressure:.2f} psi) > Pb ({bubble_point_pressure:.2f} psi)"
-            )
         gor = compute_gor_vasquez_beggs(bubble_point_pressure)
         return max(0.0, gor)
 

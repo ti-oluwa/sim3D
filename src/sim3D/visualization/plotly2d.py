@@ -233,6 +233,18 @@ class BaseRenderer(ABC):
         else:
             return f"{value:.{precision}g}"
 
+    def help(self) -> str:
+        """
+        Return a help string describing the renderer and its usage.
+
+        :return: Help string
+        """
+        return f"""
+{self.__class__.__name__} renderer
+
+{self.render.__doc__ or ""}
+        """
+
 
 class HeatmapRenderer(BaseRenderer):
     """2D Heatmap renderer using Plotly's heatmap trace."""
@@ -497,9 +509,9 @@ class ScatterRenderer(BaseRenderer):
 
         # Handle coordinate arrays
         if x_coords is None:
-            x_coords = np.arange(data.shape[1])
+            x_coords = np.arange(data.shape[1])  # type: ignore
         if y_coords is None:
-            y_coords = np.arange(data.shape[0])
+            y_coords = np.arange(data.shape[0])  # type: ignore
 
         # Create coordinate meshgrid
         X, Y = np.meshgrid(x_coords, y_coords)
@@ -1097,6 +1109,29 @@ class DataVisualizer:
             title=self.config.title or "2D Visualization Subplots",
         )
         return fig
+
+    def help(self, plot_type: typing.Optional[PlotType] = None) -> str:
+        """
+        Print help information about available plot types and their parameters.
+
+        :param plot_type: Specific plot type to get help for (or None for all)
+        :return: The help string
+
+        Example:
+        ```python
+        from sim3D.visualization.plotly1d import viz, PlotType
+
+        # Get help for all plot types
+        print(viz.help())
+        """
+        if plot_type is not None:
+            renderer = self.get_renderer(plot_type)
+            return renderer.help()
+
+        help_strings = []
+        for pt, renderer in self._renderers.items():
+            help_strings.append(f"=== {pt.value} Plot ===\n{renderer.help()}\n")
+        return "\n".join(help_strings)
 
 
 viz = DataVisualizer()

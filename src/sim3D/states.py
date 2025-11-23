@@ -20,6 +20,7 @@ from sim3D.types import (
     RelPermGrids,
     RelativeMobilityGrids,
 )
+from sim3D.utils import Cells, CellFilter
 from sim3D.wells import Wells, _expand_intervals
 from sim3D.utils import save_as_pickle, load_from_pickle
 
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = ["ModelState", "ProductionAnalyst", "dump_states", "load_states"]
+
+
+def _ensure_cells(cells: typing.Union[Cells, CellFilter]) -> typing.Optional[Cells]:
+    """Convert CellFilter to Cells if needed."""
+    if cells is None:
+        return None
+    if isinstance(cells, Cells):
+        return cells
+    return Cells.from_filter(cells)
 
 
 @attrs.define(frozen=True, slots=True)
@@ -81,8 +91,8 @@ class ModelState(typing.Generic[NDimension]):
             apply_dip=not self.options.disable_structural_dip
         )
 
-    def has_wells(self) -> bool:
-        return self.wells.has_wells()
+    def exists(self) -> bool:
+        return self.wells.exists()
 
     def dump(
         self,
@@ -119,6 +129,93 @@ class ModelState(typing.Generic[NDimension]):
         return load_from_pickle(filepath)
 
 
+def _validate_dumped_state(state: ModelState) -> ModelState:
+    if not isinstance(state, ModelState):
+        raise TypeError(
+            f"Expected ModelState instance, got {type(state).__name__} instead."
+        )
+    # Check that all grids have matching shapes
+    model = state.model
+    model_shape = model.grid_shape
+    fluid_properties = model.fluid_properties
+    rock_properties = model.rock_properties
+    injection = state.injection
+    production = state.production
+    relative_mobilities = state.relative_mobilities
+    relative_permeabilities = state.relative_permeabilities
+    capillary_pressures = state.capillary_pressures
+    thickness_grid = model.thickness_grid
+    if thickness_grid.shape != model_shape:
+        raise ValueError(
+            f"Thickness grid has shape {thickness_grid.shape}, expected {model_shape}."
+        )
+
+    for field in attrs.fields(fluid_properties.__class__):
+        grid = getattr(fluid_properties, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Fluid property grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(rock_properties.__class__):
+        grid = getattr(rock_properties, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Rock property grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(injection.__class__):
+        grid = getattr(injection, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Injection rate grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(production.__class__):
+        grid = getattr(production, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Production rate grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(relative_mobilities.__class__):
+        grid = getattr(relative_mobilities, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Relative mobility grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(relative_permeabilities.__class__):
+        grid = getattr(relative_permeabilities, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Relative permeability grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    for field in attrs.fields(capillary_pressures.__class__):
+        grid = getattr(capillary_pressures, field.name)
+        if not isinstance(grid, np.ndarray):
+            continue
+        if grid.shape != model_shape:
+            raise ValueError(
+                f"Capillary pressure grid {field.name} has shape {grid.shape}, "
+                f"expected {model_shape}."
+            )
+    return state
+
+
 def dump_states(
     states: typing.Iterable[ModelState],
     filepath: PathLike,
@@ -136,9 +233,8 @@ def dump_states(
         "lzma" (slower, better compression), or None
     :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
     """
-    state_dicts = {state.time_step: state for state in states}
     save_as_pickle(
-        state_dicts,
+        [_validate_dumped_state(state) for state in states],
         filepath,
         exist_ok=exist_ok,
         compression=compression,
@@ -146,14 +242,95 @@ def dump_states(
     )
 
 
-def load_states(filepath: PathLike) -> typing.Dict[int, ModelState]:
+def _load_states(
+    states: typing.Iterable[ModelState[NDimension]], as_tuple: bool = False
+) -> typing.Generator[
+    typing.Union[typing.Tuple[int, ModelState[NDimension]], ModelState[NDimension]],
+    None,
+    None,
+]:
+    for state in states:
+        # Older pickles may have inconsistent grid shapes due to omitting unpadding
+        # when saving. Check and unpad if necessary.
+        grid_shape = state.model.grid_shape
+        relative_mobilities = state.relative_mobilities
+        capillary_pressures = state.capillary_pressures
+        relative_permeabilities = state.relative_permeabilities
+        relative_mobilities_shape = relative_mobilities.oil_relative_mobility.shape
+        capillary_pressures_shape = (
+            capillary_pressures.oil_water_capillary_pressure.shape
+        )
+        relative_permeabilities_shape = relative_permeabilities.kro.shape
+        if relative_mobilities_shape != grid_shape:
+            logger.warning(
+                f"State at time step {state.time_step} has inconsistent relative mobility grid shapes. "
+                "Recomputing relative mobilities."
+            )
+            relative_mobilities = relative_mobilities.unpad(pad_width=1)
+
+        if capillary_pressures_shape != grid_shape:
+            logger.warning(
+                f"State at time step {state.time_step} has inconsistent capillary pressure grid shapes. "
+                "Recomputing capillary pressures."
+            )
+            capillary_pressures = capillary_pressures.unpad(pad_width=1)
+        if relative_permeabilities_shape != grid_shape:
+            logger.warning(
+                f"State at time step {state.time_step} has inconsistent relative permeability grid shapes. "
+                "Recomputing relative permeabilities."
+            )
+            relative_permeabilities = relative_permeabilities.unpad(pad_width=1)
+
+        state = attrs.evolve(
+            state,
+            relative_mobilities=relative_mobilities,
+            capillary_pressures=capillary_pressures,
+            relative_permeabilities=relative_permeabilities,
+        )
+        if as_tuple:
+            yield state.time_step, state
+        else:
+            yield state
+
+
+@typing.overload
+def load_states(
+    filepath: PathLike, as_tuple: typing.Literal[True]
+) -> typing.Generator[typing.Tuple[int, ModelState], None, None]:
+    """Loads multiple model states from a pickle file."""
+    ...
+
+
+@typing.overload
+def load_states(
+    filepath: PathLike, as_tuple: typing.Literal[False]
+) -> typing.Generator[ModelState, None, None]:
+    """Loads multiple model states from a pickle file."""
+    ...
+
+
+@typing.overload
+def load_states(filepath: PathLike) -> typing.Generator[ModelState, None, None]:
+    """Loads multiple model states from a pickle file."""
+    ...
+
+
+def load_states(
+    filepath: PathLike, as_tuple: bool = False
+) -> typing.Generator[
+    typing.Union[typing.Tuple[int, ModelState], ModelState], None, None
+]:
     """
     Loads multiple model states from pickle files in a specified directory.
 
     :param filepath: The path to the pickle file or a file-like object.
+    :param as_tuple: If True, yields (time_step, ModelState) tuples.
     :return: A dictionary mapping time step indices to ModelState instances.
     """
-    return load_from_pickle(filepath)
+    states = load_from_pickle(filepath)
+    if isinstance(states, dict):  # For older pickles saved as dicts
+        return _load_states(states.values(), as_tuple=as_tuple)
+    return _load_states(states, as_tuple=as_tuple)
 
 
 @attrs.define(frozen=True, slots=True)
@@ -186,7 +363,7 @@ class InstantaneousRates:
     """Total liquid (oil + water) rate in stock tank barrels per day (STB/day)."""
     gas_oil_ratio: float
     """Gas-oil ratio in standard cubic feet per stock tank barrel (SCF/STB)."""
-    water_cut_fraction: float
+    water_cut: float
     """Water cut as a fraction (0 to 1) of total liquid production."""
 
 
@@ -228,36 +405,46 @@ class MaterialBalanceAnalysis:
 
 @attrs.define(frozen=True, slots=True)
 class ProductivityAnalysis:
-    """Well productivity analysis results."""
+    """Well productivity analysis results based on actual flow rates and reservoir properties."""
 
-    productivity_index: float
-    """Productivity index in stock tank barrels per day per psi (STB/day/psi) or (SCF/day/psi)."""
-    inflow_performance_relationship: float
-    """Inflow performance relationship flow rate in stock tank barrels per day (STB/day)."""
+    total_flow_rate: float
+    """Total flow rate in stock tank barrels per day (STB/day) or standard cubic feet per day (SCF/day)."""
+    average_reservoir_pressure: float
+    """Average reservoir pressure at perforation intervals in psia."""
     skin_factor: float
     """Dimensionless skin factor indicating wellbore damage or stimulation."""
     flow_efficiency: float
     """Flow efficiency as a fraction (0 to 1) accounting for skin effects."""
-    ipr_method: typing.Optional[
-        typing.Literal["vogel", "linear", "fetkovich", "jones"]
-    ] = None
-    """IPR correlation method used for the analysis."""
+    well_index: float
+    """Geometric well index in reservoir barrels per day per psi (rb/day/psi)."""
+    average_mobility: float
+    """Average phase mobility at perforation intervals in 1/cp."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.define(slots=True, frozen=True)
 class SweepEfficiencyAnalysis:
     """Sweep efficiency analysis results."""
 
     volumetric_sweep_efficiency: float
-    """Volumetric sweep efficiency as a fraction (0 to 1) of reservoir contacted."""
+    """Volumetric sweep efficiency as a fraction (0 to 1) of initial oil contacted."""
+
     displacement_efficiency: float
     """Displacement efficiency as a fraction (0 to 1) in contacted zones."""
+
     recovery_efficiency: float
     """Overall recovery efficiency as a fraction (0 to 1) combining sweep and displacement."""
+
     contacted_oil: float
     """Oil in contacted reservoir zones in stock tank barrels (STB)."""
+
     uncontacted_oil: float
     """Oil in uncontacted reservoir zones in stock tank barrels (STB)."""
+
+    areal_sweep_efficiency: float = 0.0
+    """Areal sweep efficiency (0 to 1) computed from contacted planform area."""
+
+    vertical_sweep_efficiency: float = 0.0
+    """Vertical sweep efficiency (0 to 1) computed using saturation-weighted column fractions."""
 
 
 @attrs.define(frozen=True, slots=True)
@@ -302,24 +489,36 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param states: An iterable of `ModelState` instances representing the simulation states.
         """
-        self._states = sorted(states, key=lambda s: s.time_step)
-        self._max_time_step = self._states[-1].time_step
+        self._states = {state.time_step: state for state in states}
+        self._max_time_step = max(self._states.keys())
         self._state_count = len(self._states)
         if self._max_time_step != (self._state_count - 1):
             logger.debug(
-                "Model states have non-sequential time steps. Max time step: %d, State count: %d",
+                "Model states have non-sequential time steps. Max time step: %d, State count: %d. ",
+                "Some production metrics may be inaccurate.",
                 self._max_time_step,
                 self._state_count,
             )
 
-    def get_state(self, time_step: int) -> ModelState[NDimension]:
+    def get_state(self, time_step: int) -> typing.Optional[ModelState[NDimension]]:
         """
         Retrieves the model state for a specific time step.
 
         :param time_step: The time step index to retrieve the state for.
         :return: The ModelState corresponding to the specified time step.
         """
-        return self._states[time_step]
+        if time_step < 0:
+            time_step = self._state_count + time_step
+
+        state = self._states.get(time_step, None)
+        if state is None:
+            logger.warning(
+                f"Time step {time_step} not found. Available time steps: "
+                f"{sorted(self._states.keys())}"
+            )
+        else:
+            logger.debug(f"Retrieved state at time step {time_step}")
+        return state
 
     @property
     def stock_tank_oil_initially_in_place(self) -> float:
@@ -534,6 +733,11 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         # Get initial solution gas in oil
         initial_state = self.get_state(0)
+        if initial_state is None:
+            raise ValueError(
+                "Initial state (time step 0) is not available. Cannot compute total gas recovery factor."
+            )
+
         avg_initial_gor = np.nanmean(
             initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
         )  # scf/STB
@@ -591,8 +795,17 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: The total oil in place in STB
         """
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} not available. Returning 0.0 for oil in place."
+            )
+            return 0.0
+
         model = state.model
         cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
+        logger.debug(
+            f"Computing oil in place at time step {time_step}, cell area={cell_area_in_acres:.4f} acres"
+        )
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
@@ -617,8 +830,17 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: The total free gas in place in SCF
         """
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} not available. Returning 0.0 for gas in place."
+            )
+            return 0.0
+
         model = state.model
         cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
+        logger.debug(
+            f"Computing gas in place at time step {time_step}, cell area={cell_area_in_acres:.4f} acres"
+        )
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
@@ -643,7 +865,14 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: The total water in place in STB
         """
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} not available. Returning 0.0 for water in place."
+            )
+            return 0.0
+
         model = state.model
+        logger.debug(f"Computing water in place at time step {time_step}")
         cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape,
@@ -709,7 +938,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             yield (t, self.water_in_place(t))
 
     @functools.cache
-    def oil_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def oil_produced(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative oil produced between two time steps.
 
@@ -720,11 +954,37 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - ((i1,j1,k1), ...): Tuple of cells
+            - (slice, slice, slice): Region
+            - Cells object: Pre-constructed Cells instance
         :return: The cumulative oil produced in STB
         """
+        logger.debug(
+            f"Computing oil produced from time step {from_time_step} to {to_time_step}, cells filter: {cells}"
+        )
+        # Convert to Cells if not already
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_production = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj is not None
+                else None
+            )
+
             # Production is in ft³/day, convert to STB using FVF
             oil_production = state.production.oil
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -733,6 +993,11 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             time_step_production = 0.0
             if oil_production is not None:
                 oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
+
+                # Apply mask if filtering
+                if mask is not None:
+                    oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
+
                 time_step_production += np.nansum(
                     oil_production_stb_day * time_step_in_days
                 )
@@ -741,7 +1006,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         return float(total_production)
 
     @functools.cache
-    def free_gas_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def free_gas_produced(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative free gas produced between two time steps.
 
@@ -752,11 +1022,32 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The cumulative gas produced in SCF
         """
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_production = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj
+                else None
+            )
+
             # Production is in ft³/day, convert to SCF using FVF
             gas_production = state.production.gas
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -765,6 +1056,11 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             time_step_production = 0.0
             if gas_production is not None:
                 gas_production_SCF_day = gas_production / gas_fvf_grid
+
+                # Apply mask if filtering
+                if mask is not None:
+                    gas_production_SCF_day = np.where(mask, gas_production_SCF_day, 0.0)
+
                 time_step_production += np.nansum(
                     gas_production_SCF_day * time_step_in_days
                 )
@@ -773,7 +1069,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         return float(total_production)
 
     @functools.cache
-    def water_produced(self, from_time_step: int, to_time_step: int) -> float:
+    def water_produced(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative water produced between two time steps.
 
@@ -784,11 +1085,32 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The cumulative water produced in STB
         """
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_production = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj
+                else None
+            )
+
             # Production is in ft³/day, convert to STB using FVF
             water_production = state.production.water
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -801,6 +1123,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 water_production_stb_day = (
                     water_production * c.FT3_TO_BBL / water_fvf_grid
                 )
+
+                # Apply mask if filtering
+                if mask is not None:
+                    water_production_stb_day = np.where(
+                        mask, water_production_stb_day, 0.0
+                    )
+
                 time_step_production += np.nansum(
                     water_production_stb_day * time_step_in_days
                 )
@@ -808,7 +1137,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             total_production += time_step_production
         return float(total_production)
 
-    def oil_injected(self, from_time_step: int, to_time_step: int) -> float:
+    @functools.cache
+    def oil_injected(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative oil injected between two time steps.
 
@@ -819,11 +1154,32 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The cumulative oil injected in STB
         """
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_injection = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj
+                else None
+            )
+
             # Injection is in ft³/day, convert to STB using FVF
             oil_injection = state.injection.oil
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -831,13 +1187,24 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             time_step_injection = 0.0
             if oil_injection is not None:
                 oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
+
+                # Apply mask if filtering
+                if mask is not None:
+                    oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
+
                 time_step_injection += np.nansum(
                     oil_injection_stb_day * time_step_in_days
                 )
             total_injection += time_step_injection
         return float(total_injection)
 
-    def gas_injected(self, from_time_step: int, to_time_step: int) -> float:
+    @functools.cache
+    def gas_injected(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative gas injected between two time steps.
 
@@ -848,11 +1215,32 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The cumulative gas injected in SCF
         """
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_injection = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj
+                else None
+            )
+
             # Injection is in ft³/day, convert to SCF using FVF
             gas_injection = state.injection.gas
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -860,13 +1248,24 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             time_step_injection = 0.0
             if gas_injection is not None:
                 gas_injection_SCF_day = gas_injection / gas_fvf_grid
+
+                # Apply mask if filtering
+                if mask is not None:
+                    gas_injection_SCF_day = np.where(mask, gas_injection_SCF_day, 0.0)
+
                 time_step_injection += np.nansum(
                     gas_injection_SCF_day * time_step_in_days
                 )
             total_injection += time_step_injection
         return float(total_injection)
 
-    def water_injected(self, from_time_step: int, to_time_step: int) -> float:
+    @functools.cache
+    def water_injected(
+        self,
+        from_time_step: int,
+        to_time_step: int,
+        cells: typing.Union[Cells, CellFilter] = None,
+    ) -> float:
         """
         Computes the cumulative water injected between two time steps.
 
@@ -877,11 +1276,32 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         :param from_time_step: The starting time step index (inclusive).
         :param to_time_step: The ending time step index (inclusive).
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The cumulative water injected in STB
         """
+        cells_obj = _ensure_cells(cells)
+
+        if to_time_step < 0:
+            to_time_step = self._state_count + to_time_step
+
         total_injection = 0.0
         for t in range(from_time_step, to_time_step + 1):
             state = self.get_state(t)
+            if state is None:
+                continue
+
+            # Get cell mask for filtering
+            mask = (
+                cells_obj.get_mask(state.model.grid_shape, state.wells)
+                if cells_obj
+                else None
+            )
+
             # Injection is in ft³/day, convert to STB using FVF
             water_injection = state.injection.water
             time_step_in_days = state.time_step_size / c.SECONDS_PER_DAY
@@ -893,6 +1313,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 water_injection_stb_day = (
                     water_injection * c.FT3_TO_BBL / water_fvf_grid
                 )
+
+                # Apply mask if filtering
+                if mask is not None:
+                    water_injection_stb_day = np.where(
+                        mask, water_injection_stb_day, 0.0
+                    )
+
                 time_step_injection += np.nansum(
                     water_injection_stb_day * time_step_in_days
                 )
@@ -905,6 +1332,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the oil production history between two time steps.
@@ -913,19 +1341,27 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and oil produced (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative production from start of simulation to time step t
-                yield (t, self.oil_produced(0, t))
+                yield (t, self.oil_produced(0, t, cells=cells_obj))
             else:
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
-                yield (t, self.oil_produced(t, t))
+                yield (t, self.oil_produced(t, t, cells=cells_obj))
 
     def free_gas_production_history(
         self,
@@ -933,6 +1369,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the free gas production history between two time steps.
@@ -941,19 +1378,27 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and gas produced (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative production from start of simulation
-                yield (t, self.free_gas_produced(0, t))
+                yield (t, self.free_gas_produced(0, t, cells=cells_obj))
             else:
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
-                yield (t, self.free_gas_produced(t, t))
+                yield (t, self.free_gas_produced(t, t, cells=cells_obj))
 
     def water_production_history(
         self,
@@ -961,6 +1406,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the water production history between two time steps.
@@ -969,19 +1415,27 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative production from start. If False, returns production at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and water produced (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative production from start of simulation
-                yield (t, self.water_produced(0, t))
+                yield (t, self.water_produced(0, t, cells=cells_obj))
             else:
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
-                yield (t, self.water_produced(t, t))
+                yield (t, self.water_produced(t, t, cells=cells_obj))
 
     def oil_injection_history(
         self,
@@ -989,6 +1443,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the oil injection history between two time steps.
@@ -997,19 +1452,27 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and oil injected (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative injection from start of simulation
-                yield (t, self.oil_injected(0, t))
+                yield (t, self.oil_injected(0, t, cells=cells_obj))
             else:
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
-                yield (t, self.oil_injected(t, t))
+                yield (t, self.oil_injected(t, t, cells=cells_obj))
 
     def gas_injection_history(
         self,
@@ -1017,6 +1480,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the gas injection history between two time steps.
@@ -1025,19 +1489,27 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and gas injected (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative injection from start of simulation
-                yield (t, self.gas_injected(0, t))
+                yield (t, self.gas_injected(0, t, cells=cells_obj))
             else:
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
-                yield (t, self.gas_injected(t, t))
+                yield (t, self.gas_injected(t, t, cells=cells_obj))
 
     def water_injection_history(
         self,
@@ -1045,6 +1517,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cumulative: bool = False,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the water injection history between two time steps.
@@ -1053,25 +1526,34 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive).
         :param interval: Time step interval for sampling.
         :param cumulative: If True (default), returns cumulative injection from start. If False, returns injection at each time step.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: A generator yielding tuples of time step and water injected (cumulative or exclusive).
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
             if cumulative:
                 # Cumulative injection from start of simulation
-                yield (t, self.water_injected(0, t))
+                yield (t, self.water_injected(0, t, cells=cells_obj))
             else:
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
-                yield (t, self.water_injected(t, t))
+                yield (t, self.water_injected(t, t, cells=cells_obj))
 
     def oil_recovery_factor_history(
         self,
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the oil recovery factor history over time.
@@ -1091,6 +1573,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param from_time_step: The starting time step index (inclusive). Default is 0.
         :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
         :param interval: Time step interval for sampling. Default is 1.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
+            When cells is specified, STOIIP is also calculated for the same filtered region.
         :return: A generator yielding tuples of (time_step, recovery_factor).
 
         Example:
@@ -1108,10 +1597,43 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         plt.xlabel("Time Step")
         ```
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
-        stoiip = self.stock_tank_oil_initially_in_place
+        # If cells filter is specified, compute STOIIP for that region
+        if cells_obj is None:
+            stoiip = self.stock_tank_oil_initially_in_place
+        else:
+            initial_state = self.get_state(0)
+            if initial_state is None:
+                raise ValueError("Initial state not available")
+            mask = cells_obj.get_mask(
+                initial_state.model.grid_shape, initial_state.wells
+            )
+            model = initial_state.model
+            oil_saturation = model.fluid_properties.oil_saturation_grid
+            oil_fvf = model.fluid_properties.oil_formation_volume_factor_grid
+            porosity = model.rock_properties.porosity_grid
+            ntg = model.rock_properties.net_to_gross_ratio_grid
+            thickness = model.thickness_grid
+            cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
+            cell_area_grid = uniform_grid(
+                grid_shape=model.grid_shape, value=cell_area_in_acres
+            )
+            stoiip_grid = hcip_vectorized(
+                area=cell_area_grid,
+                thickness=thickness,
+                porosity=porosity,
+                phase_saturation=oil_saturation,
+                formation_volume_factor=oil_fvf,
+                net_to_gross_ratio=ntg,
+                hydrocarbon_type="oil",
+            )
+            if mask is not None:
+                stoiip_grid = np.where(mask, stoiip_grid, 0.0)
+            stoiip = float(np.nansum(stoiip_grid))
 
         if stoiip == 0:
             # If no initial oil, recovery factor is always 0
@@ -1119,7 +1641,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 yield (t, 0.0)
         else:
             for t in range(from_time_step, to_time_step + 1, interval):
-                cumulative_oil = self.oil_produced(0, t)
+                cumulative_oil = self.oil_produced(0, t, cells=cells_obj)
                 rf = cumulative_oil / stoiip
                 yield (t, rf)
 
@@ -1128,6 +1650,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the free gas recovery factor history over time.
@@ -1140,6 +1663,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param from_time_step: The starting time step index (inclusive). Default is 0.
         :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
         :param interval: Time step interval for sampling. Default is 1.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
+            When cells is specified, GIIP is also calculated for the same filtered region.
         :return: A generator yielding tuples of (time_step, recovery_factor).
 
         Example:
@@ -1151,17 +1681,50 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             print(f"Time step {t}: Free Gas RF = {rf:.2%}")
         ```
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
-        giip = self.stock_tank_gas_initially_in_place
+        # If cells filter is specified, compute GIIP for that region
+        if cells_obj is None:
+            giip = self.stock_tank_gas_initially_in_place
+        else:
+            initial_state = self.get_state(0)
+            if initial_state is None:
+                raise ValueError("Initial state not available")
+            mask = cells_obj.get_mask(
+                initial_state.model.grid_shape, initial_state.wells
+            )
+            model = initial_state.model
+            gas_saturation = model.fluid_properties.gas_saturation_grid
+            gas_fvf = model.fluid_properties.gas_formation_volume_factor_grid
+            porosity = model.rock_properties.porosity_grid
+            ntg = model.rock_properties.net_to_gross_ratio_grid
+            thickness = model.thickness_grid
+            cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
+            cell_area_grid = uniform_grid(
+                grid_shape=model.grid_shape, value=cell_area_in_acres
+            )
+            giip_grid = hcip_vectorized(
+                area=cell_area_grid,
+                thickness=thickness,
+                porosity=porosity,
+                phase_saturation=gas_saturation,
+                formation_volume_factor=gas_fvf,
+                net_to_gross_ratio=ntg,
+                hydrocarbon_type="gas",
+            )
+            if mask is not None:
+                giip_grid = np.where(mask, giip_grid, 0.0)
+            giip = float(np.nansum(giip_grid))
 
         if giip == 0:
             for t in range(from_time_step, to_time_step + 1, interval):
                 yield (t, 0.0)
         else:
             for t in range(from_time_step, to_time_step + 1, interval):
-                cumulative_gas = self.free_gas_produced(0, t)
+                cumulative_gas = self.free_gas_produced(0, t, cells=cells_obj)
                 rf = cumulative_gas / giip
                 yield (t, rf)
 
@@ -1170,6 +1733,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the total gas recovery factor history over time.
@@ -1183,6 +1747,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param from_time_step: The starting time step index (inclusive). Default is 0.
         :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
         :param interval: Time step interval for sampling. Default is 1.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
+            When cells is specified, initial gas is also calculated for the same filtered region.
         :return: A generator yielding tuples of (time_step, recovery_factor).
 
         Example:
@@ -1194,16 +1765,69 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             print(f"Time step {t}: Total Gas RF = {rf:.2%}")
         ```
         """
+        cells_obj = _ensure_cells(cells)
+
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
-        # Get initial total gas
-        initial_free_gas = self.stock_tank_gas_initially_in_place
         initial_state = self.get_state(0)
+        if initial_state is None:
+            raise ValueError(
+                "Initial state (time step 0) is not available. Cannot compute total gas recovery factor history."
+            )
+
+        # Get initial total gas
+        if cells_obj is None:
+            initial_free_gas = self.stock_tank_gas_initially_in_place
+            initial_oil = self.stock_tank_oil_initially_in_place
+        else:
+            mask = cells_obj.get_mask(
+                initial_state.model.grid_shape, initial_state.wells
+            )
+            model = initial_state.model
+
+            # Calculate GIIP for the filtered region
+            gas_saturation = model.fluid_properties.gas_saturation_grid
+            gas_fvf = model.fluid_properties.gas_formation_volume_factor_grid
+            porosity = model.rock_properties.porosity_grid
+            ntg = model.rock_properties.net_to_gross_ratio_grid
+            thickness = model.thickness_grid
+            cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
+            cell_area_grid = uniform_grid(
+                grid_shape=model.grid_shape, value=cell_area_in_acres
+            )
+            giip_grid = hcip_vectorized(
+                area=cell_area_grid,
+                thickness=thickness,
+                porosity=porosity,
+                phase_saturation=gas_saturation,
+                formation_volume_factor=gas_fvf,
+                net_to_gross_ratio=ntg,
+                hydrocarbon_type="gas",
+            )
+            if mask is not None:
+                giip_grid = np.where(mask, giip_grid, 0.0)
+            initial_free_gas = float(np.nansum(giip_grid))
+
+            # Calculate STOIIP for the filtered region
+            oil_saturation = model.fluid_properties.oil_saturation_grid
+            oil_fvf = model.fluid_properties.oil_formation_volume_factor_grid
+            stoiip_grid = hcip_vectorized(
+                area=cell_area_grid,
+                thickness=thickness,
+                porosity=porosity,
+                phase_saturation=oil_saturation,
+                formation_volume_factor=oil_fvf,
+                net_to_gross_ratio=ntg,
+                hydrocarbon_type="oil",
+            )
+            if mask is not None:
+                stoiip_grid = np.where(mask, stoiip_grid, 0.0)
+            initial_oil = float(np.nansum(stoiip_grid))
+
         avg_initial_gor = np.nanmean(
             initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
         )
-        initial_oil = self.stock_tank_oil_initially_in_place
         initial_solution_gas = initial_oil * avg_initial_gor
         total_initial_gas = initial_free_gas + initial_solution_gas
 
@@ -1212,8 +1836,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 yield (t, 0.0)
         else:
             for t in range(from_time_step, to_time_step + 1, interval):
-                cumulative_free_gas = self.free_gas_produced(0, t)
-                cumulative_oil = self.oil_produced(0, t)
+                cumulative_free_gas = self.free_gas_produced(0, t, cells=cells_obj)
+                cumulative_oil = self.oil_produced(0, t, cells=cells_obj)
                 cumulative_solution_gas = cumulative_oil * avg_initial_gor
                 total_gas_produced = cumulative_free_gas + cumulative_solution_gas
                 rf = float(total_gas_produced / total_initial_gas)
@@ -1224,6 +1848,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
+        cells: CellFilter = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the gas recovery factor history over time.
@@ -1234,12 +1859,14 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param from_time_step: The starting time step index (inclusive). Default is 0.
         :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
         :param interval: Time step interval for sampling. Default is 1.
+        :param cells: Optional filter for specific cells, well name, or region.
         :return: A generator yielding tuples of (time_step, recovery_factor).
         """
         yield from self.free_gas_recovery_factor_history(
             from_time_step=from_time_step,
             to_time_step=to_time_step,
             interval=interval,
+            cells=cells,
         )
 
     def reservoir_volumetrics_analysis(
@@ -1252,8 +1879,16 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: `ReservoirVolumetrics` containing detailed volume analysis.
         """
         state = self.get_state(time_step)
-        model = state.model
+        if state is None:
+            return ReservoirVolumetrics(
+                oil_in_place=0.0,
+                gas_in_place=0.0,
+                water_in_place=0.0,
+                pore_volume=0.0,
+                hydrocarbon_pore_volume=0.0,
+            )
 
+        model = state.model
         cell_area_in_acres = self._get_cell_area_in_acres(*model.cell_dimension[:2])
         cell_area_grid = uniform_grid(
             grid_shape=model.grid_shape, value=cell_area_in_acres
@@ -1282,14 +1917,45 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             hydrocarbon_pore_volume=hydrocarbon_pore_volume,
         )
 
-    def instantaneous_production_rates(self, time_step: int = -1) -> InstantaneousRates:
+    @functools.cache
+    def instantaneous_production_rates(
+        self, time_step: int = -1, cells: typing.Union[Cells, CellFilter] = None
+    ) -> InstantaneousRates:
         """
         Calculates instantaneous production rates at a specific time step.
 
         :param time_step: The time step index to calculate rates for.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: `InstantaneousRates` containing detailed rate analysis.
         """
+        cells_obj = _ensure_cells(cells)
+
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} is not available. Returning zero production rates."
+            )
+            return InstantaneousRates(
+                oil_rate=0.0,
+                gas_rate=0.0,
+                water_rate=0.0,
+                total_liquid_rate=0.0,
+                gas_oil_ratio=0.0,
+                water_cut=0.0,
+            )
+
+        # Get cell mask for filtering
+        mask = (
+            cells_obj.get_mask(state.model.grid_shape, state.wells)
+            if cells_obj
+            else None
+        )
+
         oil_rate = 0.0
         gas_rate = 0.0
         water_rate = 0.0
@@ -1298,40 +1964,86 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         if (oil_production := state.production.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_rate = np.nansum(oil_production * c.FT3_TO_BBL / oil_fvf_grid)
+            oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
+            if mask is not None:
+                oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
+            oil_rate = np.nansum(oil_production_stb_day)
 
         if (gas_production := state.production.gas) is not None:
             # Convert from ft³/day to SCF/day using gas FVF
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            gas_rate = np.nansum(gas_production / gas_fvf_grid)
+            gas_production_scf_day = gas_production / gas_fvf_grid
+            if mask is not None:
+                gas_production_scf_day = np.where(mask, gas_production_scf_day, 0.0)
+            gas_rate = np.nansum(gas_production_scf_day)
 
         if (water_production := state.production.water) is not None:
             # Convert from ft³/day to STB/day using water FVF
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_rate = np.nansum(water_production * c.FT3_TO_BBL / water_fvf_grid)
+            water_production_stb_day = water_production * c.FT3_TO_BBL / water_fvf_grid
+            if mask is not None:
+                water_production_stb_day = np.where(mask, water_production_stb_day, 0.0)
+            water_rate = np.nansum(water_production_stb_day)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
         water_cut = water_rate / total_liquid_rate if total_liquid_rate > 0 else 0.0
+
+        logger.debug(
+            f"Instantaneous production rates at time step {time_step}: "
+            f"oil={oil_rate:.2f} STB/d, gas={gas_rate:.2f} SCF/d, water={water_rate:.2f} STB/d, "
+            f"GOR={gas_oil_ratio:.2f}, WC={water_cut:.4f}"
+        )
         return InstantaneousRates(
             oil_rate=oil_rate,
             gas_rate=gas_rate,
             water_rate=water_rate,
             total_liquid_rate=total_liquid_rate,
             gas_oil_ratio=gas_oil_ratio,
-            water_cut_fraction=water_cut,
+            water_cut=water_cut,
         )
 
-    def instantaneous_injection_rates(self, time_step: int = -1) -> InstantaneousRates:
+    @functools.cache
+    def instantaneous_injection_rates(
+        self, time_step: int = -1, cells: typing.Union[Cells, CellFilter] = None
+    ) -> InstantaneousRates:
         """
         Calculates instantaneous injection rates at a specific time step.
 
         :param time_step: The time step index to calculate rates for.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: `InstantaneousRates` containing detailed injection rate analysis.
         """
+        cells_obj = _ensure_cells(cells)
+
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} is not available. Returning zero injection rates."
+            )
+            return InstantaneousRates(
+                oil_rate=0.0,
+                gas_rate=0.0,
+                water_rate=0.0,
+                total_liquid_rate=0.0,
+                gas_oil_ratio=0.0,
+                water_cut=0.0,
+            )
+
+        # Get cell mask for filtering
+        mask = (
+            cells_obj.get_mask(state.model.grid_shape, state.wells)
+            if cells_obj
+            else None
+        )
+
         oil_rate = 0.0
         gas_rate = 0.0
         water_rate = 0.0
@@ -1340,19 +2052,28 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         if (oil_injection := state.injection.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_rate = np.nansum(oil_injection * c.FT3_TO_BBL / oil_fvf_grid)
+            oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
+            if mask is not None:
+                oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
+            oil_rate = np.nansum(oil_injection_stb_day)
 
         if (gas_injection := state.injection.gas) is not None:
             # Convert from ft³/day to SCF/day using gas FVF
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            gas_rate = np.nansum(gas_injection / gas_fvf_grid)
+            gas_injection_scf_day = gas_injection / gas_fvf_grid
+            if mask is not None:
+                gas_injection_scf_day = np.where(mask, gas_injection_scf_day, 0.0)
+            gas_rate = np.nansum(gas_injection_scf_day)
 
         if (water_injection := state.injection.water) is not None:
             # Convert from ft³/day to STB/day using water FVF
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_rate = np.nansum(water_injection * c.FT3_TO_BBL / water_fvf_grid)
+            water_injection_stb_day = water_injection * c.FT3_TO_BBL / water_fvf_grid
+            if mask is not None:
+                water_injection_stb_day = np.where(mask, water_injection_stb_day, 0.0)
+            water_rate = np.nansum(water_injection_stb_day)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
@@ -1363,7 +2084,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             water_rate=water_rate,
             total_liquid_rate=total_liquid_rate,
             gas_oil_ratio=gas_oil_ratio,
-            water_cut_fraction=water_cut,
+            water_cut=water_cut,
         )
 
     def cumulative_production_analysis(
@@ -1420,6 +2141,19 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         """
         state = self.get_state(time_step)
         initial_state = self.get_state(0)
+        if state is None or initial_state is None:
+            logger.warning(
+                f"State at time step {time_step} or initial state is not available. Returning zero material balance analysis."
+            )
+            return MaterialBalanceAnalysis(
+                pressure=0.0,
+                oil_expansion_factor=0.0,
+                solution_gas_drive_index=0.0,
+                gas_cap_drive_index=0.0,
+                water_drive_index=0.0,
+                compaction_drive_index=0.0,
+                aquifer_influx=0.0,
+            )
 
         # Current reservoir conditions
         current_pressure = np.nanmean(state.model.fluid_properties.pressure_grid)
@@ -1573,6 +2307,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             water_drive_index /= total_indices
             compaction_drive_index /= total_indices
 
+        logger.debug(
+            f"Material balance analysis at time step {time_step}: "
+            f"P={current_pressure:.2f} psi, ΔP={pressure_decline:.2f} psi, "
+            f"solution_gas={solution_gas_drive_index:.3f}, gas_cap={gas_cap_drive_index:.3f}, "
+            f"water={water_drive_index:.3f}, compaction={compaction_drive_index:.3f}"
+        )
         return MaterialBalanceAnalysis(
             pressure=float(current_pressure),
             oil_expansion_factor=float(oil_expansion_factor),
@@ -1585,64 +2325,237 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
     mbal = material_balance_analysis
 
-    def sweep_efficiency_analysis(self, time_step: int = -1) -> SweepEfficiencyAnalysis:
+    def sweep_efficiency_analysis(
+        self,
+        time_step: int = -1,
+        displacing_phase: typing.Literal["oil", "water", "gas"] = "water",
+        delta_water_saturation_threshold: float = 0.02,
+        delta_gas_saturation_threshold: float = 0.01,
+        solvent_concentration_threshold: float = 0.01,
+    ) -> SweepEfficiencyAnalysis:
         """
         Sweep efficiency analysis to evaluate reservoir contact and displacement.
 
-        :param time_step: The time step index to analyze sweep efficiency for.
-        :return: `SweepEfficiencyAnalysis` containing sweep efficiency metrics.
+        Contact detection is performed using changes in the displacing phase saturation
+        (or solvent concentration for miscible floods). Displacement efficiency is
+        computed as the saturation-weighted oil removal in contacted cells using the
+        initial oil formation volume factor to convert pore volume to STB.
+
+        Vertical sweep efficiency is computed using the saturation-weighted column fraction:
+            For each (i,j): F_ij = sum_z (phi * h * (So_init - So_cur)) / sum_z (phi * h * So_init)
+            Then VSE = sum_ij (F_ij * initial_oil_stb_ij) / sum_ij (initial_oil_stb_ij)
+
+        Areal sweep efficiency is computed from planform contacted columns:
+            E_A = contacted_planform_area / total_planform_area
+            where planform area = dx * dy per column from model.cell_dimension.
+
+        :param time_step: Time step index to analyze; -1 gives the latest state.
+        :param displacing_phase: Phase doing the displacing ('oil', 'water' or 'gas').
+        :param delta_water_saturation_threshold: Threshold on ΔSw to declare a cell contacted when displacing phase is water.
+        :param delta_gas_saturation_threshold: Threshold on ΔSg to declare a cell contacted when displacing phase is gas.
+        :param solvent_concentration_threshold: Threshold on solvent concentration to mark contact in miscible runs.
+        :return: ``SweepEfficiencyAnalysis`` with volumetric, displacement, recovery efficiencies,
+                contacted/uncontacted oil (STB), areal sweep, and vertical sweep metrics.
         """
         state = self.get_state(time_step)
         initial_state = self.get_state(0)
+        if state is None or initial_state is None:
+            logger.warning(
+                "State at time step %s or initial state is not available. Returning zeros.",
+                time_step,
+            )
+            return SweepEfficiencyAnalysis(
+                volumetric_sweep_efficiency=0.0,
+                displacement_efficiency=0.0,
+                recovery_efficiency=0.0,
+                contacted_oil=0.0,
+                uncontacted_oil=0.0,
+                areal_sweep_efficiency=0.0,
+                vertical_sweep_efficiency=0.0,
+            )
 
-        # Calculate volumetric sweep efficiency
-        initial_oil_saturation = (
-            initial_state.model.fluid_properties.oil_saturation_grid
+        nodel = initial_state.model
+        state = state.model
+        grid_shape = state.grid_shape
+
+        initial_oil_saturation = nodel.fluid_properties.oil_saturation_grid
+        current_oil_saturation = state.fluid_properties.oil_saturation_grid
+        initial_water_saturation = nodel.fluid_properties.water_saturation_grid
+        current_water_saturation = state.fluid_properties.water_saturation_grid
+        initial_gas_saturation = nodel.fluid_properties.gas_saturation_grid
+        current_gas_saturation = state.fluid_properties.gas_saturation_grid
+        solvent_concentration_grid = state.fluid_properties.solvent_concentration_grid
+
+        # Determine contacted mask based on displacing phase and thresholds
+        if displacing_phase == "water":
+            saturation_delta = current_water_saturation - initial_water_saturation
+            contacted_mask = saturation_delta > delta_water_saturation_threshold
+        elif displacing_phase == "gas":
+            saturation_delta = current_gas_saturation - initial_gas_saturation
+            contacted_mask = saturation_delta > delta_gas_saturation_threshold
+            if solvent_concentration_grid is not None:
+                contacted_mask = contacted_mask | (
+                    solvent_concentration_grid > solvent_concentration_threshold
+                )
+        else:  # displacing_phase == "oil"
+            # treat as decrease in oil
+            saturation_delta = initial_oil_saturation - current_oil_saturation
+            contacted_mask = saturation_delta > 0.0
+
+        cell_dimension_x, cell_dimension_y = (
+            state.cell_dimension[0],
+            state.cell_dimension[1],
         )
-        current_oil_saturation = state.model.fluid_properties.oil_saturation_grid
+        cell_area_ft2 = cell_dimension_x * cell_dimension_y  # ft^2
 
-        # Cells that have been contacted have a decreased oil saturation
-        contacted_cells = current_oil_saturation < initial_oil_saturation
-        total_cells = initial_oil_saturation.size
-        contacted_fraction = np.sum(contacted_cells) / total_cells
+        # thickness grid (ft)
+        thickness_grid = state.thickness_grid
 
-        # Calculate displacement efficiency in contacted zones
-        initial_oil_contacted = np.sum(initial_oil_saturation[contacted_cells])
-        current_oil_contacted = np.sum(current_oil_saturation[contacted_cells])
-        displacement_efficiency = float(
-            (initial_oil_contacted - current_oil_contacted) / initial_oil_contacted
-            if initial_oil_contacted > 0
+        # porosity and net-to-gross
+        porosity_grid = state.rock_properties.porosity_grid
+        net_to_gross_grid = state.rock_properties.net_to_gross_ratio_grid
+
+        # initial Bo (bbl/STB) -> convert to ft^3/STB for volume calculations
+        oil_formation_volume_factor_initial_grid = (
+            initial_state.model.fluid_properties.oil_formation_volume_factor_grid
+        )
+
+        # Convert Bo from bbl/STB to ft^3/STB
+        initial_oil_formation_volume_factor_grid_ft3_per_stb = (
+            oil_formation_volume_factor_initial_grid * c.BBL_TO_FT3
+        )
+        initial_oil_formation_volume_factor_grid_ft3_per_stb = np.where(
+            initial_oil_formation_volume_factor_grid_ft3_per_stb <= 0.0,
+            np.nan,
+            initial_oil_formation_volume_factor_grid_ft3_per_stb,
+        )
+
+        # Compute initial oil pore volume per cell (ft^3) and convert to STB using initial Bo
+        initial_oil_pore_volume_ft3 = (
+            cell_area_ft2
+            * thickness_grid
+            * porosity_grid
+            * net_to_gross_grid
+            * initial_oil_saturation
+        )
+        oil_initial_stb = np.divide(
+            initial_oil_pore_volume_ft3,
+            initial_oil_formation_volume_factor_grid_ft3_per_stb,
+            out=np.zeros_like(initial_oil_pore_volume_ft3),
+            where=~np.isnan(initial_oil_formation_volume_factor_grid_ft3_per_stb),
+        )
+
+        total_initial_oil_stb = float(np.nansum(oil_initial_stb))
+        # Current oil (convert using initial Bo for STB conversion)
+        current_oil_pore_volume_ft3 = (
+            cell_area_ft2
+            * thickness_grid
+            * porosity_grid
+            * net_to_gross_grid
+            * current_oil_saturation
+        )
+        current_oil_stb = np.divide(
+            current_oil_pore_volume_ft3,
+            initial_oil_formation_volume_factor_grid_ft3_per_stb,
+            out=np.zeros_like(current_oil_pore_volume_ft3),
+            where=~np.isnan(initial_oil_formation_volume_factor_grid_ft3_per_stb),
+        )
+
+        # Contacted / uncontacted oil volumes (STB) based on mask
+        contacted_oil_initial_stb = float(np.nansum(oil_initial_stb[contacted_mask]))
+        contacted_oil_remaining_stb = float(np.nansum(current_oil_stb[contacted_mask]))
+        uncontacted_oil_stb = float(np.nansum(oil_initial_stb[~contacted_mask]))
+
+        # Volumetric sweep efficiency: fraction of initial oil contacted
+        volumetric_sweep_efficiency = (
+            contacted_oil_initial_stb / total_initial_oil_stb
+            if total_initial_oil_stb > 0
             else 0.0
         )
 
-        # Overall recovery efficiency
-        recovery_efficiency = contacted_fraction * displacement_efficiency
+        # Displacement efficiency in contacted volume (saturation-weighted/volume-weighted)
+        # numerator: oil removed in contacted cells (STB)
+        if contacted_oil_initial_stb > 0:
+            oil_removed_contacted_stb = (
+                contacted_oil_initial_stb - contacted_oil_remaining_stb
+            )
+            displacement_efficiency = float(
+                np.clip(
+                    oil_removed_contacted_stb / contacted_oil_initial_stb,
+                    0.0,
+                    1.0,
+                )
+            )
+        else:
+            displacement_efficiency = 0.0
 
-        # Calculate contacted and uncontacted oil
-        cell_area_in_acres = self._get_cell_area_in_acres(
-            *state.model.cell_dimension[:2]
+        recovery_efficiency = volumetric_sweep_efficiency * displacement_efficiency
+
+        # AREAL SWEEP EFFICIENCY: contacted planform area / total planform area
+        # A column is contacted if any cell in that (i,j) column is contacted
+        mask_reshaped = contacted_mask.reshape(grid_shape)
+        column_contacted = np.any(mask_reshaped, axis=2)
+        contacted_planform_cells = int(np.count_nonzero(column_contacted))
+        total_planform_cells = grid_shape[0] * grid_shape[1]
+        areal_sweep_efficiency = (
+            (contacted_planform_cells * cell_area_ft2)
+            / (total_planform_cells * cell_area_ft2)
+            if total_planform_cells > 0
+            else 0.0
         )
-        cell_area_grid = uniform_grid(
-            grid_shape=state.model.grid_shape, value=cell_area_in_acres
+        # Simplifies to contacted_planform_cells / total_planform_cells, but kept ft2 for clarity
+
+        # VERTICAL SWEEP EFFICIENCY (saturation-weighted)
+        # For each (i,j) compute:
+        #   denom_ij = sum_z (phi*h*So_init)_ij
+        #   numer_ij = sum_z (phi*h*(So_init - So_cur))_ij  (clamped >= 0)
+        # Then column_fraction_ij = numer_ij / denom_ij  (if denom_ij > 0)
+        # Global VSE = sum_ij (column_fraction_ij * denom_ij) / sum_ij denom_ij
+        porosity_thickness_initial_oil_saturation = (
+            porosity_grid * thickness_grid * initial_oil_saturation
         )
-        oil_volume_grid = (
-            cell_area_grid
-            * state.model.thickness_grid
-            * state.model.rock_properties.porosity_grid
-            * state.model.rock_properties.net_to_gross_ratio_grid  # Include net-to-gross ratio
-            * initial_oil_saturation
-            * c.ACRE_FT_TO_FT3
-            * c.FT3_TO_BBL  # Convert to STB
-            / initial_state.model.fluid_properties.oil_formation_volume_factor_grid
+        porosity_thickness_oil_saturation_delta = (
+            porosity_grid
+            * thickness_grid
+            * np.maximum(initial_oil_saturation - current_oil_saturation, 0.0)
         )
-        contacted_oil = np.sum(oil_volume_grid[contacted_cells])
-        uncontacted_oil = np.sum(oil_volume_grid[~contacted_cells])
+
+        denominator_per_column = np.sum(
+            porosity_thickness_initial_oil_saturation.reshape(grid_shape),
+            axis=2,
+        )
+        numerator_per_column = np.sum(
+            porosity_thickness_oil_saturation_delta.reshape(grid_shape),
+            axis=2,
+        )
+
+        # Avoid division by zero
+        with np.errstate(divide="ignore", invalid="ignore"):
+            column_fraction = np.where(
+                denominator_per_column > 0.0,
+                numerator_per_column / denominator_per_column,
+                0.0,
+            )
+
+        # Weight by initial oil (denominator_per_column * cell_area_ft2 / Bo)
+        # compute initial oil STB per column (sum of oil_initial_stb over z)
+        oil_initial_stb_per_column = np.nansum(oil_initial_stb, axis=2)
+        total_initial_oil_stb_columns = np.nansum(oil_initial_stb_per_column)
+        if total_initial_oil_stb_columns > 0.0:
+            vertical_sweep_efficiency = (
+                np.nansum(column_fraction * oil_initial_stb_per_column)
+                / total_initial_oil_stb_columns
+            )
+        else:
+            vertical_sweep_efficiency = 0.0
         return SweepEfficiencyAnalysis(
-            volumetric_sweep_efficiency=contacted_fraction,
-            displacement_efficiency=displacement_efficiency,
-            recovery_efficiency=recovery_efficiency,
-            contacted_oil=contacted_oil,
-            uncontacted_oil=uncontacted_oil,
+            volumetric_sweep_efficiency=float(volumetric_sweep_efficiency),
+            displacement_efficiency=float(displacement_efficiency),
+            recovery_efficiency=float(recovery_efficiency),
+            contacted_oil=contacted_oil_initial_stb,
+            uncontacted_oil=uncontacted_oil_stb,
+            areal_sweep_efficiency=float(areal_sweep_efficiency),
+            vertical_sweep_efficiency=float(vertical_sweep_efficiency),
         )
 
     def recommend_ipr_method(
@@ -1658,6 +2571,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :return: Recommended IPR method
         """
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} is not available. Defaulting to 'vogel' IPR method."
+            )
+            return "vogel"
+
         oil_saturation = np.nanmean(state.model.fluid_properties.oil_saturation_grid)
         gas_saturation = np.nanmean(state.model.fluid_properties.gas_saturation_grid)
         reservoir_pressure = np.nanmean(state.model.fluid_properties.pressure_grid)
@@ -1681,71 +2600,113 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         # Default to Vogel for solution gas drive reservoirs
         return "vogel"  # Best for two-phase oil/gas systems
 
+    @functools.cache
     def productivity_analysis(
         self,
         time_step: int = -1,
-        ipr_method: typing.Literal["vogel", "linear", "fetkovich", "jones"] = "vogel",
         phase: typing.Literal["oil", "gas", "water"] = "oil",
+        cells: typing.Union[Cells, CellFilter] = None,
     ) -> ProductivityAnalysis:
         """
-        Well productivity analysis using actual well model data with multiple IPR methods.
+        Well productivity analysis based on actual flow rates and reservoir properties.
+
+        Analyzes well performance without requiring bottom hole pressure data. Computes
+        flow rates, reservoir conditions, well indices, and flow efficiency metrics using
+        only production data and formation properties.
 
         :param time_step: The time step index to analyze productivity for.
-        :param ipr_method: IPR correlation method ('vogel', 'linear', 'fetkovich', 'jones').
-        :return: `ProductivityAnalysis` containing productivity metrics based on actual well model data.
+        :param phase: Phase to analyze ('oil', 'gas', 'water').
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: All production wells (default)
+            - str: Specific well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
+        :return: `ProductivityAnalysis` containing productivity metrics based on actual production data.
         """
+        cells_obj = _ensure_cells(cells)
+
         state = self.get_state(time_step)
-        if state.production is None:
+        if state is None:
+            logger.debug(
+                f"State at time step {time_step} is not available. Returning zero productivity analysis."
+            )
             return ProductivityAnalysis(
-                productivity_index=0.0,
-                inflow_performance_relationship=0.0,
+                total_flow_rate=0.0,
+                average_reservoir_pressure=0.0,
                 skin_factor=0.0,
                 flow_efficiency=1.0,
-                ipr_method=ipr_method,
+                well_index=0.0,
+                average_mobility=0.0,
             )
 
-        rates = self.instantaneous_production_rates(time_step)
+        if state.production is None:
+            logger.warning("No production data available for productivity analysis")
+            return ProductivityAnalysis(
+                total_flow_rate=0.0,
+                average_reservoir_pressure=0.0,
+                skin_factor=0.0,
+                flow_efficiency=1.0,
+                well_index=0.0,
+                average_mobility=0.0,
+            )
+
         production_wells = state.wells.production_wells
         if not production_wells:
+            logger.warning("No production wells found for productivity analysis")
             return ProductivityAnalysis(
-                productivity_index=0.0,
-                inflow_performance_relationship=0.0,
+                total_flow_rate=0.0,
+                average_reservoir_pressure=0.0,
                 skin_factor=0.0,
                 flow_efficiency=1.0,
-                ipr_method=ipr_method,
+                well_index=0.0,
+                average_mobility=0.0,
             )
 
-        # Calculate weighted averages based on actual well properties
-        total_productivity_index = 0.0
-        total_ipr_flow_rate = 0.0
+        # Get cell mask for filtering
+        mask = (
+            cells_obj.get_mask(state.model.grid_shape, state.wells)
+            if cells_obj
+            else None
+        )
+
+        # Accumulate metrics across all wells
+        total_flow_rate = 0.0
+        total_reservoir_pressure = 0.0
         total_skin_factor = 0.0
         total_flow_efficiency = 0.0
+        total_well_index = 0.0
+        total_mobility = 0.0
         active_wells = 0
+        active_cells = 0
 
         for well in production_wells:
             if not well.is_open:
                 continue
 
+            # If filtering by well name, skip if not matching
+            if isinstance(cells, str) and well.name != cells:
+                continue
+
             active_wells += 1
-            bottom_hole_pressure = well.bottom_hole_pressure
             actual_skin_factor = well.skin_factor
-            # Well-level accumulators
-            well_productivity_index = 0.0
-            well_ipr_flow_rate = 0.0
-            well_reservoir_pressure = 0.0
 
             cell_locations = _expand_intervals(
                 well.perforating_intervals, orientation=well.orientation
             )
+
             for cell_location in cell_locations:
                 i, j, k = cell_location
+
+                # Check if cell matches mask (if filtering)
+                if mask is not None and not mask[i, j, k]:
+                    continue
+
                 cell_pressure = float(
                     state.model.fluid_properties.pressure_grid[i, j, k]
                 )
-                cell_pressure_drawdown = cell_pressure - bottom_hole_pressure
-                if cell_pressure_drawdown < 0:
-                    continue
 
+                # Get actual cell flow rate and fluid properties
                 if phase == "oil":
                     if state.production.oil is None:
                         continue
@@ -1754,9 +2715,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                             i, j, k
                         ]
                     )
-                    cell_flow_rate = (
-                        state.production.oil[i, j, k] * c.FT3_TO_BBL / oil_fvf
-                    )  # stb/day
+                    cell_flow_rate_rb = state.production.oil[
+                        i, j, k
+                    ]  # ft³/day (reservoir bbl)
+                    cell_flow_rate_stb = (
+                        cell_flow_rate_rb * c.FT3_TO_BBL / oil_fvf
+                    )  # STB/day
+
                 elif phase == "water":
                     if state.production.water is None:
                         continue
@@ -1765,10 +2730,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                             i, j, k
                         ]
                     )
-                    cell_flow_rate = (
-                        state.production.water[i, j, k] * c.FT3_TO_BBL / water_fvf
-                    )  # stb/day
-                else:
+                    cell_flow_rate_rb = state.production.water[i, j, k]  # ft³/day
+                    cell_flow_rate_stb = (
+                        cell_flow_rate_rb * c.FT3_TO_BBL / water_fvf
+                    )  # STB/day
+
+                else:  # gas
                     if state.production.gas is None:
                         continue
                     gas_fvf = float(
@@ -1776,284 +2743,99 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                             i, j, k
                         ]
                     )
-                    cell_flow_rate = state.production.gas[i, j, k] / gas_fvf  # SCF/day
+                    cell_flow_rate_rb = state.production.gas[i, j, k]  # ft³/day
+                    cell_flow_rate_stb = cell_flow_rate_rb / gas_fvf  # SCF/day
 
-                # PI = q / (Pr - Pwf)
-                cell_productivity_index = cell_flow_rate / cell_pressure_drawdown
-                cell_ipr_flow_rate = self._calculate_ipr_flow_rate(
-                    ipr_method=ipr_method,
-                    reservoir_pressure=float(cell_pressure),
-                    bottom_hole_pressure=float(bottom_hole_pressure),
-                    current_rate=float(
-                        rates.oil_rate / len(production_wells) / len(cell_locations)
-                    ),
-                    productivity_index=float(cell_productivity_index),
-                    state=state,
-                    cell_location=(i, j, k),
+                if cell_flow_rate_stb == 0:
+                    continue
+
+                # Get well index and phase mobility for this cell
+                interval_thickness = state.model.cell_dimension
+                perm_x = float(
+                    state.model.rock_properties.absolute_permeability.x[i, j, k]
+                )
+                perm_y = float(
+                    state.model.rock_properties.absolute_permeability.y[i, j, k]
+                )
+                perm_z = float(
+                    state.model.rock_properties.absolute_permeability.z[i, j, k]
+                )
+                permeability = (perm_x, perm_y, perm_z)
+
+                well_index = well.get_well_index(
+                    interval_thickness=interval_thickness,
+                    permeability=permeability,
+                    skin_factor=actual_skin_factor,
                 )
 
-                # Accumulate cell values for this well
-                well_productivity_index += cell_productivity_index
-                well_ipr_flow_rate += cell_ipr_flow_rate
-                well_reservoir_pressure += cell_pressure
-                well_productivity_index += cell_productivity_index
-                well_ipr_flow_rate += cell_ipr_flow_rate
-                well_reservoir_pressure += cell_pressure
+                # Get phase mobility
+                if phase == "oil":
+                    phase_mobility = float(
+                        state.relative_mobilities.oil_relative_mobility[i, j, k]
+                    )
+                elif phase == "water":
+                    phase_mobility = float(
+                        state.relative_mobilities.water_relative_mobility[i, j, k]
+                    )
+                else:  # gas
+                    phase_mobility = float(
+                        state.relative_mobilities.gas_relative_mobility[i, j, k]
+                    )
+
+                if phase_mobility <= 0 or well_index <= 0:
+                    continue
+
+                # Accumulate metrics
+                total_flow_rate += abs(cell_flow_rate_stb)
+                total_reservoir_pressure += cell_pressure
+                total_well_index += well_index
+                total_mobility += phase_mobility
+                active_cells += 1
 
             # Flow efficiency using actual skin factor
             well_flow_efficiency = (
                 1.0 / (1.0 + actual_skin_factor) if actual_skin_factor > -1 else 1.0
             )
-            total_productivity_index += well_productivity_index
-            total_ipr_flow_rate += well_ipr_flow_rate
             total_skin_factor += actual_skin_factor
             total_flow_efficiency += well_flow_efficiency
 
-        # Calculate averages across active wells
-        if active_wells > 0:
-            avg_productivity_index = total_productivity_index
-            avg_ipr_flow_rate = total_ipr_flow_rate
+        # Calculate averages
+        if active_wells > 0 and active_cells > 0:
+            avg_flow_rate = total_flow_rate
+            avg_reservoir_pressure = total_reservoir_pressure / active_cells
             avg_skin_factor = total_skin_factor / active_wells
             avg_flow_efficiency = total_flow_efficiency / active_wells
+            avg_well_index = total_well_index / active_cells
+            avg_mobility = total_mobility / active_cells
+            logger.debug(
+                f"Productivity analysis complete: active_wells={active_wells}, "
+                f"flow_rate={avg_flow_rate:.2f}, pressure={avg_reservoir_pressure:.2f} psia, "
+                f"skin={avg_skin_factor:.4f}, efficiency={avg_flow_efficiency:.4f}, "
+                f"WI={avg_well_index:.4f}, mobility={avg_mobility:.4f}"
+            )
         else:
-            avg_productivity_index = 0.0
-            avg_ipr_flow_rate = 0.0
+            avg_flow_rate = 0.0
+            avg_reservoir_pressure = 0.0
             avg_skin_factor = 0.0
             avg_flow_efficiency = 1.0
+            avg_well_index = 0.0
+            avg_mobility = 0.0
+            logger.warning(
+                "No active production wells or cells found for productivity analysis"
+            )
 
         return ProductivityAnalysis(
-            productivity_index=float(avg_productivity_index),
-            inflow_performance_relationship=float(avg_ipr_flow_rate),
+            total_flow_rate=float(avg_flow_rate),
+            average_reservoir_pressure=float(avg_reservoir_pressure),
             skin_factor=avg_skin_factor,
             flow_efficiency=avg_flow_efficiency,
-            ipr_method=ipr_method,
+            well_index=float(avg_well_index),
+            average_mobility=float(avg_mobility),
         )
 
-    def _calculate_fetkovich_n_exponent(
-        self,
-        state: ModelState[NDimension],
-        reservoir_pressure: float,
-        bottom_hole_pressure: float,
-        cell_location: typing.Optional[typing.Tuple[int, int, int]] = None,
+    def voidage_replacement_ratio(
+        self, time_step: int = -1, cells: typing.Union[Cells, CellFilter] = None
     ) -> float:
-        """
-        Calculate the n exponent for Fetkovich IPR based on reservoir conditions.
-
-        The n exponent in the Fetkovich equation q = C * (Pr² - Pwf²)^n varies
-        based on flow regime and fluid properties:
-        - n = 1.0: Laminar flow (high gas saturation)
-        - n = 0.5: Turbulent flow (liquid-dominated)
-        - n = 0.5-1.0: Transitional flow regimes
-
-        :param state: Current model state containing fluid properties
-        :param reservoir_pressure: Reservoir pressure in psia
-        :param bottom_hole_pressure: Bottom hole pressure in psia
-        :param cell_location: Optional specific cell location (i, j, k) for cell-specific properties
-        :return: Calculated n exponent (0.5 to 1.0)
-        """
-        if cell_location is not None:
-            # Use cell-specific properties
-            i, j, k = cell_location
-            gas_saturation = float(
-                state.model.fluid_properties.gas_saturation_grid[i, j, k]
-            )
-            oil_saturation = float(
-                state.model.fluid_properties.oil_saturation_grid[i, j, k]
-            )
-            gor = float(
-                state.model.fluid_properties.solution_gas_to_oil_ratio_grid[i, j, k]
-            )
-        else:
-            # Use reservoir averages as fallback
-            gas_saturation = np.nanmean(
-                state.model.fluid_properties.gas_saturation_grid
-            )
-            oil_saturation = np.nanmean(
-                state.model.fluid_properties.oil_saturation_grid
-            )
-            gor = np.nanmean(
-                state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-            )
-
-        if gas_saturation > 0.8:
-            # High gas saturation - laminar gas flow dominates
-            n_exponent = 1.0  # Linear relationship for laminar flow
-        elif gas_saturation > 0.5:
-            # Moderate gas saturation - transitional flow
-            # n varies between 0.5-1.0 based on gas fraction
-            gas_fraction = gas_saturation / (gas_saturation + oil_saturation)
-            n_exponent = 0.5 + 0.5 * gas_fraction
-        elif gor > 1000:
-            # High GOR reservoir - significant solution gas drive
-            # Use pressure-dependent n based on non-Darcy effects
-            pressure_ratio = reservoir_pressure / (
-                reservoir_pressure + bottom_hole_pressure
-            )
-            n_exponent = 0.5 + 0.3 * pressure_ratio
-        else:
-            # Low gas content - closer to liquid flow
-            n_exponent = 0.5  # Square root relationship for turbulent flow
-
-        # Clamp n_exponent to physically reasonable bounds
-        n_exponent = max(0.5, min(1.0, n_exponent))
-        return float(n_exponent)
-
-    def _calculate_ipr_flow_rate(
-        self,
-        ipr_method: typing.Literal["vogel", "linear", "fetkovich", "jones"],
-        reservoir_pressure: float,
-        bottom_hole_pressure: float,
-        current_rate: float,
-        productivity_index: float,
-        state: ModelState[NDimension],
-        cell_location: typing.Optional[typing.Tuple[int, int, int]] = None,
-    ) -> float:
-        """
-        Calculate IPR flow rate using various correlations.
-
-        Available IPR Methods:
-
-        - "linear": q = PI x (Pr - Pwf) - Best for single-phase oil above bubble point
-        - "vogel": Vogel's correlation - Best for solution gas drive reservoirs below bubble point
-        - "fetkovich": q = C x (Pr² - Pwf²)^n - Best for gas wells and gas condensate
-        - "jones": Combined linear/Vogel - Best for multi-phase flow with changing properties
-
-        :param ipr_method: IPR correlation method
-        :param reservoir_pressure: Reservoir pressure in psia
-        :param bottom_hole_pressure: Bottom hole pressure in psia
-        :param current_rate: Current production rate in STB/day
-        :param productivity_index: Well productivity index in STB/day/psi
-        :param state: Current model state
-        :param cell_location: Optional specific cell location (i, j, k) for cell-specific properties
-        :return: IPR flow rate in STB/day
-        """
-        if reservoir_pressure <= 0 or bottom_hole_pressure < 0:
-            return 0.0
-
-        if ipr_method not in {"vogel", "linear", "fetkovich", "jones"}:
-            ipr_method = "vogel"
-
-        normalized_pressure = bottom_hole_pressure / reservoir_pressure
-
-        if ipr_method == "linear":
-            # Linear IPR: q = PI * (Pr - Pwf)
-            # Most accurate for single-phase oil above bubble point
-            return productivity_index * (reservoir_pressure - bottom_hole_pressure)
-
-        elif ipr_method == "vogel":
-            # Vogel's IPR for solution gas drive reservoirs
-            # q/qmax = 1 - 0.2*(Pwf/Pr) - 0.8*(Pwf/Pr)²
-            if normalized_pressure >= 1.0:
-                return 0.0
-
-            vogel_factor = (
-                1.0 - (0.2 * normalized_pressure) - (0.8 * normalized_pressure**2)
-            )
-
-            # Estimate qmax from current conditions
-            if current_rate > 0 and vogel_factor > 0:
-                qmax_estimate = current_rate / vogel_factor
-            else:
-                # Fallback estimation: assume current condition is at 80% depletion
-                qmax_estimate = productivity_index * reservoir_pressure / 0.8
-
-            return qmax_estimate * vogel_factor
-
-        elif ipr_method == "fetkovich":
-            # Fetkovich IPR for gas condensate wells and high-velocity gas flow
-            # q = C * (Pr² - Pwf²)^n, typically n = 0.5 to 1.0
-
-            n_exponent = self._calculate_fetkovich_n_exponent(
-                state, reservoir_pressure, bottom_hole_pressure, cell_location
-            )
-            pressure_squared_diff = reservoir_pressure**2 - bottom_hole_pressure**2
-
-            if pressure_squared_diff <= 0:
-                return 0.0
-
-            # Estimate C coefficient from current conditions
-            if current_rate > 0:
-                current_pressure_diff_squared = (
-                    reservoir_pressure**2
-                    - (reservoir_pressure - current_rate / productivity_index) ** 2
-                )
-                if current_pressure_diff_squared > 0:
-                    c_coefficient = current_rate / (
-                        current_pressure_diff_squared**n_exponent
-                    )
-                else:
-                    c_coefficient = productivity_index / (2 * reservoir_pressure)
-            else:
-                # Fallback coefficient based on linear approximation
-                c_coefficient = productivity_index / (2 * reservoir_pressure)
-
-            return float(c_coefficient * (pressure_squared_diff**n_exponent))
-
-        # ipr_method == "jones"
-        # Jones, Blount, and Glaze IPR for multi-phase flow
-        # Combines linear flow above bubble point with Vogel below bubble point
-        if cell_location is not None:
-            # Use cell-specific bubble point pressure
-            bubble_point_pressure = float(
-                state.model.fluid_properties.oil_bubble_point_pressure_grid[
-                    cell_location
-                ]
-            )
-        else:
-            # Use reservoir average bubble point pressure
-            bubble_point_pressure = np.nanmean(
-                state.model.fluid_properties.oil_bubble_point_pressure_grid
-            )
-
-        if bottom_hole_pressure >= bubble_point_pressure:
-            # Above bubble point - linear IPR (single-phase oil)
-            return productivity_index * (reservoir_pressure - bottom_hole_pressure)
-
-        # Below bubble point - combination approach
-        # Linear portion from reservoir pressure to bubble point
-        linear_rate = productivity_index * (reservoir_pressure - bubble_point_pressure)
-
-        # Vogel portion from bubble point to bottom hole pressure
-        if bubble_point_pressure > 0:
-            pb_normalized = bottom_hole_pressure / bubble_point_pressure
-            pb_normalized = max(0.0, min(1.0, pb_normalized))  # Clamp to valid range
-
-            # Modified Vogel equation for the portion below bubble point
-            vogel_portion = (
-                productivity_index
-                * bubble_point_pressure
-                * (1.0 - 0.2 * pb_normalized - 0.8 * pb_normalized**2)
-            )
-        else:
-            vogel_portion = 0.0
-
-        return float(linear_rate + vogel_portion)
-
-    def compare_ipr_methods(
-        self, time_step: int = -1, phase: typing.Literal["oil", "gas", "water"] = "oil"
-    ) -> typing.Dict[str, ProductivityAnalysis]:
-        """
-        Compare all available IPR methods for the same reservoir conditions.
-
-        This method runs productivity analysis using all four IPR methods and
-        returns the results for comparison. Useful for sensitivity analysis
-        and method validation.
-
-        :param time_step: The time step to analyze
-        :param phase: The production phase to analyze ('oil', 'gas', 'water')
-        :return: Mapping of IPR method names to their analysis results
-        """
-        methods = ["vogel", "linear", "fetkovich", "jones"]
-        results = {}
-        for method in methods:
-            results[method] = self.productivity_analysis(
-                time_step=time_step,
-                ipr_method=method,  # type: ignore
-                phase=phase,
-            )
-        return results
-
-    def voidage_replacement_ratio(self, time_step: int = -1) -> float:
         """
         Calculates the voidage replacement ratio (VRR) at a specific time step.
 
@@ -2080,19 +2862,40 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         A VRR < 1.0 indicates reservoir pressure is declining.
 
         :param time_step: The time step index to calculate VRR for.
+        :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1", "INJ-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
         :return: The voidage replacement ratio (dimensionless fraction).
         """
+        cells_obj = _ensure_cells(cells)
+
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} is not available. Returning zero VRR."
+            )
+            return 0.0
 
-        # Get cumulative injection volumes
-        cumulative_water_injected = self.water_injected(0, time_step)  # STB
-        cumulative_gas_injected = self.gas_injected(0, time_step)  # SCF (free gas only)
+        # Get cumulative injection volumes (with optional cell filter)
+        cumulative_water_injected = self.water_injected(
+            0, time_step, cells=cells_obj
+        )  # STB
+        cumulative_gas_injected = self.gas_injected(
+            0, time_step, cells=cells_obj
+        )  # SCF (free gas only)
 
-        # Get cumulative production volumes
-        cumulative_oil_produced = self.oil_produced(0, time_step)  # STB
-        cumulative_water_produced = self.water_produced(0, time_step)  # STB
+        # Get cumulative production volumes (with optional cell filter)
+        cumulative_oil_produced = self.oil_produced(
+            0, time_step, cells=cells_obj
+        )  # STB
+        cumulative_water_produced = self.water_produced(
+            0, time_step, cells=cells_obj
+        )  # STB
         cumulative_free_gas_produced = self.free_gas_produced(
-            0, time_step
+            0, time_step, cells=cells_obj
         )  # SCF (free gas only)
 
         # Get average formation volume factors at current reservoir conditions
@@ -2165,7 +2968,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         voidage_replacement_ratio = total_injected_volume / total_produced_volume
         return float(voidage_replacement_ratio)
 
-    vrr = voidage_replacement_ratio
+    vrr = VRR = voidage_replacement_ratio
 
     def recommend_decline_model(
         self,
@@ -2350,6 +3153,10 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         # Get time step size to convert decline rate bounds
         state = self.get_state(from_time_step)
+        if state is None:
+            raise ValueError(
+                f"State at time step {from_time_step} is not available for decline model recommendation."
+            )
         time_step_size_seconds = state.time_step_size
         timesteps_per_year = c.SECONDS_PER_YEAR / time_step_size_seconds
 
@@ -2435,7 +3242,17 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         # Filter out zero and negative rates for meaningful decline analysis
         positive_production_mask = production_rates_array > 0
-        if np.sum(positive_production_mask) < 2:
+        positive_count = np.sum(positive_production_mask)
+        logger.debug(
+            f"Decline curve analysis: phase={phase}, decline_type={decline_type}, "
+            f"time_steps={from_time_step} to {to_time_step}, positive_rates={positive_count}"
+        )
+
+        if positive_count < 2:
+            logger.warning(
+                f"Insufficient positive {phase} rate data for decline curve analysis: "
+                f"only {positive_count} positive rate(s)"
+            )
             return DeclineCurveResult(
                 decline_type=decline_type,
                 initial_rate=0.0,
@@ -2479,9 +3296,12 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 if total_sum_squares > 0
                 else 0.0
             )
+
+            # Use last actual rate for forecasting instead of fitted initial rate
+            last_actual_rate = positive_production_rates[-1]
             return DeclineCurveResult(
                 decline_type="exponential",
-                initial_rate=exponential_initial_production_rate,
+                initial_rate=float(last_actual_rate),
                 decline_rate_per_timestep=exponential_decline_rate_per_timestep,  # Now per timestep
                 b_factor=0.0,
                 r_squared=exponential_r_squared,
@@ -2519,9 +3339,13 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                 if harmonic_total_sum_squares > 0
                 else 0.0
             )
+
+            # Use last actual rate for forecasting instead of fitted initial rate
+            last_actual_rate = positive_production_rates[-1]
+
             return DeclineCurveResult(
                 decline_type="harmonic",
-                initial_rate=harmonic_initial_production_rate,
+                initial_rate=float(last_actual_rate),
                 decline_rate_per_timestep=harmonic_decline_rate_per_timestep,  # Now per timestep
                 b_factor=1.0,  # Harmonic decline has b=1
                 r_squared=harmonic_r_squared,
@@ -2552,8 +3376,18 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         # Typical decline rates: 0.05-0.8 per year for oil wells
         # Convert to per-timestep by dividing by number of timesteps per year
         state = self.get_state(from_time_step)
+        if state is None:
+            logger.error(
+                f"State at time step {from_time_step} not available for decline curve analysis."
+            )
+            raise ValueError(f"State at time step {from_time_step} is not available.")
+
         time_step_size_seconds = state.time_step_size
         timesteps_per_year = c.SECONDS_PER_YEAR / time_step_size_seconds
+        logger.debug(
+            f"Decline curve analysis: timesteps_per_year={timesteps_per_year:.2f}, "
+            f"time_step_size={time_step_size_seconds:.2f}s"
+        )
 
         # Upper bound for decline rate: 2.0 per year → 2.0/timesteps_per_year per timestep
         max_decline_per_timestep = 2.0 / timesteps_per_year
@@ -2565,7 +3399,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             positive_production_rates,
             p0=[estimated_initial_rate, estimated_decline_rate, estimated_b_factor],
             bounds=([0, 0, 0.1], [np.inf, max_decline_per_timestep, 2.0]),
-            maxfev=1000,
+            maxfev=5000,
         )
 
         (
@@ -2592,9 +3426,19 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             if hyperbolic_total_sum_squares > 0
             else 0.0
         )
+
+        # Use last actual rate for forecasting instead of fitted initial rate
+        last_actual_rate = positive_production_rates[-1]
+
+        logger.info(
+            f"Decline curve analysis complete: type=hyperbolic, phase={phase}, "
+            f"qi={hyperbolic_initial_rate:.2f}, Di={hyperbolic_decline_rate_per_timestep:.6f}/timestep, "
+            f"b={hyperbolic_b_factor:.4f}, R²={hyperbolic_r_squared:.4f}"
+        )
+
         return DeclineCurveResult(
             decline_type="hyperbolic",
-            initial_rate=hyperbolic_initial_rate,
+            initial_rate=float(last_actual_rate),
             decline_rate_per_timestep=hyperbolic_decline_rate_per_timestep,  # Now per timestep
             b_factor=hyperbolic_b_factor,
             r_squared=hyperbolic_r_squared,
@@ -2605,7 +3449,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             predicted_rates=predicted_hyperbolic_rates.tolist(),
         )
 
-    dca = decline_curve_analysis
+    dca = DCA = decline_curve_analysis
 
     def forecast_production(
         self,
@@ -2871,8 +3715,19 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             raise ValueError("Invalid displacing phase specified for mobility ratio.")
 
         state = self.get_state(time_step)
+        if state is None:
+            logger.warning(
+                f"State at time step {time_step} not available for mobility ratio calculation. "
+                "Returning inf."
+            )
+            return float("inf")
+
         fluid_properties = state.model.fluid_properties
         relative_permeabilities = state.relative_permeabilities
+        logger.debug(
+            f"Computing mobility ratio: displaced={displaced_phase}, displacing={displacing_phase}, "
+            f"time_step={time_step}"
+        )
 
         if displacing_phase == "water":
             displacing_viscosity_grid = fluid_properties.water_viscosity_grid
@@ -2912,6 +3767,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             return float("inf")
 
         return float(avg_displacing_mobility / avg_displaced_mobility)
+
+    mr = MR = mobility_ratio
 
     def reservoir_volumetrics_history(
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
@@ -2993,7 +3850,14 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             yield (t, self.material_balance_analysis(t))
 
     def sweep_efficiency_history(
-        self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
+        displacing_phase: typing.Literal["oil", "water", "gas"] = "water",
+        delta_water_saturation_threshold: float = 0.02,
+        delta_gas_saturation_threshold: float = 0.01,
+        solvent_concentration_threshold: float = 0.01,
     ) -> typing.Generator[typing.Tuple[int, SweepEfficiencyAnalysis], None, None]:
         """
         Generator for sweep efficiency analysis history over time.
@@ -3007,33 +3871,44 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
-            yield (t, self.sweep_efficiency_analysis(t))
+            yield (
+                t,
+                self.sweep_efficiency_analysis(
+                    time_step=t,
+                    displacing_phase=displacing_phase,
+                    delta_water_saturation_threshold=delta_water_saturation_threshold,
+                    delta_gas_saturation_threshold=delta_gas_saturation_threshold,
+                    solvent_concentration_threshold=solvent_concentration_threshold,
+                ),
+            )
 
     def productivity_history(
         self,
         from_time_step: int = 0,
         to_time_step: int = -1,
         interval: int = 1,
-        ipr_method: typing.Literal["vogel", "linear", "fetkovich", "jones"] = "vogel",
-        phase: typing.Literal["oil", "gas"] = "oil",
+        phase: typing.Literal["oil", "gas", "water"] = "oil",
     ) -> typing.Generator[typing.Tuple[int, ProductivityAnalysis], None, None]:
         """
-        Generator for productivity analysis history over time with selectable IPR method.
+        Generator for productivity analysis history over time.
 
         :param from_time_step: Starting time step index.
         :param to_time_step: Ending time step index.
         :param interval: Time step interval.
-        :param ipr_method: IPR correlation method ('vogel', 'linear', 'fetkovich', 'jones').
+        :param phase: Phase to analyze ('oil', 'gas', 'water').
         :return: Generator yielding (time_step, `ProductivityAnalysis`) tuples.
         """
         if to_time_step < 0:
             to_time_step = self._state_count + to_time_step
 
         for t in range(from_time_step, to_time_step + 1, interval):
-            yield (t, self.productivity_analysis(t, ipr_method=ipr_method, phase=phase))
+            yield (t, self.productivity_analysis(t, phase=phase))
 
     def voidage_replacement_ratio_history(
-        self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
+        self,
+        from_time_step: int = 0,
+        to_time_step: int = -1,
+        interval: int = 1,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Generator for voidage replacement ratio (VRR) history over time.
@@ -3051,6 +3926,8 @@ class ProductionAnalyst(typing.Generic[NDimension]):
 
         for t in range(from_time_step, to_time_step + 1, interval):
             yield (t, self.voidage_replacement_ratio(t))
+
+    vrr_history = voidage_replacement_ratio_history
 
     def mobility_ratio_history(
         self,
@@ -3082,3 +3959,5 @@ class ProductionAnalyst(typing.Generic[NDimension]):
                     time_step=t,
                 ),
             )
+
+    mr_history = mobility_ratio_history

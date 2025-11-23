@@ -4,7 +4,6 @@ import typing
 
 import numpy as np
 
-from sim3D._precision import get_floating_point_info
 from sim3D.constants import c
 from sim3D.diffusivity.base import (
     EvolutionResult,
@@ -405,6 +404,7 @@ def evolve_saturation_explicitly(
     updated_oil_saturation_grid = current_oil_saturation_grid.copy()
     updated_gas_saturation_grid = current_gas_saturation_grid.copy()
 
+    temperature_grid = fluid_properties.temperature_grid
     # Iterate over each interior cell to compute saturation evolution
     # # Assume boundary cells are added via padding for boundary conditions application purposes
     # Thus, we iterate from 1 to N-1 in each dimension
@@ -413,16 +413,13 @@ def evolve_saturation_explicitly(
         range(1, cell_count_y - 1),
         range(1, cell_count_z - 1),
     ):
-        cell_temperature = fluid_properties.temperature_grid[i, j, k]
+        cell_temperature = temperature_grid[i, j, k]
         cell_thickness = thickness_grid[i, j, k]
         cell_total_volume = cell_size_x * cell_size_y * cell_thickness
         # Current cell properties
         cell_porosity = porosity_grid[i, j, k]
         # Cell pore volume = φ * V_cell
         cell_pore_volume = cell_total_volume * cell_porosity
-        cell_oil_saturation = current_oil_saturation_grid[i, j, k]
-        cell_water_saturation = current_water_saturation_grid[i, j, k]
-        cell_gas_saturation = current_gas_saturation_grid[i, j, k]
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
 
         flux_configurations = {
@@ -567,19 +564,16 @@ def evolve_saturation_explicitly(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
             )
-            if cell_injection_rate < 0.0:
-                if injection_well.auto_clamp:
-                    cell_injection_rate = 0.0
-                else:
-                    _warn_injector_is_producing(
-                        injection_rate=cell_injection_rate,
-                        well_name=injection_well.name,
-                        cell=(i, j, k),
-                        time=time_step * time_step_size,
-                        rate_unit="ft³/day"
-                        if injected_phase == FluidPhase.GAS
-                        else "bbls/day",
-                    )
+            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+                _warn_injector_is_producing(
+                    injection_rate=cell_injection_rate,
+                    well_name=injection_well.name,
+                    cell=(i, j, k),
+                    time=time_step * time_step_size,
+                    rate_unit="ft³/day"
+                    if injected_phase == FluidPhase.GAS
+                    else "bbls/day",
+                )
 
             if injected_phase == FluidPhase.GAS:
                 cell_gas_injection_rate = cell_injection_rate
@@ -644,19 +638,16 @@ def evolve_saturation_explicitly(
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
-                if production_rate > 0.0:
-                    if production_well.auto_clamp:
-                        production_rate = 0.0
-                    else:
-                        _warn_producer_is_injecting(
-                            production_rate=production_rate,
-                            well_name=production_well.name,
-                            cell=(i, j, k),
-                            time=time_step * time_step_size,
-                            rate_unit="ft³/day"
-                            if produced_phase == FluidPhase.GAS
-                            else "bbls/day",
-                        )
+                if production_rate > 0.0 and options.warn_rates_anomalies:
+                    _warn_producer_is_injecting(
+                        production_rate=production_rate,
+                        well_name=production_well.name,
+                        cell=(i, j, k),
+                        time=time_step * time_step_size,
+                        rate_unit="ft³/day"
+                        if produced_phase == FluidPhase.GAS
+                        else "bbls/day",
+                    )
 
                 if produced_fluid.phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
@@ -745,33 +736,27 @@ def evolve_saturation_explicitly(
             (net_gas_flux + net_gas_flow_rate) * time_step_in_days / cell_pore_volume
         )
         # Update phase saturations
-        updated_water_saturation_grid[i, j, k] = (
-            cell_water_saturation + water_saturation_change
-        )
-        updated_oil_saturation_grid[i, j, k] = (
-            cell_oil_saturation + oil_saturation_change
-        )
-        updated_gas_saturation_grid[i, j, k] = (
-            cell_gas_saturation + gas_saturation_change
-        )
+        updated_water_saturation_grid[i, j, k] += water_saturation_change
+        updated_oil_saturation_grid[i, j, k] += oil_saturation_change
+        updated_gas_saturation_grid[i, j, k] += gas_saturation_change
 
     # Apply saturation constraints and normalization across all cells
+    # Clean up any remaining minor negative values caused by floating point errors
+    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
+    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
+    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
+
     total_saturation_grid = (
         updated_water_saturation_grid
         + updated_oil_saturation_grid
         + updated_gas_saturation_grid
     )
-    # Only normalize cells where there is saturation present (total > SATURATION_EPSILON to avoid division by zero edge cases)
+    # Only normalize cells where there is saturation present (total > `SATURATION_EPSILON` to avoid division by zero edge cases)
     mask = total_saturation_grid > c.SATURATION_EPSILON
     if np.any(mask):
         updated_water_saturation_grid[mask] /= total_saturation_grid[mask]
         updated_oil_saturation_grid[mask] /= total_saturation_grid[mask]
         updated_gas_saturation_grid[mask] /= total_saturation_grid[mask]
-
-    # Clean up any remaining minor negative values caused by floating point errors
-    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
-    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
-    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
     return EvolutionResult(
         (
             updated_water_saturation_grid,
@@ -1056,6 +1041,7 @@ def evolve_miscible_saturation_explicitly(
     # Iterate over internal cells only
     # Assume boundary cells are added via padding for boundary conditions application purposes
     # Thus, we iterate from 1 to N-1 in each dimension
+    temperature_grid = fluid_properties.temperature_grid
     for i, j, k in itertools.product(
         range(1, cell_count_x - 1),
         range(1, cell_count_y - 1),
@@ -1065,12 +1051,10 @@ def evolve_miscible_saturation_explicitly(
         cell_volume = cell_size_x * cell_size_y * cell_thickness
         cell_porosity = porosity_grid[i, j, k]
         cell_pore_volume = cell_volume * cell_porosity
-        cell_water_saturation = current_water_saturation_grid[i, j, k]
-        cell_gas_saturation = current_gas_saturation_grid[i, j, k]
         cell_oil_saturation = current_oil_saturation_grid[i, j, k]
         cell_solvent_concentration = current_solvent_concentration_grid[i, j, k]
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
-        cell_temperature = fluid_properties.temperature_grid[i, j, k]
+        cell_temperature = temperature_grid[i, j, k]
 
         flux_configurations = {
             "x": {
@@ -1218,19 +1202,16 @@ def evolve_miscible_saturation_explicitly(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
             )
-            if cell_injection_rate < 0.0:
-                if injection_well.auto_clamp:
-                    cell_injection_rate = 0.0
-                else:
-                    _warn_injector_is_producing(
-                        injection_rate=cell_injection_rate,
-                        well_name=injection_well.name,
-                        cell=(i, j, k),
-                        time=time_step * time_step_size,
-                        rate_unit="ft³/day"
-                        if injected_phase == FluidPhase.GAS
-                        else "bbls/day",
-                    )
+            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+                _warn_injector_is_producing(
+                    injection_rate=cell_injection_rate,
+                    well_name=injection_well.name,
+                    cell=(i, j, k),
+                    time=time_step * time_step_size,
+                    rate_unit="ft³/day"
+                    if injected_phase == FluidPhase.GAS
+                    else "bbls/day",
+                )
 
             # Handle miscible solvent injection
             if injected_phase == FluidPhase.GAS and injected_fluid.is_miscible:
@@ -1303,19 +1284,16 @@ def evolve_miscible_saturation_explicitly(
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
 
-                if production_rate > 0.0:
-                    if production_well.auto_clamp:
-                        production_rate = 0.0
-                    else:
-                        _warn_producer_is_injecting(
-                            production_rate=production_rate,
-                            well_name=production_well.name,
-                            cell=(i, j, k),
-                            time=time_step * time_step_size,
-                            rate_unit="ft³/day"
-                            if produced_phase == FluidPhase.GAS
-                            else "bbls/day",
-                        )
+                if production_rate > 0.0 and options.warn_rates_anomalies:
+                    _warn_producer_is_injecting(
+                        production_rate=production_rate,
+                        well_name=production_well.name,
+                        cell=(i, j, k),
+                        time=time_step * time_step_size,
+                        rate_unit="ft³/day"
+                        if produced_phase == FluidPhase.GAS
+                        else "bbls/day",
+                    )
 
                 if produced_phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
@@ -1397,15 +1375,9 @@ def evolve_miscible_saturation_explicitly(
         oil_saturation_change = (total_oil_flow * time_step_in_days) / cell_pore_volume
         gas_saturation_change = (total_gas_flow * time_step_in_days) / cell_pore_volume
 
-        updated_water_saturation_grid[i, j, k] = (
-            cell_water_saturation + water_saturation_change
-        )
-        updated_oil_saturation_grid[i, j, k] = (
-            cell_oil_saturation + oil_saturation_change
-        )
-        updated_gas_saturation_grid[i, j, k] = (
-            cell_gas_saturation + gas_saturation_change
-        )
+        updated_water_saturation_grid[i, j, k] += water_saturation_change
+        updated_oil_saturation_grid[i, j, k] += oil_saturation_change
+        updated_gas_saturation_grid[i, j, k] += gas_saturation_change
 
         # Update solvent concentration in oil phase
         # Mass balance: (C_old * V_oil_old) + (C_in * V_in) = (C_new * V_oil_new)
@@ -1449,6 +1421,10 @@ def evolve_miscible_saturation_explicitly(
             updated_solvent_concentration_grid[i, j, k] = 0.0
 
     # Apply saturation constraints and normalization across all cells
+    # Clean up any remaining minor negative values caused by floating point errors
+    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
+    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
+    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
     total_saturation_grid = (
         updated_water_saturation_grid
         + updated_oil_saturation_grid
@@ -1460,11 +1436,6 @@ def evolve_miscible_saturation_explicitly(
         updated_water_saturation_grid[mask] /= total_saturation_grid[mask]
         updated_oil_saturation_grid[mask] /= total_saturation_grid[mask]
         updated_gas_saturation_grid[mask] /= total_saturation_grid[mask]
-
-    # Clean up any remaining minor negative values caused by floating point errors
-    updated_water_saturation_grid[updated_water_saturation_grid < 0.0] = 0.0
-    updated_oil_saturation_grid[updated_oil_saturation_grid < 0.0] = 0.0
-    updated_gas_saturation_grid[updated_gas_saturation_grid < 0.0] = 0.0
     return EvolutionResult(
         (
             updated_water_saturation_grid,

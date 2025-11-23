@@ -4,9 +4,10 @@ import typing
 
 import attrs
 import numpy as np
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import Self, TypeAlias, TypedDict
 
 from sim3D.constants import Constants
+
 
 __all__ = [
     "NDimension",
@@ -367,7 +368,7 @@ class Options:
         default=1e-6, validator=attrs.validators.le(1e-2)
     )
     """Convergence tolerance for iterative solvers (default is 1e-6)."""
-    max_iterations: int = attrs.field(default=500, validator=attrs.validators.ge(1))
+    max_iterations: int = attrs.field(default=250, validator=attrs.validators.ge(1))
     """Maximum number of iterations allowed per time step for iterative solvers."""
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
@@ -427,6 +428,8 @@ class Options:
     """
     constants: Constants = attrs.field(factory=Constants)
     """Physical and conversion constants used in the simulation."""
+    warn_rates_anomalies: bool = True
+    """Whether to warn about anomalous flow rates during the simulation."""
 
 
 def Time(
@@ -475,8 +478,158 @@ class SupportsSetItem(typing.Generic[K_con, V_con], typing.Protocol):
         ...
 
 
+# TODO: Move this grid wrappers to grids/base.py. Leave here just because previous dumped states (pickled) may depend on them being in types.py
+
+
+class PadMixin(typing.Generic[NDimension]):
+    """Mixin class to add padding functionality to attrs classes with numpy array fields."""
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        """Return iterable of attrs fields that can be padded."""
+        raise NotImplementedError
+
+    def pad(
+        self,
+        pad_width: int,
+        hook: typing.Optional[
+            typing.Callable[
+                [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
+            ]
+        ] = None,
+        exclude: typing.Optional[typing.Iterable[str]] = None,
+    ) -> Self:
+        """
+        Pad all numpy array fields in the attrs class.
+
+        :param pad_width: Number of cells to pad on each side of each dimension.
+        :param hook: Optional callable to apply additional processing to each padded grid.
+        :param exclude: Optional iterable of field names to exclude from hooking.
+        :return: New instance of the attrs class with padded numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        from sim3D.grids.base import pad_grid
+
+        target_fields = self.get_paddable_fields()
+        padded_fields = {}
+        for field in target_fields:
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            padded_value = pad_grid(grid=value, pad_width=pad_width)
+            if hook and (not exclude or field.name not in exclude):
+                padded_value = hook(padded_value)
+            padded_fields[field.name] = padded_value
+        return attrs.evolve(self, **padded_fields)
+
+    def unpad(self, pad_width: int) -> Self:
+        """
+        Remove padding from all numpy array fields in the attrs class.
+
+        :param pad_width: Number of cells to remove from each side of each dimension.
+        :return: New instance of the attrs class with unpadded numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        from sim3D.grids.base import unpad_grid
+
+        target_fields = self.get_paddable_fields()
+        unpadded_fields = {}
+        for field in target_fields:
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            padded_value = unpad_grid(grid=value, pad_width=pad_width)
+            unpadded_fields[field.name] = padded_value
+        return attrs.evolve(self, **unpadded_fields)
+
+    def apply_hook(
+        self,
+        hook: typing.Callable[
+            [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
+        ],
+        exclude: typing.Optional[typing.Iterable[str]] = None,
+    ) -> Self:
+        """
+        Apply a hook function to all numpy array fields in the attrs class.
+
+        :param hook: Callable to apply to each numpy array field.
+        :param exclude: Optional iterable of field names to exclude from hooking.
+        :return: New instance of the attrs class with hooked numpy array fields.
+        """
+        if not attrs.has(type(self)):
+            raise TypeError(
+                f"{self.__class__.__name__} can only be used with attrs classes"
+            )
+
+        target_fields = self.get_paddable_fields()
+        hooked_fields = {}
+        for field in target_fields:
+            if exclude and field.name in exclude:
+                continue
+            value = getattr(self, field.name)
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"Field '{field.name}' is not a numpy array and cannot be padded"
+                )
+            hooked_value = hook(value)
+            hooked_fields[field.name] = hooked_value
+        return attrs.evolve(self, **hooked_fields)
+
+
 @attrs.define(frozen=True, slots=True)
-class RelPermGrids(typing.Generic[NDimension]):
+class RelPermGrids(PadMixin[NDimension]):  # type: ignore[override]
+    """
+    Wrapper for n-dimensional grids representing relative permeabilities
+    for different fluid phases (oil, water, gas).
+    """
+
+    oil_relative_permeability: NDimensionalGrid[NDimension]
+    """Grid representing oil relative permeability."""
+    water_relative_permeability: NDimensionalGrid[NDimension]
+    """Grid representing water relative permeability."""
+    gas_relative_permeability: NDimensionalGrid[NDimension]
+    """Grid representing gas relative permeability."""
+
+    @property
+    def kro(self) -> NDimensionalGrid[NDimension]:
+        return self.oil_relative_permeability
+
+    @property
+    def krw(self) -> NDimensionalGrid[NDimension]:
+        return self.water_relative_permeability
+
+    @property
+    def krg(self) -> NDimensionalGrid[NDimension]:
+        return self.gas_relative_permeability
+
+    Kro = kro
+    Krw = krw
+    Krg = krg
+
+    def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
+        yield self.water_relative_permeability
+        yield self.oil_relative_permeability
+        yield self.gas_relative_permeability
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(self.__class__)
+
+
+# Keep the old class name for backward compatibility with older pickled states
+# TODO: Remove this once the older pickled states are no used anymore
+@attrs.define(frozen=True, slots=True)
+class RelPermGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing relative permeabilities
     for different fluid phases (oil, water, gas).
@@ -494,9 +647,12 @@ class RelPermGrids(typing.Generic[NDimension]):
         yield self.kro
         yield self.krg
 
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(self.__class__)
+
 
 @attrs.define(frozen=True, slots=True)
-class RelativeMobilityGrids(typing.Generic[NDimension]):
+class RelativeMobilityGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing relative mobilities
     for different fluid phases (oil, water, gas).
@@ -509,14 +665,29 @@ class RelativeMobilityGrids(typing.Generic[NDimension]):
     gas_relative_mobility: NDimensionalGrid[NDimension]
     """Grid representing gas relative mobility."""
 
+    @property
+    def λo(self) -> NDimensionalGrid[NDimension]:
+        return self.oil_relative_mobility
+
+    @property
+    def λw(self) -> NDimensionalGrid[NDimension]:
+        return self.water_relative_mobility
+
+    @property
+    def λg(self) -> NDimensionalGrid[NDimension]:
+        return self.gas_relative_mobility
+
     def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
         yield self.water_relative_mobility
         yield self.oil_relative_mobility
         yield self.gas_relative_mobility
 
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(self.__class__)
+
 
 @attrs.define(frozen=True, slots=True)
-class CapillaryPressureGrids(typing.Generic[NDimension]):
+class CapillaryPressureGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing capillary pressures
     for different fluid phases (oil-water, oil-gas).
@@ -527,13 +698,27 @@ class CapillaryPressureGrids(typing.Generic[NDimension]):
     gas_oil_capillary_pressure: NDimensionalGrid[NDimension]
     """Grid representing gas-oil capillary pressure."""
 
+    @property
+    def pcow(self) -> NDimensionalGrid[NDimension]:
+        return self.oil_water_capillary_pressure
+
+    @property
+    def pcgo(self) -> NDimensionalGrid[NDimension]:
+        return self.gas_oil_capillary_pressure
+
+    Pcow = pcow
+    Pcgo = pcgo
+
     def __iter__(self) -> typing.Iterator[NDimensionalGrid[NDimension]]:
         yield self.oil_water_capillary_pressure
         yield self.gas_oil_capillary_pressure
 
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(self.__class__)
+
 
 @attrs.define(frozen=True, slots=True)
-class RateGrids(typing.Generic[NDimension]):
+class RateGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing fluid flow rates (oil, water, gas).
     """
@@ -583,6 +768,9 @@ class RateGrids(typing.Generic[NDimension]):
         water = self.water[key] if self.water is not None else 0.0
         gas = self.gas[key] if self.gas is not None else 0.0
         return oil, water, gas
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(self.__class__)
 
 
 @attrs.define(frozen=True, slots=True)

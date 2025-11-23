@@ -10,7 +10,6 @@ __all__ = [
     "with_precision",
     "use_64bit_precision",
     "use_32bit_precision",
-    "use_16bit_precision",
     "get_floating_point_info",
 ]
 
@@ -55,6 +54,13 @@ def with_precision(dtype: np.typing.DTypeLike):
         _sim3d_dtype.reset(token)
 
 
+def use_128bit_precision() -> None:
+    """
+    Set the default data type to float128 for sim3D computations.
+    """
+    set_dtype(np.float128)
+
+
 def use_64bit_precision() -> None:
     """
     Set the default data type to float64 for sim3D computations.
@@ -69,13 +75,6 @@ def use_32bit_precision() -> None:
     Default precision for sim3D.
     """
     set_dtype(np.float32)
-
-
-def use_16bit_precision() -> None:
-    """
-    Set the default data type to float16 for sim3D computations.
-    """
-    set_dtype(np.float16)
 
 
 def get_floating_point_info() -> np.finfo[np.floating]:

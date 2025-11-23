@@ -1080,7 +1080,7 @@ class BaseRenderer(ABC):
         Returns cell boundary coordinates for all dimensions (not cell centers).
         For a grid with shape (nx, ny, nz), returns:
         - X boundaries: 1D array of length nx+1
-        - Y boundaries: 1D array of length ny+1  
+        - Y boundaries: 1D array of length ny+1
         - Z boundaries: 3D array of shape (nx, ny, nz+1)
 
         Implements numpy array indexing convention:
@@ -1118,25 +1118,33 @@ class BaseRenderer(ABC):
         # depth_grid[i,j,k] is the depth of the center of cell k
         # We need to calculate boundaries (nz+1 values) from centers (nz values)
         z_boundaries = np.zeros((nx, ny, nz + 1))
-        
+
         for i, j in itertools.product(range(nx), range(ny)):
             # For interior boundaries: midpoint between adjacent cell centers
             for k in range(nz - 1):
-                z_boundaries[i, j, k + 1] = (depth_grid[i, j, k] + depth_grid[i, j, k + 1]) / 2
-            
+                z_boundaries[i, j, k + 1] = (
+                    depth_grid[i, j, k] + depth_grid[i, j, k + 1]
+                ) / 2
+
             # First boundary (top): extrapolate from first two centers
             if nz > 1:
-                z_boundaries[i, j, 0] = depth_grid[i, j, 0] - (depth_grid[i, j, 1] - depth_grid[i, j, 0]) / 2
+                z_boundaries[i, j, 0] = (
+                    depth_grid[i, j, 0]
+                    - (depth_grid[i, j, 1] - depth_grid[i, j, 0]) / 2
+                )
             else:
                 # Only one layer - assume unit thickness
                 z_boundaries[i, j, 0] = depth_grid[i, j, 0] - 0.5
-            
+
             # Last boundary (bottom): extrapolate from last two centers
             if nz > 1:
-                z_boundaries[i, j, nz] = depth_grid[i, j, nz - 1] + (depth_grid[i, j, nz - 1] - depth_grid[i, j, nz - 2]) / 2
+                z_boundaries[i, j, nz] = (
+                    depth_grid[i, j, nz - 1]
+                    + (depth_grid[i, j, nz - 1] - depth_grid[i, j, nz - 2]) / 2
+                )
             else:
                 z_boundaries[i, j, 1] = depth_grid[i, j, 0] + 0.5
-        
+
         # Negate depths for Z-axis (positive upward in Plotly)
         z_coords = -z_boundaries
 
@@ -1296,8 +1304,8 @@ class BaseRenderer(ABC):
             logger.warning("render_wells called but wells parameter is None")
             return
 
-        if not wells.has_wells():
-            logger.warning("`render_wells` called but wells.has_wells() returned False")
+        if not wells.exists():
+            logger.warning("`render_wells` called but wells.exists() returned False")
             return
 
         logger.debug(
@@ -1319,7 +1327,7 @@ class BaseRenderer(ABC):
         ) -> typing.Optional[typing.Tuple[float, float, float]]:
             """
             Convert grid indices to physical coordinates.
-            Returns None if coordinates contain NaN.
+            Returns None if coordinates contain NaN or are out of bounds.
             Note: Z-axis is negative (depth increases downward in Plotly convention)
             Z-scale is applied around z_mean to match volume rendering.
             """
@@ -1327,14 +1335,31 @@ class BaseRenderer(ABC):
                 dx, dy = cell_dimension
                 x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
 
-                # Physical X and Y
-                x_phys = (x_offset + i) * dx
-                y_phys = (y_offset + j) * dy
+                # When using slices, the well coordinates are in the original grid space,
+                # but depth_grid is in the sliced space. We need to adjust.
+                # The coordinate_offsets tell us where the slice starts in the original grid.
+                # So we need to convert original grid coords (i, j, k) to sliced coords.
+                i_sliced = i - x_offset
+                j_sliced = j - y_offset
+                k_sliced = k - z_offset
 
-                # Physical Z (depth) - use depth_grid directly
+                # Check if the well coordinates are within the sliced grid bounds
+                if not (
+                    0 <= i_sliced < depth_grid.shape[0]
+                    and 0 <= j_sliced < depth_grid.shape[1]
+                    and 0 <= k_sliced < depth_grid.shape[2]
+                ):
+                    # Well is outside the sliced region, skip it
+                    return None
+
+                # Physical X and Y (use original grid coordinates for physical position)
+                x_phys = i * dx
+                y_phys = j * dy
+
+                # Physical Z (depth) - use depth_grid with sliced indices
                 # Depth is positive downward, so negate for Z-axis (positive up)
                 # depth_grid already includes structural dip
-                depth_value = float(depth_grid[i, j, k])
+                depth_value = float(depth_grid[i_sliced, j_sliced, k_sliced])
                 if np.isnan(depth_value):
                     return None
 
@@ -1415,7 +1440,7 @@ class BaseRenderer(ABC):
                         if cell_dimension is not None and depth_grid is not None:
                             # Use a small vertical extent for single-cell perforations
                             # Since depth_grid gives cell center, extend above and below
-                            extension = 5.0 * z_scale  # 5 ft extension, scaled
+                            extension = 5.0  # 5 ft extension (physical, not scaled)
                             z_start -= extension  # Extend upward
                             z_end += extension  # Extend downward
                         else:
@@ -1447,7 +1472,7 @@ class BaseRenderer(ABC):
                             hovertemplate=(
                                 f"<b>{well.name}</b><br>"
                                 f"Type: {well_type}<br>"
-                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Control: {str(well.control)[:20]}...<br>"
                                 f"Radius: {well.radius:.2f} ft<br>"
                                 f"Skin: {well.skin_factor:.2f}<br>"
                                 "<extra></extra>"
@@ -1598,7 +1623,7 @@ class BaseRenderer(ABC):
                                 f"Type: {well_type}<br>"
                                 f"Status: {status}<br>"
                                 f"{fluid_info}<br>"
-                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Control: {str(well.control)[:20]}...<br>"
                                 f"Wellbore Radius: {well.radius:.2f} ft<br>"
                                 f"Skin Factor: {well.skin_factor:.2f}<br>"
                                 f"<br>"
@@ -1694,7 +1719,7 @@ class BaseRenderer(ABC):
                         )
                         if cell_dimension is not None and depth_grid is not None:
                             # Use a small vertical extent for single-cell perforations
-                            extension = 5.0 * z_scale  # 5 ft extension, scaled
+                            extension = 5.0  # 5 ft extension (physical, not scaled)
                             z_start -= extension  # Extend upward
                             z_end += extension  # Extend downward
                         else:
@@ -1729,7 +1754,7 @@ class BaseRenderer(ABC):
                             hovertemplate=(
                                 f"<b>{well.name}</b><br>"
                                 f"Type: {well_type}<br>"
-                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Control: {str(well.control)[:20]}...<br>"
                                 f"Radius: {well.radius:.2f} ft<br>"
                                 f"Skin: {well.skin_factor:.2f}<br>"
                                 "<extra></extra>"
@@ -1883,7 +1908,7 @@ class BaseRenderer(ABC):
                                 f"Type: {well_type}<br>"
                                 f"Status: {status}<br>"
                                 f"{fluid_info}<br>"
-                                f"BHP: {well.bottom_hole_pressure:.1f} psi<br>"
+                                f"Control: {str(well.control)[:20]}...<br>"
                                 f"Wellbore Radius: {well.radius:.2f} ft<br>"
                                 f"Skin Factor: {well.skin_factor:.2f}<br>"
                                 f"<br>"
@@ -1931,6 +1956,18 @@ class BaseRenderer(ABC):
                     borderwidth=1,
                 )
             )
+
+    def help(self) -> str:
+        """
+        Return a help string describing the renderer and its usage.
+
+        :return: Help string
+        """
+        return f"""
+{self.__class__.__name__} renderer
+
+{self.render.__doc__ or ""}
+        """
 
 
 class VolumeRenderer(BaseRenderer):
@@ -2061,12 +2098,10 @@ class VolumeRenderer(BaseRenderer):
             # We average Z coordinates across X,Y to get a representative profile
             # For full dip visualization, use CellBlockRenderer instead
             z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
-            
+
             # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
-            x, y, z = np.meshgrid(
-                x_centers, y_centers, z_profile[::-1], indexing="ij"
-            )
-            
+            x, y, z = np.meshgrid(x_centers, y_centers, z_profile[::-1], indexing="ij")
+
             x_title = "X Distance (ft)"
             y_title = "Y Distance (ft)"
             z_title = "Z Distance (ft) [averaged profile]"
@@ -2374,12 +2409,10 @@ class IsosurfaceRenderer(BaseRenderer):
             # We average Z coordinates across X,Y to get a representative profile
             # For full dip visualization, use CellBlockRenderer instead
             z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
-            
+
             # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
-            x, y, z = np.meshgrid(
-                x_centers, y_centers, z_profile[::-1], indexing="ij"
-            )
-            
+            x, y, z = np.meshgrid(x_centers, y_centers, z_profile[::-1], indexing="ij")
+
             x_title = "X Distance (ft)"
             y_title = "Y Distance (ft)"
             z_title = "Z Distance (ft) [averaged profile]"
@@ -3430,7 +3463,7 @@ PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
     PlotType.VOLUME: "3D Volume",
     PlotType.ISOSURFACE: "3D Isosurface",
     PlotType.SCATTER_3D: "3D Scatter",
-    PlotType.CELL_BLOCKS: "3D Cell Blocks",
+    # PlotType.CELL_BLOCKS: "3D Cell Blocks",
 }
 
 _missing = object()
@@ -3847,7 +3880,7 @@ class DataVisualizer:
                 logger.warning(
                     "show_wells=True ignored: wells can only be shown with ModelState data"
                 )
-            elif source.has_wells():  # type: ignore
+            elif source.exists():  # type: ignore
                 # Extract z_scale for well rendering (default to 1.0 if not specified)
                 z_scale = kwargs.get("z_scale", 1.0)
 
@@ -4176,6 +4209,29 @@ class DataVisualizer:
             ],
         )
         return base_fig
+
+    def help(self, plot_type: typing.Optional[PlotType] = None) -> str:
+        """
+        Print help information about available plot types and their parameters.
+
+        :param plot_type: Specific plot type to get help for (or None for all)
+        :return: The help string
+
+        Example:
+        ```python
+        from sim3D.visualization.plotly1d import viz, PlotType
+
+        # Get help for all plot types
+        print(viz.help())
+        """
+        if plot_type is not None:
+            renderer = self.get_renderer(plot_type)
+            return renderer.help()
+
+        help_strings = []
+        for pt, renderer in self._renderers.items():
+            help_strings.append(f"=== {pt.value} Plot ===\n{renderer.help()}\n")
+        return "\n".join(help_strings)
 
 
 viz = DataVisualizer()

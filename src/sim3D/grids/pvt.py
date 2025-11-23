@@ -257,10 +257,11 @@ def build_three_phase_capillary_pressure_grids(
         residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
         residual_gas_saturation = residual_gas_saturation_grid[indices]
 
+        oil_saturation = 1.0 - water_saturation - gas_saturation
         # Compute three-phase capillary pressures
         capillary_pressures = capillary_pressure_table(
             water_saturation=water_saturation,
-            oil_saturation=(1.0 - water_saturation - gas_saturation),
+            oil_saturation=max(0.0, oil_saturation),
             gas_saturation=gas_saturation,
             irreducible_water_saturation=irreducible_water_saturation,
             residual_oil_saturation_water=residual_oil_saturation_water,

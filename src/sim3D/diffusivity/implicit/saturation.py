@@ -70,7 +70,11 @@ import numpy as np
 from scipy.sparse import csr_matrix
 
 from sim3D.constants import c
-from sim3D.diffusivity.base import EvolutionResult
+from sim3D.diffusivity.base import (
+    EvolutionResult,
+    _warn_injector_is_producing,
+    _warn_producer_is_injecting,
+)
 from sim3D.diffusivity.saturation import evolve_saturation_explicitly
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
 from sim3D.types import (
@@ -1690,13 +1694,16 @@ def _evolve_saturation_implicitly_three_phase(
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
 
-                if cell_injection_rate < 0.0:
-                    if injection_well.auto_clamp:
-                        cell_injection_rate = 0.0
-                    else:
-                        logger.warning(
-                            f"Injector {injection_well.name} at ({i},{j},{k}) is producing: {cell_injection_rate:.2e}"
-                        )
+                if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+                    _warn_injector_is_producing(
+                        injection_rate=cell_injection_rate,
+                        well_name=injection_well.name,
+                        time=time_step * time_step_size,
+                        cell=(i, j, k),
+                        rate_unit="ft³/day"
+                        if injected_phase == FluidPhase.GAS
+                        else "bbls/day",
+                    )
 
                 if injected_phase == FluidPhase.GAS:
                     cell_gas_injection_rate = cell_injection_rate
@@ -1769,13 +1776,16 @@ def _evolve_saturation_implicitly_three_phase(
                         formation_volume_factor=fluid_formation_volume_factor,
                     )
 
-                    if production_rate > 0.0:
-                        if production_well.auto_clamp:
-                            production_rate = 0.0
-                        else:
-                            logger.warning(
-                                f"Producer {production_well.name} at ({i},{j},{k}) is injecting: {production_rate:.2e}"
-                            )
+                    if production_rate > 0.0 and options.warn_rates_anomalies:
+                        _warn_producer_is_injecting(
+                            production_rate=production_rate,
+                            well_name=production_well.name,
+                            time=time_step * time_step_size,
+                            cell=(i, j, k),
+                            rate_unit="ft³/day"
+                            if produced_phase == FluidPhase.GAS
+                            else "bbls/day",
+                        )
 
                     if produced_fluid.phase == FluidPhase.GAS:
                         cell_gas_production_rate += production_rate

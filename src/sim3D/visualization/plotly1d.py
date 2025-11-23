@@ -283,6 +283,8 @@ class BaseRenderer(ABC):
         log_x: bool = False,
         log_y: bool = False,
         num_series: int = 1,
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
     ) -> None:
         """
         Apply common layout settings to a figure.
@@ -296,6 +298,8 @@ class BaseRenderer(ABC):
         :param log_x: Use log scale for x-axis
         :param log_y: Use log scale for y-axis
         :param num_series: Number of series (for legend display)
+        :param width: Figure width in pixels (overrides config)
+        :param height: Figure height in pixels (overrides config)
         """
         title_text = title or self.config.title
 
@@ -333,8 +337,8 @@ class BaseRenderer(ABC):
             yaxis_title=dict(
                 text=y_label, font=dict(size=self.config.axis_title_font_size)
             ),
-            width=self.config.width,
-            height=self.config.height,
+            width=width if width is not None else self.config.width,
+            height=height if height is not None else self.config.height,
             showlegend=self.config.show_legend and num_series > 1,
             legend=legend_config
             if self.config.show_legend and num_series > 1
@@ -368,6 +372,18 @@ class BaseRenderer(ABC):
                 b=self.config.margin_bottom,
             ),
         )
+
+    def help(self) -> str:
+        """
+        Return a help string describing the renderer and its usage.
+
+        :return: Help string
+        """
+        return f"""
+{self.__class__.__name__} renderer
+
+{self.render.__doc__ or ""}
+        """
 
 
 class LineRenderer(BaseRenderer):
@@ -403,6 +419,8 @@ class LineRenderer(BaseRenderer):
         log_y: bool = False,
         hover_template: typing.Optional[str] = None,
         title: typing.Optional[str] = None,
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -429,8 +447,26 @@ class LineRenderer(BaseRenderer):
         :param log_y: Use logarithmic y-axis
         :param hover_template: Custom hover template
         :param title: Plot title
+        :param width: Figure width in pixels (overrides config)
+        :param height: Figure height in pixels (overrides config)
         :param kwargs: Additional parameters passed to go.Scatter
         :return: Plotly Figure
+
+        Example
+        ```python
+        import numpy as np
+
+        from sim3D.visualization.plotly1d import LineRenderer
+
+        # Sample data
+        data = {
+            "Series A": np.array([[1, 10], [2, 15], [3, 13]]),
+            "Series B": np.array([[1, 12], [2, 9], [3, 14]]),
+        }
+        renderer = LineRenderer()
+        fig = renderer.render(data)
+        fig.show()
+        ```
         """
         # Normalize data
         series_list, names_list = self.normalize_data(data)
@@ -576,8 +612,9 @@ class LineRenderer(BaseRenderer):
             log_x=log_x,
             log_y=log_y,
             num_series=num_series,
+            width=width,
+            height=height,
         )
-
         return fig
 
 
@@ -598,12 +635,15 @@ class BarRenderer(BaseRenderer):
         bar_mode: typing.Literal["group", "stack", "overlay", "relative"] = "group",
         bar_width: typing.Optional[float] = None,
         show_values: bool = False,
-        value_format: str = ".2f",
+        value_format: str = ".4f",
         x_range: typing.Optional[typing.Tuple[float, float]] = None,
         y_range: typing.Optional[typing.Tuple[float, float]] = None,
         log_y: bool = False,
         hover_template: typing.Optional[str] = None,
         title: typing.Optional[str] = None,
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
+        categories: typing.Optional[typing.Sequence[str]] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -623,8 +663,34 @@ class BarRenderer(BaseRenderer):
         :param log_y: Use logarithmic y-axis
         :param hover_template: Custom hover template
         :param title: Plot title
+        :param width: Figure width in pixels (overrides config)
+        :param height: Figure height in pixels (overrides config)
+        :param categories: Custom labels for x-axis tick marks (e.g., ["Jan", "Feb", "Mar"])
         :param kwargs: Additional parameters passed to go.Bar
-        :return: Plotly Figure
+        :return: Plotly `go.Figure`
+
+        Example
+        ```python
+        import numpy as np
+
+        from sim3D.visualization.plotly1d import BarRenderer
+
+        # Sample data with numeric x-values
+        data = {
+            "Series A": np.array([[1, 10], [2, 15], [3, 13]]),
+            "Series B": np.array([[1, 12], [2, 9], [3, 14]]),
+        }
+
+        # Render with custom category labels
+        renderer = BarRenderer()
+        fig = renderer.render(
+            data,
+            categories=["Q1", "Q2", "Q3"],  # Custom x-axis labels
+            x_label="Quarter",
+            y_label="Revenue ($M)",
+        )
+        fig.show()
+        ```
         """
         # Normalize data
         series_list, names_list = self.normalize_data(data)
@@ -686,6 +752,22 @@ class BarRenderer(BaseRenderer):
         # Set bar mode
         fig.update_layout(barmode=bar_mode)
 
+        # Apply custom x-axis category labels if provided
+        if categories is not None:
+            # Get unique x-values from first series to determine positions
+            first_series = series_list[0]
+            x_positions = first_series[:, 0]
+            if len(categories) != len(x_positions):
+                raise ValueError(
+                    f"Number of categories ({len(categories)}) must match number of x-positions ({len(x_positions)})"
+                )
+            # Update x-axis with custom tick labels
+            fig.update_xaxes(
+                tickmode="array",
+                tickvals=x_positions,
+                ticktext=categories,
+            )
+
         # Apply layout
         self.update_layout(
             fig=fig,
@@ -697,8 +779,9 @@ class BarRenderer(BaseRenderer):
             log_x=False,  # log_x not typically used for categorical
             log_y=log_y,
             num_series=num_series,
+            width=width,
+            height=height,
         )
-
         return fig
 
 
@@ -731,6 +814,8 @@ class TornadoRenderer(BaseRenderer):
         sort_by_impact: bool = True,
         hover_template: typing.Optional[str] = None,
         title: typing.Optional[str] = None,
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -748,8 +833,28 @@ class TornadoRenderer(BaseRenderer):
         :param sort_by_impact: Sort variables by total impact magnitude
         :param hover_template: Custom hover template
         :param title: Plot title
+        :param width: Figure width in pixels (overrides config)
+        :param height: Figure height in pixels (overrides config)
         :param kwargs: Additional parameters
         :return: Plotly Figure
+
+        Example
+        ```python
+        import numpy as np
+
+        from sim3D.visualization.plotly1d import TornadoRenderer
+
+        # Sample data
+        data = {
+            "Variable A": (8, 10, 12),
+            "Variable B": (5, 10, 15),
+            "Variable C": (9, 10, 11),
+        }
+        # Or as array:
+        # data = np.array([[8, 10, 12], [5, 10, 15], [9, 10, 11]])
+        renderer = TornadoRenderer()
+        fig = renderer.render(data, title="Tornado Plot Example", series_names=["A", "B", "C"])
+        ```
         """
         # Parse data
         if isinstance(data, collections.abc.Mapping):
@@ -846,8 +951,8 @@ class TornadoRenderer(BaseRenderer):
             yaxis_title=dict(
                 text=y_label, font=dict(size=self.config.axis_title_font_size)
             ),
-            width=self.config.width,
-            height=self.config.height,
+            width=width if width is not None else self.config.width,
+            height=height if height is not None else self.config.height,
             showlegend=self.config.show_legend,
             plot_bgcolor=self.config.plot_background_color,
             paper_bgcolor=self.config.background_color,
@@ -883,7 +988,7 @@ class TornadoRenderer(BaseRenderer):
         return fig
 
 
-class ScatterRenderer1D(BaseRenderer):
+class ScatterRenderer(BaseRenderer):
     """
     Renderer for 1D scatter plots with optional trendlines.
     """
@@ -908,6 +1013,8 @@ class ScatterRenderer1D(BaseRenderer):
         log_y: bool = False,
         hover_template: typing.Optional[str] = None,
         title: typing.Optional[str] = None,
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
         **kwargs: typing.Any,
     ) -> go.Figure:
         """
@@ -929,8 +1036,26 @@ class ScatterRenderer1D(BaseRenderer):
         :param log_y: Use logarithmic y-axis
         :param hover_template: Custom hover template
         :param title: Plot title
+        :param width: Figure width in pixels (overrides config)
+        :param height: Figure height in pixels (overrides config)
         :param kwargs: Additional parameters passed to go.Scatter
-        :return: Plotly Figure
+        :return: Plotly `go.Figure`
+
+        Example:
+        ```python
+        import numpy as np
+
+        from sim3D.visualization.plotly1d import ScatterRenderer
+
+        # Sample data
+        data = {
+            "Series A": np.array([[1, 10], [2, 15], [3, 13]]),
+            "Series B": np.array([[1, 12], [2, 9], [3, 14]]),
+        }
+        renderer = ScatterRenderer()
+        fig = renderer.render(data, show_trendline=True, trendline_type="linear")
+        fig.show()
+        ```
         """
         # Normalize data
         series_list, names_list = self.normalize_data(data)
@@ -1016,6 +1141,8 @@ class ScatterRenderer1D(BaseRenderer):
             log_x=log_x,
             log_y=log_y,
             num_series=num_series,
+            width=width,
+            height=height,
         )
         return fig
 
@@ -1088,7 +1215,7 @@ class DataVisualizer:
             PlotType.LINE: LineRenderer(self._config),
             PlotType.BAR: BarRenderer(self._config),
             PlotType.TORNADO: TornadoRenderer(self._config),
-            PlotType.SCATTER: ScatterRenderer1D(self._config),
+            PlotType.SCATTER: ScatterRenderer(self._config),
         }
 
     @property
@@ -1252,6 +1379,29 @@ class DataVisualizer:
         )
         return fig
 
+    def help(self, plot_type: typing.Optional[PlotType] = None) -> str:
+        """
+        Print help information about available plot types and their parameters.
+
+        :param plot_type: Specific plot type to get help for (or None for all)
+        :return: The help string
+
+        Example:
+        ```python
+        from sim3D.visualization.plotly1d import viz, PlotType
+
+        # Get help for all plot types
+        print(viz.help())
+        """
+        if plot_type is not None:
+            renderer = self.get_renderer(plot_type)
+            return renderer.help()
+
+        help_strings = []
+        for pt, renderer in self._renderers.items():
+            help_strings.append(f"=== {pt.value} Plot ===\n{renderer.help()}\n")
+        return "\n".join(help_strings)
+
 
 viz = DataVisualizer()
 """Global visualizer instance for 1D plots."""
@@ -1279,5 +1429,9 @@ def make_series_plot(
     config = PlotConfig()
     renderer = LineRenderer(config)
     return renderer.render(
-        data, x_label=x_label, y_label=y_label, title=title, **kwargs
+        data,
+        x_label=x_label,
+        y_label=y_label,
+        title=title,
+        **kwargs,
     )

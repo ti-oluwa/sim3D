@@ -3,9 +3,8 @@ import itertools
 import typing
 
 import numpy as np
-import pyamg
-from scipy.sparse import lil_matrix
-from scipy.sparse.linalg import gmres
+from scipy.sparse import lil_matrix, diags
+from scipy.sparse.linalg import bicgstab, lgmres
 
 from sim3D._precision import get_dtype, get_floating_point_info
 from sim3D.constants import c
@@ -161,7 +160,6 @@ def to_1D_index_interior_only(
 def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
-    oil_pressure_grid: ThreeDimensionalGrid,
     water_mobility_grid: ThreeDimensionalGrid,
     oil_mobility_grid: ThreeDimensionalGrid,
     gas_mobility_grid: ThreeDimensionalGrid,
@@ -503,7 +501,6 @@ def evolve_pressure_implicitly(
                 _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=neighbour_indices,
-                    oil_pressure_grid=current_oil_pressure_grid,
                     **mobility_grids,  # type: ignore
                     oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
                     gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
@@ -535,6 +532,7 @@ def evolve_pressure_implicitly(
 
     # THIRD PASS: Compute well flow rates and add to RHS
     # This is done explicitly (using current pressure) similar to explicit method
+    temperature_grid = fluid_properties.temperature_grid
     for i, j, k in itertools.product(
         range(1, cell_count_x - 1),
         range(1, cell_count_y - 1),
@@ -542,7 +540,7 @@ def evolve_pressure_implicitly(
     ):
         cell_1D_index = _to_1D_index(i, j, k)
         cell_thickness = thickness_grid[i, j, k]
-        cell_temperature = fluid_properties.temperature_grid[i, j, k]
+        cell_temperature = temperature_grid[i, j, k]
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
 
         injection_well, production_well = wells[i, j, k]
@@ -613,19 +611,16 @@ def evolve_pressure_implicitly(
             )
 
             # Check for backflow (negative injection)
-            if cell_injection_rate < 0.0:
-                if injection_well.auto_clamp:
-                    cell_injection_rate = 0.0
-                else:
-                    _warn_injector_is_producing(
-                        injection_rate=cell_injection_rate,
-                        well_name=injection_well.name,
-                        time=time_step * time_step_size,
-                        cell=(i, j, k),
-                        rate_unit="ft³/day"
-                        if injected_phase == FluidPhase.GAS
-                        else "bbls/day",
-                    )
+            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+                _warn_injector_is_producing(
+                    injection_rate=cell_injection_rate,
+                    well_name=injection_well.name,
+                    time=time_step * time_step_size,
+                    cell=(i, j, k),
+                    rate_unit="ft³/day"
+                    if injected_phase == FluidPhase.GAS
+                    else "bbls/day",
+                )
 
             # Convert to ft³/day if not already
             if injected_phase != FluidPhase.GAS:
@@ -688,19 +683,16 @@ def evolve_pressure_implicitly(
                 )
 
                 # Check for backflow (positive production = injection)
-                if production_rate > 0.0:
-                    if production_well.auto_clamp:
-                        production_rate = 0.0
-                    else:
-                        _warn_producer_is_injecting(
-                            production_rate=production_rate,
-                            well_name=production_well.name,
-                            time=time_step * time_step_size,
-                            cell=(i, j, k),
-                            rate_unit="ft³/day"
-                            if produced_phase == FluidPhase.GAS
-                            else "bbls/day",
-                        )
+                if production_rate > 0.0 and options.warn_rates_anomalies:
+                    _warn_producer_is_injecting(
+                        production_rate=production_rate,
+                        well_name=production_well.name,
+                        time=time_step * time_step_size,
+                        cell=(i, j, k),
+                        rate_unit="ft³/day"
+                        if produced_phase == FluidPhase.GAS
+                        else "bbls/day",
+                    )
 
                 # Convert to ft³/day if not already
                 if produced_phase != FluidPhase.GAS:
@@ -717,26 +709,49 @@ def evolve_pressure_implicitly(
         # Units: ft³/day
         b[cell_1D_index] += net_well_flow_rate
 
-    # Solve the linear system
+    # Solve the linear system with fallback strategy
+    # Strategy: BiCGSTAB first (fast, good for non-symmetric), then LGMRES (more robust)
     A_csr = A.tocsr()
-    ml = pyamg.ruge_stuben_solver(A_csr)
-    M = ml.aspreconditioner(cycle="V")
+    diag_elements = A_csr.diagonal()
+    diag_elements = np.where(np.abs(diag_elements) < 1e-10, 1.0, diag_elements)
+    M_diag = diags(1.0 / diag_elements, format="csr")
 
     b_norm = np.linalg.norm(b)
     epsilon = get_floating_point_info().eps
-    rtol = epsilon * 50
-    atol = max(1e-8, 20 * epsilon * b_norm)
-    new_1D_pressure_grid, info = gmres(
+    rtol = float(epsilon * 50)
+    atol = float(max(1e-8, 20 * epsilon * b_norm))
+
+    # Try BiCGSTAB first (typically faster for pressure equations)
+    bicgstab_max_iter = min(150, options.max_iterations)
+    new_1D_pressure_grid, info = bicgstab(
         A=A_csr,
         b=b,
-        M=M,
-        rtol=rtol,  # type: ignore
-        atol=atol,  # type: ignore
-        restart=50,
-        maxiter=options.max_iterations,
+        M=M_diag,
+        rtol=rtol,
+        atol=atol,
+        maxiter=bicgstab_max_iter,
     )
+
     if info != 0:
-        raise RuntimeError(f"GMRES did not converge, info={info}")
+        # BiCGSTAB failed or stalled, fall back to LGMRES
+        lgmres_max_iter = min(250, options.max_iterations)  # Cap at 250 for LGMRES
+        new_1D_pressure_grid, info = lgmres(
+            A=A_csr,
+            b=b,
+            M=M_diag,
+            rtol=rtol,
+            atol=atol,
+            maxiter=lgmres_max_iter,
+            inner_m=30,  # Inner GMRES iterations
+            outer_k=3,  # Number of vectors to carry between restarts
+        )
+
+        if info != 0:
+            raise RuntimeError(
+                f"Both BiCGSTAB and LGMRES failed to converge. "
+                f"Last solver returned info={info}. "
+                f"Consider reducing time step or checking initial conditions."
+            )
 
     # Initialize with current pressure (preserves boundary values)
     new_pressure_grid = current_oil_pressure_grid.copy()
