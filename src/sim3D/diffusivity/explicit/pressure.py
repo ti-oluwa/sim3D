@@ -95,182 +95,6 @@ Notes:
 """
 
 
-def _compute_explicit_pressure_pseudo_flux_from_neighbour(
-    cell_indices: ThreeDimensions,
-    neighbour_indices: ThreeDimensions,
-    oil_pressure_grid: ThreeDimensionalGrid,
-    water_mobility_grid: ThreeDimensionalGrid,
-    oil_mobility_grid: ThreeDimensionalGrid,
-    gas_mobility_grid: ThreeDimensionalGrid,
-    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
-    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
-) -> float:
-    """
-    Computes the total "pseudo" volumetric flux from a neighbour cell into the current cell
-    based on the pressure differences, mobilities, and capillary pressures.
-
-    The pseudo flux comes about due to the fact that we are are not using the pressure gradient, ∆P/∆x, or ∆P/∆y, or ∆P/∆z,
-    but rather the pressure difference between the cells, ∆P.
-
-    This will later be normalized by the cell geometric factor (A/∆x) to obtain the actual volumetric flow rate.
-
-    This function calculates the pseudo volumetric flux for each phase (water, oil, gas)
-    from the neighbour cell into the current cell using the harmonic mobility approach.
-    The total volumetric flux is the sum of the individual phase fluxes, converted to ft³/day.
-    The formula used is:
-
-    q_total = (λ_w * Water Phase Potential Difference)
-              + (λ_o * Oil Phase Potential Difference)
-              + (λ_g * Gas Phase Potential Difference)
-
-    Where:
-        - λ_w, λ_o, λ_g are the harmonic mobilities of water, oil, and gas respectively.
-        - Water Phase Potential Difference = [(P_neighbour - P_current) - (P_cow_neighbour - P_cow_current)]
-                                            + (upwind_water_density * gravity * height_difference / 144.0)
-        - Oil Phase Potential Difference = (P_neighbour - P_current) + (upwind_oil_density * gravity * height_difference / 144.0)
-        - Gas Phase Potential Difference = [(P_neighbour + P_cgo_neighbour) - (P_current + P_cgo_current)]
-                                            + (upwind_gas_density * gravity * height_difference / 144.0)
-        - Upwinded densities are determined based on the pressure difference:
-        - If the pressure difference is positive (P_neighbour - P_current > 0), we use the neighbour's density i.e.,
-            Neighbour is upstream in the flow direction.
-        - If the pressure difference is negative (P_neighbour - P_current < 0), we use the current cell's density.
-
-    :param cell_indices: Indices of the current cell (i, j, k).
-    :param neighbour_indices: Indices of the neighbour cell (i±1, j, k) or (i, j±1, k) or (i, j, k±1).
-    :param oil_pressure_grid: N-Dimensional numpy array representing the oil phase pressure grid (psi).
-    :param water_mobility_grid: N-Dimensional numpy array representing the water phase mobility grid (ft²/psi/day).
-    :param oil_mobility_grid: N-Dimensional numpy array representing the oil phase mobility grid (ft²/psi/day).
-    :param gas_mobility_grid: N-Dimensional numpy array representing the gas phase mobility grid (ft²/psi/day).
-    :param oil_water_capillary_pressure_grid: N-Dimensional numpy array representing the oil-water capillary pressure grid (psi).
-    :param gas_oil_capillary_pressure_grid: N-Dimensional numpy array representing the gas-oil capillary pressure grid (psi).
-    :param oil_density_grid: N-Dimensional numpy array representing the oil phase density grid (lb/ft³).
-    :param water_density_grid: N-Dimensional numpy array representing the water phase density grid (lb/ft³).
-    :param gas_density_grid: N-Dimensional numpy array representing the gas phase density grid (lb/ft³).
-    :param elevation_grid: N-Dimensional numpy array representing the thickness of each cell in the reservoir (ft).
-    :return: Total pseudo volumetric flux from neighbour to current cell (ft²/day).
-    """
-    cell_oil_pressure = oil_pressure_grid[cell_indices]
-    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
-    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
-    neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
-    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
-        neighbour_indices
-    ]
-    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
-        neighbour_indices
-    ]
-
-    # Calculate pressure differences relative to current cell (Neighbour - Current)
-    # These represent the gradients driving flow from current to neighbour, or vice versa
-    oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
-    oil_water_capillary_pressure_difference = (
-        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
-    )
-    water_pressure_difference = (
-        oil_pressure_difference - oil_water_capillary_pressure_difference
-    )
-    # Gas pressure difference is calculated as:
-    gas_oil_capillary_pressure_difference = (
-        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
-    )
-    gas_pressure_difference = (
-        oil_pressure_difference + gas_oil_capillary_pressure_difference
-    )
-
-    if elevation_grid is not None:
-        # Calculate the elevation difference between the neighbour and current cell
-        elevation_delta = (
-            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
-        )
-    else:
-        elevation_delta = 0.0
-
-    # Determine the harmonic densities for each phase across the face
-    if water_density_grid is not None:
-        harmonic_water_density = compute_harmonic_mean(
-            water_density_grid[neighbour_indices], water_density_grid[cell_indices]
-        )
-    else:
-        harmonic_water_density = 0.0
-
-    if oil_density_grid is not None:
-        harmonic_oil_density = compute_harmonic_mean(
-            oil_density_grid[neighbour_indices], oil_density_grid[cell_indices]
-        )
-    else:
-        harmonic_oil_density = 0.0
-
-    if gas_density_grid is not None:
-        harmonic_gas_density = compute_harmonic_mean(
-            gas_density_grid[neighbour_indices], gas_density_grid[cell_indices]
-        )
-    else:
-        harmonic_gas_density = 0.0
-
-    # Calculate harmonic mobilities for each phase across the face (in the direction of flow)
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=water_mobility_grid
-    )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=oil_mobility_grid
-    )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=gas_mobility_grid
-    )
-
-    # Calculate volumetric flux for each phase from neighbour INTO the current cell
-    # Flux_in = λ * 'Phase Potential Difference'
-    # P_water_neighbour - P_water_current = (P_oil_neighbour - P_oil_current) - (neighbour_cell_oil_water_capillary_pressure - cell_oil_water_capillary_pressure)
-    # P_gas_neighbour - P_gas_current = (P_oil_neighbour - P_oil_current) + (neighbour_cell_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure)
-
-    # NOTE: Phase potential differences is the same as the pressure difference
-    # For Oil and Water:
-    # q = λ * (∆P + Gravity Potential) (ft³/day)
-    # Calculate the water gravity potential (hydrostatic/gravity head)
-    water_gravity_potential = (
-        harmonic_water_density
-        * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
-        * elevation_delta
-    ) / 144.0
-    # Calculate the total water phase potential
-    water_phase_potential = water_pressure_difference + water_gravity_potential
-    # Calculate the volumetric flux of water from neighbour to current cell
-    water_pseudo_volumetric_flux = water_harmonic_mobility * water_phase_potential
-
-    # For Oil:
-    # Calculate the oil gravity potential (gravity head)
-    oil_gravity_potential = (
-        harmonic_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Calculate the total oil phase potential
-    oil_phase_potential = oil_pressure_difference + oil_gravity_potential
-    # Calculate the volumetric flux of oil from neighbour to current cell
-    oil_pseudo_volumetric_flux = oil_harmonic_mobility * oil_phase_potential
-
-    # For Gas:
-    # q = λ * ∆P (ft²/day)
-    # Calculate the gas gravity potential (gravity head)
-    gas_gravity_potential = (
-        harmonic_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Calculate the total gas phase potential
-    gas_phase_potential = gas_pressure_difference + gas_gravity_potential
-    # Calculate the volumetric flux of gas from neighbour to current cell
-    gas_pseudo_volumetric_flux = gas_harmonic_mobility * gas_phase_potential
-
-    # Add these incoming fluxes to the net total for the cell, q (ft²/day)
-    total_pseudo_volumetric_flux = (
-        water_pseudo_volumetric_flux
-        + oil_pseudo_volumetric_flux
-        + gas_pseudo_volumetric_flux
-    )
-    return total_pseudo_volumetric_flux
-
-
 def evolve_pressure_explicitly(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -496,7 +320,7 @@ def evolve_pressure_explicitly(
 
             for neighbour in configuration["neighbours"]:
                 # Compute the total flux from neighbours
-                pseudo_flux = _compute_explicit_pressure_pseudo_flux_from_neighbour(
+                pseudo_flux = compute_pseudo_flux_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=neighbour,
                     oil_pressure_grid=current_oil_pressure_grid,
@@ -679,5 +503,181 @@ def evolve_pressure_explicitly(
         # Apply the update to the pressure grid
         # P_oil^(n+1) = P_oil^n + dP_oil
         updated_oil_pressure_grid[i, j, k] += change_in_pressure
-    
+
     return EvolutionResult(updated_oil_pressure_grid, scheme="explicit")
+
+
+def compute_pseudo_flux_from_neighbour(
+    cell_indices: ThreeDimensions,
+    neighbour_indices: ThreeDimensions,
+    oil_pressure_grid: ThreeDimensionalGrid,
+    water_mobility_grid: ThreeDimensionalGrid,
+    oil_mobility_grid: ThreeDimensionalGrid,
+    gas_mobility_grid: ThreeDimensionalGrid,
+    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
+    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
+    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
+) -> float:
+    """
+    Computes the total "pseudo" volumetric flux from a neighbour cell into the current cell
+    based on the pressure differences, mobilities, and capillary pressures.
+
+    The pseudo flux comes about due to the fact that we are are not using the pressure gradient, ∆P/∆x, or ∆P/∆y, or ∆P/∆z,
+    but rather the pressure difference between the cells, ∆P.
+
+    This will later be normalized by the cell geometric factor (A/∆x) to obtain the actual volumetric flow rate.
+
+    This function calculates the pseudo volumetric flux for each phase (water, oil, gas)
+    from the neighbour cell into the current cell using the harmonic mobility approach.
+    The total volumetric flux is the sum of the individual phase fluxes, converted to ft³/day.
+    The formula used is:
+
+    q_total = (λ_w * Water Phase Potential Difference)
+              + (λ_o * Oil Phase Potential Difference)
+              + (λ_g * Gas Phase Potential Difference)
+
+    Where:
+        - λ_w, λ_o, λ_g are the harmonic mobilities of water, oil, and gas respectively.
+        - Water Phase Potential Difference = [(P_neighbour - P_current) - (P_cow_neighbour - P_cow_current)]
+                                            + (upwind_water_density * gravity * height_difference / 144.0)
+        - Oil Phase Potential Difference = (P_neighbour - P_current) + (upwind_oil_density * gravity * height_difference / 144.0)
+        - Gas Phase Potential Difference = [(P_neighbour + P_cgo_neighbour) - (P_current + P_cgo_current)]
+                                            + (upwind_gas_density * gravity * height_difference / 144.0)
+        - Upwinded densities are determined based on the pressure difference:
+        - If the pressure difference is positive (P_neighbour - P_current > 0), we use the neighbour's density i.e.,
+            Neighbour is upstream in the flow direction.
+        - If the pressure difference is negative (P_neighbour - P_current < 0), we use the current cell's density.
+
+    :param cell_indices: Indices of the current cell (i, j, k).
+    :param neighbour_indices: Indices of the neighbour cell (i±1, j, k) or (i, j±1, k) or (i, j, k±1).
+    :param oil_pressure_grid: N-Dimensional numpy array representing the oil phase pressure grid (psi).
+    :param water_mobility_grid: N-Dimensional numpy array representing the water phase mobility grid (ft²/psi/day).
+    :param oil_mobility_grid: N-Dimensional numpy array representing the oil phase mobility grid (ft²/psi/day).
+    :param gas_mobility_grid: N-Dimensional numpy array representing the gas phase mobility grid (ft²/psi/day).
+    :param oil_water_capillary_pressure_grid: N-Dimensional numpy array representing the oil-water capillary pressure grid (psi).
+    :param gas_oil_capillary_pressure_grid: N-Dimensional numpy array representing the gas-oil capillary pressure grid (psi).
+    :param oil_density_grid: N-Dimensional numpy array representing the oil phase density grid (lb/ft³).
+    :param water_density_grid: N-Dimensional numpy array representing the water phase density grid (lb/ft³).
+    :param gas_density_grid: N-Dimensional numpy array representing the gas phase density grid (lb/ft³).
+    :param elevation_grid: N-Dimensional numpy array representing the thickness of each cell in the reservoir (ft).
+    :return: Total pseudo volumetric flux from neighbour to current cell (ft²/day).
+    """
+    cell_oil_pressure = oil_pressure_grid[cell_indices]
+    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
+    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
+    neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
+    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
+        neighbour_indices
+    ]
+    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
+        neighbour_indices
+    ]
+
+    # Calculate pressure differences relative to current cell (Neighbour - Current)
+    # These represent the gradients driving flow from current to neighbour, or vice versa
+    oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
+    oil_water_capillary_pressure_difference = (
+        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
+    )
+    water_pressure_difference = (
+        oil_pressure_difference - oil_water_capillary_pressure_difference
+    )
+    # Gas pressure difference is calculated as:
+    gas_oil_capillary_pressure_difference = (
+        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
+    )
+    gas_pressure_difference = (
+        oil_pressure_difference + gas_oil_capillary_pressure_difference
+    )
+
+    if elevation_grid is not None:
+        # Calculate the elevation difference between the neighbour and current cell
+        elevation_delta = (
+            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
+        )
+    else:
+        elevation_delta = 0.0
+
+    # Determine the harmonic densities for each phase across the face
+    if water_density_grid is not None:
+        harmonic_water_density = compute_harmonic_mean(
+            water_density_grid[neighbour_indices], water_density_grid[cell_indices]
+        )
+    else:
+        harmonic_water_density = 0.0
+
+    if oil_density_grid is not None:
+        harmonic_oil_density = compute_harmonic_mean(
+            oil_density_grid[neighbour_indices], oil_density_grid[cell_indices]
+        )
+    else:
+        harmonic_oil_density = 0.0
+
+    if gas_density_grid is not None:
+        harmonic_gas_density = compute_harmonic_mean(
+            gas_density_grid[neighbour_indices], gas_density_grid[cell_indices]
+        )
+    else:
+        harmonic_gas_density = 0.0
+
+    # Calculate harmonic mobilities for each phase across the face (in the direction of flow)
+    water_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=water_mobility_grid
+    )
+    oil_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=oil_mobility_grid
+    )
+    gas_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=gas_mobility_grid
+    )
+
+    # Calculate volumetric flux for each phase from neighbour INTO the current cell
+    # Flux_in = λ * 'Phase Potential Difference'
+    # P_water_neighbour - P_water_current = (P_oil_neighbour - P_oil_current) - (neighbour_cell_oil_water_capillary_pressure - cell_oil_water_capillary_pressure)
+    # P_gas_neighbour - P_gas_current = (P_oil_neighbour - P_oil_current) + (neighbour_cell_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure)
+
+    # NOTE: Phase potential differences is the same as the pressure difference
+    # For Oil and Water:
+    # q = λ * (∆P + Gravity Potential) (ft³/day)
+    # Calculate the water gravity potential (hydrostatic/gravity head)
+    water_gravity_potential = (
+        harmonic_water_density
+        * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        * elevation_delta
+    ) / 144.0
+    # Calculate the total water phase potential
+    water_phase_potential = water_pressure_difference + water_gravity_potential
+    # Calculate the volumetric flux of water from neighbour to current cell
+    water_pseudo_volumetric_flux = water_harmonic_mobility * water_phase_potential
+
+    # For Oil:
+    # Calculate the oil gravity potential (gravity head)
+    oil_gravity_potential = (
+        harmonic_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    # Calculate the total oil phase potential
+    oil_phase_potential = oil_pressure_difference + oil_gravity_potential
+    # Calculate the volumetric flux of oil from neighbour to current cell
+    oil_pseudo_volumetric_flux = oil_harmonic_mobility * oil_phase_potential
+
+    # For Gas:
+    # q = λ * ∆P (ft²/day)
+    # Calculate the gas gravity potential (gravity head)
+    gas_gravity_potential = (
+        harmonic_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    # Calculate the total gas phase potential
+    gas_phase_potential = gas_pressure_difference + gas_gravity_potential
+    # Calculate the volumetric flux of gas from neighbour to current cell
+    gas_pseudo_volumetric_flux = gas_harmonic_mobility * gas_phase_potential
+
+    # Add these incoming fluxes to the net total for the cell, q (ft²/day)
+    total_pseudo_volumetric_flux = (
+        water_pseudo_volumetric_flux
+        + oil_pseudo_volumetric_flux
+        + gas_pseudo_volumetric_flux
+    )
+    return total_pseudo_volumetric_flux

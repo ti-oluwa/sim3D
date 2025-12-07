@@ -2,6 +2,7 @@ import typing
 import warnings
 
 import attrs
+
 from sim3D.types import T, ThreeDimensions
 
 

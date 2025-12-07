@@ -1,12 +1,13 @@
 import functools
 import logging
-import typing
 from os import PathLike
+import typing
 
 import attrs
 import numpy as np
 from scipy.optimize import curve_fit
 
+from sim3D.cells import CellFilter, Cells
 from sim3D.constants import c
 from sim3D.grids import uniform_grid
 from sim3D.models import ReservoirModel
@@ -20,14 +21,13 @@ from sim3D.types import (
     RelPermGrids,
     RelativeMobilityGrids,
 )
-from sim3D.utils import Cells, CellFilter
+from sim3D.utils import load_from_pickle, save_as_pickle
 from sim3D.wells import Wells, _expand_intervals
-from sim3D.utils import save_as_pickle, load_from_pickle
 
 logger = logging.getLogger(__name__)
 
 
-__all__ = ["ModelState", "ProductionAnalyst", "dump_states", "load_states"]
+__all__ = ["ModelState", "ModelAnalyst", "dump_states", "load_states"]
 
 
 def _ensure_cells(cells: typing.Union[Cells, CellFilter]) -> typing.Optional[Cells]:
@@ -478,16 +478,18 @@ hcip_vectorized = np.vectorize(
 )
 
 
-class ProductionAnalyst(typing.Generic[NDimension]):
+class ModelAnalyst(typing.Generic[NDimension]):
     """
-    Production analysis for evaluating reservoir performance over a series of model states.
+    Analysis tools for evaluating reservoir model performance over a series of states
+    captured during a simulation run.
     """
 
     def __init__(self, states: typing.Iterable[ModelState[NDimension]]) -> None:
         """
         Initializes the model analyst with a series of model states.
 
-        :param states: An iterable of `ModelState` instances representing the simulation states.
+        :param states: An iterable of `ModelState` objects representing the reservoir model states
+        captured at different time steps during a simulation run.
         """
         self._states = {state.time_step: state for state in states}
         self._max_time_step = max(self._states.keys())
@@ -1554,6 +1556,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cells: CellFilter = None,
+        stoiip: typing.Optional[float] = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the oil recovery factor history over time.
@@ -1580,6 +1583,10 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             - [(i1,j1,k1), ...]: List of cells
             - (slice, slice, slice): Region
             When cells is specified, STOIIP is also calculated for the same filtered region.
+        :param stoiip: Optional pre-calculated STOIIP value to use instead of computing from initial state.
+            This will be needed if the initial state of the reservoir is not available in the states provided.
+            Especially the the case of EOR simulations where the initial state may not be included, and its starting
+            point is after some production has already occurred.
         :return: A generator yielding tuples of (time_step, recovery_factor).
 
         Example:
@@ -1603,7 +1610,9 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             to_time_step = self._state_count + to_time_step
 
         # If cells filter is specified, compute STOIIP for that region
-        if cells_obj is None:
+        if stoiip is not None:
+            pass
+        elif cells_obj is None:
             stoiip = self.stock_tank_oil_initially_in_place
         else:
             initial_state = self.get_state(0)
@@ -1651,6 +1660,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cells: CellFilter = None,
+        stgiip: typing.Optional[float] = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the free gas recovery factor history over time.
@@ -1670,6 +1680,10 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             - [(i1,j1,k1), ...]: List of cells
             - (slice, slice, slice): Region
             When cells is specified, GIIP is also calculated for the same filtered region.
+        :param stgiip: Optional pre-calculated Stock Tank Gas Initially in Place (STGIIP) value to use instead of computing from initial state.
+            This will be needed if the initial state of the reservoir is not available in the states provided.
+            Especially the the case of EOR simulations where the initial state may not be included, and its starting
+            point is after some production has already occurred.
         :return: A generator yielding tuples of (time_step, recovery_factor).
 
         Example:
@@ -1687,7 +1701,9 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             to_time_step = self._state_count + to_time_step
 
         # If cells filter is specified, compute GIIP for that region
-        if cells_obj is None:
+        if stgiip is not None:
+            giip = stgiip
+        elif cells_obj is None:
             giip = self.stock_tank_gas_initially_in_place
         else:
             initial_state = self.get_state(0)
@@ -1849,6 +1865,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         to_time_step: int = -1,
         interval: int = 1,
         cells: CellFilter = None,
+        stgiip: typing.Optional[float] = None,
     ) -> typing.Generator[typing.Tuple[int, float], None, None]:
         """
         Get the gas recovery factor history over time.
@@ -1860,6 +1877,16 @@ class ProductionAnalyst(typing.Generic[NDimension]):
         :param to_time_step: The ending time step index (inclusive). Default is -1 (last time step).
         :param interval: Time step interval for sampling. Default is 1.
         :param cells: Optional filter for specific cells, well name, or region.
+            - None: Entire reservoir (default)
+            - str: Well name (e.g., "PROD-1")
+            - (i, j, k): Single cell
+            - [(i1,j1,k1), ...]: List of cells
+            - (slice, slice, slice): Region
+            When cells is specified, GIIP is also calculated for the same filtered region.
+        :param stgiip: Optional pre-calculated Stock Tank Gas Initially in Place (STGIIP) value to use instead of computing from initial state.
+            This will be needed if the initial state of the reservoir is not available in the states provided.
+            Especially the the case of EOR simulations where the initial state may not be included, and its starting
+            point is after some production has already occurred.
         :return: A generator yielding tuples of (time_step, recovery_factor).
         """
         yield from self.free_gas_recovery_factor_history(
@@ -1867,6 +1894,7 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             to_time_step=to_time_step,
             interval=interval,
             cells=cells,
+            stgiip=stgiip,
         )
 
     def reservoir_volumetrics_analysis(
@@ -2503,7 +2531,6 @@ class ProductionAnalyst(typing.Generic[NDimension]):
             if total_planform_cells > 0
             else 0.0
         )
-        # Simplifies to contacted_planform_cells / total_planform_cells, but kept ft2 for clarity
 
         # VERTICAL SWEEP EFFICIENCY (saturation-weighted)
         # For each (i,j) compute:

@@ -14,7 +14,7 @@ def _():
 
     sim3D.image_config(scale=3)
 
-    DEPLETED_MODEL_STATES = Path.cwd() / "scenarios/states/co2_injection_coarse.pkl.xz"
+    DEPLETED_MODEL_STATES = Path.cwd() / "scenarios/states/co2_injection_coarse_2.pkl.xz"
     states = list(sim3D.load_states(filepath=DEPLETED_MODEL_STATES))
     return itertools, np, sim3D, states
 
@@ -724,9 +724,9 @@ def _(sim3D, states, viz):
         # cmax=0.85,
     )
 
-    property = "pcgo"
+    property = "solvent-concentration"
     figures = []
-    timesteps = [2, 1753]
+    timesteps = [2, 450, 960, 1541]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

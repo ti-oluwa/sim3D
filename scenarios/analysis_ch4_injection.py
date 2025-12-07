@@ -22,7 +22,7 @@ def _():
 
 @app.cell
 def _(itertools, np, sim3D, states):
-    analyst = sim3D.ProductionAnalyst(states)
+    analyst = sim3D.ModelAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
         interval=1, from_time_step=1, displacing_phase="gas"
@@ -694,32 +694,6 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(np, sim3D):
-    viz1d = sim3D.plotly1d.DataVisualizer()
-
-    # Cum. Production
-    data = {
-        "Primary Depeletion": np.array([[0, 201.0105]]),
-        "CO2 Injection": np.array([[0,  321.9279]]),
-        "CH4 Injection": np.array([[0,  343.5733]]),
-    }
-
-    cum_bar_chart = viz1d.make_plot(
-        data,
-        plot_type=sim3D.plotly1d.PlotType.BAR,
-        width=960,
-        height=600,
-        bar_mode="stack",
-        bar_width=0.5,
-        y_label="Cumulative Oil Production (MSTB)",
-        x_label="Cases",
-        title="Incremental Recovery"
-    )
-    cum_bar_chart.show()
-    return
-
-
-@app.cell
 def _(sim3D):
     viz = sim3D.plotly3d.DataVisualizer()
     return (viz,)
@@ -751,9 +725,9 @@ def _(sim3D, states, viz):
         # cmax=1.1,
     )
 
-    property = "oil-relative-mobility"
+    property = "oil-effective-viscosity"
     figures = []
-    timesteps = [2, 450]
+    timesteps = [2, 450, 962, 1253]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

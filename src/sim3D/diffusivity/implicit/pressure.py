@@ -3,7 +3,7 @@ import itertools
 import typing
 
 import numpy as np
-from scipy.sparse import lil_matrix, diags
+from scipy.sparse import csr_array, lil_matrix, diags
 from scipy.sparse.linalg import bicgstab, lgmres
 
 from sim3D._precision import get_dtype, get_floating_point_info
@@ -122,181 +122,6 @@ Notes:
 Stability:
     - Fully implicit scheme is unconditionally stable for linear pressure diffusion
 """
-
-
-def to_1D_index_interior_only(
-    i: int,
-    j: int,
-    k: int,
-    cell_count_x: int,
-    cell_count_y: int,
-    cell_count_z: int,
-) -> int:
-    """
-    Converts 3D grid indices to 1D index for interior cells only.
-    Padding cells (i=0, i=Nx-1, etc.) return -1.
-    Interior cells are mapped to [0, (Nx-2)*(Ny-2)*(Nz-2))
-    """
-    if not (
-        0 < i < cell_count_x - 1
-        and 0 < j < cell_count_y - 1
-        and 0 < k < cell_count_z - 1
-    ):
-        return -1  # Padding cell
-
-    # Adjust indices to 0-based for interior grid
-    i_interior = i - 1
-    j_interior = j - 1
-    k_interior = k - 1
-
-    # Interior dimensions
-    ny_interior = cell_count_y - 2
-    nz_interior = cell_count_z - 2
-    return (
-        i_interior * (ny_interior * nz_interior) + j_interior * nz_interior + k_interior
-    )
-
-
-def _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
-    cell_indices: ThreeDimensions,
-    neighbour_indices: ThreeDimensions,
-    water_mobility_grid: ThreeDimensionalGrid,
-    oil_mobility_grid: ThreeDimensionalGrid,
-    gas_mobility_grid: ThreeDimensionalGrid,
-    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
-    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
-) -> typing.Tuple[float, float, float]:
-    """
-    Computes and returns a tuple of the total harmonic mobility of the phases, the capillary pseudo flux,
-    and the gravity pseudo flux from the neighbour to the current cell.
-
-    Pseudo flux comes about from the fact that the fluxes returned are not actual fluxes with units of ft/day,
-    but rather pseudo fluxes with units of ft²/day, which are then used to compute the actual fluxes and subsequently,
-    the flow rates in the implicit pressure evolution scheme.
-
-    :param cell_indices: Indices of the current cell (i, j, k)
-    :param neighbour_indices: Indices of the neighbouring cell (i±1, j, k) or (i, j±1, k) or (i, j, k±1)
-    :param oil_pressure_grid: 3D grid of oil pressures (psi)
-    :param water_mobility_grid: 3D grid of water mobilities (ft²/psi.day)
-    :param oil_mobility_grid: 3D grid of oil mobilities (ft²/psi.day)
-    :param gas_mobility_grid: 3D grid of gas mobilities (ft²/psi.day)
-    :param oil_water_capillary_pressure_grid: 3D grid of oil-water capillary pressures (psi)
-    :param gas_oil_capillary_pressure_grid: 3D grid of gas-oil capillary pressures (psi)
-    :param oil_density_grid: 3D grid of oil densities (lb/ft³), optional
-    :param water_density_grid: 3D grid of water densities (lb/ft³), optional
-    :param gas_density_grid: 3D grid of gas densities (lb/ft³), optional
-    :param elevation_grid: 3D grid of elevations (ft), optional
-    :return: A tuple containing:
-        - Total harmonic mobility (ft²/psi.day)
-        - Total capillary pseudo flux (ft²/day)
-        - Total gravity pseudo flux (ft²/day)
-    """
-    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
-    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
-    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
-        neighbour_indices
-    ]
-    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
-        neighbour_indices
-    ]
-
-    # Calculate pressure differences relative to current cell (Neighbour - Current)
-    # These represent the gradients driving flow from neighbour to current cell, or vice versa
-    oil_water_capillary_pressure_difference = (
-        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
-    )
-    gas_oil_capillary_pressure_difference = (
-        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
-    )
-
-    if elevation_grid is not None:
-        # Calculate the elevation difference between the neighbour and current cell
-        elevation_delta = (
-            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
-        )
-    else:
-        elevation_delta = 0.0
-
-    # Determine the harmonic densities for each phase across the face
-    if water_density_grid is not None:
-        harmonic_water_density = compute_harmonic_mean(
-            water_density_grid[neighbour_indices], water_density_grid[cell_indices]
-        )
-    else:
-        harmonic_water_density = 0.0
-
-    if oil_density_grid is not None:
-        harmonic_oil_density = compute_harmonic_mean(
-            oil_density_grid[neighbour_indices], oil_density_grid[cell_indices]
-        )
-    else:
-        harmonic_oil_density = 0.0
-
-    if gas_density_grid is not None:
-        harmonic_gas_density = compute_harmonic_mean(
-            gas_density_grid[neighbour_indices], gas_density_grid[cell_indices]
-        )
-    else:
-        harmonic_gas_density = 0.0
-
-    # Calculate harmonic mobilities for each phase across the face
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=water_mobility_grid
-    )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=oil_mobility_grid
-    )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=gas_mobility_grid
-    )
-    total_harmonic_mobility = (
-        water_harmonic_mobility + oil_harmonic_mobility + gas_harmonic_mobility
-    )
-    if total_harmonic_mobility <= 0.0:
-        # No flow can occur if there is no mobility
-        return 0.0, 0.0, 0.0
-
-    # λ_w * (P_cow_{n+1} - P_cow_{n}) (ft²/psi.day * psi = ft²/day)
-    water_capillary_pseudo_flux = (
-        water_harmonic_mobility * oil_water_capillary_pressure_difference
-    )
-    # λ_g * (P_cgo_{n+1} - P_cgo_{n}) (ft²/psi.day * psi = ft²/day)
-    gas_capillary_pseudo_flux = (
-        gas_harmonic_mobility * gas_oil_capillary_pressure_difference
-    )
-    # Total capillary flux from the neighbour (ft²/day)
-    total_capillary_pseudo_flux = (
-        water_capillary_pseudo_flux + gas_capillary_pseudo_flux
-    )
-
-    # Calculate the phase gravity potentials (hydrostatic/gravity head)
-    water_gravity_potential = (
-        harmonic_water_density
-        * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
-        * elevation_delta
-    ) / 144.0
-    oil_gravity_potential = (
-        harmonic_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    gas_gravity_potential = (
-        harmonic_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Total gravity pseudo flux (ft²/day)
-    water_gravity_pseudo_flux = water_harmonic_mobility * water_gravity_potential
-    oil_gravity_pseudo_flux = oil_harmonic_mobility * oil_gravity_potential
-    gas_gravity_pseudo_flux = gas_harmonic_mobility * gas_gravity_potential
-    total_gravity_pseudo_flux = (
-        water_gravity_pseudo_flux + oil_gravity_pseudo_flux + gas_gravity_pseudo_flux
-    )
-    return (
-        total_harmonic_mobility,
-        total_capillary_pseudo_flux,
-        total_gravity_pseudo_flux,
-    )
 
 
 def evolve_pressure_implicitly(
@@ -498,7 +323,7 @@ def evolve_pressure_implicitly(
 
             # Compute pseudo flux from neighbour to cell
             harmonic_mobility, cap_flux, grav_flux = (
-                _compute_implicit_pressure_pseudo_fluxes_from_neighbour(
+                compute_pseudo_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=neighbour_indices,
                     **mobility_grids,  # type: ignore
@@ -709,50 +534,12 @@ def evolve_pressure_implicitly(
         # Units: ft³/day
         b[cell_1D_index] += net_well_flow_rate
 
-    # Solve the linear system with fallback strategy
-    # Strategy: BiCGSTAB first (fast, good for non-symmetric), then LGMRES (more robust)
-    A_csr = A.tocsr()
-    diag_elements = A_csr.diagonal()
-    diag_elements = np.where(np.abs(diag_elements) < 1e-10, 1.0, diag_elements)
-    M_diag = diags(1.0 / diag_elements, format="csr")
-
-    b_norm = np.linalg.norm(b)
-    epsilon = get_floating_point_info().eps
-    rtol = float(epsilon * 50)
-    atol = float(max(1e-8, 20 * epsilon * b_norm))
-
-    # Try BiCGSTAB first (typically faster for pressure equations)
-    bicgstab_max_iter = min(150, options.max_iterations)
-    new_1D_pressure_grid, info = bicgstab(
-        A=A_csr,
+    # Solve the linear system A·pⁿ⁺¹ = b
+    new_1D_pressure_grid = solve_linear_system(
+        A=A.tocsr(),
         b=b,
-        M=M_diag,
-        rtol=rtol,
-        atol=atol,
-        maxiter=bicgstab_max_iter,
+        max_iterations=options.max_iterations,
     )
-
-    if info != 0:
-        # BiCGSTAB failed or stalled, fall back to LGMRES
-        lgmres_max_iter = min(250, options.max_iterations)  # Cap at 250 for LGMRES
-        new_1D_pressure_grid, info = lgmres(
-            A=A_csr,
-            b=b,
-            M=M_diag,
-            rtol=rtol,
-            atol=atol,
-            maxiter=lgmres_max_iter,
-            inner_m=30,  # Inner GMRES iterations
-            outer_k=3,  # Number of vectors to carry between restarts
-        )
-
-        if info != 0:
-            raise RuntimeError(
-                f"Both BiCGSTAB and LGMRES failed to converge. "
-                f"Last solver returned info={info}. "
-                f"Consider reducing time step or checking initial conditions."
-            )
-
     # Initialize with current pressure (preserves boundary values)
     new_pressure_grid = current_oil_pressure_grid.copy()
 
@@ -768,3 +555,245 @@ def evolve_pressure_implicitly(
 
     new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
     return EvolutionResult(new_pressure_grid, scheme="implicit")
+
+
+def to_1D_index_interior_only(
+    i: int,
+    j: int,
+    k: int,
+    cell_count_x: int,
+    cell_count_y: int,
+    cell_count_z: int,
+) -> int:
+    """
+    Converts 3D grid indices to 1D index for interior cells only.
+    Padding cells (i=0, i=Nx-1, etc.) return -1.
+    Interior cells are mapped to [0, (Nx-2)*(Ny-2)*(Nz-2))
+    """
+    if not (
+        0 < i < cell_count_x - 1
+        and 0 < j < cell_count_y - 1
+        and 0 < k < cell_count_z - 1
+    ):
+        return -1  # Padding cell
+
+    # Adjust indices to 0-based for interior grid
+    i_interior = i - 1
+    j_interior = j - 1
+    k_interior = k - 1
+
+    # Interior dimensions
+    ny_interior = cell_count_y - 2
+    nz_interior = cell_count_z - 2
+    return (
+        i_interior * (ny_interior * nz_interior)
+        + (j_interior * nz_interior)
+        + k_interior
+    )
+
+
+def compute_pseudo_fluxes_from_neighbour(
+    cell_indices: ThreeDimensions,
+    neighbour_indices: ThreeDimensions,
+    water_mobility_grid: ThreeDimensionalGrid,
+    oil_mobility_grid: ThreeDimensionalGrid,
+    gas_mobility_grid: ThreeDimensionalGrid,
+    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
+    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
+    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
+) -> typing.Tuple[float, float, float]:
+    """
+    Computes and returns a tuple of the total harmonic mobility of the phases, the capillary pseudo flux,
+    and the gravity pseudo flux from the neighbour to the current cell.
+
+    Pseudo flux comes about from the fact that the fluxes returned are not actual fluxes with units of ft/day,
+    but rather pseudo fluxes with units of ft²/day, which are then used to compute the actual fluxes and subsequently,
+    the flow rates in the implicit pressure evolution scheme.
+
+    :param cell_indices: Indices of the current cell (i, j, k)
+    :param neighbour_indices: Indices of the neighbouring cell (i±1, j, k) or (i, j±1, k) or (i, j, k±1)
+    :param oil_pressure_grid: 3D grid of oil pressures (psi)
+    :param water_mobility_grid: 3D grid of water mobilities (ft²/psi.day)
+    :param oil_mobility_grid: 3D grid of oil mobilities (ft²/psi.day)
+    :param gas_mobility_grid: 3D grid of gas mobilities (ft²/psi.day)
+    :param oil_water_capillary_pressure_grid: 3D grid of oil-water capillary pressures (psi)
+    :param gas_oil_capillary_pressure_grid: 3D grid of gas-oil capillary pressures (psi)
+    :param oil_density_grid: 3D grid of oil densities (lb/ft³), optional
+    :param water_density_grid: 3D grid of water densities (lb/ft³), optional
+    :param gas_density_grid: 3D grid of gas densities (lb/ft³), optional
+    :param elevation_grid: 3D grid of elevations (ft), optional
+    :return: A tuple containing:
+        - Total harmonic mobility (ft²/psi.day)
+        - Total capillary pseudo flux (ft²/day)
+        - Total gravity pseudo flux (ft²/day)
+    """
+    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
+    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
+    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
+        neighbour_indices
+    ]
+    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
+        neighbour_indices
+    ]
+
+    # Calculate pressure differences relative to current cell (Neighbour - Current)
+    # These represent the gradients driving flow from neighbour to current cell, or vice versa
+    oil_water_capillary_pressure_difference = (
+        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
+    )
+    gas_oil_capillary_pressure_difference = (
+        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
+    )
+
+    if elevation_grid is not None:
+        # Calculate the elevation difference between the neighbour and current cell
+        elevation_delta = (
+            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
+        )
+    else:
+        elevation_delta = 0.0
+
+    # Determine the harmonic densities for each phase across the face
+    if water_density_grid is not None:
+        harmonic_water_density = compute_harmonic_mean(
+            water_density_grid[neighbour_indices], water_density_grid[cell_indices]
+        )
+    else:
+        harmonic_water_density = 0.0
+
+    if oil_density_grid is not None:
+        harmonic_oil_density = compute_harmonic_mean(
+            oil_density_grid[neighbour_indices], oil_density_grid[cell_indices]
+        )
+    else:
+        harmonic_oil_density = 0.0
+
+    if gas_density_grid is not None:
+        harmonic_gas_density = compute_harmonic_mean(
+            gas_density_grid[neighbour_indices], gas_density_grid[cell_indices]
+        )
+    else:
+        harmonic_gas_density = 0.0
+
+    # Calculate harmonic mobilities for each phase across the face
+    water_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=water_mobility_grid
+    )
+    oil_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=oil_mobility_grid
+    )
+    gas_harmonic_mobility = compute_harmonic_mobility(
+        index1=cell_indices, index2=neighbour_indices, mobility_grid=gas_mobility_grid
+    )
+    total_harmonic_mobility = (
+        water_harmonic_mobility + oil_harmonic_mobility + gas_harmonic_mobility
+    )
+    if total_harmonic_mobility <= 0.0:
+        # No flow can occur if there is no mobility
+        return 0.0, 0.0, 0.0
+
+    # λ_w * (P_cow_{n+1} - P_cow_{n}) (ft²/psi.day * psi = ft²/day)
+    water_capillary_pseudo_flux = (
+        water_harmonic_mobility * oil_water_capillary_pressure_difference
+    )
+    # λ_g * (P_cgo_{n+1} - P_cgo_{n}) (ft²/psi.day * psi = ft²/day)
+    gas_capillary_pseudo_flux = (
+        gas_harmonic_mobility * gas_oil_capillary_pressure_difference
+    )
+    # Total capillary flux from the neighbour (ft²/day)
+    total_capillary_pseudo_flux = (
+        water_capillary_pseudo_flux + gas_capillary_pseudo_flux
+    )
+
+    # Calculate the phase gravity potentials (hydrostatic/gravity head)
+    water_gravity_potential = (
+        harmonic_water_density
+        * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        * elevation_delta
+    ) / 144.0
+    oil_gravity_potential = (
+        harmonic_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    gas_gravity_potential = (
+        harmonic_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    # Total gravity pseudo flux (ft²/day)
+    water_gravity_pseudo_flux = water_harmonic_mobility * water_gravity_potential
+    oil_gravity_pseudo_flux = oil_harmonic_mobility * oil_gravity_potential
+    gas_gravity_pseudo_flux = gas_harmonic_mobility * gas_gravity_potential
+    total_gravity_pseudo_flux = (
+        water_gravity_pseudo_flux + oil_gravity_pseudo_flux + gas_gravity_pseudo_flux
+    )
+    return (
+        total_harmonic_mobility,
+        total_capillary_pseudo_flux,
+        total_gravity_pseudo_flux,
+    )
+
+
+def solve_linear_system(
+    A: csr_array,
+    b: np.ndarray,
+    max_iterations: int,
+) -> np.ndarray:
+    """
+    Solves the linear system A·x = b using an iterative solver with a fallback strategy.
+
+    The function first attempts to solve the system using the BiCGSTAB method, which is
+    generally efficient for large, sparse, non-symmetric systems. If BiCGSTAB fails to
+    converge within the specified number of iterations, the function falls back to the
+    LGMRES method, which is more robust but typically slower.
+
+    Preconditioning is applied using a diagonal preconditioner derived from the diagonal
+    elements of matrix A to improve convergence.
+
+    :param A: Coefficient matrix in CSR format.
+    :param b: Right-hand side vector.
+    :param max_iterations: Maximum number of iterations for each solver.
+    :return: Solution vector x.
+    :raises RuntimeError: If both solvers fail to converge.
+    """
+    diag_elements = A.diagonal()
+    diag_elements = np.where(np.abs(diag_elements) < 1e-10, 1.0, diag_elements)
+    M_diag = diags(1.0 / diag_elements, format="csr")
+
+    b_norm = np.linalg.norm(b)
+    epsilon = get_floating_point_info().eps
+    rtol = float(epsilon * 50)
+    atol = float(max(1e-8, 20 * epsilon * b_norm))
+
+    # Try BiCGSTAB first
+    bicgstab_max_iter = min(150, max_iterations)
+    x, info = bicgstab(
+        A=A,
+        b=b,
+        M=M_diag,
+        rtol=rtol,
+        atol=atol,
+        maxiter=bicgstab_max_iter,
+    )
+
+    if info != 0:
+        # BiCGSTAB failed, fall back to LGMRES
+        lgmres_max_iter = min(250, max_iterations)
+        x, info = lgmres(
+            A=A,
+            b=b,
+            M=M_diag,
+            rtol=rtol,
+            atol=atol,
+            maxiter=lgmres_max_iter,
+            inner_m=30,
+            outer_k=3,
+        )
+
+        if info != 0:
+            raise RuntimeError(
+                f"Both BiCGSTAB and LGMRES failed to converge. "
+                f"Last solver returned info={info}. "
+                f"Consider reducing time step or checking initial conditions."
+            )
+    return x

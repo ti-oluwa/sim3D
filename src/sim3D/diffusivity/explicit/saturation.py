@@ -126,149 +126,6 @@ Notes:
 """
 
 
-def _compute_explicit_saturation_phase_fluxes_from_neighbour(
-    cell_indices: ThreeDimensions,
-    neighbour_indices: ThreeDimensions,
-    flow_area: float,
-    flow_length: float,
-    oil_pressure_grid: ThreeDimensionalGrid,
-    water_mobility_grid: ThreeDimensionalGrid,
-    oil_mobility_grid: ThreeDimensionalGrid,
-    gas_mobility_grid: ThreeDimensionalGrid,
-    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
-    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
-    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
-) -> typing.Tuple[float, float, float]:
-    # Current cell pressures (P_oil is direct, P_water and P_gas derived)
-    cell_oil_pressure = oil_pressure_grid[cell_indices]
-    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
-    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
-
-    # For the neighbour
-    neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
-    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
-        neighbour_indices
-    ]
-    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
-        neighbour_indices
-    ]
-
-    # Compute pressure differences
-    oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
-    oil_water_capillary_pressure_difference = (
-        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
-    )
-    water_pressure_difference = (
-        oil_pressure_difference - oil_water_capillary_pressure_difference
-    )
-    gas_oil_capillary_pressure_difference = (
-        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
-    )
-    gas_pressure_difference = (
-        oil_pressure_difference + gas_oil_capillary_pressure_difference
-    )
-
-    if elevation_grid is not None:
-        # Calculate the elevation difference between the neighbour and current cell
-        elevation_delta = (
-            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
-        )
-    else:
-        elevation_delta = 0.0
-
-    # Determine the upwind densities and solubilities based on pressure difference
-    # If pressure difference is positive (P_neighbour - P_current > 0), we use the neighbour's density
-    if water_density_grid is not None:
-        upwind_water_density = (
-            water_density_grid[neighbour_indices]
-            if water_pressure_difference > 0.0
-            else water_density_grid[cell_indices]
-        )
-    else:
-        upwind_water_density = 0.0
-
-    if oil_density_grid is not None:
-        upwind_oil_density = (
-            oil_density_grid[neighbour_indices]
-            if oil_pressure_difference > 0.0
-            else oil_density_grid[cell_indices]
-        )
-    else:
-        upwind_oil_density = 0.0
-
-    if gas_density_grid is not None:
-        upwind_gas_density = (
-            gas_density_grid[neighbour_indices]
-            if gas_pressure_difference > 0.0
-            else gas_density_grid[cell_indices]
-        )
-    else:
-        upwind_gas_density = 0.0
-
-    # Computing the Darcy velocities (ft/day) for the three phases
-    # v_x = λ_x * ∆P / Δx
-    # For water: v_w = λ_w * [(P_oil - P_cow) + (upwind_ρ_water * g * Δz)] / ΔL
-    water_gravity_potential = (
-        upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Calculate the total water phase potential
-    water_phase_potential = water_pressure_difference + water_gravity_potential
-
-    # For oil: v_o = λ_o * [(P_oil) + (upwind_ρ_oil * g * Δz)] / ΔL
-    oil_gravity_potential = (
-        upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Calculate the total oil phase potential
-    oil_phase_potential = oil_pressure_difference + oil_gravity_potential
-
-    # For gas: v_g = λ_g * ∆P / ΔL
-    # v_g = λ_g * [(P_oil + P_go) - (P_cog + P_gas) + (upwind_ρ_gas * g * Δz)] / ΔL
-    gas_gravity_potential = (
-        upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
-    ) / 144.0
-    # Calculate the total gas phase potential
-    gas_phase_potential = gas_pressure_difference + gas_gravity_potential
-
-    upwind_water_mobility = (
-        water_mobility_grid[neighbour_indices]
-        if water_phase_potential > 0.0  # Flow from neighbour to cell
-        else water_mobility_grid[cell_indices]
-    )
-
-    upwind_oil_mobility = (
-        oil_mobility_grid[neighbour_indices]
-        if oil_phase_potential > 0.0
-        else oil_mobility_grid[cell_indices]
-    )
-
-    upwind_gas_mobility = (
-        gas_mobility_grid[neighbour_indices]
-        if gas_phase_potential > 0.0
-        else gas_mobility_grid[cell_indices]
-    )
-
-    water_velocity = upwind_water_mobility * water_phase_potential / flow_length
-    oil_velocity = upwind_oil_mobility * oil_phase_potential / flow_length
-    gas_velocity = upwind_gas_mobility * gas_phase_potential / flow_length
-
-    # Compute volumetric fluxes at the face for each phase
-    # F_x = v_x * A
-    # For water: F_w = v_w * A
-    water_volumetric_flux_at_face = water_velocity * flow_area
-    # For oil: F_o = v_o * A
-    oil_volumetric_flux_at_face = oil_velocity * flow_area
-    # For gas: F_g = v_g * A
-    gas_volumetric_flux_at_face = gas_velocity * flow_area
-    return (
-        water_volumetric_flux_at_face,
-        oil_volumetric_flux_at_face,
-        gas_volumetric_flux_at_face,
-    )
-
-
 def evolve_saturation_explicitly(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -479,7 +336,7 @@ def evolve_saturation_explicitly(
                     water_flux,
                     oil_flux,
                     gas_flux,
-                ) = _compute_explicit_saturation_phase_fluxes_from_neighbour(
+                ) = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=neighbour,
                     flow_area=flow_area,
@@ -767,7 +624,7 @@ def evolve_saturation_explicitly(
     )
 
 
-def _compute_explicit_miscible_phase_fluxes_from_neighbour(
+def compute_phase_fluxes_from_neighbour(
     cell_indices: ThreeDimensions,
     neighbour_indices: ThreeDimensions,
     flow_area: float,
@@ -776,27 +633,19 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     water_mobility_grid: ThreeDimensionalGrid,
     oil_mobility_grid: ThreeDimensionalGrid,
     gas_mobility_grid: ThreeDimensionalGrid,
-    solvent_concentration_grid: ThreeDimensionalGrid,
     oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
     gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
     oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
     elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
-) -> typing.Tuple[float, float, float, float]:  # water, oil, gas, solvent_in_oil
-    """
-    Compute phase fluxes including solvent concentration transport.
-
-    Returns: (water_flux, oil_flux, gas_flux, solvent_mass_flux_in_oil)
-
-    The solvent_mass_flux_in_oil is the mass flux of dissolved solvent
-    moving with the oil phase (ft³/day * concentration).
-    """
+) -> typing.Tuple[float, float, float]:
+    # Current cell pressures (P_oil is direct, P_water and P_gas derived)
     cell_oil_pressure = oil_pressure_grid[cell_indices]
     cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
     cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
-    cell_solvent_concentration = solvent_concentration_grid[cell_indices]
 
+    # For the neighbour
     neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
     neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
         neighbour_indices
@@ -804,9 +653,8 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
         neighbour_indices
     ]
-    neighbour_solvent_concentration = solvent_concentration_grid[neighbour_indices]
 
-    # Pressure differences
+    # Compute pressure differences
     oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
     oil_water_capillary_pressure_difference = (
         neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
@@ -821,15 +669,16 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
         oil_pressure_difference + gas_oil_capillary_pressure_difference
     )
 
-    # Elevation effects
     if elevation_grid is not None:
+        # Calculate the elevation difference between the neighbour and current cell
         elevation_delta = (
             elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
         )
     else:
         elevation_delta = 0.0
 
-    # Upwind densities
+    # Determine the upwind densities and solubilities based on pressure difference
+    # If pressure difference is positive (P_neighbour - P_current > 0), we use the neighbour's density
     if water_density_grid is not None:
         upwind_water_density = (
             water_density_grid[neighbour_indices]
@@ -857,20 +706,28 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     else:
         upwind_gas_density = 0.0
 
-    # Darcy velocities with gravity
+    # Computing the Darcy velocities (ft/day) for the three phases
+    # v_x = λ_x * ∆P / Δx
+    # For water: v_w = λ_w * [(P_oil - P_cow) + (upwind_ρ_water * g * Δz)] / ΔL
     water_gravity_potential = (
         upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
+    # Calculate the total water phase potential
     water_phase_potential = water_pressure_difference + water_gravity_potential
 
+    # For oil: v_o = λ_o * [(P_oil) + (upwind_ρ_oil * g * Δz)] / ΔL
     oil_gravity_potential = (
         upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
+    # Calculate the total oil phase potential
     oil_phase_potential = oil_pressure_difference + oil_gravity_potential
 
+    # For gas: v_g = λ_g * ∆P / ΔL
+    # v_g = λ_g * [(P_oil + P_go) - (P_cog + P_gas) + (upwind_ρ_gas * g * Δz)] / ΔL
     gas_gravity_potential = (
         upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
     ) / 144.0
+    # Calculate the total gas phase potential
     gas_phase_potential = gas_pressure_difference + gas_gravity_potential
 
     upwind_water_mobility = (
@@ -895,26 +752,18 @@ def _compute_explicit_miscible_phase_fluxes_from_neighbour(
     oil_velocity = upwind_oil_mobility * oil_phase_potential / flow_length
     gas_velocity = upwind_gas_mobility * gas_phase_potential / flow_length
 
-    # Upwind solvent concentration (moves with oil)
-    upwinded_solvent_concentration = (
-        neighbour_solvent_concentration
-        if oil_velocity > 0
-        else cell_solvent_concentration
-    )
-
-    # Volumetric fluxes (ft³/day)
-    water_volumetric_flux = water_velocity * flow_area
-    oil_volumetric_flux = oil_velocity * flow_area
-    gas_volumetric_flux = gas_velocity * flow_area
-
-    # Solvent mass flux in oil phase
-    # The solvent concentration travels with the oil phase
-    solvent_mass_flux_in_oil = oil_volumetric_flux * upwinded_solvent_concentration
+    # Compute volumetric fluxes at the face for each phase
+    # F_x = v_x * A
+    # For water: F_w = v_w * A
+    water_volumetric_flux_at_face = water_velocity * flow_area
+    # For oil: F_o = v_o * A
+    oil_volumetric_flux_at_face = oil_velocity * flow_area
+    # For gas: F_g = v_g * A
+    gas_volumetric_flux_at_face = gas_velocity * flow_area
     return (
-        water_volumetric_flux,
-        oil_volumetric_flux,
-        gas_volumetric_flux,
-        solvent_mass_flux_in_oil,
+        water_volumetric_flux_at_face,
+        oil_volumetric_flux_at_face,
+        gas_volumetric_flux_at_face,
     )
 
 
@@ -1117,7 +966,7 @@ def evolve_miscible_saturation_explicitly(
                     oil_flux,
                     gas_flux,
                     solvent_flux,
-                ) = _compute_explicit_miscible_phase_fluxes_from_neighbour(
+                ) = compute_miscible_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=neighbour,
                     flow_area=flow_area,
@@ -1444,4 +1293,155 @@ def evolve_miscible_saturation_explicitly(
             updated_solvent_concentration_grid,
         ),
         scheme="explicit",
+    )
+
+
+def compute_miscible_phase_fluxes_from_neighbour(
+    cell_indices: ThreeDimensions,
+    neighbour_indices: ThreeDimensions,
+    flow_area: float,
+    flow_length: float,
+    oil_pressure_grid: ThreeDimensionalGrid,
+    water_mobility_grid: ThreeDimensionalGrid,
+    oil_mobility_grid: ThreeDimensionalGrid,
+    gas_mobility_grid: ThreeDimensionalGrid,
+    solvent_concentration_grid: ThreeDimensionalGrid,
+    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
+    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
+    oil_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    water_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_density_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    elevation_grid: typing.Optional[ThreeDimensionalGrid] = None,
+) -> typing.Tuple[float, float, float, float]:  # water, oil, gas, solvent_in_oil
+    """
+    Compute phase fluxes including solvent concentration transport.
+
+    Returns: (water_flux, oil_flux, gas_flux, solvent_mass_flux_in_oil)
+
+    The solvent_mass_flux_in_oil is the mass flux of dissolved solvent
+    moving with the oil phase (ft³/day * concentration).
+    """
+    cell_oil_pressure = oil_pressure_grid[cell_indices]
+    cell_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[cell_indices]
+    cell_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[cell_indices]
+    cell_solvent_concentration = solvent_concentration_grid[cell_indices]
+
+    neighbour_oil_pressure = oil_pressure_grid[neighbour_indices]
+    neighbour_oil_water_capillary_pressure = oil_water_capillary_pressure_grid[
+        neighbour_indices
+    ]
+    neighbour_gas_oil_capillary_pressure = gas_oil_capillary_pressure_grid[
+        neighbour_indices
+    ]
+    neighbour_solvent_concentration = solvent_concentration_grid[neighbour_indices]
+
+    # Pressure differences
+    oil_pressure_difference = neighbour_oil_pressure - cell_oil_pressure
+    oil_water_capillary_pressure_difference = (
+        neighbour_oil_water_capillary_pressure - cell_oil_water_capillary_pressure
+    )
+    water_pressure_difference = (
+        oil_pressure_difference - oil_water_capillary_pressure_difference
+    )
+    gas_oil_capillary_pressure_difference = (
+        neighbour_gas_oil_capillary_pressure - cell_gas_oil_capillary_pressure
+    )
+    gas_pressure_difference = (
+        oil_pressure_difference + gas_oil_capillary_pressure_difference
+    )
+
+    # Elevation effects
+    if elevation_grid is not None:
+        elevation_delta = (
+            elevation_grid[neighbour_indices] - elevation_grid[cell_indices]
+        )
+    else:
+        elevation_delta = 0.0
+
+    # Upwind densities
+    if water_density_grid is not None:
+        upwind_water_density = (
+            water_density_grid[neighbour_indices]
+            if water_pressure_difference > 0.0
+            else water_density_grid[cell_indices]
+        )
+    else:
+        upwind_water_density = 0.0
+
+    if oil_density_grid is not None:
+        upwind_oil_density = (
+            oil_density_grid[neighbour_indices]
+            if oil_pressure_difference > 0.0
+            else oil_density_grid[cell_indices]
+        )
+    else:
+        upwind_oil_density = 0.0
+
+    if gas_density_grid is not None:
+        upwind_gas_density = (
+            gas_density_grid[neighbour_indices]
+            if gas_pressure_difference > 0.0
+            else gas_density_grid[cell_indices]
+        )
+    else:
+        upwind_gas_density = 0.0
+
+    # Darcy velocities with gravity
+    water_gravity_potential = (
+        upwind_water_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    water_phase_potential = water_pressure_difference + water_gravity_potential
+
+    oil_gravity_potential = (
+        upwind_oil_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    oil_phase_potential = oil_pressure_difference + oil_gravity_potential
+
+    gas_gravity_potential = (
+        upwind_gas_density * c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 * elevation_delta
+    ) / 144.0
+    gas_phase_potential = gas_pressure_difference + gas_gravity_potential
+
+    upwind_water_mobility = (
+        water_mobility_grid[neighbour_indices]
+        if water_phase_potential > 0.0  # Flow from neighbour to cell
+        else water_mobility_grid[cell_indices]
+    )
+
+    upwind_oil_mobility = (
+        oil_mobility_grid[neighbour_indices]
+        if oil_phase_potential > 0.0
+        else oil_mobility_grid[cell_indices]
+    )
+
+    upwind_gas_mobility = (
+        gas_mobility_grid[neighbour_indices]
+        if gas_phase_potential > 0.0
+        else gas_mobility_grid[cell_indices]
+    )
+
+    water_velocity = upwind_water_mobility * water_phase_potential / flow_length
+    oil_velocity = upwind_oil_mobility * oil_phase_potential / flow_length
+    gas_velocity = upwind_gas_mobility * gas_phase_potential / flow_length
+
+    # Upwind solvent concentration (moves with oil)
+    upwinded_solvent_concentration = (
+        neighbour_solvent_concentration
+        if oil_velocity > 0
+        else cell_solvent_concentration
+    )
+
+    # Volumetric fluxes (ft³/day)
+    water_volumetric_flux = water_velocity * flow_area
+    oil_volumetric_flux = oil_velocity * flow_area
+    gas_volumetric_flux = gas_velocity * flow_area
+
+    # Solvent mass flux in oil phase
+    # The solvent concentration travels with the oil phase
+    solvent_mass_flux_in_oil = oil_volumetric_flux * upwinded_solvent_concentration
+    return (
+        water_volumetric_flux,
+        oil_volumetric_flux,
+        gas_volumetric_flux,
+        solvent_mass_flux_in_oil,
     )

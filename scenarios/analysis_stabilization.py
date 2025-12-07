@@ -14,14 +14,14 @@ def _():
 
     sim3D.image_config(scale=3)
 
-    DEPLETED_MODEL_STATES = Path.cwd() / "scenarios/states/stabilization_coarse.pkl.xz"
+    DEPLETED_MODEL_STATES = Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
     states = list(sim3D.load_states(filepath=DEPLETED_MODEL_STATES))
     return itertools, np, sim3D, states
 
 
 @app.cell
 def _(itertools, np, sim3D, states):
-    analyst = sim3D.ProductionAnalyst(states)
+    analyst = sim3D.ModelAnalyst(states)
 
     oil_saturation_history = []
     water_saturation_history = []
@@ -84,12 +84,12 @@ def _(itertools, np, sim3D, states):
         kro_saturation_history,
         krw_history,
         krw_saturation_history,
-        oil_saturation_history,
-        oil_water_capillary_pressure_history,
-        water_saturation_history,
         oil_effective_density_history,
         oil_effective_viscosity_history,
         oil_relative_mobility_history,
+        oil_saturation_history,
+        oil_water_capillary_pressure_history,
+        water_saturation_history,
     )
 
 

@@ -224,7 +224,7 @@ class BoundaryMetadata:
                         # Use first x,y location as representative (assuming uniform layers)
                         layer_thickness = (
                             self.thickness_grid[0, 0, :]
-                            if self.thickness_grid.shape[2] == nz
+                            if self.thickness_grid.shape[2] == nz  # type: ignore
                             else None
                         )
 
@@ -1130,3 +1130,7 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
 
     def __copy__(self):
         return self.__class__(conditions=dict(self), factory=self.factory)
+
+
+default_bc = BoundaryConditions()["__default__"]
+"""Default boundary conditions using `NoFlowBoundary` for all sides."""

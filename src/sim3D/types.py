@@ -430,6 +430,8 @@ class Options:
     """Physical and conversion constants used in the simulation."""
     warn_rates_anomalies: bool = True
     """Whether to warn about anomalous flow rates during the simulation."""
+    progress_log_interval: int = attrs.field(default=10, validator=attrs.validators.ge(1))
+    """Interval (in time steps) at which to log simulation progress."""
 
 
 def Time(

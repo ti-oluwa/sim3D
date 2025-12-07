@@ -827,15 +827,15 @@ class Wells(typing.Generic[WellLocation]):
         for well in itertools.chain(self.injection_wells, self.production_wells):
             well.evolve(model_state)
 
-    def check_location(self, grid_dimensions: typing.Tuple[int, ...]) -> None:
+    def check_location(self, grid_shape: typing.Tuple[int, ...]) -> None:
         """
         Check if all wells' perforating intervals are within the grid dimensions.
 
-        :param grid_dimensions: The dimensions of the reservoir grid (i, j, k).
+        :param grid_shape: The shape of the reservoir grid (nx, ny, nz).
         :raises ValueError: If any well's perforating interval is out of bounds.
         """
         for well in itertools.chain(self.injection_wells, self.production_wells):
-            well.check_location(grid_dimensions)
+            well.check_location(grid_shape)
 
     def exists(self) -> bool:
         """

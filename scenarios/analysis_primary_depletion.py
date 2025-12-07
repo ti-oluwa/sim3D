@@ -23,7 +23,7 @@ def _():
 
 @app.cell
 def _(itertools, np, sim3D, states):
-    analyst = sim3D.ProductionAnalyst(states)
+    analyst = sim3D.ModelAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
         interval=1, from_time_step=1, displacing_phase="water",
