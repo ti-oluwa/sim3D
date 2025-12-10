@@ -3,8 +3,9 @@
 from functools import cached_property
 import typing
 import numpy as np
+import numba
 
-from attrs import define
+import attrs
 from scipy.interpolate import interp1d
 
 from sim3D.pvt import clip_scalar
@@ -60,6 +61,7 @@ Comparison of common three-phase relative permeability mixing rules:
 """
 
 
+@numba.njit(cache=True)
 def min_rule(
     kro_w: float,
     kro_g: float,
@@ -74,6 +76,7 @@ def min_rule(
     return min(kro_w, kro_g)
 
 
+@numba.njit(cache=True)
 def stone_I_rule(
     kro_w: float,
     kro_g: float,
@@ -90,6 +93,7 @@ def stone_I_rule(
     return (kro_w * kro_g) / max((kro_w + kro_g - kro_w * kro_g), 1e-12)
 
 
+@numba.njit(cache=True)
 def stone_II_rule(
     kro_w: float,
     kro_g: float,
@@ -114,6 +118,7 @@ def stone_II_rule(
     return kro
 
 
+@numba.njit(cache=True)
 def arithmetic_mean_rule(
     kro_w: float,
     kro_g: float,
@@ -134,6 +139,7 @@ def arithmetic_mean_rule(
     return (kro_w + kro_g) / 2.0
 
 
+@numba.njit(cache=True)
 def geometric_mean_rule(
     kro_w: float,
     kro_g: float,
@@ -154,6 +160,7 @@ def geometric_mean_rule(
     return np.sqrt(kro_w * kro_g)
 
 
+@numba.njit(cache=True)
 def harmonic_mean_rule(
     kro_w: float,
     kro_g: float,
@@ -176,6 +183,7 @@ def harmonic_mean_rule(
     return 2.0 / (1.0 / kro_w + 1.0 / kro_g)
 
 
+@numba.njit(cache=True)
 def saturation_weighted_interpolation_rule(
     kro_w: float,
     kro_g: float,
@@ -204,6 +212,7 @@ def saturation_weighted_interpolation_rule(
     return kro_w * water_weight + kro_g * gas_weight
 
 
+@numba.njit(cache=True)
 def baker_linear_rule(
     kro_w: float,
     kro_g: float,
@@ -234,6 +243,7 @@ def baker_linear_rule(
     return kro_w * (1.0 - sg_norm) + kro_g * (1.0 - sw_norm)
 
 
+@numba.njit(cache=True)
 def blunt_rule(
     kro_w: float,
     kro_g: float,
@@ -257,6 +267,7 @@ def blunt_rule(
     return kro_w * kro_g * (2.0 - kro_w - kro_g)
 
 
+@numba.njit(cache=True)
 def hustad_hansen_rule(
     kro_w: float,
     kro_g: float,
@@ -299,6 +310,7 @@ def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
     :return: A mixing rule function implementing the Aziz-Settari correlation.
     """
 
+    @numba.njit(cache=True)
     def _rule(
         kro_w: float,
         kro_g: float,
@@ -313,6 +325,7 @@ def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
     return _rule
 
 
+@numba.njit(cache=True)
 def eclipse_rule(
     kro_w: float,
     kro_g: float,
@@ -353,6 +366,7 @@ def eclipse_rule(
     return kro_w * f_w + kro_g * f_g
 
 
+@numba.njit(cache=True)
 def max_rule(
     kro_w: float,
     kro_g: float,
@@ -373,6 +387,7 @@ def max_rule(
     return max(kro_w, kro_g)
 
 
+@numba.njit(cache=True)
 def product_saturation_weighted_rule(
     kro_w: float,
     kro_g: float,
@@ -407,6 +422,7 @@ def product_saturation_weighted_rule(
     return (kro_w * kro_g) * (so_normalized**n)
 
 
+@numba.njit(cache=True)
 def linear_interpolation_rule(
     kro_w: float,
     kro_g: float,
@@ -437,7 +453,7 @@ def linear_interpolation_rule(
     return (kro_g * gas_fraction) + (kro_w * water_fraction)
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class TwoPhaseRelPermTable:
     """
     Two-phase relative permeability lookup table.
@@ -491,7 +507,7 @@ class TwoPhaseRelPermTable:
         return self.wetting_phase_interpolator, self.non_wetting_phase_interpolator
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class ThreePhaseRelPermTable:
     """
     Three-phase relative permeability lookup table, with mixing rules.
@@ -774,7 +790,7 @@ def compute_corey_three_phase_relative_permeabilities(
     return float(krw), float(kro), float(krg)
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class BrooksCoreyThreePhaseRelPermModel:
     """
     Brooks-Corey-type three-phase relative permeability model.

@@ -662,7 +662,7 @@ def compute_required_bhp_for_gas_rate(
     return float(required_bhp)
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class WellFluid:
     """Base class for fluid properties in wells."""
 
@@ -724,7 +724,7 @@ class WellFluid:
         )
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class InjectedFluid(WellFluid):
     """Properties of the fluid being injected into or produced by a well."""
 
@@ -889,7 +889,7 @@ class InjectedFluid(WellFluid):
         )
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class ProducedFluid(WellFluid):
     """Properties of the fluid being produced by a well."""
 

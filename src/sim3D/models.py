@@ -24,7 +24,7 @@ from sim3D.types import (
 __all__ = ["FluidProperties", "RockProperties", "ReservoirModel", "RockPermeability"]
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class FluidProperties(PadMixin[NDimension]):
     """
     Fluid properties of a reservoir model.
@@ -145,7 +145,7 @@ class FluidProperties(PadMixin[NDimension]):
         )
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class RockPermeability(PadMixin[NDimension]):
     """
     Rock permeability in the reservoir, in milliDarcy (mD).
@@ -171,7 +171,7 @@ class RockPermeability(PadMixin[NDimension]):
         return attrs.fields(type(self))
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class RockProperties(PadMixin[NDimension]):
     """
     Rock properties of a reservoir model.
@@ -223,7 +223,7 @@ class RockProperties(PadMixin[NDimension]):
         return attrs.evolve(padded, absolute_permeability=padded_absolute_permeability)
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class RockFluidProperties:
     """
     Combined rock and fluid properties of a reservoir model.
@@ -236,7 +236,7 @@ class RockFluidProperties:
     """Callable that evaluates the capillary pressure curves based on fluid saturations."""
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class ReservoirModel(typing.Generic[NDimension]):
     """Models a reservoir in N-dimensional space for simulation."""
 

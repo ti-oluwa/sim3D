@@ -98,7 +98,7 @@ def get_neighbor_indices(
     return tuple(neighbor_indices)
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class BoundaryMetadata:
     """
     Optional metadata for boundary condition evaluation.
@@ -300,7 +300,7 @@ class BoundaryCondition(typing.Protocol):
         ...
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class NoFlowBoundary(typing.Generic[NDimension]):
     """
     Implements a no-flow boundary condition.
@@ -348,7 +348,7 @@ class NoFlowBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = grid[neighbor_indices]
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class ConstantBoundary(typing.Generic[NDimension]):
     """
     Implements a constant boundary condition (Dirichlet).
@@ -399,7 +399,7 @@ class ConstantBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = self.constant
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class VariableBoundary(typing.Generic[NDimension]):
     """
     Implements a variable boundary condition using a callable function.
@@ -475,7 +475,7 @@ NeumannBoundary = VariableBoundary
 """Alias for `VariableBoundary` representing Neumann boundary conditions."""
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class SpatialBoundary(typing.Generic[NDimension]):
     """
     Implements a spatial boundary condition using coordinate-based functions.
@@ -572,7 +572,7 @@ class SpatialBoundary(typing.Generic[NDimension]):
             grid[boundary_indices] = result.reshape(coords.shape[:-1])
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class TimeDependentBoundary(typing.Generic[NDimension]):
     """
     Implements a time-dependent boundary condition.
@@ -643,7 +643,7 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = value
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class LinearGradientBoundary(typing.Generic[NDimension]):
     """
     Implements a linear gradient boundary condition.
@@ -752,7 +752,7 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
             )
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class FluxBoundary(typing.Generic[NDimension]):
     """
     Implements a flux boundary condition (Neumann with physical interpretation).
@@ -851,7 +851,7 @@ class FluxBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = neighbor_values + self.flux_value * spacing
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class GridBoundaryCondition(typing.Generic[NDimension]):
     """
     Container for defining boundary conditions for a grid.

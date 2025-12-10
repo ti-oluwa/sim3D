@@ -39,7 +39,7 @@ def _ensure_cells(cells: typing.Union[Cells, CellFilter]) -> typing.Optional[Cel
     return Cells.from_filter(cells)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class ModelState(typing.Generic[NDimension]):
     """
     The state of the reservoir model at a specific time step during a simulation.
@@ -333,7 +333,7 @@ def load_states(
     return _load_states(states, as_tuple=as_tuple)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class ReservoirVolumetrics:
     """Reservoir volumetrics analysis results."""
 
@@ -349,7 +349,7 @@ class ReservoirVolumetrics:
     """Hydrocarbon pore volume in cubic feet (ft³)."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class InstantaneousRates:
     """Instantaneous production/injection rates."""
 
@@ -367,7 +367,7 @@ class InstantaneousRates:
     """Water cut as a fraction (0 to 1) of total liquid production."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class CumulativeProduction:
     """Cumulative production analysis results."""
 
@@ -383,7 +383,7 @@ class CumulativeProduction:
     """Gas recovery factor as a fraction (0 to 1) of initial gas in place."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class MaterialBalanceAnalysis:
     """Material balance analysis results."""
 
@@ -403,7 +403,7 @@ class MaterialBalanceAnalysis:
     """Estimated aquifer influx in stock tank barrels (STB)."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class ProductivityAnalysis:
     """Well productivity analysis results based on actual flow rates and reservoir properties."""
 
@@ -447,7 +447,7 @@ class SweepEfficiencyAnalysis:
     """Vertical sweep efficiency (0 to 1) computed using saturation-weighted column fractions."""
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class DeclineCurveResult:
     """Decline curve analysis results."""
 
@@ -820,6 +820,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.oil_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="oil",
+            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
         return np.nansum(stoiip_grid)
 
@@ -855,6 +857,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="gas",
+            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
         return np.nansum(stgiip_grid)
 
@@ -888,6 +892,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.water_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="oil",  # Use "oil" since there's no "water" hydrocarbon_type and they use equivalent calculation
+            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
         return np.nansum(water_in_place_grid)
 
@@ -1639,6 +1645,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=oil_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="oil",
+                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
             )
             if mask is not None:
                 stoiip_grid = np.where(mask, stoiip_grid, 0.0)
@@ -1730,6 +1738,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=gas_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="gas",
+                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
             )
             if mask is not None:
                 giip_grid = np.where(mask, giip_grid, 0.0)
@@ -1820,6 +1830,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=gas_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="gas",
+                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
             )
             if mask is not None:
                 giip_grid = np.where(mask, giip_grid, 0.0)
@@ -1836,6 +1848,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=oil_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="oil",
+                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
+                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
             )
             if mask is not None:
                 stoiip_grid = np.where(mask, stoiip_grid, 0.0)

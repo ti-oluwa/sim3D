@@ -386,4 +386,3 @@ class Cells:
         elif self.is_slice:
             return "Cells(slice region)"
         return f"Cells({self.filter})"
-

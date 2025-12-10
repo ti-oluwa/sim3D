@@ -14,7 +14,9 @@ def _():
 
     sim3D.image_config(scale=3)
 
-    DEPLETED_MODEL_STATES = Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
+    DEPLETED_MODEL_STATES = (
+        Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
+    )
     states = list(sim3D.load_states(filepath=DEPLETED_MODEL_STATES))
     return itertools, np, sim3D, states
 

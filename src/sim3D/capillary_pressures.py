@@ -3,7 +3,8 @@
 from functools import cached_property
 import typing
 
-from attrs import define
+import attrs
+import numba
 import numpy as np
 from scipy.interpolate import interp1d
 
@@ -29,7 +30,7 @@ __all__ = [
 ]
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class TwoPhaseCapillaryPressureTable:
     """
     Two-phase capillary pressure lookup table.
@@ -78,7 +79,7 @@ class TwoPhaseCapillaryPressureTable:
         return self.get_capillary_pressure(wetting_phase_saturation)
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class ThreePhaseCapillaryPressureTable:
     """
     Three-phase capillary pressure lookup table.
@@ -170,6 +171,7 @@ class ThreePhaseCapillaryPressureTable:
         )
 
 
+@numba.njit(cache=True)
 def compute_brooks_corey_capillary_pressures(
     water_saturation: float,
     oil_saturation: float,
@@ -308,7 +310,7 @@ def compute_brooks_corey_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class BrooksCoreyCapillaryPressureModel:
     """
     Brooks-Corey capillary pressure model for three-phase systems.
@@ -444,6 +446,7 @@ class BrooksCoreyCapillaryPressureModel:
         )
 
 
+@numba.njit(cache=True)
 def compute_van_genuchten_capillary_pressures(
     water_saturation: float,
     oil_saturation: float,
@@ -588,7 +591,7 @@ def compute_van_genuchten_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class VanGenuchtenCapillaryPressureModel:
     """
     van Genuchten capillary pressure model for three-phase systems.
@@ -724,6 +727,7 @@ class VanGenuchtenCapillaryPressureModel:
         )
 
 
+@numba.njit(cache=True)
 def compute_leverett_j_capillary_pressures(
     water_saturation: float,
     oil_saturation: float,
@@ -883,7 +887,7 @@ def compute_leverett_j_capillary_pressures(
     return float(oil_water_capillary_pressure), float(gas_oil_capillary_pressure)
 
 
-@define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class LeverettJCapillaryPressureModel:
     """
     Leverett J-function capillary pressure model for three-phase systems.

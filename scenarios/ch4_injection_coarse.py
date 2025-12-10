@@ -124,7 +124,9 @@ def _():
         wells = sim3D.wells_(injectors=injectors, producers=producers)
         options = sim3D.Options(
             scheme="impes",
-            total_time=sim3D.Time(days=(sim3D.c.DAYS_PER_YEAR * 5) + 100),  # 5 years + 100 days
+            total_time=sim3D.Time(
+                days=(sim3D.c.DAYS_PER_YEAR * 5) + 100
+            ),  # 5 years + 100 days
             time_step_size=sim3D.Time(hours=30),
             max_time_steps=2000,
             output_frequency=1,
@@ -133,6 +135,7 @@ def _():
         )
         states = sim3D.run(model=model, wells=wells, options=options)
         return list(states)
+
     return Path, main, sim3D
 
 

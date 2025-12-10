@@ -1,7 +1,7 @@
 import typing
-import itertools
 
 import numpy as np
+import numba
 
 from sim3D._precision import get_dtype
 from sim3D.types import (
@@ -113,6 +113,60 @@ def build_layered_grid(
 layered_grid = build_layered_grid  # Alias for convenience
 
 
+@numba.njit(cache=True)
+def _compute_elevation_downward(
+    thickness_grid: NDimensionalGrid[NDimension],
+    dtype: np.typing.DTypeLike,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Compute elevation grid in downward direction (depth from top).
+
+    :param thickness_grid: 3D array of cell thicknesses (ft)
+    :param dtype: NumPy dtype for array allocation
+    :return: 3D elevation grid (ft)
+    """
+    nx, ny, nz = thickness_grid.shape
+    elevation_grid = np.zeros_like(thickness_grid, dtype=dtype)
+
+    # Start from top layer
+    elevation_grid[:, :, 0] = thickness_grid[:, :, 0] / 2
+    for k in range(1, nz):
+        elevation_grid[:, :, k] = (
+            elevation_grid[:, :, k - 1]
+            + thickness_grid[:, :, k - 1] / 2
+            + thickness_grid[:, :, k] / 2
+        )
+
+    return elevation_grid  # type: ignore
+
+
+@numba.njit(cache=True)
+def _compute_elevation_upward(
+    thickness_grid: NDimensionalGrid[NDimension],
+    dtype: np.typing.DTypeLike,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Compute elevation grid in upward direction (elevation from bottom).
+
+    :param thickness_grid: 3D array of cell thicknesses (ft)
+    :param dtype: NumPy dtype for array allocation
+    :return: 3D elevation grid (ft)
+    """
+    nx, ny, nz = thickness_grid.shape
+    elevation_grid = np.zeros_like(thickness_grid, dtype=dtype)
+
+    # Start from bottom layer
+    elevation_grid[:, :, -1] = thickness_grid[:, :, -1] / 2
+    for k in range(nz - 2, -1, -1):
+        elevation_grid[:, :, k] = (
+            elevation_grid[:, :, k + 1]
+            + thickness_grid[:, :, k + 1] / 2
+            + thickness_grid[:, :, k] / 2
+        )
+
+    return elevation_grid  # type: ignore
+
+
 def _build_elevation_grid(
     thickness_grid: NDimensionalGrid[NDimension],
     direction: typing.Literal["downward", "upward"] = "downward",
@@ -132,28 +186,11 @@ def _build_elevation_grid(
     if direction not in {"downward", "upward"}:
         raise ValueError("direction must be 'downward' or 'upward'")
 
-    nx, ny, nz = thickness_grid.shape  # Now Z is LAST
-    elevation_grid = np.zeros_like(thickness_grid, dtype=get_dtype())
+    dtype = get_dtype()
 
     if direction == "downward":
-        # Iterate over Z in the LAST dimension
-        elevation_grid[:, :, 0] = thickness_grid[:, :, 0] / 2
-        for k in range(1, nz):
-            elevation_grid[:, :, k] = (
-                elevation_grid[:, :, k - 1]
-                + thickness_grid[:, :, k - 1] / 2
-                + thickness_grid[:, :, k] / 2
-            )
-    else:
-        # Start from bottom layer
-        elevation_grid[:, :, -1] = thickness_grid[:, :, -1] / 2
-        for k in range(nz - 2, -1, -1):
-            elevation_grid[:, :, k] = (
-                elevation_grid[:, :, k + 1]
-                + thickness_grid[:, :, k + 1] / 2
-                + thickness_grid[:, :, k] / 2
-            )
-    return typing.cast(NDimensionalGrid[NDimension], elevation_grid)
+        return _compute_elevation_downward(thickness_grid, dtype=dtype)
+    return _compute_elevation_upward(thickness_grid, dtype=dtype)
 
 
 def build_elevation_grid(
@@ -188,6 +225,74 @@ def build_depth_grid(
 
 
 depth_grid = build_depth_grid  # Alias for convenience
+
+
+@numba.njit(parallel=True, cache=True)
+def _apply_dip_upward(
+    dipped_elevation_grid: NDimensionalGrid[NDimension],
+    grid_dimensions: typing.Tuple[int, int],
+    cell_dimensions: typing.Tuple[float, float],
+    dip_components: typing.Tuple[float, float, float],
+) -> NDimensionalGrid[NDimension]:
+    """
+    Apply structural dip for upward elevation convention (parallel).
+
+    Each (i,j) column is processed independently, allowing parallelization.
+
+    :param dipped_elevation_grid: Grid to modify in-place
+    :param grid_dimensions: (nx, ny) - number of cells in x and y directions
+    :param cell_dimensions: (cell_size_x, cell_size_y) - cell sizes in feet
+    :param dip_components: (dx_component, dy_component, tan_dip_angle) - pre-computed dip parameters
+    :return: Modified elevation grid
+    """
+    nx, ny = grid_dimensions
+    cell_size_x, cell_size_y = cell_dimensions
+    dx_component, dy_component, tan_dip_angle = dip_components
+
+    for i in numba.prange(nx):  # type: ignore  # Parallel outer loop
+        for j in range(ny):
+            x_distance = i * cell_size_x
+            y_distance = j * cell_size_y
+            distance_along_dip = x_distance * dx_component + y_distance * dy_component
+            dip_offset = distance_along_dip * tan_dip_angle
+            # Upward: moving in dip direction decreases elevation
+            dipped_elevation_grid[i, j, :] -= dip_offset
+
+    return dipped_elevation_grid
+
+
+@numba.njit(parallel=True, cache=True)
+def _apply_dip_downward(
+    dipped_elevation_grid: NDimensionalGrid[NDimension],
+    grid_dimensions: typing.Tuple[int, int],
+    cell_dimensions: typing.Tuple[float, float],
+    dip_components: typing.Tuple[float, float, float],
+) -> NDimensionalGrid[NDimension]:
+    """
+    Apply structural dip for downward depth convention (parallel).
+
+    Each (i,j) column is processed independently, allowing parallelization.
+
+    :param dipped_elevation_grid: Grid to modify in-place
+    :param grid_dimensions: (nx, ny) - number of cells in x and y directions
+    :param cell_dimensions: (cell_size_x, cell_size_y) - cell sizes in feet
+    :param dip_components: (dx_component, dy_component, tan_dip_angle) - pre-computed dip parameters
+    :return: Modified elevation grid
+    """
+    nx, ny = grid_dimensions
+    cell_size_x, cell_size_y = cell_dimensions
+    dx_component, dy_component, tan_dip_angle = dip_components
+
+    for i in numba.prange(nx):  # type: ignore  # Parallel outer loop
+        for j in range(ny):
+            x_distance = i * cell_size_x
+            y_distance = j * cell_size_y
+            distance_along_dip = x_distance * dx_component + y_distance * dy_component
+            dip_offset = distance_along_dip * tan_dip_angle
+            # Downward: moving in dip direction increases depth
+            dipped_elevation_grid[i, j, :] += dip_offset
+
+    return dipped_elevation_grid
 
 
 def apply_structural_dip(
@@ -245,7 +350,8 @@ def apply_structural_dip(
     if not (0.0 <= dip_azimuth < 360.0):
         raise ValueError("`dip_azimuth` must be between 0 and 360 degrees")
 
-    dipped_elevation_grid = elevation_grid.copy().astype(get_dtype())
+    dtype = get_dtype()
+    dipped_elevation_grid = elevation_grid.copy().astype(dtype)
     dip_angle_radians = np.radians(dip_angle)
     dip_azimuth_radians = np.radians(dip_azimuth)
 
@@ -255,35 +361,28 @@ def apply_structural_dip(
 
     # Convert azimuth to directional components
     # Azimuth: 0° = North (+y), 90° = East (+x), 180° = South (-y), 270° = West (-x)
-    # Component in x-direction (East-West)
     dx_component = np.sin(dip_azimuth_radians)  # Positive = East
-    # Component in y-direction (North-South)
     dy_component = np.cos(dip_azimuth_radians)  # Positive = North
+    tan_dip_angle = np.tan(dip_angle_radians)
 
-    # Iterate through all grid cells using itertools.product
-    for i, j in itertools.product(range(nx), range(ny)):
-        # Distance from origin in each direction
-        x_distance = i * cell_size_x
-        y_distance = j * cell_size_y
+    # Group parameters for cleaner function calls
+    grid_dimensions = (nx, ny)
+    dip_components = (dx_component, dy_component, tan_dip_angle)
 
-        # Total distance along dip direction (dot product with unit vector)
-        distance_along_dip = x_distance * dx_component + y_distance * dy_component
-
-        # Calculate elevation change due to dip
-        # Positive distance along dip = moving in dip direction = elevation decreases
-        dip_offset = distance_along_dip * np.tan(dip_angle_radians)
-
-        # Apply offset based on elevation convention
-        if elevation_direction == "upward":
-            # Upward convention: higher values = higher elevation
-            # Moving in dip direction decreases elevation, so subtract offset
-            dipped_elevation_grid[i, j, :] -= dip_offset
-        else:
-            # Downward convention: higher values = greater depth
-            # Moving in dip direction increases depth, so add offset
-            dipped_elevation_grid[i, j, :] += dip_offset
-
-    return dipped_elevation_grid
+    # Apply dip using njitted helper functions
+    if elevation_direction == "upward":
+        return _apply_dip_upward(
+            dipped_elevation_grid=dipped_elevation_grid,
+            grid_dimensions=grid_dimensions,
+            cell_dimensions=cell_dimension,
+            dip_components=dip_components,
+        )
+    return _apply_dip_downward(
+        dipped_elevation_grid=dipped_elevation_grid,
+        grid_dimensions=grid_dimensions,
+        cell_dimensions=cell_dimension,
+        dip_components=dip_components,
+    )
 
 
 def pad_grid(
@@ -299,10 +398,10 @@ def pad_grid(
     :return: Padded N-Dimensional numpy array
     """
     padded_grid = np.pad(grid, pad_width=pad_width, mode="edge")
-    padded_grid = typing.cast(NDimensionalGrid[NDimension], padded_grid)
-    return padded_grid
+    return padded_grid  # type: ignore
 
 
+@numba.njit(cache=True)
 def get_pad_mask(grid_shape: typing.Tuple[int, ...], pad_width: int = 1) -> np.ndarray:
     """
     Generate a boolean mask for the padded grid indicating the padded regions.
@@ -327,6 +426,7 @@ def get_pad_mask(grid_shape: typing.Tuple[int, ...], pad_width: int = 1) -> np.n
     return mask
 
 
+@numba.njit(cache=True)
 def unpad_grid(
     grid: NDimensionalGrid[NDimension], pad_width: int = 1
 ) -> NDimensionalGrid[NDimension]:
@@ -337,9 +437,20 @@ def unpad_grid(
     :param pad_width: Width of the padding to be removed from all sides of the grid
     :return: N-Dimensional numpy array with padding removed
     """
-    slices = tuple(slice(pad_width, -pad_width) for _ in range(grid.ndim))
-    unpadded_grid = grid[slices]
-    return typing.cast(NDimensionalGrid[NDimension], unpadded_grid)
+    # Build slices list explicitly (generator expressions not supported in Numba)
+    ndim = grid.ndim
+    if ndim == 2:
+        unpadded_grid = grid[pad_width:-pad_width, pad_width:-pad_width]
+    elif ndim == 3:
+        unpadded_grid = grid[
+            pad_width:-pad_width, pad_width:-pad_width, pad_width:-pad_width
+        ]
+    else:
+        raise ValueError(
+            f"Unsupported grid dimension: {ndim}. Only 2D and 3D grids are supported."
+        )
+
+    return unpadded_grid  # type: ignore
 
 
 def coarsen_grid(
@@ -424,7 +535,7 @@ def coarsen_grid(
     elif method == "min":
         coarsened = data_reshaped.min(axis=agg_axes)
 
-    return typing.cast(NDimensionalGrid[NDimension], coarsened)
+    return coarsened  # type: ignore
 
 
 FlattenStrategy = typing.Union[
@@ -433,6 +544,7 @@ FlattenStrategy = typing.Union[
 ]
 
 
+@numba.njit(cache=True)
 def flatten_multilayer_grid_to_surface(
     multilayer_grid: ThreeDimensionalGrid,
     strategy: FlattenStrategy = "max",

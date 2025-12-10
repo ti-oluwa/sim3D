@@ -101,7 +101,7 @@ class TimeStepResult(typing.Generic[NDimension]):
 
 def _run_fully_implicit(
     time_step: int,
-    num_of_steps: int,
+    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -206,7 +206,7 @@ def _run_fully_implicit(
 
 def _run_impes(
     time_step: int,
-    num_of_steps: int,
+    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -394,7 +394,7 @@ def _run_impes(
 
 def _run_fully_explicit(
     time_step: int,
-    num_of_steps: int,
+    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -550,18 +550,15 @@ def _run_fully_explicit(
 
 
 def _log_progress(
-    time_step: int,
-    num_of_steps: int,
-    time_step_size: float,
-    interval: int = 10,
+    time_step: int, num_of_time_steps: int, time_step_size: float, interval: int = 10
 ):
     """Logs the simulation progress at specified intervals."""
-    if time_step % interval == 0 or time_step == num_of_steps:
+    if time_step % interval == 0 or time_step == num_of_time_steps:
         elapsed_time = time_step * time_step_size
-        total_time = num_of_steps * time_step_size
-        percent_complete = (time_step / num_of_steps) * 100
+        total_time = num_of_time_steps * time_step_size
+        percent_complete = (time_step / num_of_time_steps) * 100
         logger.info(
-            f"Time Step {time_step}/{num_of_steps} "
+            f"Time Step {time_step}/{num_of_time_steps} "
             f"({percent_complete:.2f}%) - "
             f"Elapsed Time: {elapsed_time:.2f}s / {total_time:.2f}s"
         )
@@ -700,13 +697,13 @@ def run(
             ),
         )
 
-        num_of_steps = min(
+        num_of_time_steps = min(
             math.ceil(options.total_time // time_step_size), options.max_time_steps
         )
         output_frequency = options.output_frequency
 
-        logger.debug(f"Simulating for {num_of_steps} time steps")
-        logger.debug(f"Number of time steps to simulate: {int(num_of_steps)}")
+        logger.debug(f"Simulating for {num_of_time_steps} time steps")
+        logger.debug(f"Number of time steps to simulate: {int(num_of_time_steps)}")
         logger.debug(f"Output frequency: every {output_frequency} steps")
         logger.debug(f"Convergence tolerance: {options.convergence_tolerance}")
         logger.debug(f"Has wells: {has_wells}")
@@ -719,8 +716,8 @@ def run(
             boundary_conditions["pressure"], type(default_bc)
         )
 
-        for time_step in range(1, num_of_steps + 1):
-            logger.debug(f"Running time step {time_step} of {num_of_steps}...")
+        for time_step in range(1, num_of_time_steps + 1):
+            logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
             try:
                 if has_wells:
                     logger.debug(
@@ -731,7 +728,7 @@ def run(
 
                 _log_progress(
                     time_step=time_step,
-                    num_of_steps=num_of_steps,
+                    num_of_time_steps=num_of_time_steps,
                     time_step_size=time_step_size,
                     interval=options.progress_log_interval,
                 )
@@ -739,7 +736,7 @@ def run(
                 if scheme == "implicit":
                     result = _run_fully_implicit(
                         time_step=time_step,
-                        num_of_steps=num_of_steps,
+                        num_of_time_steps=num_of_time_steps,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
@@ -758,7 +755,7 @@ def run(
                 elif scheme == "impes":
                     result = _run_impes(
                         time_step=time_step,
-                        num_of_steps=num_of_steps,
+                        num_of_time_steps=num_of_time_steps,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
@@ -778,7 +775,7 @@ def run(
                 else:
                     result = _run_fully_explicit(
                         time_step=time_step,
-                        num_of_steps=num_of_steps,
+                        num_of_time_steps=num_of_time_steps,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
@@ -799,7 +796,9 @@ def run(
                 padded_fluid_properties = result.fluid_properties
 
                 # Take a snapshot of the model state at specified intervals and at the last time step
-                if (time_step % output_frequency == 0) or (time_step == num_of_steps):
+                if (time_step % output_frequency == 0) or (
+                    time_step == num_of_time_steps
+                ):
                     logger.debug(f"Capturing model state at time step {time_step}")
                     # The production rates are negative in the evolution
                     # so we need to negate them to report positive production values
@@ -916,4 +915,6 @@ def run(
                 logger.error(f"Error encountered at time step {time_step}: {exc}")
                 raise
 
-    logger.info(f"Simulation completed successfully after {num_of_steps} time steps")
+    logger.info(
+        f"Simulation completed successfully after {num_of_time_steps} time steps"
+    )

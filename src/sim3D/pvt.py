@@ -6,6 +6,7 @@ import typing
 import warnings
 
 from CoolProp.CoolProp import PropsSI  # type: ignore [import]
+import numba
 import numpy as np
 from scipy.optimize import brentq, root_scalar
 
@@ -95,6 +96,7 @@ def clip_temperature(temperature: float, fluid: str) -> float:
     return min(max(temperature, t_min + 0.1), t_max - 0.1)  # Add small buffer
 
 
+@numba.njit(cache=True)
 def clip_scalar(value: float, min_val: float, max_val: float) -> float:
     if value < min_val:
         return min_val
@@ -254,6 +256,7 @@ def compute_gas_gravity_from_density(
     return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
+@numba.njit(cache=True)
 def compute_total_fluid_compressibility(
     water_saturation: float,
     oil_saturation: float,
@@ -327,6 +330,7 @@ def compute_diffusion_number(
     return diffusion_number
 
 
+@numba.njit(cache=True)
 def compute_harmonic_mean(value1: float, value2: float) -> float:
     """
     Computes the harmonic mean of two values.
@@ -340,6 +344,7 @@ def compute_harmonic_mean(value1: float, value2: float) -> float:
     return (2 * value1 * value2) / (value1 + value2)
 
 
+@numba.njit(cache=True)
 def compute_harmonic_mobility(
     index1: NDimension,
     index2: NDimension,
@@ -408,9 +413,10 @@ def compute_oil_specific_gravity_from_density(
         correction_factor, 0.2, 2.0
     )  # Avoid numerical issues with very small values
     oil_density_at_stp = oil_density * correction_factor
-    return oil_density_at_stp / c.c.STANDARD_WATER_DENSITY_IMPERIAL
+    return oil_density_at_stp / c.STANDARD_WATER_DENSITY_IMPERIAL
 
 
+@numba.njit(cache=True)
 def convert_surface_rate_to_reservoir(
     surface_rate: float, formation_volume_factor: float
 ) -> float:
@@ -430,6 +436,7 @@ def convert_surface_rate_to_reservoir(
     )  # Production reservoir volume is larger than surface
 
 
+@numba.njit(cache=True)
 def convert_reservoir_rate_to_surface(
     reservoir_rate: float, formation_volume_factor: float
 ) -> float:
@@ -449,6 +456,7 @@ def convert_reservoir_rate_to_surface(
     )  # Production surface volume is larger than reservoir volume
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_standing(
     temperature: float,
     oil_specific_gravity: float,
@@ -494,6 +502,7 @@ def compute_oil_formation_volume_factor_standing(
     return oil_fvf
 
 
+@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_fvf_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -502,6 +511,7 @@ def _get_vazquez_beggs_oil_fvf_coefficients(
     return 4.670e-4, 1.100e-5, 1.337e-9
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_vazquez_and_beggs(
     temperature: float,
     oil_specific_gravity: float,
@@ -546,6 +556,7 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
     return oil_fvf
 
 
+@numba.njit(cache=True)
 def correct_oil_fvf_for_pressure(
     saturated_oil_fvf: float,
     oil_compressibility: float,
@@ -574,6 +585,7 @@ def correct_oil_fvf_for_pressure(
     return saturated_oil_fvf * correction_factor
 
 
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -699,7 +711,6 @@ def compute_water_formation_volume_factor_mccain(
     if gas_solubility > 0:
         # Rs_w in SCF/STB
         B_w = B_w - (gas_solubility * 1.0e-6)  # Approximate correction
-
     return B_w
 
 
@@ -826,6 +837,7 @@ def compute_gas_compressibility_factor(
     )  # Ensure Z-factor is not less than 0.1 as Papay's correlation may under-predict at times
 
 
+@numba.njit(cache=True)
 def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     """
     Computes the API gravity (in degrees) from oil specific gravity.
@@ -847,6 +859,7 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     return (141.5 / oil_specific_gravity) - 131.5
 
 
+@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -870,6 +883,7 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         return 0.0178, 1.1870, 23.9310
 
 
+@numba.njit(cache=True)
 def compute_oil_bubble_point_pressure(
     gas_gravity: float,
     oil_api_gravity: float,
@@ -1367,30 +1381,35 @@ def compute_gas_viscosity(
     return max(0.0, gas_viscosity)
 
 
+@numba.njit(cache=True)
 def kelvin_to_fahrenheit(temp_K: float) -> float:
     """Converts temperature from Kelvin to Fahrenheit."""
     return (temp_K - 273.15) * 9 / 5 + 32
 
 
+@numba.njit(cache=True)
 def fahrenheit_to_kelvin(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Kelvin."""
     return (temp_F - 32) * 5 / 9 + 273.15
 
 
+@numba.njit(cache=True)
 def fahrenheit_to_celsius(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Celsius."""
     return (temp_F - 32) * 5 / 9
 
 
+@numba.njit(cache=True)
 def fahrenheit_to_rankine(temp_F: float) -> float:
     """Converts temperature from Fahrenheit to Rankine."""
     return temp_F + 459.67
 
 
+@numba.njit(cache=True)
 def _compute_water_viscosity(
-    temperature: float, salinity: float, pressure: float
+    temperature: float, salinity: float, pressure: float, ppm_to_weight_fraction: float
 ) -> float:
-    salinity_fraction = salinity * c.PPM_TO_WEIGHT_FRACTION
+    salinity_fraction = salinity * ppm_to_weight_fraction
     A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
     B = 1.48e-3 - 1.8e-7 * salinity_fraction
     C = 2.94e-6
@@ -1462,7 +1481,10 @@ def compute_water_viscosity(
             f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
         )
     return _compute_water_viscosity(
-        temperature=temperature, salinity=salinity, pressure=pressure
+        temperature=temperature,
+        salinity=salinity,
+        pressure=pressure,
+        ppm_to_weight_fraction=c.PPM_TO_WEIGHT_FRACTION,
     )
 
 
@@ -1708,6 +1730,7 @@ def compute_gas_compressibility(
     return max(0.0, gas_compressibility)  # Compressibility must be non-negative
 
 
+@numba.njit(cache=True)
 def _gas_solubility_in_water_mccain_methane(
     pressure: float,
     temperature: float,
@@ -1760,8 +1783,13 @@ def _gas_solubility_in_water_mccain_methane(
 MOLALITY_TO_SCF_STB_CO2 = 315.4  # Approximate conversion factor for CO2
 
 
+@numba.njit(cache=True)
 def _gas_solubility_in_water_duan_sun_co2(
-    pressure: float, temperature: float, salinity: float = 0.0
+    pressure: float,
+    temperature: float,
+    salinity: float = 0.0,
+    nacl_molecular_weight: float = 58.44,
+    psi_to_bar: float = 0.0689476,
 ) -> float:
     """
     Calculates CO₂ solubility in water (Rsw) using the Duan and Sun (2003) model.
@@ -1797,7 +1825,7 @@ def _gas_solubility_in_water_duan_sun_co2(
     if pressure <= 0 or temperature <= 0:
         raise ValueError("Pressure and temperature must be positive.")
 
-    P = pressure * c.PSI_TO_BAR
+    P = pressure * psi_to_bar  # Convert pressure from psi to bar
     T = fahrenheit_to_kelvin(temperature)
 
     if not (273.15 <= T <= 533.15):
@@ -1828,7 +1856,7 @@ def _gas_solubility_in_water_duan_sun_co2(
     # Apply Salinity Correction (Setschenow equation)
     # Convert salinity from ppm to molality (mol NaCl / kg H2O)
     # 1 ppm NaCl ≈ 1 mg NaCl / 1 L H2O ≈ 1 mg NaCl / 1 kg H2O
-    m_nacl = salinity / (c.MOLECULAR_WEIGHT_NACL * 1000)
+    m_nacl = salinity / (nacl_molecular_weight * 1000)
 
     # Setschenow coefficient (k_s) for CO2-NaCl interaction, with T-dependence
     # This is a common empirical fit.
@@ -1845,12 +1873,6 @@ def _gas_solubility_in_water_duan_sun_co2(
     return rsw
 
 
-MOLAR_MASSES = {
-    "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-    "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
-    "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
-}
-
 # Henry's constants (Sander, 2020) — ln(H) = A + B/T + C*ln(T)
 # H in mol/(m³·Pa), will be inverted to Pa·m³/mol
 HENRY_COEFFICIENTS = {
@@ -1863,8 +1885,10 @@ HENRY_COEFFICIENTS = {
 def _gas_solubility_in_water_henry_law(
     pressure: float,
     temperature: float,
+    gas: str,
+    molar_masses: typing.Dict[str, float],
+    henry_coefficients: typing.Dict[str, typing.Tuple[float, float, float]],
     salinity: float = 0.0,
-    gas: str = "co2",
 ) -> float:
     """
     Estimates gas solubility in water using Henry's Law with Setschenow salinity correction.
@@ -1892,14 +1916,16 @@ def _gas_solubility_in_water_henry_law(
     :param temperature: Temperature in (°F)
     :param salinity: Salinity in ppm NaCl
     :param gas: One of "co2", "methane", or "n2"
+    :param molar_masses: Dictionary of molar masses for gases in kg/mol
+    :param henry_coefficients: Dictionary of Henry's Law coefficients (A, B, C) for gases
     :return: Solubility in SCF/STB (standard cubic feet per stock tank barrel)
     """
     gas = gas.lower()
-    if gas not in HENRY_COEFFICIENTS:
+    if gas not in henry_coefficients:
         raise ValueError(f"Unsupported gas '{gas}' for Henry's Law fallback.")
 
-    A, B, C = HENRY_COEFFICIENTS[gas]
-    M = MOLAR_MASSES[gas]
+    A, B, C = henry_coefficients[gas]
+    M = molar_masses[gas]
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
 
     ln_H_inv = -(A + B / temperature_in_kelvin + C * np.log(temperature_in_kelvin))
@@ -1950,14 +1976,33 @@ def compute_gas_solubility_in_water(
 
     elif gas == "co2" and 32 <= temperature <= 572:
         # For CO2, we use Duan's correlation for higher accuracy
-        return _gas_solubility_in_water_duan_sun_co2(pressure, temperature, salinity)
+        return _gas_solubility_in_water_duan_sun_co2(
+            pressure,
+            temperature,
+            salinity,
+            nacl_molecular_weight=c.MOLECULAR_WEIGHT_NACL,
+            psi_to_bar=c.PSI_TO_BAR,
+        )
 
     elif gas in {"methane", "co2", "n2"}:
-        return _gas_solubility_in_water_henry_law(pressure, temperature, salinity, gas)
+        molar_masses = {
+            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+            "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
+            "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
+        }
+        return _gas_solubility_in_water_henry_law(
+            pressure,
+            temperature,
+            gas=gas,
+            molar_masses=molar_masses,
+            henry_coefficients=HENRY_COEFFICIENTS,
+            salinity=salinity,
+        )
 
     raise NotImplementedError(f"No model for gas '{gas}'.")
 
 
+@numba.njit(cache=True)
 def compute_gas_free_water_formation_volume_factor(
     pressure: float, temperature: float
 ) -> float:
@@ -1994,6 +2039,7 @@ def compute_gas_free_water_formation_volume_factor(
     return max(0.9, gas_free_water_fvf)  # Bw_gas_free is typically close to 1.0
 
 
+@numba.njit(cache=True)
 def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     """
     Calculates the derivative of gas solubility in water (Rsw) with respect to pressure,
@@ -2011,10 +2057,8 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     return derivative_pure_water * salinity_correction_factor
 
 
-def _compute_dBw_gas_free_dp_mccain(
-    pressure: float,
-    temperature: float,
-) -> float:
+@numba.njit(cache=True)
+def _compute_dBw_gas_free_dp_mccain(pressure: float, temperature: float) -> float:
     """
     Calculates the derivative of dissolved-gas-free Water Formation Volume Factor (Bw_gas_free)
     with respect to pressure, based on McCain's correlation.
@@ -2213,6 +2257,7 @@ def compute_water_density_mccain(
     return water_density
 
 
+@numba.njit(cache=True)
 def compute_water_density_batzle(
     pressure: float, temperature: float, salinity: float
 ) -> float:
@@ -2352,6 +2397,7 @@ def compute_water_density(
     return max(0.0, live_water_density_in_lb_per_ft3)
 
 
+@numba.njit(cache=True)
 def compute_gas_to_oil_ratio_standing(
     pressure: float,
     oil_api_gravity: float,
@@ -2443,6 +2489,7 @@ def estimate_bubble_point_pressure_standing(
     return bubble_point_pressure
 
 
+@numba.njit(cache=True)
 def compute_hydrocarbon_in_place(
     area: float,
     thickness: float,
@@ -2451,6 +2498,8 @@ def compute_hydrocarbon_in_place(
     formation_volume_factor: float,
     net_to_gross_ratio: float = 1.0,
     hydrocarbon_type: typing.Literal["oil", "gas", "water"] = "oil",
+    acre_ft_to_bbl: float = 7758.0,
+    acre_ft_to_ft3: float = 43560.0,
 ) -> float:
     """
     Computes the (free) hydrocarbon (or free water) in place (HCIP or FWIP) in stock tank barrels (STB) or standard cubic feet (SCF)
@@ -2509,7 +2558,7 @@ def compute_hydrocarbon_in_place(
     if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
         # Oil in Place (OIP) calculation (May include dissolved gas in undersaturated reservoirs)
         oip = (
-            c.ACRE_FT_TO_BBL
+            acre_ft_to_bbl
             * area
             * thickness
             * porosity
@@ -2521,7 +2570,7 @@ def compute_hydrocarbon_in_place(
 
     # Free Gas in Place (GIP) calculation
     free_gip = (
-        c.ACRE_FT_TO_FT3
+        acre_ft_to_ft3
         * area
         * thickness
         * porosity
@@ -2532,6 +2581,7 @@ def compute_hydrocarbon_in_place(
     return free_gip
 
 
+@numba.njit(cache=True)
 def compute_miscibility_transition_factor(
     pressure: float,
     minimum_miscibility_pressure: float,
@@ -2611,10 +2661,10 @@ def compute_miscibility_transition_factor(
 
     # Transition factor varies from 0 (immiscible) to 1 (miscible)
     transition_factor = 0.5 * (1.0 + np.tanh(normalized))
-
     return transition_factor
 
 
+@numba.njit(cache=True)
 def compute_effective_todd_longstaff_omega(
     pressure: float,
     base_omega: float,
@@ -2662,6 +2712,7 @@ def compute_effective_todd_longstaff_omega(
     return base_omega * transition_factor
 
 
+@numba.njit(cache=True)
 def compute_todd_longstaff_effective_viscosity(
     oil_viscosity: float,
     solvent_viscosity: float,
@@ -2782,6 +2833,7 @@ def compute_todd_longstaff_effective_viscosity(
     return mu_effective
 
 
+@numba.njit(cache=True)
 def compute_todd_longstaff_effective_density(
     oil_density: float,
     solvent_density: float,

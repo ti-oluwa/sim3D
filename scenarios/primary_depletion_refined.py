@@ -19,7 +19,6 @@ def _():
 
     STABILIZED_MODEL_STATE = Path.cwd() / "scenarios/states/stabilized_refined.pkl.xz"
 
-
     def main():
         state = sim3D.ModelState.load(filepath=STABILIZED_MODEL_STATE)
         model = state.model
@@ -89,6 +88,7 @@ def _():
         )
         states = sim3D.run(model=model, wells=wells, options=options)
         return list(states)
+
     return Path, main, np, sim3D
 
 

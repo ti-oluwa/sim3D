@@ -9,7 +9,7 @@ import attrs
 __all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class Constant:
     """A constant value with optional description and metadata.
 

@@ -127,7 +127,11 @@ def _(np, viz):
         y_label="Displacement Efficiency (%)",
         x_label="Case",
         title="Displacement Efficiencies",
-        series_names=["Primary Depletion (Aquifer Driven)", "CO2 Injection", "CH4 Injection"],
+        series_names=[
+            "Primary Depletion (Aquifer Driven)",
+            "CO2 Injection",
+            "CH4 Injection",
+        ],
         y_range=[0, 100],
     )
     displacement_efficiency_bar_chart.show()

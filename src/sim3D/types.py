@@ -4,6 +4,8 @@ import typing
 
 import attrs
 import numpy as np
+from scipy.sparse import csr_array, csr_matrix
+from scipy.sparse.linalg import LinearOperator
 from typing_extensions import Self, TypeAlias, TypedDict
 
 from sim3D.constants import Constants
@@ -130,6 +132,41 @@ class ArrayLike(typing.Generic[Tco], typing.Protocol):
 Interpolator = typing.Callable[[float], float]
 
 
+PreconditionerStr = typing.Literal["ilu", "amg", "diagonal"]
+PreconditionerFactory = typing.Callable[
+    [typing.Union[csr_array, csr_matrix]],
+    typing.Union[LinearOperator, np.typing.NDArray],
+]
+Preconditioner = typing.Union[
+    LinearOperator, PreconditionerStr, PreconditionerFactory, str
+]
+
+
+IterativeSolverStr = typing.Literal["gmres", "lgmres", "bicgstab", "tfqmr"]
+
+
+class IterativeSolverFunc(typing.Protocol):
+    """
+    Protocol for an iterative solver function.
+    """
+
+    def __call__(
+        self,
+        A: typing.Any,
+        b: typing.Any,
+        x0: typing.Optional[typing.Any],
+        *,
+        rtol: float,
+        atol: float,
+        maxiter: typing.Optional[int],
+        M: typing.Optional[typing.Any],
+        callback: typing.Optional[typing.Callable[[np.typing.NDArray], None]],
+    ) -> np.typing.NDArray: ...
+
+
+IterativeSolver = typing.Union[IterativeSolverFunc, IterativeSolverStr, str]
+
+
 class MixingRule(typing.Protocol):
     """
     Protocol for a mixing rule function that combines two properties
@@ -173,7 +210,7 @@ class CapillaryPressures(typing.TypedDict):
     gas_oil: float  # Pcgo = Pg - Po
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class PhaseFluxDerivatives:
     """
     Derivatives of a single phase flux with respect to saturations at cell and neighbour.
@@ -191,7 +228,7 @@ class PhaseFluxDerivatives:
     derivative_wrt_oil_saturation_at_neighbour: float
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class FluxDerivativesWithRespectToSaturations:
     """
     Complete set of flux derivatives for all three phases.
@@ -205,7 +242,7 @@ class FluxDerivativesWithRespectToSaturations:
     gas_phase_flux_derivatives: PhaseFluxDerivatives
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class MisciblePhaseFluxDerivatives:
     """
     Derivatives of a single phase flux with respect to saturations AND solvent concentration.
@@ -227,7 +264,7 @@ class MisciblePhaseFluxDerivatives:
     derivative_wrt_solvent_concentration_at_neighbour: float
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class MiscibleFluxDerivativesWithRespectToSaturations:
     """
     Complete set of flux derivatives for miscible displacement (4 equations).
@@ -290,7 +327,7 @@ class CapillaryPressureTable(typing.Protocol):
         ...
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class Range:
     """
     Class representing minimum and maximum values.
@@ -352,7 +389,7 @@ class RelativeMobilityRange(TypedDict):
     gas: Range
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class Options:
     """
     Simulation run options and parameters.
@@ -368,8 +405,20 @@ class Options:
         default=1e-6, validator=attrs.validators.le(1e-2)
     )
     """Convergence tolerance for iterative solvers (default is 1e-6)."""
-    max_iterations: int = attrs.field(default=250, validator=attrs.validators.ge(1))
-    """Maximum number of iterations allowed per time step for iterative solvers."""
+    max_iterations: int = attrs.field(
+        default=200,
+        validator=attrs.validators.and_(
+            attrs.validators.ge(1), attrs.validators.le(250)
+        ),
+    )
+    """
+    Maximum number of iterations allowed per time step for iterative solvers.
+    
+    Capped at 250 to prevent excessive computation time in case of non-convergence.
+    If the solver does not converge within this limit, the matrix is most likely
+    ill-conditioned or the problem setup needs to be reviewed. Use a stronger
+    preconditioner or adjust simulation parameters accordingly.
+    """
     output_frequency: int = attrs.field(default=10, validator=attrs.validators.ge(1))
     """Frequency of output results during the simulation."""
     scheme: EvolutionScheme = "impes"
@@ -430,8 +479,16 @@ class Options:
     """Physical and conversion constants used in the simulation."""
     warn_rates_anomalies: bool = True
     """Whether to warn about anomalous flow rates during the simulation."""
-    progress_log_interval: int = attrs.field(default=10, validator=attrs.validators.ge(1))
+    progress_log_interval: int = attrs.field(
+        default=10, validator=attrs.validators.ge(1)
+    )
     """Interval (in time steps) at which to log simulation progress."""
+    preconditioner: typing.Optional[Preconditioner] = "cpr"
+    """Preconditioner to use for iterative solvers."""
+    iterative_solver: typing.Union[
+        IterativeSolver, typing.Iterable[IterativeSolver]
+    ] = "lgmres"
+    """Iterative solver(s) to use for solving linear systems."""
 
 
 def Time(
@@ -589,7 +646,7 @@ class PadMixin(typing.Generic[NDimension]):
         return attrs.evolve(self, **hooked_fields)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class RelPermGrids(PadMixin[NDimension]):  # type: ignore[override]
     """
     Wrapper for n-dimensional grids representing relative permeabilities
@@ -630,7 +687,7 @@ class RelPermGrids(PadMixin[NDimension]):  # type: ignore[override]
 
 # Keep the old class name for backward compatibility with older pickled states
 # TODO: Remove this once the older pickled states are no used anymore
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class RelPermGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing relative permeabilities
@@ -653,7 +710,7 @@ class RelPermGrids(PadMixin[NDimension]):
         return attrs.fields(self.__class__)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class RelativeMobilityGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing relative mobilities
@@ -688,7 +745,7 @@ class RelativeMobilityGrids(PadMixin[NDimension]):
         return attrs.fields(self.__class__)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class CapillaryPressureGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing capillary pressures
@@ -719,7 +776,7 @@ class CapillaryPressureGrids(PadMixin[NDimension]):
         return attrs.fields(self.__class__)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class RateGrids(PadMixin[NDimension]):
     """
     Wrapper for n-dimensional grids representing fluid flow rates (oil, water, gas).
@@ -775,7 +832,7 @@ class RateGrids(PadMixin[NDimension]):
         return attrs.fields(self.__class__)
 
 
-@attrs.define(frozen=True, slots=True)
+@attrs.frozen(slots=True)
 class _RateGridsProxy(typing.Generic[NDimension]):
     """
     Proxy to allow (controlled) item assignment on an n-dimensional rate grids.

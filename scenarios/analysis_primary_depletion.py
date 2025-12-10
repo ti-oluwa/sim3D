@@ -26,7 +26,9 @@ def _(itertools, np, sim3D, states):
     analyst = sim3D.ModelAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
-        interval=1, from_time_step=1, displacing_phase="water",
+        interval=1,
+        from_time_step=1,
+        displacing_phase="water",
     )
     production_rate_history = analyst.instantaneous_rates_history(
         interval=1, from_time_step=1, rate_type="production"
@@ -249,7 +251,7 @@ def _(
         oil_effective_density_fig,
         oil_effective_viscosity_fig,
         cols=2,
-        title="Oil Effective Density & Viscosity Analysis  (CASE 2)"
+        title="Oil Effective Density & Viscosity Analysis  (CASE 2)",
     )
     effective_density_viscosity_fig.show()
     return
@@ -522,7 +524,7 @@ def _(analyst, np, sim3D):
         oil_water_reserves_fig,
         gas_reserve_fig,
         cols=2,
-        title="Reserves Analysis (CASE 2)"
+        title="Reserves Analysis (CASE 2)",
     )
     reserves_plots.show()
     return
@@ -562,7 +564,7 @@ def _(
         displacement_efficiency_fig,
         vol_sweep_efficiency_fig,
         cols=2,
-        title="Sweep Efficiency Analysis (CASE 2)"
+        title="Sweep Efficiency Analysis (CASE 2)",
     )
     sweep_efficiency_plots.show()
     return
@@ -579,7 +581,7 @@ def _(analyst, np, recovery_efficiency_history, sim3D):
         marker_sizes=6,
         width=720,
         height=460,
-        line_colors="orange"
+        line_colors="orange",
     )
 
     oil_recovery_factor_history = analyst.oil_recovery_factor_history(
@@ -600,7 +602,7 @@ def _(analyst, np, recovery_efficiency_history, sim3D):
         recovery_efficiency_fig,
         recovery_factor_fig,
         cols=2,
-        title="Recovery Analysis (CASE 2)"
+        title="Recovery Analysis (CASE 2)",
     )
     recovery_plots.show()
     return
@@ -662,7 +664,7 @@ def _(sim3D, states, viz):
         # z_slice=(0, 8),
         # isomin=1800,
         cmin=1,
-        cmax=2.0
+        cmax=2.0,
     )
 
     property = "oil-relative-mobility"

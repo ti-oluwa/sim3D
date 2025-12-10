@@ -18,13 +18,12 @@ def _():
     sim3D.use_32bit_precision()
     sim3D.image_config(scale=3)
 
-
     def main():
         # Grid dimensions - typical field scale
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
         grid_shape = typing.cast(
             sim3D.ThreeDimensions,
-            (5, 5, 10),  # 30x30 cells, 10 layers
+            (20, 20, 10),  # 30x30 cells, 10 layers
         )
         dip_angle = 5.0
         dip_azimuth = 90.0
@@ -60,8 +59,7 @@ def _():
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
         oil_bubble_point_pressure_grid = sim3D.layered_grid(
             grid_shape=grid_shape,
-            layer_values=layer_pressures
-            - 400.0,  # 400 psi below formation pressure
+            layer_values=layer_pressures - 400.0,  # 400 psi below formation pressure
             orientation=sim3D.Orientation.Z,
         )
 
@@ -115,8 +113,7 @@ def _():
             sim3D.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
-                oil_water_contact=owc_depth
-                - reservoir_top_depth,  # 150 ft below top
+                oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
                 connate_water_saturation_grid=connate_water_saturation_grid,
                 residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
                 residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
@@ -152,9 +149,7 @@ def _():
         # Permeability distribution
         # Higher permeability in middle layers (better reservoir quality)
         # Anisotropy ratio kv/kh ~ 0.1 (typical for layered sandstone)
-        x_perm_values = np.array(
-            [12, 25, 40, 18, 55, 70, 90, 35, 48, 22]
-        )  # mD
+        x_perm_values = np.array([12, 25, 40, 18, 55, 70, 90, 35, 48, 22])  # mD
         x_permeability_grid = sim3D.layered_grid(
             grid_shape=grid_shape,
             layer_values=x_perm_values,
@@ -273,13 +268,16 @@ def _():
         )
 
         options = sim3D.Options(
-            scheme="implicit",
+            scheme="impes",
             total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 5),  # 3 years
-            time_step_size=sim3D.Time(hours=24),
-            max_time_steps=3,
+            time_step_size=sim3D.Time(days=2.5),
+            max_time_steps=100,
             output_frequency=1,
-            miscibility_model="immiscible",
+            miscibility_model="todd",
             use_pseudo_pressure=True,
+            max_iterations=200,
+            iterative_solver="bicgstab",
+            preconditioner="amg",
         )
         states = sim3D.run(model=model, wells=None, options=options)
         return list(states)
