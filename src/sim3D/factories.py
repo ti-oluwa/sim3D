@@ -13,7 +13,6 @@ from sim3D.grids.pvt import (
     build_gas_density_grid,
     build_gas_formation_volume_factor_grid,
     build_gas_free_water_formation_volume_factor_grid,
-    build_gas_gravity_grid,
     build_gas_molecular_weight_grid,
     build_gas_solubility_in_water_grid,
     build_solution_gas_to_oil_ratio_grid,
@@ -34,11 +33,12 @@ from sim3D.models import (
     RockPermeability,
     RockProperties,
 )
-from sim3D.pvt import (
-    compute_gas_to_oil_ratio_standing,
+from sim3D.pvt.core import (
     validate_input_pressure,
     validate_input_temperature,
+    compute_gas_gravity,
 )
+from sim3D.pvt.arrays import compute_gas_to_oil_ratio_standing
 from sim3D.types import (
     NDimension,
     NDimensionalGrid,
@@ -410,7 +410,11 @@ def reservoir_model(
         )
 
     if gas_gravity_grid is None:
-        gas_gravity_grid = build_gas_gravity_grid(gas=reservoir_gas)
+        gas_gravity = compute_gas_gravity(gas=reservoir_gas)
+        gas_gravity_grid = build_uniform_grid(
+            grid_shape=grid_shape,
+            value=gas_gravity,
+        )
 
     if water_viscosity_grid is None:
         water_viscosity_grid = build_water_viscosity_grid(
@@ -484,10 +488,10 @@ def reservoir_model(
         )
         # Try to estimate the GOR and then calculate the bubble point pressure from that
         # As either GOR or buble point is needed to build the model
-        estimated_gor_grid = np.vectorize(compute_gas_to_oil_ratio_standing)(
-            pressure_grid,
-            oil_api_gravity_grid,
-            gas_gravity_grid,
+        estimated_gor_grid = compute_gas_to_oil_ratio_standing(
+            pressure=pressure_grid,
+            oil_api_gravity=oil_api_gravity_grid,
+            gas_gravity=gas_gravity_grid,
         )
         oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
             temperature_grid=temperature_grid,

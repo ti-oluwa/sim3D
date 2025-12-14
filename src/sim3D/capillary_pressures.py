@@ -8,7 +8,7 @@ import numba
 import numpy as np
 from scipy.interpolate import interp1d
 
-from sim3D.pvt import clip_scalar
+from sim3D.utils import clip
 from sim3D.types import (
     ArrayLike,
     CapillaryPressures,
@@ -260,7 +260,7 @@ def compute_brooks_corey_capillary_pressures(
         effective_water_saturation = (
             water_saturation - irreducible_water_saturation
         ) / total_mobile_pore_space_water
-        effective_water_saturation = clip_scalar(effective_water_saturation, 1e-6, 1.0)
+        effective_water_saturation = clip(effective_water_saturation, 1e-6, 1.0)
 
         if effective_water_saturation < 1.0 - 1e-6:
             if wettability == WettabilityType.WATER_WET:
@@ -300,7 +300,7 @@ def compute_brooks_corey_capillary_pressures(
         effective_gas_saturation = (
             gas_saturation - residual_gas_saturation
         ) / total_mobile_pore_space_gas
-        effective_gas_saturation = clip_scalar(effective_gas_saturation, 1e-6, 1.0)
+        effective_gas_saturation = clip(effective_gas_saturation, 1e-6, 1.0)
 
         if effective_gas_saturation < 1.0 - 1e-6:
             gas_oil_capillary_pressure = gas_oil_entry_pressure * (
@@ -536,7 +536,7 @@ def compute_van_genuchten_capillary_pressures(
         effective_water_saturation = (
             water_saturation - irreducible_water_saturation
         ) / total_mobile_pore_space_water
-        effective_water_saturation = clip_scalar(
+        effective_water_saturation = clip(
             effective_water_saturation, 1e-6, 1.0 - 1e-6
         )
 
@@ -580,7 +580,7 @@ def compute_van_genuchten_capillary_pressures(
         effective_gas_saturation = (
             gas_saturation - residual_gas_saturation
         ) / total_mobile_pore_space_gas
-        effective_gas_saturation = clip_scalar(
+        effective_gas_saturation = clip(
             effective_gas_saturation, 1e-6, 1.0 - 1e-6
         )
 
@@ -835,7 +835,7 @@ def compute_leverett_j_capillary_pressures(
         effective_water_saturation = (
             water_saturation - irreducible_water_saturation
         ) / total_mobile_pore_space_water
-        effective_water_saturation = clip_scalar(
+        effective_water_saturation = clip(
             effective_water_saturation, 1e-6, 1.0 - 1e-6
         )
 
@@ -868,7 +868,7 @@ def compute_leverett_j_capillary_pressures(
         effective_gas_saturation = (
             gas_saturation - residual_gas_saturation
         ) / total_mobile_pore_space_gas
-        effective_gas_saturation = clip_scalar(
+        effective_gas_saturation = clip(
             effective_gas_saturation, 1e-6, 1.0 - 1e-6
         )
 

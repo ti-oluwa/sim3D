@@ -11,12 +11,12 @@ from sim3D.grids.base import (
     apply_structural_dip,
     build_depth_grid,
     build_elevation_grid,
+    PadMixin,
 )
 from sim3D.types import (
     CapillaryPressureTable,
     NDimension,
     NDimensionalGrid,
-    PadMixin,
     RelativePermeabilityTable,
 )
 

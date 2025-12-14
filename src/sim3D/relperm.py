@@ -8,7 +8,7 @@ import numba
 import attrs
 from scipy.interpolate import interp1d
 
-from sim3D.pvt import clip_scalar
+from sim3D.utils import clip
 from sim3D.types import (
     ArrayLike,
     FluidPhase,
@@ -717,7 +717,7 @@ def compute_corey_three_phase_relative_permeabilities(
             effective_water_saturation = (
                 water_saturation - irreducible_water_saturation
             ) / movable_water_range
-            effective_water_saturation = clip_scalar(
+            effective_water_saturation = clip(
                 effective_water_saturation, 0.0, 1.0
             )
         krw = effective_water_saturation**water_exponent
@@ -730,7 +730,7 @@ def compute_corey_three_phase_relative_permeabilities(
             effective_gas_saturation = (
                 gas_saturation - residual_gas_saturation
             ) / movable_gas_range
-            effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
+            effective_gas_saturation = clip(effective_gas_saturation, 0.0, 1.0)
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Oil relperm (intermediate phase) → Stone I blending
@@ -756,7 +756,7 @@ def compute_corey_three_phase_relative_permeabilities(
                 oil_saturation
                 - min(residual_oil_saturation_water, residual_oil_saturation_gas)
             ) / movable_oil_range
-            effective_oil_saturation = clip_scalar(effective_oil_saturation, 0.0, 1.0)
+            effective_oil_saturation = clip(effective_oil_saturation, 0.0, 1.0)
         kro = effective_oil_saturation**oil_exponent
 
         # 2. Gas relperm (nonwetting phase)
@@ -767,7 +767,7 @@ def compute_corey_three_phase_relative_permeabilities(
             effective_gas_saturation = (
                 gas_saturation - residual_gas_saturation
             ) / movable_gas_range
-            effective_gas_saturation = clip_scalar(effective_gas_saturation, 0.0, 1.0)
+            effective_gas_saturation = clip(effective_gas_saturation, 0.0, 1.0)
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Water relperm (intermediate phase, use Stone I style blending)
@@ -784,9 +784,9 @@ def compute_corey_three_phase_relative_permeabilities(
         raise ValueError(f"Wettability {wettability} not implemented.")
 
     # Clip all results to [0, 1]
-    krw = clip_scalar(krw, 0.0, 1.0)
-    kro = clip_scalar(kro, 0.0, 1.0)
-    krg = clip_scalar(krg, 0.0, 1.0)
+    krw = clip(krw, 0.0, 1.0)
+    kro = clip(kro, 0.0, 1.0)
+    krg = clip(krg, 0.0, 1.0)
     return float(krw), float(kro), float(krg)
 
 

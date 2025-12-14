@@ -38,6 +38,8 @@ __all__ = [
     "build_diagonal_preconditioner",
     "build_amg_preconditioner",
     "solve_linear_system",
+    "to_1D_index_interior_only",
+    "from_1D_index_interior_only",
 ]
 
 
@@ -83,7 +85,7 @@ class EvolutionResult(typing.Generic[T]):
     scheme: typing.Literal["implicit", "explicit"]
 
 
-@numba.njit(cache=True)
+@numba.njit(inline="always", cache=True)
 def to_1D_index_interior_only(
     i: int,
     j: int,
@@ -93,7 +95,13 @@ def to_1D_index_interior_only(
     cell_count_z: int,
 ) -> int:
     """
-    Converts 3D grid indices to 1D index for interior cells only.
+    Convert 3D interior cell indices to 1D array index.
+    
+    For a grid with dimensions (Nx, Ny, Nz), interior cells are
+    indexed from (1, 1, 1) to (Nx-2, Ny-2, Nz-2).
+    
+    The 1D index starts at 0 for cell (1, 1, 1).
+    
     Padding cells (i=0, i=Nx-1, etc.) return -1.
     Interior cells are mapped to [0, (Nx-2)*(Ny-2)*(Nz-2))
     """
@@ -120,6 +128,48 @@ def to_1D_index_interior_only(
 
 
 @numba.njit(cache=True)
+def from_1D_index_interior_only(
+    idx: int,
+    cell_count_x: int,
+    cell_count_y: int,
+    cell_count_z: int,
+) -> typing.Tuple[int, int, int]:
+    """
+    Convert 1D interior cell index back to 3D grid indices.
+    
+    This is the inverse of to_1D_index_interior_only.
+    
+    For a grid with dimensions (Nx, Ny, Nz), interior cells are
+    indexed from (1, 1, 1) to (Nx-2, Ny-2, Nz-2).
+    
+    The 1D index starts at 0 for cell (1, 1, 1).
+    
+    :param idx: 1D array index (0 to interior_cell_count - 1)
+    :param cell_count_x: Total number of cells in x-direction (including boundaries)
+    :param cell_count_y: Total number of cells in y-direction (including boundaries)
+    :param cell_count_z: Total number of cells in z-direction (including boundaries)
+    :return: Tuple of (i, j, k) indices in the full grid (interior cells only)
+    """
+    # Compute interior dimensions
+    interior_Ny = cell_count_y - 2
+    interior_Nz = cell_count_z - 2
+    
+    # Reverse the row-major ordering
+    # idx = i_interior * (interior_Ny * interior_Nz) + j_interior * interior_Nz + k_interior
+    i_interior = idx // (interior_Ny * interior_Nz)
+    remainder = idx % (interior_Ny * interior_Nz)
+    j_interior = remainder // interior_Nz
+    k_interior = remainder % interior_Nz
+    
+    # Convert back to full grid coordinates (add 1 to shift from interior to full grid)
+    i = i_interior + 1
+    j = j_interior + 1
+    k = k_interior + 1
+    
+    return i, j, k
+
+
+@numba.njit(cache=True, fastmath=True)
 def compute_mobility_grids(
     absolute_permeability_x: ThreeDimensionalGrid,
     absolute_permeability_y: ThreeDimensionalGrid,
@@ -383,17 +433,17 @@ def build_cpr_preconditioner(
 
 __preconditioner_factories = {
     "cpr": build_cpr_preconditioner,
-    "ilu": build_ilu_preconditioner,
     "amg": build_amg_preconditioner,
+    "ilu": build_ilu_preconditioner,
     "diagonal": build_diagonal_preconditioner,
 }
 
-_lgmres = functools.partial(lgmres, inner_m=50, outer_k=5)
+_lgmres = functools.partial(lgmres, inner_m=30, outer_k=3)
 __iterative_solvers = {
-    "gmres": gmres,
     "lgmres": _lgmres,
     "bicgstab": bicgstab,
     "tfqmr": tfqmr,
+    "gmres": gmres,
 }
 
 

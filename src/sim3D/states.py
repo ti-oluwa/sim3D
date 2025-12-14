@@ -9,18 +9,16 @@ from scipy.optimize import curve_fit
 
 from sim3D.cells import CellFilter, Cells
 from sim3D.constants import c
-from sim3D.grids import uniform_grid
-from sim3D.models import ReservoirModel
-from sim3D.pvt import compute_hydrocarbon_in_place
-from sim3D.types import (
+from sim3D.grids.base import (
     CapillaryPressureGrids,
-    NDimension,
-    NDimensionalGrid,
-    Options,
     RateGrids,
     RelPermGrids,
     RelativeMobilityGrids,
+    uniform_grid,
 )
+from sim3D.models import ReservoirModel
+from sim3D.pvt.arrays import compute_hydrocarbon_in_place
+from sim3D.types import NDimension, NDimensionalGrid, Options
 from sim3D.utils import load_from_pickle, save_as_pickle
 from sim3D.wells import Wells, _expand_intervals
 
@@ -473,11 +471,6 @@ class DeclineCurveResult:
     """Predicted production rates from decline curve in STB/day or SCF/day depending on phase."""
 
 
-hcip_vectorized = np.vectorize(
-    compute_hydrocarbon_in_place, excluded=["hydrocarbon_type"], cache=True
-)
-
-
 class ModelAnalyst(typing.Generic[NDimension]):
     """
     Analysis tools for evaluating reservoir model performance over a series of states
@@ -812,7 +805,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
         )
-        stoiip_grid = hcip_vectorized(
+        stoiip_grid = compute_hydrocarbon_in_place(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
@@ -823,7 +816,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
             acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
-        return np.nansum(stoiip_grid)
+        return np.nansum(stoiip_grid)  # type: ignore[return-value]
 
     @functools.cache
     def gas_in_place(self, time_step: int = -1) -> float:
@@ -849,7 +842,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
         )
-        stgiip_grid = hcip_vectorized(
+        stgiip_grid = compute_hydrocarbon_in_place(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
@@ -860,7 +853,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
             acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
-        return np.nansum(stgiip_grid)
+        return np.nansum(stgiip_grid)  # type: ignore[return-value]
 
     @functools.cache
     def water_in_place(self, time_step: int = -1) -> float:
@@ -884,7 +877,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             grid_shape=model.grid_shape,
             value=cell_area_in_acres,
         )
-        water_in_place_grid = hcip_vectorized(
+        water_in_place_grid = compute_hydrocarbon_in_place(
             area=cell_area_grid,
             thickness=model.thickness_grid,
             porosity=model.rock_properties.porosity_grid,
@@ -895,7 +888,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
             acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
         )
-        return np.nansum(water_in_place_grid)
+        return np.nansum(water_in_place_grid)  # type: ignore[return-value]
 
     def oil_in_place_history(
         self, from_time_step: int = 0, to_time_step: int = -1, interval: int = 1
@@ -1637,7 +1630,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             cell_area_grid = uniform_grid(
                 grid_shape=model.grid_shape, value=cell_area_in_acres
             )
-            stoiip_grid = hcip_vectorized(
+            stoiip_grid = compute_hydrocarbon_in_place(
                 area=cell_area_grid,
                 thickness=thickness,
                 porosity=porosity,
@@ -1730,7 +1723,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             cell_area_grid = uniform_grid(
                 grid_shape=model.grid_shape, value=cell_area_in_acres
             )
-            giip_grid = hcip_vectorized(
+            giip_grid = compute_hydrocarbon_in_place(
                 area=cell_area_grid,
                 thickness=thickness,
                 porosity=porosity,
@@ -1822,7 +1815,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             cell_area_grid = uniform_grid(
                 grid_shape=model.grid_shape, value=cell_area_in_acres
             )
-            giip_grid = hcip_vectorized(
+            giip_grid = compute_hydrocarbon_in_place(
                 area=cell_area_grid,
                 thickness=thickness,
                 porosity=porosity,
@@ -1840,7 +1833,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             # Calculate STOIIP for the filtered region
             oil_saturation = model.fluid_properties.oil_saturation_grid
             oil_fvf = model.fluid_properties.oil_formation_volume_factor_grid
-            stoiip_grid = hcip_vectorized(
+            stoiip_grid = compute_hydrocarbon_in_place(
                 area=cell_area_grid,
                 thickness=thickness,
                 porosity=porosity,

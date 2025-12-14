@@ -663,7 +663,7 @@ def _prepare_wells_map(
     return wells_map
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class WellsProxy(typing.Generic[WellLocation, WellT]):
     """A proxy class for quick access to wells by their location."""
 

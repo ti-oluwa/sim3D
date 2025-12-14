@@ -268,16 +268,16 @@ def _():
         )
 
         options = sim3D.Options(
-            scheme="impes",
+            scheme="implicit",
             total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 5),  # 3 years
-            time_step_size=sim3D.Time(days=2.5),
-            max_time_steps=100,
+            time_step_size=sim3D.Time(days=2),
+            max_time_steps=3,
             output_frequency=1,
-            miscibility_model="todd",
+            miscibility_model="immiscible",
             use_pseudo_pressure=True,
             max_iterations=200,
-            iterative_solver="bicgstab",
-            preconditioner="amg",
+            iterative_solver="lgmres",
+            preconditioner="cpr",
         )
         states = sim3D.run(model=model, wells=None, options=options)
         return list(states)

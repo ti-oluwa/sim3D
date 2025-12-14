@@ -8,6 +8,7 @@ import typing
 import attrs
 import numpy as np
 
+from sim3D.boundaries import BoundaryConditions, default_bc
 from sim3D.diffusivity import (
     evolve_fully_implicit,
     evolve_miscible_saturation_explicitly,
@@ -15,13 +16,21 @@ from sim3D.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
-from sim3D.grids.base import build_uniform_grid, pad_grid
+from sim3D.grids.base import (
+    CapillaryPressureGrids,
+    RateGrids,
+    RelPermGrids,
+    RelativeMobilityGrids,
+    _RateGridsProxy,
+    build_uniform_grid,
+    pad_grid,
+)
 from sim3D.grids.pvt import build_three_phase_relative_mobilities_grids
 from sim3D.helpers import (
     _mirror_neighbour,
+    apply_boundary_conditions,
     build_rock_fluid_properties_grids,
     update_pvt_properties,
-    apply_boundary_conditions,
 )
 from sim3D.models import (
     FluidProperties,
@@ -31,20 +40,14 @@ from sim3D.models import (
 )
 from sim3D.states import ModelState
 from sim3D.types import (
-    CapillaryPressureGrids,
     MiscibilityModel,
     NDimension,
     NDimensionalGrid,
     Options,
-    RateGrids,
-    RelPermGrids,
-    RelativeMobilityGrids,
     ThreeDimensions,
-    _RateGridsProxy,
     default_options,
 )
 from sim3D.wells import Wells
-from sim3D.boundaries import BoundaryConditions, default_bc
 
 
 __all__ = ["run"]
@@ -865,8 +868,13 @@ def run(
                     logger.debug("Yielding model state snapshot")
                     yield state
 
-                # Apply boundary conditions before pressure update for the next time step
                 next_step = time_step + 1
+                if next_step > num_of_time_steps:
+                    # Break the loop if we've reached the final time step
+                    # to avoid unnecessary computations
+                    break
+
+                # Apply boundary conditions before pressure update for the next time step
                 logger.debug(
                     f"Applying boundary conditions for time step {next_step}..."
                 )

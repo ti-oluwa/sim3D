@@ -4,9 +4,10 @@ import logging
 import typing
 
 import attrs
+import numba
 
 from sim3D.constants import c
-from sim3D.pvt import compute_gas_compressibility_factor
+from sim3D.pvt.core import compute_gas_compressibility_factor
 from sim3D.types import FluidPhase
 from sim3D.wells.core import (
     WellFluid,
@@ -122,6 +123,7 @@ def _setup_gas_pseudo_pressure(
     return True, pseudo_pressure_table
 
 
+@numba.njit(cache=True)
 def _compute_avg_z_factor(
     pressure: float,
     temperature: float,

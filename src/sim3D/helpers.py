@@ -6,7 +6,12 @@ import numpy as np
 
 from sim3D._precision import get_dtype
 from sim3D.boundaries import BoundaryConditions, BoundaryMetadata, default_bc
-from sim3D.grids.base import build_uniform_grid
+from sim3D.grids.base import (
+    CapillaryPressureGrids,
+    RelPermGrids,
+    RelativeMobilityGrids,
+    build_uniform_grid,
+)
 from sim3D.grids.pvt import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -34,13 +39,10 @@ from sim3D.grids.pvt import (
 )
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
 from sim3D.types import (
-    CapillaryPressureGrids,
     MiscibilityModel,
     NDimension,
     NDimensionalGrid,
     Options,
-    RelPermGrids,
-    RelativeMobilityGrids,
     ThreeDimensions,
 )
 from sim3D.wells import Wells
@@ -246,8 +248,10 @@ def build_rock_fluid_properties_grids(
                 gas_oil_capillary_pressure_grid * options.capillary_strength_factor,
             )
 
-    padded_relperm_grids = RelPermGrids[ThreeDimensions](
-        kro=kro_grid, krw=krw_grid, krg=krg_grid
+    padded_relperm_grids = RelPermGrids(
+        oil_relative_permeability=kro_grid,
+        water_relative_permeability=krw_grid,
+        gas_relative_permeability=krg_grid,
     )
     padded_relative_mobility_grids = RelativeMobilityGrids(
         water_relative_mobility=water_relative_mobility_grid,
@@ -266,6 +270,138 @@ def build_rock_fluid_properties_grids(
         padded_relative_mobility_grids,
         padded_capillary_pressure_grids,
     )
+
+
+def update_phase_densities(
+    fluid_properties: FluidProperties[ThreeDimensions],
+    wells: Wells[ThreeDimensions],
+    miscibility_model: MiscibilityModel,
+) -> FluidProperties[ThreeDimensions]:
+    """
+    Updates only the phase density grids based on current pressure, temperature, and composition.
+
+    This is a lightweight version of update_pvt_properties that only recalculates densities,
+    making it suitable for use in perturbation calculations where only densities are needed.
+
+    Updates:
+    - Gas density (ρg)
+    - Water density (ρw)
+    - Oil density (ρo)
+    - Oil effective density (ρo_eff) - includes miscibility effects if applicable
+
+    :param fluid_properties: Current fluid property grids
+    :param wells: Current wells configuration
+    :param miscibility_model: The miscibility model used in the simulation
+    :return: FluidProperties with updated density grids only
+    """
+    # GAS DENSITY
+    # Need z-factor to compute gas density
+    gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+    )
+    new_gas_density_grid = build_gas_density_grid(
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
+    )
+
+    # WATER DENSITY
+    # Need gas solubility and gas-free water FVF for water density
+    gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        salinity_grid=fluid_properties.water_salinity_grid,
+        gas=fluid_properties.reservoir_gas,
+    )
+    gas_free_water_formation_volume_factor_grid = (
+        build_gas_free_water_formation_volume_factor_grid(
+            pressure_grid=fluid_properties.pressure_grid,
+            temperature_grid=fluid_properties.temperature_grid,
+        )
+    )
+    new_water_density_grid = build_water_density_grid(
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        salinity_grid=fluid_properties.water_salinity_grid,
+        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+        gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
+    )
+
+    # OIL DENSITY
+    new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
+    )
+    gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
+        pressure_grid=new_oil_bubble_point_pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+    )
+    new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+        gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
+    )
+    new_oil_formation_volume_factor_grid = build_oil_formation_volume_factor_grid(
+        pressure_grid=fluid_properties.pressure_grid,
+        temperature_grid=fluid_properties.temperature_grid,
+        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+        oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
+        oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
+    )
+    new_oil_density_grid = build_live_oil_density_grid(
+        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+        gas_gravity_grid=fluid_properties.gas_gravity_grid,
+        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
+        formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
+    )
+    new_oil_effective_density_grid = new_oil_density_grid
+
+    # Handle miscible injections if applicable
+    if miscibility_model != "immiscible":
+        for well in wells.injection_wells:
+            injected_fluid = well.injected_fluid
+            if injected_fluid and injected_fluid.is_miscible:
+                injected_fluid_viscosity_grid = np.vectorize(
+                    injected_fluid.get_viscosity, otypes=[get_dtype()]
+                )(
+                    pressure=fluid_properties.pressure_grid,
+                    temperature=fluid_properties.temperature_grid,
+                )
+                # Update effective oil density using Todd-Longstaff model
+                new_oil_effective_density_grid = build_oil_effective_density_grid(
+                    oil_density_grid=new_oil_density_grid,
+                    solvent_density_grid=injected_fluid_viscosity_grid,
+                    oil_viscosity_grid=fluid_properties.oil_effective_viscosity_grid,
+                    solvent_viscosity_grid=injected_fluid_viscosity_grid,
+                    solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
+                    base_omega=injected_fluid.todd_longstaff_omega,
+                    pressure_grid=fluid_properties.pressure_grid,
+                    minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
+                    transition_width=injected_fluid.miscibility_transition_width,
+                )
+
+    updated_fluid_properties = attrs.evolve(
+        fluid_properties,
+        oil_density_grid=new_oil_density_grid,
+        oil_effective_density_grid=new_oil_effective_density_grid,
+        water_density_grid=new_water_density_grid,
+        gas_density_grid=new_gas_density_grid,
+    )
+    return updated_fluid_properties
 
 
 def update_pvt_properties(

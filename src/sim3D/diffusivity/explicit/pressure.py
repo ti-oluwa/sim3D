@@ -1,5 +1,6 @@
 import itertools
 import typing
+
 import numba
 import numpy as np
 
@@ -11,17 +12,11 @@ from sim3D.diffusivity.base import (
     _warn_producer_is_injecting,
     compute_mobility_grids,
 )
+from sim3D.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from sim3D.grids.pvt import build_total_fluid_compressibility_grid
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
-from sim3D.pvt import compute_harmonic_mean, compute_harmonic_mobility
-from sim3D.types import (
-    CapillaryPressureGrids,
-    FluidPhase,
-    Options,
-    RelativeMobilityGrids,
-    ThreeDimensionalGrid,
-    ThreeDimensions,
-)
+from sim3D.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
+from sim3D.types import FluidPhase, Options, ThreeDimensionalGrid, ThreeDimensions
 from sim3D.wells import Wells
 
 __all__ = ["evolve_pressure_explicitly"]
@@ -133,7 +128,7 @@ def evolve_pressure_explicitly(
         capillary_pressure_grids
     )
 
-    # Compute mobility grids for x, y, z directions using the optimized function
+    # Compute mobility grids for x, y, z directions
     mobility_grids = compute_mobility_grids(
         absolute_permeability_x=absolute_permeability.x,
         absolute_permeability_y=absolute_permeability.y,
@@ -152,7 +147,7 @@ def evolve_pressure_explicitly(
 
     dtype = get_dtype()
 
-    # Compute net flux contributions from neighbors (parallelized)
+    # Compute net flux contributions from neighbors
     net_flux_grid = compute_net_flux_contributions(
         current_oil_pressure_grid=current_oil_pressure_grid,
         cell_count_x=cell_count_x,
@@ -205,7 +200,7 @@ def evolve_pressure_explicitly(
         dtype=dtype,
     )
 
-    # Apply pressure updates (parallelized)
+    # Apply pressure updates
     updated_oil_pressure_grid = apply_pressure_updates(
         current_oil_pressure_grid=current_oil_pressure_grid,
         net_flux_grid=net_flux_grid,
@@ -284,89 +279,75 @@ def compute_net_flux_contributions(
     :param dtype: NumPy dtype for array allocation (np.float32 or np.float64)
     :return: 3D grid of net volumetric fluxes (ft³/day), positive = flow into cell
     """
-    interior_x = cell_count_x - 2
-    interior_y = cell_count_y - 2
-    interior_z = cell_count_z - 2
-    interior_cell_count = interior_x * interior_y * interior_z
-
     flux_grid = np.zeros((cell_count_x, cell_count_y, cell_count_z), dtype=dtype)
 
-    for cell_1D_index in numba.prange(interior_cell_count):  # type: ignore
-        # Convert 1D index to 3D coordinates (interior cells only)
-        k = cell_1D_index // (interior_x * interior_y)
-        remainder = cell_1D_index % (interior_x * interior_y)
-        j = remainder // interior_x
-        i = remainder % interior_x
+    for i in numba.prange(1, cell_count_x - 1):  # type: ignore
+        for j in range(1, cell_count_y - 1):
+            for k in range(1, cell_count_z - 1):
+                cell_thickness = thickness_grid[i, j, k]
+                net_flux = 0.0
 
-        # Adjust for boundary offset (interior cells start at index 1)
-        i += 1
-        j += 1
-        k += 1
+                # X-direction neighbors (i+1 and i-1)
+                geometric_factor_x = cell_size_y * cell_thickness / cell_size_x
+                for ni in (i + 1, i - 1):
+                    flux = compute_pseudo_flux_from_neighbour(
+                        cell_indices=(i, j, k),
+                        neighbour_indices=(ni, j, k),
+                        oil_pressure_grid=current_oil_pressure_grid,
+                        water_mobility_grid=water_mobility_grid_x,
+                        oil_mobility_grid=oil_mobility_grid_x,
+                        gas_mobility_grid=gas_mobility_grid_x,
+                        oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                        gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                        oil_density_grid=oil_density_grid,
+                        water_density_grid=water_density_grid,
+                        gas_density_grid=gas_density_grid,
+                        elevation_grid=elevation_grid,
+                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    )
+                    net_flux += flux * geometric_factor_x
 
-        cell_thickness = thickness_grid[i, j, k]
-        net_flux = 0.0
+                # Y-direction neighbors (j+1 and j-1)
+                geometric_factor_y = cell_size_x * cell_thickness / cell_size_y
+                for nj in (j + 1, j - 1):
+                    flux = compute_pseudo_flux_from_neighbour(
+                        cell_indices=(i, j, k),
+                        neighbour_indices=(i, nj, k),
+                        oil_pressure_grid=current_oil_pressure_grid,
+                        water_mobility_grid=water_mobility_grid_y,
+                        oil_mobility_grid=oil_mobility_grid_y,
+                        gas_mobility_grid=gas_mobility_grid_y,
+                        oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                        gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                        oil_density_grid=oil_density_grid,
+                        water_density_grid=water_density_grid,
+                        gas_density_grid=gas_density_grid,
+                        elevation_grid=elevation_grid,
+                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    )
+                    net_flux += flux * geometric_factor_y
 
-        # X-direction neighbors (i+1 and i-1)
-        geometric_factor_x = cell_size_y * cell_thickness / cell_size_x
-        for ni in (i + 1, i - 1):
-            flux = compute_pseudo_flux_from_neighbour(
-                cell_indices=(i, j, k),
-                neighbour_indices=(ni, j, k),
-                oil_pressure_grid=current_oil_pressure_grid,
-                water_mobility_grid=water_mobility_grid_x,
-                oil_mobility_grid=oil_mobility_grid_x,
-                gas_mobility_grid=gas_mobility_grid_x,
-                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                oil_density_grid=oil_density_grid,
-                water_density_grid=water_density_grid,
-                gas_density_grid=gas_density_grid,
-                elevation_grid=elevation_grid,
-                acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
-            )
-            net_flux += flux * geometric_factor_x
+                # Z-direction neighbors (k+1 and k-1)
+                geometric_factor_z = cell_size_x * cell_size_y / cell_thickness
+                for nk in (k + 1, k - 1):
+                    flux = compute_pseudo_flux_from_neighbour(
+                        cell_indices=(i, j, k),
+                        neighbour_indices=(i, j, nk),
+                        oil_pressure_grid=current_oil_pressure_grid,
+                        water_mobility_grid=water_mobility_grid_z,
+                        oil_mobility_grid=oil_mobility_grid_z,
+                        gas_mobility_grid=gas_mobility_grid_z,
+                        oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                        gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                        oil_density_grid=oil_density_grid,
+                        water_density_grid=water_density_grid,
+                        gas_density_grid=gas_density_grid,
+                        elevation_grid=elevation_grid,
+                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    )
+                    net_flux += flux * geometric_factor_z
 
-        # Y-direction neighbors (j+1 and j-1)
-        geometric_factor_y = cell_size_x * cell_thickness / cell_size_y
-        for nj in (j + 1, j - 1):
-            flux = compute_pseudo_flux_from_neighbour(
-                cell_indices=(i, j, k),
-                neighbour_indices=(i, nj, k),
-                oil_pressure_grid=current_oil_pressure_grid,
-                water_mobility_grid=water_mobility_grid_y,
-                oil_mobility_grid=oil_mobility_grid_y,
-                gas_mobility_grid=gas_mobility_grid_y,
-                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                oil_density_grid=oil_density_grid,
-                water_density_grid=water_density_grid,
-                gas_density_grid=gas_density_grid,
-                elevation_grid=elevation_grid,
-                acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
-            )
-            net_flux += flux * geometric_factor_y
-
-        # Z-direction neighbors (k+1 and k-1)
-        geometric_factor_z = cell_size_x * cell_size_y / cell_thickness
-        for nk in (k + 1, k - 1):
-            flux = compute_pseudo_flux_from_neighbour(
-                cell_indices=(i, j, k),
-                neighbour_indices=(i, j, nk),
-                oil_pressure_grid=current_oil_pressure_grid,
-                water_mobility_grid=water_mobility_grid_z,
-                oil_mobility_grid=oil_mobility_grid_z,
-                gas_mobility_grid=gas_mobility_grid_z,
-                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-                oil_density_grid=oil_density_grid,
-                water_density_grid=water_density_grid,
-                gas_density_grid=gas_density_grid,
-                elevation_grid=elevation_grid,
-                acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
-            )
-            net_flux += flux * geometric_factor_z
-
-        flux_grid[i, j, k] = net_flux
+                flux_grid[i, j, k] = net_flux
 
     return flux_grid
 
@@ -637,45 +618,31 @@ def apply_pressure_updates(
     :param time_step_size_in_days: Time step size (days)
     :return: Updated oil pressure grid (psi)
     """
-    interior_x = cell_count_x - 2
-    interior_y = cell_count_y - 2
-    interior_z = cell_count_z - 2
-    interior_cell_count = interior_x * interior_y * interior_z
-
     updated_grid = current_oil_pressure_grid.copy()
 
-    for cell_1D_index in numba.prange(interior_cell_count):  # type: ignore
-        # Convert 1D index to 3D coordinates (interior cells only)
-        k = cell_1D_index // (interior_x * interior_y)
-        remainder = cell_1D_index % (interior_x * interior_y)
-        j = remainder // interior_x
-        i = remainder % interior_x
+    for i in numba.prange(1, cell_count_x - 1):  # type: ignore
+        for j in range(1, cell_count_y - 1):
+            for k in range(1, cell_count_z - 1):
+                # Cell properties
+                cell_thickness = thickness_grid[i, j, k]
+                cell_volume = cell_size_x * cell_size_y * cell_thickness
+                cell_porosity = porosity_grid[i, j, k]
+                cell_total_compressibility = total_compressibility_grid[i, j, k]
 
-        # Adjust for boundary offset (interior cells start at index 1)
-        i += 1
-        j += 1
-        k += 1
+                # Total flow rate = flux from neighbors + well contribution
+                net_volumetric_flow = net_flux_grid[i, j, k]
+                net_well_flow = well_rate_grid[i, j, k]
+                total_flow_rate = net_volumetric_flow + net_well_flow
 
-        # Cell properties
-        cell_thickness = thickness_grid[i, j, k]
-        cell_volume = cell_size_x * cell_size_y * cell_thickness
-        cell_porosity = porosity_grid[i, j, k]
-        cell_total_compressibility = total_compressibility_grid[i, j, k]
+                # Calculate pressure change
+                # dP = (Δt / (φ * c_t * V)) * Q_total
+                change_in_pressure = (
+                    time_step_size_in_days
+                    / (cell_porosity * cell_total_compressibility * cell_volume)
+                ) * total_flow_rate
 
-        # Total flow rate = flux from neighbors + well contribution
-        net_volumetric_flow = net_flux_grid[i, j, k]
-        net_well_flow = well_rate_grid[i, j, k]
-        total_flow_rate = net_volumetric_flow + net_well_flow
-
-        # Calculate pressure change
-        # dP = (Δt / (φ * c_t * V)) * Q_total
-        change_in_pressure = (
-            time_step_size_in_days
-            / (cell_porosity * cell_total_compressibility * cell_volume)
-        ) * total_flow_rate
-
-        # Apply the update
-        updated_grid[i, j, k] += change_in_pressure
+                # Apply the update
+                updated_grid[i, j, k] += change_in_pressure
 
     return updated_grid
 

@@ -13,21 +13,15 @@ from sim3D.diffusivity.base import (
     EvolutionResult,
     _warn_injector_is_producing,
     _warn_producer_is_injecting,
+    compute_mobility_grids,
     solve_linear_system,
     to_1D_index_interior_only,
-    compute_mobility_grids,
 )
+from sim3D.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from sim3D.grids.pvt import build_total_fluid_compressibility_grid
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
-from sim3D.pvt import compute_harmonic_mean, compute_harmonic_mobility
-from sim3D.types import (
-    CapillaryPressureGrids,
-    FluidPhase,
-    Options,
-    RelativeMobilityGrids,
-    ThreeDimensionalGrid,
-    ThreeDimensions,
-)
+from sim3D.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
+from sim3D.types import FluidPhase, Options, ThreeDimensionalGrid, ThreeDimensions
 from sim3D.wells import Wells
 
 logger = logging.getLogger(__name__)
@@ -143,6 +137,7 @@ def evolve_pressure_implicitly(
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
+        dtype=dtype,
     )
 
     # SECOND PASS: Add face transmissibilities and fluxes using njitted function
@@ -171,6 +166,7 @@ def evolve_pressure_implicitly(
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
         acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
+        dtype=dtype,
     )
 
     # THIRD PASS: Compute well flow rates and add to RHS using extracted function
@@ -245,22 +241,20 @@ def map_solution_to_grid(
     # Initialize with current grid (preserves boundary values)
     new_grid = current_grid.copy()
 
-    interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
-
     # Fill interior cells with solution using parallel processing
-    for idx in numba.prange(interior_cell_count):  # type: ignore
-        # Convert 1D index to 3D coordinates (interior cells only)
-        k = idx // ((cell_count_x - 2) * (cell_count_y - 2))
-        remainder = idx % ((cell_count_x - 2) * (cell_count_y - 2))
-        j = remainder // (cell_count_x - 2)
-        i = remainder % (cell_count_x - 2)
-
-        # Adjust for boundary offset (interior cells start at index 1)
-        i += 1
-        j += 1
-        k += 1
-
-        new_grid[i, j, k] = solution_1D[idx]
+    for i in numba.prange(1, cell_count_x - 1):  # type: ignore
+        for j in range(1, cell_count_y - 1):
+            for k in range(1, cell_count_z - 1):
+                # Convert 3D indices to 1D index for solution array
+                idx = to_1D_index_interior_only(
+                    i=i,
+                    j=j,
+                    k=k,
+                    cell_count_x=cell_count_x,
+                    cell_count_y=cell_count_y,
+                    cell_count_z=cell_count_z,
+                )
+                new_grid[i, j, k] = solution_1D[idx]
     return new_grid
 
 
@@ -276,6 +270,7 @@ def compute_accumulation_arrays(
     cell_size_x: float,
     cell_size_y: float,
     time_step_size_in_days: float,
+    dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[np.ndarray, np.ndarray]:
     """
     Compute accumulation terms for all interior cells and return as dense arrays.
@@ -294,37 +289,38 @@ def compute_accumulation_arrays(
     :param cell_size_x: Cell size in x-direction (ft)
     :param cell_size_y: Cell size in y-direction (ft)
     :param time_step_size_in_days: Time step size (days)
-    :return: Tuple of (diagonal_values, rhs_values) both 1D arrays of length interior_cell_count
+    :param dtype: Data type for arrays (np.float32 or np.float64)
+    :return: Tuple of (diagonal_values, rhs_values) both 1D arrays of length `interior_cell_count`
     """
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
-    diagonal_values = np.zeros(interior_cell_count, dtype=np.float64)
-    rhs_values = np.zeros(interior_cell_count, dtype=np.float64)
+    diagonal_values = np.zeros(interior_cell_count, dtype=dtype)
+    rhs_values = np.zeros(interior_cell_count, dtype=dtype)
 
-    for cell_1D_index in numba.prange(interior_cell_count):  # type: ignore
-        # Convert 1D index to 3D coordinates (interior cells only)
-        k = cell_1D_index // ((cell_count_x - 2) * (cell_count_y - 2))
-        remainder = cell_1D_index % ((cell_count_x - 2) * (cell_count_y - 2))
-        j = remainder // (cell_count_x - 2)
-        i = remainder % (cell_count_x - 2)
+    for i in numba.prange(1, cell_count_x - 1):  # type: ignore
+        for j in range(1, cell_count_y - 1):
+            for k in range(1, cell_count_z - 1):
+                cell_1D_index = to_1D_index_interior_only(
+                    i=i,
+                    j=j,
+                    k=k,
+                    cell_count_x=cell_count_x,
+                    cell_count_y=cell_count_y,
+                    cell_count_z=cell_count_z,
+                )
 
-        # Adjust for boundary offset (interior cells start at index 1)
-        i += 1
-        j += 1
-        k += 1
+                cell_thickness = thickness_grid[i, j, k]
+                cell_volume = cell_size_x * cell_size_y * cell_thickness
+                cell_porosity = porosity_grid[i, j, k]
+                cell_total_compressibility = total_compressibility_grid[i, j, k]
+                cell_oil_pressure = current_oil_pressure_grid[i, j, k]
 
-        cell_thickness = thickness_grid[i, j, k]
-        cell_volume = cell_size_x * cell_size_y * cell_thickness
-        cell_porosity = porosity_grid[i, j, k]
-        cell_total_compressibility = total_compressibility_grid[i, j, k]
-        cell_oil_pressure = current_oil_pressure_grid[i, j, k]
+                # Accumulation term coefficient
+                accumulation_coefficient = (
+                    cell_porosity * cell_total_compressibility * cell_volume
+                ) / time_step_size_in_days
 
-        # Accumulation term coefficient
-        accumulation_coefficient = (
-            cell_porosity * cell_total_compressibility * cell_volume
-        ) / time_step_size_in_days
-
-        diagonal_values[cell_1D_index] = accumulation_coefficient
-        rhs_values[cell_1D_index] = accumulation_coefficient * cell_oil_pressure
+                diagonal_values[cell_1D_index] = accumulation_coefficient
+                rhs_values[cell_1D_index] = accumulation_coefficient * cell_oil_pressure
 
     return diagonal_values, rhs_values
 
@@ -342,6 +338,7 @@ def add_accumulation_terms(
     cell_size_x: float,
     cell_size_y: float,
     time_step_size_in_days: float,
+    dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[lil_matrix, np.ndarray]:
     """
     Initialize accumulation terms using njitted computation then populate sparse matrix.
@@ -362,9 +359,9 @@ def add_accumulation_terms(
     :param cell_size_x: Cell size in x-direction (ft)
     :param cell_size_y: Cell size in y-direction (ft)
     :param time_step_size_in_days: Time step size (days)
+    :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (A, b) with accumulation terms initialized (same objects passed in, modified in place)
     """
-    # Compute using njitted function
     diagonal_values, rhs_values = compute_accumulation_arrays(
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
@@ -376,15 +373,16 @@ def add_accumulation_terms(
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
+        dtype=dtype,
     )
 
-    # Populate sparse matrix (fast operation)
+    # Populate sparse matrix
     A.setdiag(diagonal_values)
     b[:] = rhs_values
     return A, b
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True) # NOTE: Do not usage parallel=True here. Prone to race conditions.
 def compute_face_transmissibility_arrays(
     cell_count_x: int,
     cell_count_y: int,
@@ -408,15 +406,17 @@ def compute_face_transmissibility_arrays(
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
     acceleration_due_to_gravity_ft_per_s2: float,
+    dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute face transmissibilities and flux contributions as arrays for sparse matrix assembly.
+    Compute face transmissibility arrays for all interior cell faces.
 
-    This function processes all interior cell faces and returns arrays suitable for
-    constructing a sparse matrix. Each face contributes to:
-    - Diagonal entries for both cells sharing the face
-    - Off-diagonal entries connecting the two cells
-    - RHS entries for capillary and gravity effects
+    This function processes each interior cell and computes transmissibilities
+    for faces in the positive x, y, and z directions only (to avoid double-counting).
+    Each face connects two cells, so we add symmetric entries to the sparse matrix.
+
+    The resulting arrays can be used to construct the sparse matrix A and update
+    the diagonal and RHS vectors.
 
     :param cell_count_x: Number of cells in x-direction (including boundaries)
     :param cell_count_y: Number of cells in y-direction (including boundaries)
@@ -424,22 +424,23 @@ def compute_face_transmissibility_arrays(
     :param thickness_grid: Cell thickness grid (ft)
     :param cell_size_x: Cell size in x-direction (ft)
     :param cell_size_y: Cell size in y-direction (ft)
-    :param water_mobility_grid_x: Water mobility grid in x-direction (ft²/psi·day)
-    :param oil_mobility_grid_x: Oil mobility grid in x-direction (ft²/psi·day)
-    :param gas_mobility_grid_x: Gas mobility grid in x-direction (ft²/psi·day)
-    :param water_mobility_grid_y: Water mobility grid in y-direction (ft²/psi·day)
-    :param oil_mobility_grid_y: Oil mobility grid in y-direction (ft²/psi·day)
-    :param gas_mobility_grid_y: Gas mobility grid in y-direction (ft²/psi·day)
-    :param water_mobility_grid_z: Water mobility grid in z-direction (ft²/psi·day)
-    :param oil_mobility_grid_z: Oil mobility grid in z-direction (ft²/psi·day)
-    :param gas_mobility_grid_z: Gas mobility grid in z-direction (ft²/psi·day)
-    :param oil_water_capillary_pressure_grid: Oil-water capillary pressure (psi)
-    :param gas_oil_capillary_pressure_grid: Gas-oil capillary pressure (psi)
-    :param oil_density_grid: Oil density grid (lb/ft³)
-    :param water_density_grid: Water density grid (lb/ft³)
-    :param gas_density_grid: Gas density grid (lb/ft³)
-    :param elevation_grid: Elevation grid (ft)
-    :param acceleration_due_to_gravity_ft_per_s2: Gravitational acceleration (ft/s²)
+    :param water_mobility_grid_x: Water mobility grid for x-direction faces (1/(cp*ft))
+    :param oil_mobility_grid_x: Oil mobility grid for x-direction faces (1/(cp*ft))
+    :param gas_mobility_grid_x: Gas mobility grid for x-direction faces (1/(cp*ft))
+    :param water_mobility_grid_y: Water mobility grid for y-direction faces (1/(cp*ft))
+    :param oil_mobility_grid_y: Oil mobility grid for y-direction faces (1/(cp*ft))
+    :param gas_mobility_grid_y: Gas mobility grid for y-direction faces (1/(cp*ft))
+    :param water_mobility_grid_z: Water mobility grid for z-direction faces (1/(cp*ft))
+    :param oil_mobility_grid_z: Oil mobility grid for z-direction faces (1/(cp*ft))
+    :param gas_mobility_grid_z: Gas mobility grid for z-direction faces (1/(cp*ft))
+    :param oil_water_capillary_pressure_grid: Oil-water capillary pressure grid (psi)
+    :param gas_oil_capillary_pressure_grid: Gas-oil capillary pressure grid (psi)
+    :param oil_density_grid: Oil density grid (lb/ft^3)
+    :param water_density_grid: Water density grid (lb/ft^3)
+    :param gas_density_grid: Gas density grid (lb/ft^3)
+    :param elevation_grid: Cell elevation grid (ft)
+    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s^2)
+    :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (rows, cols, off_diag_values, diagonal_additions, rhs_additions)
         - rows: Row indices for off-diagonal entries
         - cols: Column indices for off-diagonal entries
@@ -455,72 +456,48 @@ def compute_face_transmissibility_arrays(
     # Arrays for off-diagonal entries (each face creates 2 entries: A[i,j] and A[j,i])
     rows = np.zeros(max_faces * 2, dtype=np.int32)
     cols = np.zeros(max_faces * 2, dtype=np.int32)
-    off_diag_values = np.zeros(max_faces * 2, dtype=np.float64)
+    off_diag_values = np.zeros(max_faces * 2, dtype=dtype)
 
     # Diagonal and RHS additions (indexed by cell_1D_index)
-    diagonal_additions = np.zeros(interior_cell_count, dtype=np.float64)
-    rhs_additions = np.zeros(interior_cell_count, dtype=np.float64)
+    diagonal_additions = np.zeros(interior_cell_count, dtype=dtype)
+    rhs_additions = np.zeros(interior_cell_count, dtype=dtype)
 
     # Counter for entries
     entry_idx = 0
 
-    # Process inter-cell fluxes - iterate only positive offsets
-    neighbor_offsets = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
-
-    for i in range(1, cell_count_x - 1):
+    for i in range(1, cell_count_x - 1):  # Regular loop, not prange
         for j in range(1, cell_count_y - 1):
             for k in range(1, cell_count_z - 1):
-                # Compute cell 1D index
-                cell_1D_index = (
-                    (k - 1) * (cell_count_x - 2) * (cell_count_y - 2)
-                    + (j - 1) * (cell_count_x - 2)
-                    + (i - 1)
+                cell_1D_index = to_1D_index_interior_only(
+                    i=i,
+                    j=j,
+                    k=k,
+                    cell_count_x=cell_count_x,
+                    cell_count_y=cell_count_y,
+                    cell_count_z=cell_count_z,
                 )
                 cell_thickness = thickness_grid[i, j, k]
 
-                for di, dj, dk in neighbor_offsets:
-                    ni, nj, nk = i + di, j + dj, k + dk
-
-                    # Check bounds (is neighbor interior?)
-                    if (
-                        ni >= cell_count_x - 1
-                        or nj >= cell_count_y - 1
-                        or nk >= cell_count_z - 1
-                    ):
-                        continue
-
-                    # Compute neighbor 1D index
-                    neighbour_1D_index = (
-                        (nk - 1) * (cell_count_x - 2) * (cell_count_y - 2)
-                        + (nj - 1) * (cell_count_x - 2)
-                        + (ni - 1)
+                # X-DIRECTION: Process East face (i+1, j, k) only to avoid double-counting
+                ni, nj, nk = i + 1, j, k
+                if ni < cell_count_x - 1:  # Check neighbor is interior
+                    neighbour_1D_index = to_1D_index_interior_only(
+                        i=ni,
+                        j=nj,
+                        k=nk,
+                        cell_count_x=cell_count_x,
+                        cell_count_y=cell_count_y,
+                        cell_count_z=cell_count_z,
                     )
+                    geometric_factor = cell_size_y * cell_thickness / cell_size_x
 
-                    # Choose geometric factor and mobility grids for this offset
-                    if (di, dj, dk) == (1, 0, 0):
-                        geometric_factor = cell_size_y * cell_thickness / cell_size_x
-                        water_mobility_grid = water_mobility_grid_x
-                        oil_mobility_grid = oil_mobility_grid_x
-                        gas_mobility_grid = gas_mobility_grid_x
-                    elif (di, dj, dk) == (0, 1, 0):
-                        geometric_factor = cell_size_x * cell_thickness / cell_size_y
-                        water_mobility_grid = water_mobility_grid_y
-                        oil_mobility_grid = oil_mobility_grid_y
-                        gas_mobility_grid = gas_mobility_grid_y
-                    else:  # (0, 0, 1)
-                        geometric_factor = cell_size_x * cell_size_y / cell_thickness
-                        water_mobility_grid = water_mobility_grid_z
-                        oil_mobility_grid = oil_mobility_grid_z
-                        gas_mobility_grid = gas_mobility_grid_z
-
-                    # Compute pseudo flux from neighbour to cell
                     harmonic_mobility, cap_flux, grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
                             cell_indices=(i, j, k),
                             neighbour_indices=(ni, nj, nk),
-                            water_mobility_grid=water_mobility_grid,
-                            oil_mobility_grid=oil_mobility_grid,
-                            gas_mobility_grid=gas_mobility_grid,
+                            water_mobility_grid=water_mobility_grid_x,
+                            oil_mobility_grid=oil_mobility_grid_x,
+                            gas_mobility_grid=gas_mobility_grid_x,
                             oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
                             gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
                             oil_density_grid=oil_density_grid,
@@ -531,28 +508,121 @@ def compute_face_transmissibility_arrays(
                         )
                     )
 
-                    # Face transmissibility
                     T_face = harmonic_mobility * geometric_factor
                     rhs_face_term = (cap_flux + grav_flux) * geometric_factor
 
-                    # Store off-diagonal entries
-                    # Entry for A[cell, neighbor]
+                    # Store off-diagonal entries (symmetric)
                     rows[entry_idx] = cell_1D_index
                     cols[entry_idx] = neighbour_1D_index
                     off_diag_values[entry_idx] = -T_face
 
-                    # Entry for A[neighbor, cell] (symmetric)
                     rows[entry_idx + 1] = neighbour_1D_index
                     cols[entry_idx + 1] = cell_1D_index
                     off_diag_values[entry_idx + 1] = -T_face
 
                     entry_idx += 2
 
-                    # Add to diagonals (both cells get +T_face)
+                    # Update diagonals (both cells)
                     diagonal_additions[cell_1D_index] += T_face
                     diagonal_additions[neighbour_1D_index] += T_face
 
-                    # Add to RHS (opposite signs)
+                    # Update RHS (opposite signs)
+                    rhs_additions[cell_1D_index] += rhs_face_term
+                    rhs_additions[neighbour_1D_index] -= rhs_face_term
+
+                # Y-DIRECTION: Process South face (i, j+1, k) only
+                ni, nj, nk = i, j + 1, k
+                if nj < cell_count_y - 1:
+                    neighbour_1D_index = to_1D_index_interior_only(
+                        i=ni,
+                        j=nj,
+                        k=nk,
+                        cell_count_x=cell_count_x,
+                        cell_count_y=cell_count_y,
+                        cell_count_z=cell_count_z,
+                    )
+                    geometric_factor = cell_size_x * cell_thickness / cell_size_y
+
+                    harmonic_mobility, cap_flux, grav_flux = (
+                        compute_pseudo_fluxes_from_neighbour(
+                            cell_indices=(i, j, k),
+                            neighbour_indices=(ni, nj, nk),
+                            water_mobility_grid=water_mobility_grid_y,
+                            oil_mobility_grid=oil_mobility_grid_y,
+                            gas_mobility_grid=gas_mobility_grid_y,
+                            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                            oil_density_grid=oil_density_grid,
+                            water_density_grid=water_density_grid,
+                            gas_density_grid=gas_density_grid,
+                            elevation_grid=elevation_grid,
+                            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        )
+                    )
+
+                    T_face = harmonic_mobility * geometric_factor
+                    rhs_face_term = (cap_flux + grav_flux) * geometric_factor
+
+                    rows[entry_idx] = cell_1D_index
+                    cols[entry_idx] = neighbour_1D_index
+                    off_diag_values[entry_idx] = -T_face
+
+                    rows[entry_idx + 1] = neighbour_1D_index
+                    cols[entry_idx + 1] = cell_1D_index
+                    off_diag_values[entry_idx + 1] = -T_face
+
+                    entry_idx += 2
+
+                    diagonal_additions[cell_1D_index] += T_face
+                    diagonal_additions[neighbour_1D_index] += T_face
+                    rhs_additions[cell_1D_index] += rhs_face_term
+                    rhs_additions[neighbour_1D_index] -= rhs_face_term
+
+                # Z-DIRECTION: Process Bottom face (i, j, k+1) only
+                ni, nj, nk = i, j, k + 1
+                if nk < cell_count_z - 1:
+                    neighbour_1D_index = to_1D_index_interior_only(
+                        i=ni,
+                        j=nj,
+                        k=nk,
+                        cell_count_x=cell_count_x,
+                        cell_count_y=cell_count_y,
+                        cell_count_z=cell_count_z,
+                    )
+                    geometric_factor = cell_size_x * cell_size_y / cell_thickness
+
+                    harmonic_mobility, cap_flux, grav_flux = (
+                        compute_pseudo_fluxes_from_neighbour(
+                            cell_indices=(i, j, k),
+                            neighbour_indices=(ni, nj, nk),
+                            water_mobility_grid=water_mobility_grid_z,
+                            oil_mobility_grid=oil_mobility_grid_z,
+                            gas_mobility_grid=gas_mobility_grid_z,
+                            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                            oil_density_grid=oil_density_grid,
+                            water_density_grid=water_density_grid,
+                            gas_density_grid=gas_density_grid,
+                            elevation_grid=elevation_grid,
+                            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        )
+                    )
+
+                    T_face = harmonic_mobility * geometric_factor
+                    rhs_face_term = (cap_flux + grav_flux) * geometric_factor
+
+                    rows[entry_idx] = cell_1D_index
+                    cols[entry_idx] = neighbour_1D_index
+                    off_diag_values[entry_idx] = -T_face
+
+                    rows[entry_idx + 1] = neighbour_1D_index
+                    cols[entry_idx + 1] = cell_1D_index
+                    off_diag_values[entry_idx + 1] = -T_face
+
+                    entry_idx += 2
+
+                    diagonal_additions[cell_1D_index] += T_face
+                    diagonal_additions[neighbour_1D_index] += T_face
                     rhs_additions[cell_1D_index] += rhs_face_term
                     rhs_additions[neighbour_1D_index] -= rhs_face_term
 
@@ -589,6 +659,7 @@ def add_face_transmissibilities_and_fluxes(
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
     acceleration_due_to_gravity_ft_per_s2: float,
+    dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[lil_matrix, np.ndarray]:
     """
     Add face transmissibilities using njitted computation then populate sparse matrix.
@@ -621,6 +692,7 @@ def add_face_transmissibilities_and_fluxes(
     :param gas_density_grid: Gas density grid (lb/ft³)
     :param elevation_grid: Elevation grid (ft)
     :param acceleration_due_to_gravity_ft_per_s2: Gravitational acceleration (ft/s²)
+    :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (A, b) with face contributions added (same objects passed in, modified in place)
     """
     # Compute using njitted function
@@ -648,6 +720,7 @@ def add_face_transmissibilities_and_fluxes(
             gas_density_grid=gas_density_grid,
             elevation_grid=elevation_grid,
             acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+            dtype=dtype,
         )
     )
 

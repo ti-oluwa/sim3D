@@ -2,9 +2,10 @@ import itertools
 import logging
 import typing
 
-import numpy as np
 import numba
+import numpy as np
 
+from sim3D._precision import get_dtype
 from sim3D.constants import c
 from sim3D.diffusivity.base import (
     EvolutionResult,
@@ -12,18 +13,16 @@ from sim3D.diffusivity.base import (
     _warn_producer_is_injecting,
     compute_mobility_grids,
 )
+from sim3D.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from sim3D.models import FluidProperties, RockFluidProperties, RockProperties
 from sim3D.types import (
-    CapillaryPressureGrids,
     FluidPhase,
     Options,
-    RelativeMobilityGrids,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
 )
 from sim3D.wells import Wells
-from sim3D._precision import get_dtype
 
 __all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation_explicitly"]
 
@@ -110,7 +109,7 @@ def evolve_saturation_explicitly(
         capillary_pressure_grids
     )
 
-    # Compute mobility grids for x, y, z directions using the optimized function
+    # Compute mobility grids for x, y, z directions
     (
         (water_mobility_grid_x, oil_mobility_grid_x, gas_mobility_grid_x),
         (water_mobility_grid_y, oil_mobility_grid_y, gas_mobility_grid_y),
@@ -127,7 +126,7 @@ def evolve_saturation_explicitly(
 
     dtype = get_dtype()
 
-    # Step 1: Compute net flux contributions
+    # Compute net flux contributions
     net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
         compute_net_phase_flux_contributions(
             current_oil_pressure_grid=current_oil_pressure_grid,
@@ -157,10 +156,10 @@ def evolve_saturation_explicitly(
         )
     )
 
-    # Step 2: Compute well rate contributions
+    # Compute well rate contributions
     temperature_grid = fluid_properties.temperature_grid
     net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid = (
-        compute_phase_well_rate_grids(
+        compute_well_rate_grids(
             cell_count_x=cell_count_x,
             cell_count_y=cell_count_y,
             cell_count_z=cell_count_z,
@@ -187,7 +186,7 @@ def evolve_saturation_explicitly(
         )
     )
 
-    # Step 3: Apply saturation updates
+    # Apply saturation updates
     (
         updated_water_saturation_grid,
         updated_oil_saturation_grid,
@@ -262,7 +261,7 @@ def evolve_saturation_explicitly(
             f"Consider reducing time step size from {time_step_size} seconds."
         )
 
-    # Step 4: Normalize saturations (njitted)
+    # Normalize saturations
     (
         updated_water_saturation_grid,
         updated_oil_saturation_grid,
@@ -615,7 +614,7 @@ def compute_net_phase_flux_contributions(
     return net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid
 
 
-def compute_phase_well_rate_grids(
+def compute_well_rate_grids(
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -645,7 +644,7 @@ def compute_phase_well_rate_grids(
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
-    Pre-compute well rates for all cells (injection + production).
+    Compute well rates for all cells (injection + production).
 
     Returns: (net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid)
     """
@@ -1151,7 +1150,7 @@ def evolve_miscible_saturation_explicitly(
         net_gas_well_rate_grid,
         solvent_injection_concentration_grid,
         gas_injection_rate_grid,
-    ) = compute_miscible_phase_well_rate_grids(
+    ) = compute_miscible_well_rate_grids(
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
@@ -1655,7 +1654,7 @@ def compute_net_miscible_phase_flux_contributions(
     )
 
 
-def compute_miscible_phase_well_rate_grids(
+def compute_miscible_well_rate_grids(
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -2131,10 +2130,8 @@ def apply_miscible_saturation_updates(
                     new_solvent_mass = (
                         old_solvent_mass + advected_solvent_mass + injected_solvent_mass
                     )
-
                     # New oil volume
                     new_oil_volume = new_oil_saturation * cell_pore_volume
-
                     # New concentration
                     new_concentration = new_solvent_mass / new_oil_volume
 

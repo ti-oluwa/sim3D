@@ -5,12 +5,13 @@ import logging
 import typing
 
 import attrs
+import numba
 import numpy as np
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
 
 from sim3D.constants import c
-from sim3D.pvt import (
+from sim3D.pvt.core import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
     compute_gas_density,
@@ -43,6 +44,7 @@ __all__ = [
 ]
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_well_index(
     permeability: float,
     interval_thickness: float,
@@ -80,6 +82,7 @@ def compute_well_index(
     return well_index
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_3D_effective_drainage_radius(
     interval_thickness: ThreeDimensions,
     permeability: ThreeDimensions,
@@ -136,6 +139,7 @@ def compute_3D_effective_drainage_radius(
     return effective_drainage_radius
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_2D_effective_drainage_radius(
     interval_thickness: TwoDimensions,
     permeability: TwoDimensions,
@@ -355,6 +359,7 @@ class GasPseudoPressureTable:
         return 2.0 * pressure / (mu * Z)
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_well_rate(
     well_index: float,
     pressure: float,
@@ -510,6 +515,7 @@ def compute_gas_well_rate(
     return well_rate * gas_fvf  # ft³/day
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_required_bhp_for_oil_rate(
     target_rate: float,
     well_index: float,
@@ -899,6 +905,7 @@ class ProducedFluid(WellFluid):
 WellFluidT = typing.TypeVar("WellFluidT", bound=WellFluid)
 
 
+@numba.njit(cache=True, fastmath=True)
 def _geometric_mean(values: typing.Sequence[float]) -> float:
     prod = 1.0
     n = 0
@@ -910,6 +917,7 @@ def _geometric_mean(values: typing.Sequence[float]) -> float:
     return prod ** (1.0 / n)
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_effective_permeability_for_well(
     permeability: typing.Sequence[float], orientation: Orientation
 ) -> float:

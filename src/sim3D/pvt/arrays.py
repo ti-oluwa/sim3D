@@ -1,108 +1,25 @@
-"""Utilities for computing reservoir PVT properties."""
-
-import functools
 import logging
 import typing
 import warnings
 
-from CoolProp.CoolProp import PropsSI  # type: ignore [import]
+from CoolProp.CoolProp import PropsSI  # type: ignore[import]
 import numba
 import numpy as np
-from scipy.optimize import brentq, root_scalar
+from scipy.optimize import brentq
 
 from sim3D.constants import c
-from sim3D.types import NDimension, NDimensionalGrid
+from sim3D.pvt.core import (
+    clip_pressure,
+    clip_temperature,
+    fahrenheit_to_celsius,
+    fahrenheit_to_kelvin,
+    compute_gas_solubility_in_water as compute_gas_solubility_in_water_scalar,
+    compute_gas_to_oil_ratio_standing as compute_gas_to_oil_ratio_standing_scalar,
+)
+from sim3D.types import FloatOrArray, NDimension, NDimensionalGrid
+from sim3D.utils import apply_mask, clip, get_mask, min_, max_
 
 logger = logging.getLogger(__name__)
-
-
-def validate_input_temperature(temperature: typing.Union[float, np.ndarray]) -> None:
-    """
-    Validates that the input temperature(s) are within valid/reservoir-like range.
-
-    Accepts scalar or ndarray input.
-
-    :param temperature: Temperature(s) in Kelvin (°F)
-    :raises ValueError: If any temperature is outside the valid range.
-    """
-    temp_array = np.asarray(temperature)
-    invalid_mask = (temp_array < c.MIN_VALID_TEMPERATURE) | (
-        temp_array > c.MAX_VALID_TEMPERATURE
-    )
-
-    if np.any(invalid_mask):
-        invalid: np.ndarray = temp_array[invalid_mask]
-        raise ValueError(
-            f"Temperature(s) out of valid range [{c.MIN_VALID_TEMPERATURE}, {c.MAX_VALID_TEMPERATURE}] K: "
-            f"{invalid}"
-        )
-
-
-def validate_input_pressure(pressure: typing.Union[float, np.ndarray]) -> None:
-    """
-    Validates that the input pressure(s) are within valid/reservoir-like range.
-
-    Accepts scalar or ndarray input.
-
-    :param pressure: Pressure(s) in Pascals (psi)
-    :raises ValueError: If any pressure is outside the valid range.
-    """
-    pressure_array = np.asarray(pressure)
-    invalid = (pressure_array < c.MIN_VALID_PRESSURE) | (
-        pressure_array > c.MAX_VALID_PRESSURE
-    )
-
-    if np.any(invalid):
-        raise ValueError(
-            f"Pressure(s) out of valid range [{c.MIN_VALID_PRESSURE}, {c.MAX_VALID_PRESSURE}] Pa: "
-            f"{pressure_array[invalid]}"
-        )
-
-
-@functools.lru_cache(maxsize=64)
-def is_CoolProp_supported_fluid(fluid: str) -> bool:
-    """
-    Check if the fluid is supported by CoolProp.
-
-    :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Water")
-    :return: True if the fluid is supported, False otherwise.
-    """
-    return PropsSI("D", "T", 300, "P", 101325, fluid) is not None
-
-
-def clip_pressure(pressure: float, fluid: str) -> float:
-    """
-    Clips pressure to be within CoolProp's valid pressure range for the given fluid.
-
-    :param pressure: Pressure in Pascals (psi)
-    :param fluid: CoolProp fluid name
-    :return: Clipped pressure in Pascals
-    """
-    p_min = PropsSI("P_MIN", fluid)  # Minimum pressure allowed
-    p_max = PropsSI("P_MAX", fluid)  # Maximum pressure allowed
-    return min(max(pressure, p_min + 1.0), p_max - 1.0)  # Add small buffer
-
-
-def clip_temperature(temperature: float, fluid: str) -> float:
-    """
-    Clips temperature to be within CoolProp's valid temperature range for the given fluid.
-
-    :param temperature: Temperature in Kelvin (°F)
-    :param fluid: CoolProp fluid name
-    :return: Clipped temperature in Kelvin
-    """
-    t_min = PropsSI("T_MIN", fluid)
-    t_max = PropsSI("T_MAX", fluid)
-    return min(max(temperature, t_min + 0.1), t_max - 0.1)  # Add small buffer
-
-
-@numba.njit(cache=True)
-def clip_scalar(value: float, min_val: float, max_val: float) -> float:
-    if value < min_val:
-        return min_val
-    elif value > max_val:
-        return max_val
-    return value
 
 
 ##################################################
@@ -110,7 +27,11 @@ def clip_scalar(value: float, min_val: float, max_val: float) -> float:
 ##################################################
 
 
-def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> float:
+def compute_fluid_density(
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    fluid: str,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute fluid density from EOS using CoolProp.
 
@@ -119,20 +40,39 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Water")
     :return: Density in lbm/ft³
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
+    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
     pressure_in_pascals = pressure * c.PSI_TO_PA
-    density: float = PropsSI(
-        "D",
-        "P",
-        clip_pressure(pressure_in_pascals, fluid),
-        "T",
-        clip_temperature(temperature_in_kelvin, fluid),
-        fluid,
-    )
-    return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
+
+    def _compute_density(
+        pressure_in_pascals,
+        temperature_in_kelvin,
+        fluid: str,
+    ):
+        density: float = PropsSI(
+            "D",
+            "P",
+            clip_pressure(pressure_in_pascals, fluid),
+            "T",
+            clip_temperature(temperature_in_kelvin, fluid),
+            fluid,
+        )
+        return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
+
+    pressure_array = np.asarray(pressure_in_pascals)
+    temperature_array = np.asarray(temperature_in_kelvin)
+    density_array = np.empty_like(pressure_array)
+    for idx in np.ndindex(pressure_array.shape):
+        density_array[idx] = _compute_density(
+            pressure_array[idx], temperature_array[idx], fluid
+        )
+    return density_array  # type: ignore[return-value]
 
 
-def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> float:
+def compute_fluid_viscosity(
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    fluid: str,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute fluid dynamic viscosity from EOS using CoolProp.
 
@@ -143,20 +83,33 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
     pressure_in_pascals = pressure * c.PSI_TO_PA
-    viscosity = PropsSI(
-        "V",
-        "P",
-        clip_pressure(pressure_in_pascals, fluid),
-        "T",
-        clip_temperature(temperature_in_kelvin, fluid),
-        fluid,
-    )
-    return viscosity * c.PASCAL_SECONDS_TO_CENTIPOISE
+
+    def _compute_viscosity(pressure_in_pascals, temperature_in_kelvin, fluid: str):
+        viscosity = PropsSI(
+            "V",
+            "P",
+            clip_pressure(pressure_in_pascals, fluid),
+            "T",
+            clip_temperature(temperature_in_kelvin, fluid),
+            fluid,
+        )
+        return viscosity * c.PASCAL_SECONDS_TO_CENTIPOISE
+
+    pressure_array = np.asarray(pressure_in_pascals)
+    temperature_array = np.asarray(temperature_in_kelvin)
+    viscosity_array = np.empty_like(pressure_array)
+    for idx in np.ndindex(pressure_array.shape):
+        viscosity_array[idx] = _compute_viscosity(
+            pressure_array[idx], temperature_array[idx], fluid
+        )
+    return viscosity_array  # type: ignore[return-value]
 
 
 def compute_fluid_compressibility_factor(
-    pressure: float, temperature: float, fluid: str
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    fluid: str,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute fluid compressibility factor Z from EOS using CoolProp.
 
@@ -165,23 +118,36 @@ def compute_fluid_compressibility_factor(
     :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Methane")
     :return: Compressibility factor Z (dimensionless)
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
+    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
     pressure_in_pascals = pressure * c.PSI_TO_PA
-    return PropsSI(
-        "Z",
-        "P",
-        clip_pressure(pressure_in_pascals, fluid),
-        "T",
-        clip_temperature(temperature_in_kelvin, fluid),
-        fluid,
-    )
+
+    def _compute_z(
+        pressure_in_pascals,
+        temperature_in_kelvin,
+        fluid: str,
+    ):
+        return PropsSI(
+            "Z",
+            "P",
+            clip_pressure(pressure_in_pascals, fluid),
+            "T",
+            clip_temperature(temperature_in_kelvin, fluid),
+            fluid,
+        )
+
+    pressure_array = np.asarray(pressure_in_pascals)
+    temperature_array = np.asarray(temperature_in_kelvin)
+    z_array = np.empty_like(pressure_array)
+    for idx in np.ndindex(pressure_array.shape):
+        z_array[idx] = _compute_z(pressure_array[idx], temperature_array[idx], fluid)
+    return z_array  # type: ignore[return-value]
 
 
 def compute_fluid_compressibility(
-    pressure: float,
-    temperature: float,
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
     fluid: str,
-) -> float:
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the isothermal compressibility of a fluid at a given pressure and temperature.
 
@@ -194,19 +160,32 @@ def compute_fluid_compressibility(
     :param fluid: str name supported by CoolProp (e.g., 'n-Octane')
     :return: Compressibility in psi⁻¹
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
+    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
     pressure_in_pascals = pressure * c.PSI_TO_PA
-    return (
-        PropsSI(
-            "ISOTHERMAL_COMPRESSIBILITY",
-            "P",
-            clip_pressure(pressure_in_pascals, fluid),
-            "T",
-            clip_temperature(temperature_in_kelvin, fluid),
-            fluid,
+
+    def _compute_compressibility(
+        pressure_in_pascals, temperature_in_kelvin, fluid: str
+    ):
+        return (
+            PropsSI(
+                "ISOTHERMAL_COMPRESSIBILITY",
+                "P",
+                clip_pressure(pressure_in_pascals, fluid),
+                "T",
+                clip_temperature(temperature_in_kelvin, fluid),
+                fluid,
+            )
+            / c.PA_TO_PSI
         )
-        / c.PA_TO_PSI
-    )
+
+    pressure_array = np.asarray(pressure_in_pascals)
+    temperature_array = np.asarray(temperature_in_kelvin)
+    compressibility_array = np.empty_like(pressure_array)
+    for idx in np.ndindex(pressure_array.shape):
+        compressibility_array[idx] = _compute_compressibility(
+            pressure_array[idx], temperature_array[idx], fluid
+        )
+    return compressibility_array  # type: ignore[return-value]
 
 
 def compute_gas_gravity(gas: str) -> float:
@@ -224,7 +203,7 @@ def compute_gas_gravity(gas: str) -> float:
     air_density_at_stp = compute_fluid_density(
         c.STANDARD_PRESSURE_IMPERIAL, c.STANDARD_TEMPERATURE_IMPERIAL, fluid="Air"
     )
-    return gas_density_at_stp / air_density_at_stp
+    return gas_density_at_stp / air_density_at_stp  # type: ignore[return-value]
 
 
 ####################################################
@@ -233,10 +212,10 @@ def compute_gas_gravity(gas: str) -> float:
 
 
 def compute_gas_gravity_from_density(
-    pressure: float,
-    temperature: float,
-    density: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    density: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the gas gravity from density.
 
@@ -248,7 +227,7 @@ def compute_gas_gravity_from_density(
     :param density: Density of the gas in lbm/ft³
     :return: Gas gravity (dimensionless)
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
+    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
     pressure_in_pascals = pressure * c.PSI_TO_PA
     air_density = compute_fluid_density(
         pressure_in_pascals, temperature_in_kelvin, fluid="Air"
@@ -256,15 +235,15 @@ def compute_gas_gravity_from_density(
     return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_total_fluid_compressibility(
-    water_saturation: float,
-    oil_saturation: float,
-    water_compressibility: float,
-    oil_compressibility: float,
-    gas_saturation: typing.Optional[float] = None,
-    gas_compressibility: typing.Optional[float] = None,
-) -> float:
+    water_saturation: NDimensionalGrid[NDimension],
+    oil_saturation: NDimensionalGrid[NDimension],
+    water_compressibility: NDimensionalGrid[NDimension],
+    oil_compressibility: NDimensionalGrid[NDimension],
+    gas_saturation: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    gas_compressibility: typing.Optional[NDimensionalGrid[NDimension]] = None,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the total fluid compressibility as a saturation-weighted average of
     individual phase compressibilities.
@@ -283,96 +262,15 @@ def compute_total_fluid_compressibility(
     if gas_saturation is not None and gas_compressibility is not None:
         total_fluid_compressibility += gas_saturation * gas_compressibility
 
-    return total_fluid_compressibility
-
-
-def compute_diffusion_number(
-    porosity: float,
-    total_mobility: float,
-    total_compressibility: float,
-    time_step_size: float,
-    cell_size: float,
-) -> float:
-    """
-    Computes the diffusion number (also known as the stability criterion or CFL number)
-    for a single reservoir grid block in a pressure diffusion simulation.
-
-    The diffusion number is a dimensionless quantity that determines whether an
-    explicit finite-difference method will be stable for the given set of physical
-    and numerical parameters. If the diffusion number is greater than or equal to 0.25,
-    an implicit method is typically recommended.
-
-    The formula used is:
-
-        D = [k * sum(k_r / μ)] / [(φ * C_t)) * (Δt / Δh²)]
-
-    where:
-        - k is the permeability in mD (millidarcies),
-        - φ is the porosity (fraction),
-        - k_r is the relative permeability (dimensionless),
-        - μ is the fluid viscosity (cP),
-        - C_t is the total compressibility (psi⁻¹),
-        - Δt is the time step size (s),
-        - Δh is the grid block size (ft) in a specific direction (∆x, ∆y, ∆z).
-
-    :param permeability: Rock permeability in millidarcies (mD)
-    :param porosity: Rock porosity as a fraction (e.g., 0.2)
-    :param total_mobility: Fluid total mobility (ft²/psi.day), which is typically calculated as [k * sum(k_r / μ)]
-    :param total_compressibility: Total compressibility of the system (psi⁻¹)
-    :param time_step_size: Time step size (seconds)
-    :param cell_size: Size of the grid block (ft)
-    :return: Diffusion number (dimensionless)
-    """
-    time_in_days = time_step_size * c.DAYS_PER_SECOND
-    diffusion_number = (total_mobility / (porosity * total_compressibility)) * (
-        time_in_days / cell_size**2
-    )
-    return diffusion_number
-
-
-@numba.njit(cache=True)
-def compute_harmonic_mean(value1: float, value2: float) -> float:
-    """
-    Computes the harmonic mean of two values.
-
-    :param value1: First value (e.g., transmissibility, permeability, viscosity)
-    :param value2: Second value (e.g., transmissibility, permeability, viscosity)
-    :return: Harmonic mean scaled by the square of the spacing
-    """
-    if value1 + value2 == 0:
-        return 0.0
-    return (2 * value1 * value2) / (value1 + value2)
-
-
-@numba.njit(cache=True)
-def compute_harmonic_mobility(
-    index1: NDimension,
-    index2: NDimension,
-    mobility_grid: NDimensionalGrid[NDimension],
-) -> float:
-    """
-    Computes harmonic average mobility between two cells.
-
-    If both mobilities are zero, returns zero to avoid division by zero.
-
-    :param index1: Index of the first cell in the mobility grid comprising
-        of N-dimensional indices (x, y, z, ...).
-    :param index2: Index of the second cell in the mobility grid comprising
-        of N-dimensional indices (x, y, z, ...).
-    :param mobility_grid: N-dimensional grid containing mobility values.
-    """
-    λ1: float = mobility_grid[index1]
-    λ2: float = mobility_grid[index2]
-    λ_harmonic = compute_harmonic_mean(λ1, λ2)
-    return λ_harmonic
+    return total_fluid_compressibility  # type: ignore[return-value]
 
 
 def compute_oil_specific_gravity_from_density(
-    oil_density: float,
-    pressure: float,
-    temperature: float,
-    oil_compressibility: float,
-) -> float:
+    oil_density: NDimensionalGrid[NDimension],
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    oil_compressibility: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Converts oil density (lbm/ft³) at given reservoir conditions to specific gravity (dimensionless)
     by adjusting for pressure and temperature effects using a linearized approximation.
@@ -409,17 +307,18 @@ def compute_oil_specific_gravity_from_density(
         (oil_compressibility * delta_p)
         + (c.OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL * delta_t)
     )
-    correction_factor = clip_scalar(
+    correction_factor = clip(
         correction_factor, 0.2, 2.0
-    )  # Avoid numerical issues with very small values
+    )  # Avoid numerical issues with small/large values
     oil_density_at_stp = oil_density * correction_factor
     return oil_density_at_stp / c.STANDARD_WATER_DENSITY_IMPERIAL
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def convert_surface_rate_to_reservoir(
-    surface_rate: float, formation_volume_factor: float
-) -> float:
+    surface_rate: NDimensionalGrid[NDimension],
+    formation_volume_factor: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Converts a surface rate (e.g., STB/day) to reservoir conditions.
 
@@ -427,19 +326,28 @@ def convert_surface_rate_to_reservoir(
     :param formation_volume_factor: Formation volume factor (FVF) for the fluid (bbl/STB)
     :return: Reservoir volumetric flow rate (e.g., bbl/day)
     """
-    if surface_rate > 0:  # Injection
-        return surface_rate * formation_volume_factor
+    result = np.empty_like(surface_rate)
+    injection_mask = surface_rate > 0
+    production_mask = np.invert(injection_mask)
 
-    # Production (rate is negative)
-    return (
-        surface_rate / formation_volume_factor
-    )  # Production reservoir volume is larger than surface
+    if np.any(injection_mask):
+        injection_surface_rate = get_mask(surface_rate, injection_mask)
+        injection_fvf = get_mask(formation_volume_factor, injection_mask)
+        apply_mask(result, injection_mask, injection_surface_rate * injection_fvf)
+
+    if np.any(production_mask):
+        production_surface_rate = get_mask(surface_rate, production_mask)
+        production_fvf = get_mask(formation_volume_factor, production_mask)
+        apply_mask(result, production_mask, production_surface_rate * production_fvf)
+
+    return result  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def convert_reservoir_rate_to_surface(
-    reservoir_rate: float, formation_volume_factor: float
-) -> float:
+    reservoir_rate: NDimensionalGrid[NDimension],
+    formation_volume_factor: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Converts a reservoir rate (e.g., bbl/day) to surface conditions.
 
@@ -447,22 +355,30 @@ def convert_reservoir_rate_to_surface(
     :param formation_volume_factor: Formation volume factor (FVF) for the fluid (bbl/STB)
     :return: Surface volumetric flow rate (e.g., STB/day)
     """
-    if reservoir_rate > 0:  # Injection
-        return reservoir_rate / formation_volume_factor
+    result = np.empty_like(reservoir_rate)
+    injection_mask = reservoir_rate > 0
+    production_mask = np.invert(injection_mask)
 
-    # Production (rate is negative)
-    return (
-        reservoir_rate * formation_volume_factor
-    )  # Production surface volume is larger than reservoir volume
+    if np.any(injection_mask):
+        injection_reservoir_rate = get_mask(reservoir_rate, injection_mask)
+        injection_fvf = get_mask(formation_volume_factor, injection_mask)
+        apply_mask(result, injection_mask, injection_reservoir_rate / injection_fvf)
+
+    if np.any(production_mask):
+        production_reservoir_rate = get_mask(reservoir_rate, production_mask)
+        production_fvf = get_mask(formation_volume_factor, production_mask)
+        apply_mask(result, production_mask, production_reservoir_rate / production_fvf)
+
+    return result  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_formation_volume_factor_standing(
-    temperature: float,
-    oil_specific_gravity: float,
-    gas_gravity: float,
-    gas_to_oil_ratio: float,
-) -> float:
+    temperature: NDimensionalGrid[NDimension],
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the oil formation volume factor (Bo) in m³ oil at reservoir conditions per m³ oil at standard conditions
     using the Standing correlation.
@@ -488,36 +404,45 @@ def compute_oil_formation_volume_factor_standing(
     :param gas_to_oil_ratio: Gas-to-oil ratio in SCF/STB
     :return: Formation volume factor (Bo) in bbl/STB
     """
-    if oil_specific_gravity <= 0 or gas_gravity <= 0:
+    if min_(oil_specific_gravity) <= 0 or min_(gas_gravity) <= 0:
         raise ValueError("Specific gravities must be positive.")
-    if gas_to_oil_ratio < 0:
+    if min_(gas_to_oil_ratio) < 0:
         raise ValueError("Gas-to-oil ratio must be non-negative.")
-    if temperature < 32:
+    if min_(temperature) < 32:
         raise ValueError("Temperature seems unphysical (<32 °F). Check units.")
 
     x = (gas_to_oil_ratio * (gas_gravity / oil_specific_gravity) ** 0.5) + (
         1.25 * temperature
     )
     oil_fvf = 0.972 + 0.000147 * (x**1.175)
-    return oil_fvf
+    return oil_fvf  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
 def _get_vazquez_beggs_oil_fvf_coefficients(
-    oil_api_gravity: float,
-) -> typing.Tuple[float, float, float]:
-    if oil_api_gravity <= 30:
-        return 4.677e-4, 1.751e-5, -1.811e-8
-    return 4.670e-4, 1.100e-5, 1.337e-9
+    oil_api_gravity: NDimensionalGrid[NDimension],
+) -> typing.Tuple[
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+]:
+    """
+    Returns the coefficients a1, a2, a3 for the Vazquez and Beggs oil FVF correlation based on oil API gravity.
+    """
+    less_equal_30 = oil_api_gravity <= 30
+    a1 = np.where(less_equal_30, 4.677e-4, 4.670e-4)
+    a2 = np.where(less_equal_30, 1.751e-5, 1.100e-5)
+    a3 = np.where(less_equal_30, -1.811e-8, 1.337e-9)
+    return a1, a2, a3  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_formation_volume_factor_vazquez_and_beggs(
-    temperature: float,
-    oil_specific_gravity: float,
-    gas_gravity: float,
-    gas_to_oil_ratio: float,
-) -> float:
+    temperature: NDimensionalGrid[NDimension],
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the oil formation volume factor (Bo) using the Vazquez and Beggs correlation.
 
@@ -553,16 +478,16 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
             * (oil_specific_gravity / gas_gravity)
         )
     )
-    return oil_fvf
+    return oil_fvf  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def correct_oil_fvf_for_pressure(
-    saturated_oil_fvf: float,
-    oil_compressibility: float,
-    bubble_point_pressure: float,
-    current_pressure: float,
-) -> float:
+    saturated_oil_fvf: NDimensionalGrid[NDimension],
+    oil_compressibility: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    current_pressure: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Applies exponential shrinkage correction to oil FVF for pressures above bubble point.
 
@@ -575,26 +500,35 @@ def correct_oil_fvf_for_pressure(
     :param current_pressure: Current reservoir pressure (psi)
     :return: Adjusted Bo at current pressure (bbl/STB)
     """
-    if current_pressure <= bubble_point_pressure:
-        return saturated_oil_fvf
+    result = np.empty_like(current_pressure)
+    saturated_mask = current_pressure <= bubble_point_pressure
+    undersaturated_mask = np.invert(saturated_mask)
 
-    delta_p = bubble_point_pressure - current_pressure
-    correction_factor = clip_scalar(
-        np.exp(oil_compressibility * delta_p), 1e-6, 5.0
-    )  # Avoid numerical issues with very small values
-    return saturated_oil_fvf * correction_factor
+    # Saturated: just use saturated_oil_fvf
+    saturated_fvf = get_mask(saturated_oil_fvf, saturated_mask)
+    apply_mask(result, saturated_mask, saturated_fvf)
+
+    # Undersaturated: compute correction only where needed
+    if np.any(undersaturated_mask):
+        undersaturated_pressure = get_mask(current_pressure, undersaturated_mask)
+        undersaturated_fvf = get_mask(saturated_oil_fvf, undersaturated_mask)
+        delta_p = bubble_point_pressure - undersaturated_pressure
+        correction_factor = clip(np.exp(oil_compressibility * delta_p), 1e-6, 5.0)
+        apply_mask(result, undersaturated_mask, undersaturated_fvf * correction_factor)
+
+    return result
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_formation_volume_factor(
-    pressure: float,
-    temperature: float,
-    bubble_point_pressure: float,
-    oil_specific_gravity: float,
-    gas_gravity: float,
-    gas_to_oil_ratio: float,
-    oil_compressibility: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+    oil_compressibility: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the oil formation volume factor (Bo) in bbl/STB of oil
     based on pressure and temperature deviations from reference conditions.
@@ -611,22 +545,29 @@ def compute_oil_formation_volume_factor(
     :param oil_compressibility: Oil isothermal compressibility (psi⁻¹)
     :return: Oil formation volume factor (Bo) in bbl/STB
     """
-    # Use standing correlation if temperature is above 100°F
-    if temperature <= 100:
-        oil_fvf = compute_oil_formation_volume_factor_standing(
-            temperature=temperature,
-            oil_specific_gravity=oil_specific_gravity,
-            gas_gravity=gas_gravity,
-            gas_to_oil_ratio=gas_to_oil_ratio,
-        )
+    oil_fvf = np.empty_like(temperature)
+    standing_mask = temperature <= 100
+    vazquez_mask = np.invert(standing_mask)
 
-    else:
-        oil_fvf = compute_oil_formation_volume_factor_vazquez_and_beggs(
-            temperature=temperature,
-            oil_specific_gravity=oil_specific_gravity,
-            gas_gravity=gas_gravity,
-            gas_to_oil_ratio=gas_to_oil_ratio,
+    # Compute Standing FVF only where T <= 100
+    if np.any(standing_mask):
+        standing_result = compute_oil_formation_volume_factor_standing(
+            temperature=get_mask(temperature, standing_mask),
+            oil_specific_gravity=get_mask(oil_specific_gravity, standing_mask),
+            gas_gravity=get_mask(gas_gravity, standing_mask),
+            gas_to_oil_ratio=get_mask(gas_to_oil_ratio, standing_mask),
         )
+        apply_mask(oil_fvf, standing_mask, standing_result)
+
+    # Compute Vazquez-Beggs FVF only where T > 100
+    if np.any(vazquez_mask):
+        vazquez_result = compute_oil_formation_volume_factor_vazquez_and_beggs(
+            temperature=get_mask(temperature, vazquez_mask),
+            oil_specific_gravity=get_mask(oil_specific_gravity, vazquez_mask),
+            gas_gravity=get_mask(gas_gravity, vazquez_mask),
+            gas_to_oil_ratio=get_mask(gas_to_oil_ratio, vazquez_mask),
+        )
+        apply_mask(oil_fvf, vazquez_mask, vazquez_result)
 
     return correct_oil_fvf_for_pressure(
         saturated_oil_fvf=oil_fvf,
@@ -637,8 +578,8 @@ def compute_oil_formation_volume_factor(
 
 
 def compute_water_formation_volume_factor(
-    water_density: float, salinity: float
-) -> float:
+    water_density: NDimensionalGrid[NDimension], salinity: FloatOrArray
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the water formation volume factor (B_w) in bbl/STB of water
     based on pressure and temperature deviations from reference conditions.
@@ -661,21 +602,22 @@ def compute_water_formation_volume_factor(
         temperature=c.STANDARD_TEMPERATURE_IMPERIAL,
         salinity=salinity,
     )
-    if water_density <= 0:
+    if min_(water_density) <= 0:
         raise ValueError("Water density must be positive.")
-    if standard_water_density <= 0:
+    if min_(standard_water_density) <= 0:
         raise ValueError("Standard water density must be positive.")
 
     water_fvf = standard_water_density / water_density
-    return water_fvf
+    return water_fvf  # type: ignore[return-value]
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_water_formation_volume_factor_mccain(
-    pressure: float,
-    temperature: float,
-    salinity: float = 0.0,
-    gas_solubility: float = 0.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
+    gas_solubility: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     McCain water FVF correlation (more commonly used in industry).
 
@@ -692,10 +634,10 @@ def compute_water_formation_volume_factor_mccain(
 
     # Volume correction for pressure (ΔV_wp)
     delta_V_wp = (
-        -1.95301e-9 * pressure * T_C
-        - 1.72834e-13 * pressure**2 * T_C
-        - 3.58922e-7 * pressure
-        - 2.25341e-10 * pressure**2
+        -(1.95301e-9 * pressure * T_C)
+        - (1.72834e-13 * pressure**2 * T_C)
+        - (3.58922e-7 * pressure)
+        - (2.25341e-10 * pressure**2)
     )
 
     # Volume correction for salinity and pressure (ΔV_wsp)
@@ -708,17 +650,17 @@ def compute_water_formation_volume_factor_mccain(
     B_w = (1 + delta_V_wT) * (1 + delta_V_wp) * (1 + delta_V_wsp)
 
     # Correction for dissolved gas (if present)
-    if gas_solubility > 0:
+    if np.sign(gas_solubility) == 1:
         # Rs_w in SCF/STB
         B_w = B_w - (gas_solubility * 1.0e-6)  # Approximate correction
-    return B_w
+    return B_w  # type: ignore[return-value]
 
 
 def compute_gas_formation_volume_factor(
-    pressure: float,
-    temperature: float,
-    gas_compressibility_factor: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_compressibility_factor: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the gas formation volume factor (B_g) in ft³/SCF, using the real gas law.
 
@@ -741,9 +683,9 @@ def compute_gas_formation_volume_factor(
     :param gas_compressibility_factor: Z-factor (dimensionless)
     :return: Gas formation volume factor (ft³/SCF)
     """
-    if pressure <= 0 or temperature <= 0:
+    if min_(pressure) <= 0 or min_(temperature) <= 0:
         raise ValueError("Pressure and temperature must be positive.")
-    if gas_compressibility_factor <= 0:
+    if min_(gas_compressibility_factor) <= 0:
         raise ValueError("Z-factor must be positive.")
 
     return (
@@ -754,14 +696,15 @@ def compute_gas_formation_volume_factor(
     )
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_gas_compressibility_factor(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float,
-    h2s_mole_fraction: float = 0.0,
-    co2_mole_fraction: float = 0.0,
-    n2_mole_fraction: float = 0.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    h2s_mole_fraction: FloatOrArray = 0.0,
+    co2_mole_fraction: FloatOrArray = 0.0,
+    n2_mole_fraction: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes gas compressibility factor using Papay's correlation for gas compressibility factor,
     with corrections for sour gases using the Wichert-Aziz method.
@@ -793,16 +736,13 @@ def compute_gas_compressibility_factor(
     :param n2_mole_fraction: Mole fraction of N2 in the gas (dimensionless, default is 0.0)
     :return: Compressibility factor Z (dimensionless)
     """
-    if pressure <= 0 or temperature <= 0 or gas_gravity <= 0:
+    if min_(pressure) <= 0 or min_(temperature) <= 0 or min_(gas_gravity) <= 0:
         raise ValueError(
             "Pressure, temperature, and gas specific gravity must be positive."
         )
-    if not 0 <= h2s_mole_fraction <= 1:
-        raise ValueError("H2S mole fraction must be between 0 and 1.")
-    if not 0 <= co2_mole_fraction <= 1:
-        raise ValueError("CO2 mole fraction must be between 0 and 1.")
-    if not 0 <= n2_mole_fraction <= 1:
-        raise ValueError("N2 mole fraction must be between 0 and 1.")
+    h2s_mole_fraction = clip(h2s_mole_fraction, 0.0, 1.0)
+    co2_mole_fraction = clip(co2_mole_fraction, 0.0, 1.0)
+    n2_mole_fraction = clip(n2_mole_fraction, 0.0, 1.0)
 
     pseudo_critical_pressure, pseudo_critical_temperature = (
         compute_gas_pseudocritical_properties(
@@ -817,8 +757,8 @@ def compute_gas_compressibility_factor(
     pseudo_reduced_temperature = temperature / pseudo_critical_temperature
 
     # Clamp pseudo-reduced values to avoid extreme/unphysical Z outputs
-    pseudo_reduced_pressure = clip_scalar(pseudo_reduced_pressure, 0.2, 30)
-    pseudo_reduced_temperature = clip_scalar(pseudo_reduced_temperature, 1.0, 3.0)
+    pseudo_reduced_pressure = clip(pseudo_reduced_pressure, 0.2, 30)
+    pseudo_reduced_temperature = clip(pseudo_reduced_temperature, 1.0, 3.0)
     # Papay's correlation for gas compressibility factor
     compressibility_factor = (
         1
@@ -832,13 +772,13 @@ def compute_gas_compressibility_factor(
         )
         + ((0.274 * pseudo_reduced_pressure**2) / pseudo_reduced_temperature**2)
     )
-    return max(
-        compressibility_factor, 0.1
-    )  # Ensure Z-factor is not less than 0.1 as Papay's correlation may under-predict at times
+    return np.maximum(compressibility_factor, 0.1)
 
 
-@numba.njit(cache=True)
-def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
+@numba.njit(cache=True, fastmath=True)
+def compute_oil_api_gravity(
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the API gravity (in degrees) from oil specific gravity.
 
@@ -853,16 +793,20 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     :param oil_specific_gravity: Oil specific gravity (dimensionless)
     :return: API gravity in degrees (°API)
     """
-    if oil_specific_gravity <= 0:
+    if np.any(oil_specific_gravity <= 0):
         raise ValueError("Oil specific gravity must be greater than zero.")
 
-    return (141.5 / oil_specific_gravity) - 131.5
+    return (141.5 / oil_specific_gravity) - 131.5  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
-    oil_api_gravity: float,
-) -> typing.Tuple[float, float, float]:
+    oil_api_gravity: NDimensionalGrid[NDimension],
+) -> typing.Tuple[
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+    NDimensionalGrid[NDimension],
+]:
     """
     Returns the empirical coefficients (C₁, C₂, C₃) used in the Vazquez-Beggs
     bubble point pressure correlation based on oil API gravity.
@@ -877,19 +821,20 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     :param oil_api_gravity: Oil API gravity (°API)
     :return: Tuple (C₁, C₂, C₃)
     """
-    if oil_api_gravity <= 30.0:
-        return 0.0362, 1.0937, 25.7240
-    else:
-        return 0.0178, 1.1870, 23.9310
+    less_equal_30 = oil_api_gravity <= 30
+    c1 = np.where(less_equal_30, 0.0362, 0.0178)
+    c2 = np.where(less_equal_30, 1.0937, 1.1870)
+    c3 = np.where(less_equal_30, 25.7240, 23.9310)
+    return c1, c2, c3  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_bubble_point_pressure(
-    gas_gravity: float,
-    oil_api_gravity: float,
-    temperature: float,
-    gas_to_oil_ratio: float,
-) -> float:
+    gas_gravity: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the bubble point pressure of oil using the Vazquez-Beggs correlation.
 
@@ -916,13 +861,13 @@ def compute_oil_bubble_point_pressure(
     :param gas_to_oil_ratio: Gas-to-oil ratio (GOR) in SCF/STB at reservoir conditions
     :return: Bubble point pressure (psi)
     """
-    if gas_gravity <= 0:
+    if min_(gas_gravity) <= 0:
         raise ValueError("Gas specific gravity must be greater than zero.")
-    if oil_api_gravity <= 0:
+    if min_(oil_api_gravity) <= 0:
         raise ValueError("Oil API gravity must be greater than zero.")
-    if temperature <= 32:
+    if min_(temperature) <= 32:
         raise ValueError("Temperature must be greater than absolute zero (32 °F).")
-    if gas_to_oil_ratio < 0:
+    if min_(gas_to_oil_ratio) < 0:
         raise ValueError("Gas-to-oil ratio must be non-negative.")
 
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
@@ -933,15 +878,59 @@ def compute_oil_bubble_point_pressure(
         gas_to_oil_ratio
         / (c1 * gas_gravity * np.exp((c3 * oil_api_gravity) / temperature_rankine))
     ) ** (1 / c2)
-    return pressure
+    return pressure  # type: ignore[return-value]
+
+
+@numba.njit(cache=True, fastmath=True)
+def compute_water_bubble_point_pressure_mccain(
+    temperature: NDimensionalGrid[NDimension],
+    gas_solubility_in_water: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Computes the bubble point pressure using the inverted McCain correlation for methane.
+
+    Valid for:
+    - T: 100-400°F
+    - P: 0-14,700 psi
+    - Salinity: 0-200,000 ppm
+
+    :param temperature: Temperature (°F)
+    :param gas_solubility_in_water: Target gas solubility in SCF/STB
+    :param salinity: Salinity in ppm
+    :return: Bubble point pressure (psi)
+    """
+    A = 2.12 + 0.00345 * temperature - 0.0000125 * temperature**2
+    B = 0.000045
+    denominator = B * (1.0 - 0.000001 * salinity)
+    bubble_point_pressure = np.maximum(0.0, (gas_solubility_in_water - A) / denominator)
+    return bubble_point_pressure  # type: ignore[return-value]
+
+
+def _water_bubble_point_residual(
+    pressure: float,
+    temperature: float,
+    salinity: float,
+    target_solubility: float,
+    gas: str,
+) -> float:
+    return (
+        compute_gas_solubility_in_water_scalar(
+            pressure=pressure,
+            temperature=temperature,
+            salinity=salinity,
+            gas=gas,
+        )
+        - target_solubility
+    )
 
 
 def compute_water_bubble_point_pressure(
-    temperature: float,
-    gas_solubility_in_water: float,
-    salinity: float,
+    temperature: NDimensionalGrid[NDimension],
+    gas_solubility_in_water: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
     gas: str = "methane",
-) -> float:
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the bubble point pressure where the given gas solubility in water is reached.
     Uses analytical inversion for McCain, otherwise numerical root-finding.
@@ -952,37 +941,40 @@ def compute_water_bubble_point_pressure(
     :param gas: Gas name ("co2", "methane", "n2")
     :return: Bubble point pressure (psi)
     """
+    if np.isscalar(salinity):
+        salinity = np.full_like(temperature, salinity)  # type: ignore[assignment]
+
     gas = gas.lower()
-    if gas == "methane" and 100 <= temperature <= 400:
+    if gas == "methane" and (min_(temperature) < 100 or max_(temperature) > 400):
         # Inverted McCain
-        A = 2.12 + 0.00345 * temperature - 0.0000125 * temperature**2
-        B = 0.000045
-        denominator = B * (1.0 - 0.000001 * salinity)
-        bubble_point_pressure = max(0.0, (gas_solubility_in_water - A) / denominator)
-        return bubble_point_pressure
+        return compute_water_bubble_point_pressure_mccain(
+            temperature=temperature,
+            gas_solubility_in_water=gas_solubility_in_water,
+            salinity=salinity,
+        )
 
-    lower_bound_pressure = 0.5
-    upper_bound_pressure = 14700
+    min_pressure = np.full_like(temperature, c.MIN_VALID_PRESSURE)
+    max_pressure = np.full_like(temperature, c.MAX_VALID_PRESSURE)
 
-    lower_bound_solubility = compute_gas_solubility_in_water(
-        pressure=lower_bound_pressure,
+    min_solubility = compute_gas_solubility_in_water(
+        pressure=min_pressure,
         temperature=temperature,
         salinity=salinity,
         gas=gas,
     )
-    upper_bound_solubility = compute_gas_solubility_in_water(
-        pressure=upper_bound_pressure,
+    max_solubility = compute_gas_solubility_in_water(
+        pressure=max_pressure,
         temperature=temperature,
         salinity=salinity,
         gas=gas,
     )
 
-    if not (
-        lower_bound_solubility <= gas_solubility_in_water <= upper_bound_solubility
+    if np.any(gas_solubility_in_water < min_solubility) or np.any(
+        gas_solubility_in_water > max_solubility
     ):
         raise RuntimeError(
             f"Target gas solubility {gas_solubility_in_water} SCF/STB is outside the range "
-            f"[{lower_bound_solubility:.2f}, {upper_bound_solubility:.2f}] "
+            f"[{min_solubility:.2f}, {max_solubility:.2f}] "
             f"for gas '{gas}' at T={temperature}°F and salinity={salinity} ppm."
         )
 
@@ -992,28 +984,57 @@ def compute_water_bubble_point_pressure(
     # This inversion finds the pressure at which gas solubility in water equals the specified value.
     # Though these models don't explicitly define a bubble point, this process yields the effective
     # bubble point pressure—i.e., the pressure where gas begins to come out of solution.
-    def residual(pressure: float) -> float:
-        return (
-            compute_gas_solubility_in_water(
-                pressure=pressure, temperature=temperature, salinity=salinity, gas=gas
-            )
-            - gas_solubility_in_water
+    # Allocate result
+    bubble_point_pressure = np.empty_like(temperature)
+
+    it = np.nditer(temperature, flags=["multi_index"])
+    while not it.finished:
+        idx = it.multi_index
+        bubble_point_pressure[idx] = brentq(  # type: ignore
+            _water_bubble_point_residual,
+            a=min_pressure[idx],
+            b=max_pressure[idx],
+            args=(
+                temperature[idx],
+                salinity[idx],  # type: ignore
+                gas_solubility_in_water[idx],
+                gas,
+            ),
+            xtol=1e-6,
         )
+        it.iternext()
 
-    bubble_point_pressure = brentq(
-        residual, a=lower_bound_pressure, b=upper_bound_pressure, xtol=1e-6
+    return bubble_point_pressure
+
+
+@numba.njit(cache=True, fastmath=True)
+def _compute_gor_vasquez_beggs(
+    pressure: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    temperature_in_rankine: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
+    """Implementation of the Vazquez-Beggs GOR correlation."""
+    c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
+        oil_api_gravity
     )
-    return typing.cast(float, bubble_point_pressure)
+    return (  # type: ignore[return-value]
+        (pressure**c2)
+        * c1
+        * gas_gravity
+        * np.exp((c3 * oil_api_gravity) / temperature_in_rankine)
+    ).astype(pressure.dtype)
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_gas_to_oil_ratio(
-    pressure: float,
-    temperature: float,
-    bubble_point_pressure: float,
-    gas_gravity: float,
-    oil_api_gravity: float,
-    gor_at_bubble_point_pressure: typing.Optional[float] = None,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: typing.Optional[NDimensionalGrid[NDimension]] = None,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the gas-to-oil ratio (GOR) using the Vazquez-Beggs correlation.
 
@@ -1048,38 +1069,50 @@ def compute_gas_to_oil_ratio(
     :param gor_at_bubble_point_pressure: GOR at the bubble point pressure SCF/STB, optional
     :return: Gas-to-oil ratio SCF/STB
     """
-    if pressure <= 0:
+    if min_(pressure) <= 0:
         raise ValueError("Pressure must be greater than zero.")
 
     temperature_in_rankine = temperature + 459.67
-    c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
-        oil_api_gravity
-    )
 
-    def compute_gor_vasquez_beggs(pressure: float) -> float:
-        """Implementation of the Vazquez-Beggs GOR correlation."""
-        return (
-            (pressure**c2)
-            * c1
-            * gas_gravity
-            * np.exp((c3 * oil_api_gravity) / temperature_in_rankine)
+    # Compute GOR at bubble point
+    if gor_at_bubble_point_pressure is not None:
+        gor_at_bp = gor_at_bubble_point_pressure
+    else:
+        gor_at_bp = _compute_gor_vasquez_beggs(
+            pressure=bubble_point_pressure,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            temperature_in_rankine=temperature_in_rankine,
         )
 
-    if pressure >= bubble_point_pressure:
-        if gor_at_bubble_point_pressure is not None:
-            return gor_at_bubble_point_pressure
+    gor = np.empty_like(pressure)
+    saturated_mask = pressure < bubble_point_pressure
+    undersaturated_mask = np.invert(saturated_mask)
 
-        gor = compute_gor_vasquez_beggs(bubble_point_pressure)
-        return max(0.0, gor)
+    # Undersaturated: use GOR at bubble point
+    undersaturated_gor = get_mask(gor_at_bp, undersaturated_mask)
+    apply_mask(gor, undersaturated_mask, undersaturated_gor)
 
-    gor = compute_gor_vasquez_beggs(pressure)
-    return max(0.0, gor)
+    # Saturated: compute GOR at current pressure
+    if np.any(saturated_mask):
+        saturated_pressure = get_mask(pressure, saturated_mask)
+        saturated_gor = _compute_gor_vasquez_beggs(
+            saturated_pressure,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            temperature_in_rankine=temperature_in_rankine,
+        )
+        apply_mask(gor, saturated_mask, saturated_gor)
+
+    return np.maximum(0.0, gor)  # type: ignore[return-value]
 
 
+@numba.njit(cache=True, fastmath=True)
 def _compute_dead_oil_viscosity_modified_beggs(
-    temperature: float, oil_api_gravity: float
-) -> float:
-    if temperature <= 0:
+    temperature: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
+    if np.any(temperature <= 0):
         raise ValueError("Temperature (°F) must be > 0 for this correlation.")
 
     temperature_rankine = temperature + 459.67
@@ -1091,13 +1124,13 @@ def _compute_dead_oil_viscosity_modified_beggs(
         - 0.5644 * np.log10(temperature_rankine)
     )
     viscosity = (10**log_viscosity) - 1
-    return max(0.0, viscosity)
+    return np.maximum(0.0, viscosity)  # type: ignore[return-value]
 
 
 def compute_dead_oil_viscosity_modified_beggs(
-    temperature: float,
-    oil_specific_gravity: float,
-) -> float:
+    temperature: NDimensionalGrid[NDimension],
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the dead oil viscosity (mu_od) using the Modified Beggs correlation.
     Viscosity is in centipoise (cP), Labedi (1992).
@@ -1114,7 +1147,7 @@ def compute_dead_oil_viscosity_modified_beggs(
     :return: Dead oil viscosity in cP
     """
     oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
-    if not (5 <= oil_api_gravity <= 75):
+    if min_(oil_api_gravity) < 5 or max_(oil_api_gravity) > 75:
         warnings.warn(
             f"API gravity {oil_api_gravity:.2f} is outside typical range [5, 75]. "
             f"Dead oil viscosity may be inaccurate."
@@ -1122,43 +1155,74 @@ def compute_dead_oil_viscosity_modified_beggs(
     return _compute_dead_oil_viscosity_modified_beggs(temperature, oil_api_gravity)
 
 
+@numba.njit(cache=True, fastmath=True)
 def _compute_oil_viscosity(
-    pressure: float,
-    bubble_point_pressure: float,
-    dead_oil_viscosity: float,
-    gas_to_oil_ratio: float,
-    gor_at_bubble_point_pressure: float,
-) -> float:
-    # If pressure is below or equal to bubble point, use saturated viscosity correlation
-    if pressure <= bubble_point_pressure:
-        X_saturated = 10.715 * (gas_to_oil_ratio + 100) ** -0.515
-        Y_saturated = 5.44 * (gas_to_oil_ratio + 150) ** -0.338
-        saturated_live_oil_viscosity = X_saturated * (dead_oil_viscosity**Y_saturated)
-        return max(saturated_live_oil_viscosity, 1e-6)
+    pressure: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    dead_oil_viscosity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
+    result = np.empty_like(pressure)
+    saturated_mask = pressure <= bubble_point_pressure
+    undersaturated_mask = np.invert(saturated_mask)
 
-    # Undersaturated case: compute mu_ob at Pb
-    X_bubble_point = 10.715 * (gor_at_bubble_point_pressure + 100) ** -0.515
-    Y_bubble_point = 5.44 * (gor_at_bubble_point_pressure + 150) ** -0.338
-    dead_oil_viscosity_at_bubble_point = X_bubble_point * (
-        dead_oil_viscosity**Y_bubble_point
-    )
+    # Saturated case: compute viscosity using current GOR
+    if np.any(saturated_mask):
+        gas_to_oil_ratio_saturated = get_mask(gas_to_oil_ratio, saturated_mask)
+        dead_oil_viscosity_saturated = get_mask(dead_oil_viscosity, saturated_mask)
 
-    # Apply undersaturated viscosity correlation
-    X_undersaturated = 2.6 * pressure**1.187 * np.exp(-11.513 - 8.98e-5 * pressure)
-    live_oil_viscosity_undersaturated = dead_oil_viscosity_at_bubble_point * (
-        (pressure / bubble_point_pressure) ** X_undersaturated
-    )
-    return max(live_oil_viscosity_undersaturated, 1e-6)
+        X_saturated = 10.715 * (gas_to_oil_ratio_saturated + 100) ** -0.515
+        Y_saturated = 5.44 * (gas_to_oil_ratio_saturated + 150) ** -0.338
+        saturated_viscosity = X_saturated * (dead_oil_viscosity_saturated**Y_saturated)
+        apply_mask(result, saturated_mask, saturated_viscosity)
+
+    # Undersaturated case: compute mu_ob at Pb first
+    if np.any(undersaturated_mask):
+        pressure_undersaturated = get_mask(pressure, undersaturated_mask)
+        bubble_point_pressure_undersaturated = get_mask(
+            bubble_point_pressure, undersaturated_mask
+        )
+        dead_oil_viscosity_undersaturated = get_mask(
+            dead_oil_viscosity, undersaturated_mask
+        )
+        gor_at_bubble_point_pressure_undersaturated = get_mask(
+            gor_at_bubble_point_pressure, undersaturated_mask
+        )
+
+        X_bubble_point = (
+            10.715 * (gor_at_bubble_point_pressure_undersaturated + 100) ** -0.515  # type: ignore
+        )
+        Y_bubble_point = (
+            5.44 * (gor_at_bubble_point_pressure_undersaturated + 150) ** -0.338  # type: ignore
+        )
+        dead_oil_viscosity_at_bubble_point = X_bubble_point * (
+            dead_oil_viscosity_undersaturated**Y_bubble_point
+        )
+
+        # Apply undersaturated viscosity correlation
+        X_undersaturated = (
+            2.6
+            * pressure_undersaturated**1.187
+            * np.exp(-11.513 - 8.98e-5 * pressure_undersaturated)
+        )
+        undersaturated_viscosity = dead_oil_viscosity_at_bubble_point * (
+            (pressure_undersaturated / bubble_point_pressure_undersaturated)
+            ** X_undersaturated
+        )
+        apply_mask(result, undersaturated_mask, undersaturated_viscosity)
+
+    return np.maximum(result, 1e-6)  # type: ignore[return-value]
 
 
 def compute_oil_viscosity(
-    pressure: float,
-    temperature: float,
-    bubble_point_pressure: float,
-    oil_specific_gravity: float,
-    gas_to_oil_ratio: float,
-    gor_at_bubble_point_pressure: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    oil_specific_gravity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes oil viscosity (cP) using the Modified Beggs & Robinson correlation
     for dead, saturated, and undersaturated oil.
@@ -1196,9 +1260,13 @@ def compute_oil_viscosity(
     :param gor_at_bubble_point_pressure: GOR at bubble point pressure in standard SCF/STB
     :return: Oil viscosity in cP
     """
-    if temperature <= 0 or pressure <= 0 or bubble_point_pressure <= 0:
+    if (
+        min_(temperature) <= 0
+        or min_(pressure) <= 0
+        or min_(bubble_point_pressure) <= 0
+    ):
         raise ValueError("Temperature and pressures must be positive.")
-    if oil_specific_gravity <= 0:
+    if min_(oil_specific_gravity) <= 0:
         raise ValueError("Oil specific gravity must be positive.")
 
     # Dead oil viscosity (mu_od)
@@ -1214,7 +1282,9 @@ def compute_oil_viscosity(
     )
 
 
-def compute_gas_molecular_weight(gas_gravity: float) -> float:
+def compute_gas_molecular_weight(
+    gas_gravity: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the apparent molecular weight of a gas (g/mol) from its specific gravity relative to air.
 
@@ -1229,17 +1299,18 @@ def compute_gas_molecular_weight(gas_gravity: float) -> float:
     :param gas_gravity: Specific gravity of the gas relative to air (dimensionless)
     :return: Molecular weight of the gas in grams per mole (g/mol)
     """
-    if gas_gravity <= 0:
+    if min_(gas_gravity) <= 0:
         raise ValueError("Gas specific gravity must be greater than zero.")
     return gas_gravity * c.MOLECULAR_WEIGHT_AIR
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_gas_pseudocritical_properties(
-    gas_gravity: float,
-    h2s_mole_fraction: float = 0.0,
-    co2_mole_fraction: float = 0.0,
-    n2_mole_fraction: float = 0.0,
-) -> typing.Tuple[float, float]:
+    gas_gravity: NDimensionalGrid[NDimension],
+    h2s_mole_fraction: FloatOrArray = 0.0,
+    co2_mole_fraction: FloatOrArray = 0.0,
+    n2_mole_fraction: FloatOrArray = 0.0,
+) -> typing.Tuple[NDimensionalGrid[NDimension], NDimensionalGrid[NDimension]]:
     """
     Computes pseudocritical pressure and temperature of natural gas in psi and °F.
 
@@ -1266,7 +1337,7 @@ def compute_gas_pseudocritical_properties(
     :param n2_mole_fraction: Mole fraction of N₂ (dimensionless).
     :return: Tuple (P_pc in psi, T_pc in °F)
     """
-    if gas_gravity <= 0:
+    if min_(gas_gravity) <= 0:
         raise ValueError("Gas specific gravity must be greater than zero.")
 
     # Sutton's pseudocritical properties (psia and Rankine)
@@ -1275,12 +1346,12 @@ def compute_gas_pseudocritical_properties(
         169.2 + 349.5 * gas_gravity - 74.0 * gas_gravity**2
     )
 
-    total_acid_gas_fraction = h2s_mole_fraction + co2_mole_fraction
+    total_acid_gas_fraction = h2s_mole_fraction + co2_mole_fraction  # type: ignore
     if total_acid_gas_fraction > 0.001:
         epsilon = 120.0 * (
-            (h2s_mole_fraction + n2_mole_fraction) ** 0.9
-            - (h2s_mole_fraction + n2_mole_fraction) ** 1.6
-        ) + 15.0 * (co2_mole_fraction**0.5 - co2_mole_fraction**4)
+            (h2s_mole_fraction + n2_mole_fraction) ** 0.9  # type: ignore
+            - (h2s_mole_fraction + n2_mole_fraction) ** 1.6  # type: ignore
+        ) + 15.0 * (co2_mole_fraction**0.5 - co2_mole_fraction**4)  # type: ignore
 
         pseudocritical_temperature_rankine -= epsilon
         pseudocritical_pressure = (
@@ -1288,20 +1359,20 @@ def compute_gas_pseudocritical_properties(
             * pseudocritical_temperature_rankine
             / (
                 pseudocritical_temperature_rankine
-                + h2s_mole_fraction * (1 - h2s_mole_fraction) * epsilon
+                + h2s_mole_fraction * (1 - h2s_mole_fraction) * epsilon  # type: ignore
             )
         )
 
     pseudocritical_temperature_fahrenheit = pseudocritical_temperature_rankine - 459.67
-    return pseudocritical_pressure, pseudocritical_temperature_fahrenheit
+    return pseudocritical_pressure, pseudocritical_temperature_fahrenheit  # type: ignore[return-value]
 
 
 def compute_gas_density(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float,
-    gas_compressibility_factor: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_compressibility_factor: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the gas density (lbm/ft³) using the real gas equation of state.
 
@@ -1324,10 +1395,10 @@ def compute_gas_density(
 
 
 def compute_gas_viscosity(
-    temperature: float,
-    gas_density: float,
-    gas_molecular_weight: float,
-) -> float:
+    temperature: NDimensionalGrid[NDimension],
+    gas_density: NDimensionalGrid[NDimension],
+    gas_molecular_weight: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the gas viscosity (cP) using the Lee-Gonzalez-Eakin (LGE) correlation.
 
@@ -1364,7 +1435,7 @@ def compute_gas_viscosity(
     k = (
         (9.4 + (0.02 * gas_molecular_weight_lbm_per_lbmole))
         * (temperature_in_rankine**1.5)
-        / (209 + (19 * gas_molecular_weight_lbm_per_lbmole) + temperature_in_rankine)
+        / (209 + (19 * gas_molecular_weight_lbm_per_lbmole) + temperature_in_rankine)  # type: ignore
     )
 
     x = (
@@ -1375,58 +1446,37 @@ def compute_gas_viscosity(
     y = 2.4 - (0.2 * x)
 
     exponent = x * (density_in_grams_per_cm3**y)
-    exponent = min(700, max(-700, exponent))  # cap to prevent overflow
+    exponent = np.minimum(700, np.maximum(-700, exponent))  # cap to prevent overflow
 
     gas_viscosity = (k * 1e-4) * np.exp(exponent)
-    return max(0.0, gas_viscosity)
+    return np.maximum(0.0, gas_viscosity)
 
 
-@numba.njit(cache=True)
-def kelvin_to_fahrenheit(temp_K: float) -> float:
-    """Converts temperature from Kelvin to Fahrenheit."""
-    return (temp_K - 273.15) * 9 / 5 + 32
-
-
-@numba.njit(cache=True)
-def fahrenheit_to_kelvin(temp_F: float) -> float:
-    """Converts temperature from Fahrenheit to Kelvin."""
-    return (temp_F - 32) * 5 / 9 + 273.15
-
-
-@numba.njit(cache=True)
-def fahrenheit_to_celsius(temp_F: float) -> float:
-    """Converts temperature from Fahrenheit to Celsius."""
-    return (temp_F - 32) * 5 / 9
-
-
-@numba.njit(cache=True)
-def fahrenheit_to_rankine(temp_F: float) -> float:
-    """Converts temperature from Fahrenheit to Rankine."""
-    return temp_F + 459.67
-
-
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def _compute_water_viscosity(
-    temperature: float, salinity: float, pressure: float, ppm_to_weight_fraction: float
-) -> float:
-    salinity_fraction = salinity * ppm_to_weight_fraction
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray,
+    pressure: FloatOrArray,
+    ppm_to_weight_fraction: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
+    salinity_fraction = salinity * ppm_to_weight_fraction  # type: ignore
     A = 1.0 + 1.17 * salinity_fraction + 3.15e-6 * salinity_fraction**2
     B = 1.48e-3 - 1.8e-7 * salinity_fraction
     C = 2.94e-6
 
     viscosity_at_standard_pressure = A - (B * temperature) + (C * temperature**2)
     pressure_correction_factor = (
-        0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)
+        0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)  # type: ignore
     )
     viscosity_at_pressure = viscosity_at_standard_pressure * pressure_correction_factor
-    return max(1e-6, viscosity_at_pressure)
+    return np.maximum(viscosity_at_pressure, 1e-6)  # type: ignore[return-value]
 
 
 def compute_water_viscosity(
-    temperature: float,
-    salinity: float = 0.0,
-    pressure: float = 14.7,
-) -> float:
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
+    pressure: FloatOrArray = 14.7,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes water viscosity using McCain's corrected correlation for reservoir conditions.
 
@@ -1460,23 +1510,23 @@ def compute_water_viscosity(
     :param pressure: Pressure in psi, default is 14.7 psi (atmospheric pressure)
     :return: Water viscosity in centipoise (cP)
     """
-    if salinity < 0:
+    if min_(salinity) < 0:
         raise ValueError("Salinity must be non-negative.")
 
-    if pressure is not None and pressure < 0:
+    if min_(pressure) < 0:
         raise ValueError("Pressure must be non-negative.")
 
-    if not (60 <= temperature <= 400):
+    if min_(temperature) < 60 or max_(temperature) > 400:
         warnings.warn(
             f"Temperature {temperature:.2f}°F is outside the valid range for McCain's water viscosity correlation (60°F to 400°F)."
         )
 
-    if salinity > 300_000:
+    if max_(salinity) > 300_000:
         warnings.warn(
             f"Salinity {salinity:.2f} ppm is unusually high for McCain's water viscosity correlation."
         )
 
-    if pressure is not None and pressure > 10_000:
+    if max_(pressure) > 10_000:
         warnings.warn(
             f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
         )
@@ -1488,16 +1538,17 @@ def compute_water_viscosity(
     )
 
 
+@numba.njit(cache=True, fastmath=True)
 def _compute_oil_compressibility_liberation_correction_term(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float,
-    oil_api_gravity: float,
-    bubble_point_pressure: float,
-    gas_formation_volume_factor: float,
-    oil_formation_volume_factor: float,
-    gor_at_bubble_point_pressure: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_formation_volume_factor: FloatOrArray,
+    oil_formation_volume_factor: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the liberation correction term for oil compressibility below bubble point pressure.
 
@@ -1524,45 +1575,68 @@ def _compute_oil_compressibility_liberation_correction_term(
     :param gor_at_bubble_point_pressure: GOR at bubble point pressure (scf/stb).
     :return: Correction term for oil compressibility.
     """
-    delta_p = max(0.01, 1e-4 * pressure)
-    if (pressure_plus := (pressure + delta_p)) > 0:
-        gor_plus_delta = compute_gas_to_oil_ratio(
-            pressure=pressure_plus,
-            temperature=temperature,
-            bubble_point_pressure=bubble_point_pressure,
-            gas_gravity=gas_gravity,
-            oil_api_gravity=oil_api_gravity,
-            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
-        )
-    else:
-        gor_plus_delta = 0.0
-
-    if (pressure_minus := (pressure - delta_p)) > 0:
-        gor_minus_delta = compute_gas_to_oil_ratio(
-            pressure=pressure_minus,
-            temperature=temperature,
-            bubble_point_pressure=bubble_point_pressure,
-            gas_gravity=gas_gravity,
-            oil_api_gravity=oil_api_gravity,
-            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
-        )
-    else:
-        gor_minus_delta = 0.0
+    delta_p = np.maximum(0.01, 1e-4 * pressure)
+    pressure_plus = pressure - delta_p
+    pressure_minus = pressure + delta_p
+    gor_plus_delta = compute_gas_to_oil_ratio(
+        pressure=pressure_plus,
+        temperature=temperature,
+        bubble_point_pressure=bubble_point_pressure,
+        gas_gravity=gas_gravity,
+        oil_api_gravity=oil_api_gravity,
+        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+    )
+    gor_minus_delta = compute_gas_to_oil_ratio(
+        pressure=pressure_minus,
+        temperature=temperature,
+        bubble_point_pressure=bubble_point_pressure,
+        gas_gravity=gas_gravity,
+        oil_api_gravity=oil_api_gravity,
+        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+    )
 
     dRs_dp = (gor_plus_delta - gor_minus_delta) / (2 * delta_p)
-    return (gas_formation_volume_factor / oil_formation_volume_factor) * dRs_dp / 5.615
+    return (gas_formation_volume_factor / oil_formation_volume_factor) * dRs_dp / 5.615  # type: ignore[return-value]
 
 
+@numba.njit(cache=True, fastmath=True)
+def compute_base_compressibility(
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
+    current_gor = compute_gas_to_oil_ratio(
+        pressure=pressure,
+        temperature=temperature,
+        bubble_point_pressure=bubble_point_pressure,
+        gas_gravity=gas_gravity,
+        oil_api_gravity=oil_api_gravity,
+        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+    )
+    val = (
+        -1433
+        + 5 * current_gor
+        + 17.2 * temperature
+        - 1180 * gas_gravity
+        + 12.61 * oil_api_gravity
+    ) / ((10**5) * pressure)
+    return np.maximum(val, 0.0)  # type: ignore[return-value]
+
+
+@numba.njit(cache=True, fastmath=True)
 def compute_oil_compressibility(
-    pressure: float,
-    temperature: float,
-    bubble_point_pressure: float,
-    oil_api_gravity: float,
-    gas_gravity: float,
-    gor_at_bubble_point_pressure: float,
-    gas_formation_volume_factor: float = 1.0,
-    oil_formation_volume_factor: float = 1.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gor_at_bubble_point_pressure: NDimensionalGrid[NDimension],
+    gas_formation_volume_factor: FloatOrArray = 1.0,
+    oil_formation_volume_factor: FloatOrArray = 1.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the oil compressibility (C_o) in psi⁻¹ using the Vasquez and Beggs (1980) correlation.
 
@@ -1608,59 +1682,75 @@ def compute_oil_compressibility(
     :return: Oil compressibility in psi⁻¹
     """
     if (
-        pressure <= 0
-        or bubble_point_pressure <= 0
-        or temperature <= 0
-        or gas_gravity <= 0
-        or oil_api_gravity <= 0
+        min_(pressure) <= 0
+        or min_(bubble_point_pressure) <= 0
+        or min_(temperature) <= 0
+        or min_(gas_gravity) <= 0
+        or min_(oil_api_gravity) <= 0
     ):
         raise ValueError(
             "All input parameters (P, Pb, T, Gas SG, API) must be positive."
         )
 
-    def compute_base_compressibility(pressure: float) -> float:
-        current_gor = compute_gas_to_oil_ratio(
-            pressure=pressure,
+    result = np.empty_like(pressure)
+    undersaturated_mask = pressure > bubble_point_pressure
+    saturated_mask = np.invert(undersaturated_mask)
+
+    # Use atmospheric pressure as fill value instead of np.nan (default fill) to avoid issues
+    # With `compute_base_compressibility` complaining about NaNs or zero pressure.
+    # Undersaturated: just base compressibility
+    if np.any(undersaturated_mask):
+        undersaturated_pressure = get_mask(
+            pressure, undersaturated_mask, fill_value=14.7
+        )
+        undersaturated_compressibility = compute_base_compressibility(
+            pressure=undersaturated_pressure,
             temperature=temperature,
             bubble_point_pressure=bubble_point_pressure,
-            gas_gravity=gas_gravity,
             oil_api_gravity=oil_api_gravity,
+            gas_gravity=gas_gravity,
             gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
         )
-        val = (
-            -1433
-            + 5 * current_gor
-            + 17.2 * temperature
-            - 1180 * gas_gravity
-            + 12.61 * oil_api_gravity
-        ) / ((10**5) * pressure)
-        return max(val, 0.0)
+        apply_mask(result, undersaturated_mask, undersaturated_compressibility)
 
-    if pressure > bubble_point_pressure:
-        return compute_base_compressibility(pressure)
+    # Saturated: base compressibility + correction term
+    if np.any(saturated_mask):
+        pressure_saturated = get_mask(pressure, saturated_mask, fill_value=14.7)
+        base_compressibility_saturated = compute_base_compressibility(
+            pressure=pressure_saturated,
+            temperature=temperature,
+            bubble_point_pressure=bubble_point_pressure,
+            oil_api_gravity=oil_api_gravity,
+            gas_gravity=gas_gravity,
+            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+        )
 
-    correction_term = _compute_oil_compressibility_liberation_correction_term(
-        pressure=pressure,
-        temperature=temperature,
-        gas_gravity=gas_gravity,
-        oil_api_gravity=oil_api_gravity,
-        bubble_point_pressure=bubble_point_pressure,
-        gas_formation_volume_factor=gas_formation_volume_factor,
-        oil_formation_volume_factor=oil_formation_volume_factor,
-        gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
-    )
-    return compute_base_compressibility(pressure) + correction_term
+        correction_term = _compute_oil_compressibility_liberation_correction_term(
+            pressure=pressure_saturated,
+            temperature=temperature,
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            bubble_point_pressure=bubble_point_pressure,
+            gas_formation_volume_factor=gas_formation_volume_factor,
+            oil_formation_volume_factor=oil_formation_volume_factor,
+            gor_at_bubble_point_pressure=gor_at_bubble_point_pressure,
+        )
+        saturated_compressibility = base_compressibility_saturated + correction_term
+        apply_mask(result, saturated_mask, saturated_compressibility)
+
+    return result
 
 
+@numba.njit(cache=True, fastmath=True)
 def compute_gas_compressibility(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float,
-    gas_compressibility_factor: typing.Optional[float] = None,
-    h2s_mole_fraction: float = 0.0,
-    co2_mole_fraction: float = 0.0,
-    n2_mole_fraction: float = 0.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_compressibility_factor: typing.Optional[FloatOrArray] = None,
+    h2s_mole_fraction: FloatOrArray = 0.0,
+    co2_mole_fraction: FloatOrArray = 0.0,
+    n2_mole_fraction: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the isothermal gas compressibility (C_g) in psi⁻¹ using Papay's Z-factor correlation
     and its analytical derivative.
@@ -1675,7 +1765,7 @@ def compute_gas_compressibility(
     :param n2_mole_fraction: N2 mole fraction (0 to 1).
     :return: Gas compressibility in psi⁻¹.
     """
-    if pressure <= 0 or temperature <= 0 or gas_gravity <= 0:
+    if min_(pressure) <= 0 or min_(temperature) <= 0 or min_(gas_gravity) <= 0:
         raise ValueError(
             "Pressure, temperature, and gas specific gravity must be positive."
         )
@@ -1719,7 +1809,7 @@ def compute_gas_compressibility(
     # Calculate the gas compressibility (C_g)
     # C_g = (1/P) - (1/(Z * Ppc)) * (dZ/dPpr)
     # Ensure Ppc is not zero, which should be handled by compute_gas_pseudocritical_properties
-    if pseudo_critical_pressure == 0:
+    if np.any(pseudo_critical_pressure == 0):
         raise ValueError(
             "Pseudo-critical pressure cannot be zero for compressibility calculation."
         )
@@ -1727,15 +1817,16 @@ def compute_gas_compressibility(
     gas_compressibility = (1 / pressure) - (
         1 / (Z * pseudo_critical_pressure)
     ) * dZ_dP_r
-    return max(0.0, gas_compressibility)  # Compressibility must be non-negative
+    # Compressibility must be non-negative
+    return np.maximum(0.0, gas_compressibility)  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def _gas_solubility_in_water_mccain_methane(
-    pressure: float,
-    temperature: float,
-    salinity: float = 0.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates gas solubility in water (Rsw) using McCain's correlation (1990).
 
@@ -1760,13 +1851,12 @@ def _gas_solubility_in_water_mccain_methane(
     :param salinity: Salinity in parts per million (ppm).
     :return: Gas solubility in water in SCF/STB.
     """
-    # print(pressure, temperature, salinity)
-    if pressure < 0 or temperature < 0 or salinity < 0:
+    if min_(pressure) < 0 or min_(temperature) < 0 or min_(salinity) < 0:
         raise ValueError("Pressure, temperature, and salinity must be non-negative.")
 
-    if not (100 <= temperature <= 400):
+    if min_(temperature) < 100 or max_(temperature) > 400:
         raise ValueError(
-            "Temperature out of valid range for McCain's Rsw correlation (311 K to 478 K)."
+            "Temperature out of valid range for McCain's Rsw correlation (100 °F to 400 °F) (311 K to 478 K)."
         )
 
     # A(T_F) term from McCain
@@ -1777,20 +1867,18 @@ def _gas_solubility_in_water_mccain_methane(
 
     salinity_correction = 1.0 - (0.000001 * salinity)
     gas_solubility = A_term + (B * pressure * salinity_correction)
-    return max(0.0, gas_solubility)  # clamp to non-negative
+    # Clamp to non-negative
+    return np.maximum(0.0, gas_solubility)  # type: ignore[return-value]
 
 
-MOLALITY_TO_SCF_STB_CO2 = 315.4  # Approximate conversion factor for CO2
-
-
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def _gas_solubility_in_water_duan_sun_co2(
-    pressure: float,
-    temperature: float,
-    salinity: float = 0.0,
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
     nacl_molecular_weight: float = 58.44,
     psi_to_bar: float = 0.0689476,
-) -> float:
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates CO₂ solubility in water (Rsw) using the Duan and Sun (2003) model.
 
@@ -1822,17 +1910,18 @@ def _gas_solubility_in_water_duan_sun_co2(
     :param salinity: Salinity in parts per million (ppm NaCl)
     :return: CO₂ solubility in SCF/STB.
     """
-    if pressure <= 0 or temperature <= 0:
+    if min_(pressure) <= 0 or min_(temperature) <= 0:
         raise ValueError("Pressure and temperature must be positive.")
 
     P = pressure * psi_to_bar  # Convert pressure from psi to bar
     T = fahrenheit_to_kelvin(temperature)
 
-    if not (273.15 <= T <= 533.15):
+    if min_(T) < 273.15 or max_(T) > 533.15:
         raise ValueError(
-            "Temperature is out of the valid range for this model (0-260°C)."
+            "Temperature is out of the valid range for this model (273.15-533.15 K)(0-260°C)."
         )
-    if not (0 < P <= 2000):
+
+    if min_(P) < 0 or max_(P) > 2000:
         raise ValueError(
             "Pressure is out of the valid range for this model (0-2000 bar)."
         )
@@ -1856,7 +1945,7 @@ def _gas_solubility_in_water_duan_sun_co2(
     # Apply Salinity Correction (Setschenow equation)
     # Convert salinity from ppm to molality (mol NaCl / kg H2O)
     # 1 ppm NaCl ≈ 1 mg NaCl / 1 L H2O ≈ 1 mg NaCl / 1 kg H2O
-    m_nacl = salinity / (nacl_molecular_weight * 1000)
+    m_nacl = salinity / (nacl_molecular_weight * 1000)  # type: ignore
 
     # Setschenow coefficient (k_s) for CO2-NaCl interaction, with T-dependence
     # This is a common empirical fit.
@@ -1865,12 +1954,13 @@ def _gas_solubility_in_water_duan_sun_co2(
     # Corrected molality in brine
     m_co2_brine = m_co2_pure / (10 ** (k_s * m_nacl))
 
+    MOLALITY_TO_SCF_STB_CO2 = 315.4  # Approximate conversion factor for CO2
     # Convert Molality to SCF/STB
     # This is an approximate conversion that depends on water density and standard conditions.
     # It combines molality -> mole fraction -> volume ratio.
     # For many reservoir engineering applications, a factor around 315.4 is used.
     rsw = m_co2_brine * MOLALITY_TO_SCF_STB_CO2
-    return rsw
+    return rsw  # type: ignore[return-value]
 
 
 # Henry's constants (Sander, 2020) — ln(H) = A + B/T + C*ln(T)
@@ -1883,13 +1973,13 @@ HENRY_COEFFICIENTS = {
 
 
 def _gas_solubility_in_water_henry_law(
-    pressure: float,
-    temperature: float,
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
     gas: str,
     molar_masses: typing.Dict[str, float],
     henry_coefficients: typing.Dict[str, typing.Tuple[float, float, float]],
-    salinity: float = 0.0,
-) -> float:
+    salinity: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Estimates gas solubility in water using Henry's Law with Setschenow salinity correction.
 
@@ -1955,11 +2045,11 @@ def _gas_solubility_in_water_henry_law(
 
 
 def compute_gas_solubility_in_water(
-    pressure: float,
-    temperature: float,
-    salinity: float = 0.0,
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
     gas: str = "methane",
-) -> float:
+) -> NDimensionalGrid[NDimension]:
     """
     Computes gas solubility in water using McCain, Duan, or Henry's Law based on gas type and temperature.
 
@@ -1970,42 +2060,91 @@ def compute_gas_solubility_in_water(
     :return: Gas solubility in water in SCF/STB (standard cubic feet per stock tank barrel).
     """
     gas = gas.lower()
-    if gas == "methane" and 100.0 <= temperature <= 400.0:
-        # For methane, we use McCain's correlation for gas solubility in water
-        return _gas_solubility_in_water_mccain_methane(pressure, temperature, salinity)
+    result = np.empty_like(pressure)
 
-    elif gas == "co2" and 32 <= temperature <= 572:
-        # For CO2, we use Duan's correlation for higher accuracy
-        return _gas_solubility_in_water_duan_sun_co2(
-            pressure,
-            temperature,
-            salinity,
-            nacl_molecular_weight=c.MOLECULAR_WEIGHT_NACL,
-            psi_to_bar=c.PSI_TO_BAR,
-        )
+    if gas == "methane":
+        # McCain correlation for 100°F <= T <= 400°F
+        mccain_mask = (temperature >= 100.0) & (temperature <= 400.0)
+        henry_mask = np.invert(mccain_mask)
 
-    elif gas in {"methane", "co2", "n2"}:
+        # Apply McCain correlation where applicable
+        if np.any(mccain_mask):
+            mccain_result = _gas_solubility_in_water_mccain_methane(
+                get_mask(pressure, mccain_mask),
+                get_mask(temperature, mccain_mask),
+                salinity,
+            )
+            apply_mask(result, mccain_mask, mccain_result)
+
+        # Apply Henry's Law for out-of-range temperatures
+        if np.any(henry_mask):
+            molar_masses = {
+                "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
+            }
+            henry_result = _gas_solubility_in_water_henry_law(
+                pressure=get_mask(pressure, henry_mask),
+                temperature=get_mask(temperature, henry_mask),
+                gas=gas,
+                molar_masses=molar_masses,
+                henry_coefficients=HENRY_COEFFICIENTS,
+                salinity=salinity,
+            )
+            apply_mask(result, henry_mask, henry_result)
+
+    elif gas == "co2":
+        # Duan correlation for 32°F <= T <= 572°F
+        duan_mask = (temperature >= 32) & (temperature <= 572)
+        henry_mask = np.invert(duan_mask)
+
+        # Apply Duan correlation where applicable
+        if np.any(duan_mask):
+            duan_result = _gas_solubility_in_water_duan_sun_co2(
+                pressure=get_mask(pressure, duan_mask),
+                temperature=get_mask(temperature, duan_mask),
+                salinity=salinity,
+                nacl_molecular_weight=c.MOLECULAR_WEIGHT_NACL,
+                psi_to_bar=c.PSI_TO_BAR,
+            )
+            apply_mask(result, duan_mask, duan_result)
+
+        # Apply Henry's Law for out-of-range temperatures
+        if np.any(henry_mask):
+            molar_masses = {
+                "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+            }
+            henry_result = _gas_solubility_in_water_henry_law(
+                pressure=get_mask(pressure, henry_mask),
+                temperature=get_mask(temperature, henry_mask),
+                gas=gas,
+                molar_masses=molar_masses,
+                henry_coefficients=HENRY_COEFFICIENTS,
+                salinity=salinity,
+            )
+            apply_mask(result, henry_mask, henry_result)
+
+    elif gas == "n2":
+        # Henry's Law for all temperatures (no specialized correlation)
         molar_masses = {
-            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-            "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
             "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
         }
-        return _gas_solubility_in_water_henry_law(
-            pressure,
-            temperature,
+        result = _gas_solubility_in_water_henry_law(
+            pressure=pressure,
+            temperature=temperature,
             gas=gas,
             molar_masses=molar_masses,
             henry_coefficients=HENRY_COEFFICIENTS,
             salinity=salinity,
         )
 
-    raise NotImplementedError(f"No model for gas '{gas}'.")
+    else:
+        raise NotImplementedError(f"No model for gas '{gas}'.")
+    return result  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
 def compute_gas_free_water_formation_volume_factor(
-    pressure: float, temperature: float
-) -> float:
+    pressure: NDimensionalGrid[NDimension], temperature: NDimensionalGrid[NDimension]
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the Water Formation Volume Factor (Bw) for dissolved-gas-free water
     using McCain's correlation (based on Petroleum Office function BwMcCain_GasFree).
@@ -2026,7 +2165,7 @@ def compute_gas_free_water_formation_volume_factor(
     :param temperature: Temperature (°F).
     :return: Dissolved-gas-free Water Formation Volume Factor (Bw_gas_free) in bbl/STB.
     """
-    if pressure < 0 or temperature < 0:
+    if min_(pressure) < 0 or min_(temperature) < 0:
         raise ValueError(
             "Pressure and temperature cannot be negative for gas-free water FVF."
         )
@@ -2036,17 +2175,19 @@ def compute_gas_free_water_formation_volume_factor(
     )
     isothermal_compressibility = -(1.95301e-9 * pressure) + (1.72492e-13 * pressure**2)
     gas_free_water_fvf = (1.0 + thermal_expansion) * (1.0 + isothermal_compressibility)
-    return max(0.9, gas_free_water_fvf)  # Bw_gas_free is typically close to 1.0
+    return np.maximum(0.9, gas_free_water_fvf)  # type: ignore[return-value]  # Bw_gas_free is typically close to 1.0
 
 
 @numba.njit(cache=True)
-def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
+def _compute_dRsw_dP_mccain(
+    temperature: NDimensionalGrid[NDimension], salinity: FloatOrArray
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the derivative of gas solubility in water (Rsw) with respect to pressure,
     based on McCain's correlation for Rsw.
     Returns dRsw/dP in scf/(STB*psi).
     """
-    if temperature < 0 or salinity < 0:
+    if min_(temperature) < 0 or min_(salinity) < 0:
         raise ValueError("Temperature and salinity cannot be negative for dRsw/dP.")
 
     derivative_pure_water = (
@@ -2054,17 +2195,19 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     )
     salinity_correction_factor = 1.0 - 0.000001 * salinity
     # This derivative is positive (Rsw increases with P)
-    return derivative_pure_water * salinity_correction_factor
+    return derivative_pure_water * salinity_correction_factor  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
-def _compute_dBw_gas_free_dp_mccain(pressure: float, temperature: float) -> float:
+def _compute_dBw_gas_free_dp_mccain(
+    pressure: NDimensionalGrid[NDimension], temperature: NDimensionalGrid[NDimension]
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the derivative of dissolved-gas-free Water Formation Volume Factor (Bw_gas_free)
     with respect to pressure, based on McCain's correlation.
     Returns dBw_gas_free/dP in res bbl/(STB*psi). This value will be negative.
     """
-    if pressure < 0:
+    if min_(pressure) < 0:
         raise ValueError("Pressure cannot be negative for dBw_gas_free/dP.")
 
     thermal_expansion_term = (
@@ -2078,18 +2221,20 @@ def _compute_dBw_gas_free_dp_mccain(pressure: float, temperature: float) -> floa
 
     # dBw_gas_free/dP = d/dP [ (1+VT)*(1+VP) ] = (1+VT) * d(1+VP)/dP
     # This value will be negative as Bw decreases with increasing P.
-    return thermal_expansion_term * isothermal_compressibility_derivative
+    return thermal_expansion_term * isothermal_compressibility_derivative  # type: ignore[return-value]
 
 
 def compute_water_compressibility(
-    pressure: float,
-    temperature: float,
-    bubble_point_pressure: float,  # This Pwb is for the water's dissolved gas in water.
-    gas_formation_volume_factor: float,  # Bg in ft3/SCF
-    gas_solubility_in_water: float,  # Rsw in SCF/STB
-    gas_free_water_formation_volume_factor: float,  # Bw_gas_free in bbl/STB (output of compute_gas_free_water_formation_volume_factor)
-    salinity: float = 0.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    bubble_point_pressure: NDimensionalGrid[
+        NDimension
+    ],  # This Pwb is for the water's dissolved gas in water.
+    gas_formation_volume_factor: NDimensionalGrid[NDimension],  # Bg in ft3/SCF
+    gas_solubility_in_water: NDimensionalGrid[NDimension],  # Rsw in SCF/STB
+    gas_free_water_formation_volume_factor: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the isothermal water compressibility (C_w) using McCain's correlations.
     Distinguishes between undersaturated and saturated water conditions.
@@ -2128,52 +2273,67 @@ def compute_water_compressibility(
         salinity=salinity,
     )
 
-    if pressure >= bubble_point_pressure:
-        # --- Undersaturated Water (P >= Pwb) ---
-        # C_w = - (1/Bw_gas_free) * (dBw_gas_free/dP)_T
-        # dBw_gas_free_dP is negative, so -dBw_gas_free_dP is positive, resulting in positive Cw.
-        if gas_free_water_formation_volume_factor <= 0:
+    # Handle array case - compute only where needed
+    result = np.empty_like(pressure)
+    undersaturated_mask = pressure >= bubble_point_pressure
+    saturated_mask = np.invert(undersaturated_mask)
+
+    # Undersaturated Water (P >= Pwb)
+    if np.any(undersaturated_mask):
+        gas_free_water_formation_volume_factor_undersaturated = get_mask(
+            gas_free_water_formation_volume_factor, undersaturated_mask
+        )
+        dBw_gas_free_dP_undersaturated = get_mask(dBw_gas_free_dP, undersaturated_mask)
+
+        if np.any(gas_free_water_formation_volume_factor_undersaturated <= 0):
             raise ValueError("Calculated Bw for undersaturated water is non-positive.")
 
-        water_compressibility = (
-            -(1.0 / gas_free_water_formation_volume_factor) * dBw_gas_free_dP
+        undersaturated_compressibility = (
+            -(1.0 / gas_free_water_formation_volume_factor_undersaturated)
+            * dBw_gas_free_dP_undersaturated
+        )
+        apply_mask(result, undersaturated_mask, undersaturated_compressibility)
+
+    # Saturated Water (P < Pwb)
+    if np.any(saturated_mask):
+        gas_free_water_formation_volume_factor_saturated = get_mask(
+            gas_free_water_formation_volume_factor, saturated_mask
+        )
+        gas_solubility_in_water_saturated = get_mask(
+            gas_solubility_in_water, saturated_mask
+        )
+        gas_fvf_in_bbl_per_scf_saturated = get_mask(
+            gas_fvf_in_bbl_per_scf, saturated_mask
+        )
+        dBw_gas_free_dP_saturated = get_mask(dBw_gas_free_dP, saturated_mask)
+        dRsw_dP_saturated = get_mask(dRsw_dP, saturated_mask)
+
+        water_fvf_in_bbl_per_stb = gas_free_water_formation_volume_factor_saturated + (
+            gas_solubility_in_water_saturated * gas_fvf_in_bbl_per_scf_saturated
         )
 
-    else:
-        # --- Saturated Water (P < Pwb) ---
-        # Bw_actual = Bw_gas_free + Rsw * Bg
-        # C_w = C_w_gas_free + (Bg / Bw_actual) * dRsw_dP
-        # This is the most common practical form where Cw_gas_free term is for the liquid compression
-        # and the second term is for gas liberation.
-
-        # Calculate Bw_actual (water formation volume factor at current conditions, accounting for dissolved gas)
-        water_fvf_in_bbl_per_stb = gas_free_water_formation_volume_factor + (
-            gas_solubility_in_water * gas_fvf_in_bbl_per_scf
-        )
-        if water_fvf_in_bbl_per_stb <= 0:
+        if np.any(water_fvf_in_bbl_per_stb <= 0):
             raise ValueError("Calculated Bw for saturated water is non-positive.")
 
-        # C_w_gas_free_component: Compressibility of the gas-free water itself
-        c_w_gas_free_component = -(1.0 / water_fvf_in_bbl_per_stb) * dBw_gas_free_dP
-        # Note: If water_fvf_in_bbl_per_stb is used in the denominator here, it's slightly different
-        # from C_w_gas_free = -(1/Bw_gas_free)*dBw_gas_free_dP, but common in formulations for total system.
-
-        # Gas liberation component: Contribution to compressibility from gas coming out of solution
+        c_w_gas_free_component = (
+            -(1.0 / water_fvf_in_bbl_per_stb) * dBw_gas_free_dP_saturated
+        )
         gas_liberation_component = (
-            gas_fvf_in_bbl_per_scf / water_fvf_in_bbl_per_stb
-        ) * dRsw_dP
+            gas_fvf_in_bbl_per_scf_saturated / water_fvf_in_bbl_per_stb
+        ) * dRsw_dP_saturated
+        saturated_compressibility = c_w_gas_free_component + gas_liberation_component
+        apply_mask(result, saturated_mask, saturated_compressibility)
 
-        water_compressibility = c_w_gas_free_component + gas_liberation_component
-
-    return max(0.0, water_compressibility)  # Ensure non-negative compressibility
+    # Ensure non-negative compressibility
+    return np.maximum(0.0, result)  # type: ignore[return-value]
 
 
 def compute_live_oil_density(
-    api_gravity: float,
-    gas_gravity: float,
-    gas_to_oil_ratio: float,
-    formation_volume_factor: float,
-) -> float:
+    api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    gas_to_oil_ratio: NDimensionalGrid[NDimension],
+    formation_volume_factor: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Estimates live oil density at reservoir conditions at the current pressure
     and temperature, considering dissolved gas and oil compressibility.
@@ -2216,8 +2376,10 @@ def compute_live_oil_density(
 
 
 def compute_water_density_mccain(
-    pressure: float, temperature: float, salinity: float = 0.0
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the live water/brine density at reservoir conditions using McCain's correlation.
 
@@ -2238,9 +2400,9 @@ def compute_water_density_mccain(
     :param salinity: Salinity in ppm.
     :return: Live brine density in lb/ft³.
     """
-    if salinity < 0:
+    if min_(salinity) < 0:
         raise ValueError("Salinity cannot be negative.")
-    if pressure < 0:
+    if min_(pressure) < 0:
         raise ValueError("Pressure cannot be negative.")
 
     salinity_in_wt_percent = salinity / 10000.0
@@ -2257,10 +2419,12 @@ def compute_water_density_mccain(
     return water_density
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_water_density_batzle(
-    pressure: float, temperature: float, salinity: float
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the live water/brine density using Batzle & Wang's correlation.
 
@@ -2287,9 +2451,9 @@ def compute_water_density_batzle(
     :param salinity: Salinity in ppm.
     :return: Brine density in lb/ft³.
     """
-    if salinity < 0:
+    if min_(salinity) < 0:
         raise ValueError("Salinity cannot be negative.")
-    if pressure < 0:
+    if min_(pressure) < 0:
         raise ValueError("Pressure cannot be negative.")
 
     # Convert units
@@ -2312,17 +2476,17 @@ def compute_water_density_batzle(
     )
     # Convert to lb/ft³ (1 g/cm³ = 62.42796 lb/ft³)
     water_density = brine_density_g_per_cm3 * 62.42796
-    return water_density
+    return water_density  # type: ignore[return-value]
 
 
 def compute_water_density(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float = 0.0,
-    salinity: float = 0.0,
-    gas_solubility_in_water: float = 0.0,
-    gas_free_water_formation_volume_factor: float = 1.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    gas_gravity: FloatOrArray = 0.0,
+    salinity: FloatOrArray = 0.0,
+    gas_solubility_in_water: FloatOrArray = 0.0,
+    gas_free_water_formation_volume_factor: FloatOrArray = 1.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Calculates the live water/brine density at reservoir conditions
     using McCain's correlations.
@@ -2346,7 +2510,7 @@ def compute_water_density(
         Defaults to 1.0 (no gas effect).
     :return: Live water/brine density (lb/ft³) at reservoir conditions.
     """
-    if salinity < 0 or gas_gravity < 0:
+    if min_(salinity) < 0 or min_(gas_gravity) < 0:
         raise ValueError("Salinity and gas gravity must be non-negative.")
 
     standard_water_density_in_lb_per_ft3 = compute_water_density_batzle(
@@ -2361,7 +2525,7 @@ def compute_water_density(
     # So, bw_actual = bw_gas_free is a common approximation here, or if Rsw*Bg effect on volume is added.
     # For simplicity and given the formula structure, we use the bw_gas_free as the Bw in denominator.
 
-    if gas_free_water_formation_volume_factor <= 0:
+    if min_(gas_free_water_formation_volume_factor) <= 0:
         raise ValueError(
             "Calculated water formation volume factor (Bw) is non-positive, cannot calculate density."
         )
@@ -2378,7 +2542,7 @@ def compute_water_density(
     # Mass gas (lb) = Rsw (scf) * Density of gas at std cond (lb/scf)
     # Density of gas at std cond (lb/scf) = gas_gravity * (28.96 lb/lb-mol_air / 379.4 scf/lb-mol_ideal_gas) = gas_gravity * 0.0763 lb/scf
     mass_of_dissolved_gas_in_lb_per_stb = (
-        gas_solubility_in_water * gas_gravity * c.MOLECULAR_WEIGHT_AIR
+        gas_solubility_in_water * gas_gravity * c.MOLECULAR_WEIGHT_AIR  # type: ignore
     ) / c.SCF_PER_POUND_MOLE  # lb_mass_gas/STB
 
     # Total mass of live water (and dissolved gas) per STB
@@ -2394,15 +2558,15 @@ def compute_water_density(
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
     )  # lb/ft^3
     # Ensure density is non-negative
-    return max(0.0, live_water_density_in_lb_per_ft3)
+    return np.maximum(0.0, live_water_density_in_lb_per_ft3)  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_gas_to_oil_ratio_standing(
-    pressure: float,
-    oil_api_gravity: float,
-    gas_gravity: float,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Standing correlation to compute Rs (solution GOR) in scf/STB.
 
@@ -2427,10 +2591,10 @@ def compute_gas_to_oil_ratio_standing(
     :param gas_gravity: Specific gravity of the gas (relative to air).
     :return: Solution gas-oil ratio (Rs) in (SCF/STB).
     """
-    if oil_api_gravity < 0 or gas_gravity < 0 or pressure < 0:
+    if min_(oil_api_gravity) < 0 or min_(gas_gravity) < 0 or min_(pressure) < 0:
         raise ValueError("All inputs must be non-negative for Rs calculation.")
 
-    if oil_api_gravity < 10:
+    if min_(oil_api_gravity) < 10:
         raise ValueError(
             "API gravity must be greater than or equal to 10 for Standing's correlation."
         )
@@ -2438,14 +2602,32 @@ def compute_gas_to_oil_ratio_standing(
     gor = gas_gravity * (
         (pressure / 18.2 + 1.4) * 10 ** (0.0125 * oil_api_gravity)
     ) ** (1 / 1.2048)
-    return gor
+    return gor  # type: ignore[return-value]
+
+
+@numba.njit(cache=True, fastmath=True)
+def _standing_bp_residual_scalar(
+    pressure: float,
+    oil_api: float,
+    gas_gravity: float,
+    target_rs: float,
+) -> float:
+    """
+    Scalar residual for Standing correlation: Rs(P) - Rs_target
+    """
+    gor = compute_gas_to_oil_ratio_standing_scalar(
+        pressure=pressure,
+        oil_api_gravity=oil_api,
+        gas_gravity=gas_gravity,
+    )
+    return gor - target_rs
 
 
 def estimate_bubble_point_pressure_standing(
-    oil_api_gravity: float,
-    gas_gravity: float,
-    observed_gas_to_oil_ratio: float,
-) -> float:
+    oil_api_gravity: np.ndarray,
+    gas_gravity: np.ndarray,
+    observed_gas_to_oil_ratio: np.ndarray,
+) -> np.ndarray:
     """
     Estimate bubble point pressure (Pb) using Standing's correlation
     given observed Rs and known oil API gravity and gas gravity.
@@ -2472,35 +2654,48 @@ def estimate_bubble_point_pressure_standing(
     :param observed_gas_to_oil_ratio: Observed solution gas-oil ratio (Rs) in SCF/STB.
     :return: Estimated bubble point pressure (Pb) (psi).
     """
+    # Make sure all inputs are arrays of same shape
+    oil_api_gravity = np.asarray(oil_api_gravity, dtype=float)
+    gas_gravity = np.asarray(gas_gravity, dtype=float)
+    observed_gas_to_oil_ratio = np.asarray(observed_gas_to_oil_ratio, dtype=float)
 
-    def residual(pressure: float) -> float:
-        gor = compute_gas_to_oil_ratio_standing(
-            pressure=pressure,
-            oil_api_gravity=oil_api_gravity,
-            gas_gravity=gas_gravity,
+    # Allocate output
+    bubble_point_pressure = np.empty_like(oil_api_gravity)
+
+    # Loop over all cells
+    it = np.nditer(oil_api_gravity, flags=["multi_index"])
+    while not it.finished:
+        idx = it.multi_index
+
+        bubble_point_pressure[idx] = brentq(
+            _standing_bp_residual_scalar,
+            a=14.696,
+            b=10000.0,
+            args=(
+                oil_api_gravity[idx],
+                gas_gravity[idx],
+                observed_gas_to_oil_ratio[idx],
+            ),
+            xtol=1e-6,
         )
-        return gor - observed_gas_to_oil_ratio
 
-    solver = root_scalar(residual, bracket=[14.696, 10000], method="brentq")
-    if not solver.converged:
-        raise RuntimeError("Could not converge to a bubble point pressure.")
+        it.iternext()
 
-    bubble_point_pressure = solver.root
     return bubble_point_pressure
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_hydrocarbon_in_place(
-    area: float,
-    thickness: float,
-    porosity: float,
-    phase_saturation: float,
-    formation_volume_factor: float,
-    net_to_gross_ratio: float = 1.0,
+    area: NDimensionalGrid[NDimension],
+    thickness: NDimensionalGrid[NDimension],
+    porosity: NDimensionalGrid[NDimension],
+    phase_saturation: NDimensionalGrid[NDimension],
+    formation_volume_factor: NDimensionalGrid[NDimension],
+    net_to_gross_ratio: FloatOrArray = 1.0,
     hydrocarbon_type: typing.Literal["oil", "gas", "water"] = "oil",
-    acre_ft_to_bbl: float = 7758.0,
-    acre_ft_to_ft3: float = 43560.0,
-) -> float:
+    acre_ft_to_bbl: FloatOrArray = 7758.0,
+    acre_ft_to_ft3: FloatOrArray = 43560.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Computes the (free) hydrocarbon (or free water) in place (HCIP or FWIP) in stock tank barrels (STB) or standard cubic feet (SCF)
     using the volumetric method.
@@ -2546,13 +2741,13 @@ def compute_hydrocarbon_in_place(
     """
     if hydrocarbon_type not in {"oil", "gas", "water"}:
         raise ValueError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
-    if area <= 0 or thickness <= 0:
+    if min_(area) <= 0 or min_(thickness) <= 0:
         raise ValueError("Area and thickness must be positive values.")
-    if not (0 <= porosity <= 1):
+    if min_(porosity) < 0 or max_(porosity) > 1:
         raise ValueError("Porosity must be a fraction between 0 and 1.")
-    if not (0 <= phase_saturation <= 1):
+    if min_(phase_saturation) < 0 or max_(phase_saturation) > 1:
         raise ValueError("Phase saturation must be a fraction between 0 and 1.")
-    if formation_volume_factor <= 0:
+    if min_(formation_volume_factor) <= 0:
         raise ValueError("Formation volume factor must be a positive value.")
 
     if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
@@ -2566,7 +2761,7 @@ def compute_hydrocarbon_in_place(
             * net_to_gross_ratio
             / formation_volume_factor
         )
-        return oip
+        return oip  # type: ignore[return-value]
 
     # Free Gas in Place (GIP) calculation
     free_gip = (
@@ -2578,15 +2773,15 @@ def compute_hydrocarbon_in_place(
         * net_to_gross_ratio
         / formation_volume_factor
     )
-    return free_gip
+    return free_gip  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_miscibility_transition_factor(
-    pressure: float,
-    minimum_miscibility_pressure: float,
-    transition_width: float = 500.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    minimum_miscibility_pressure: FloatOrArray,
+    transition_width: FloatOrArray = 500.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute pressure-dependent miscibility transition factor.
 
@@ -2650,10 +2845,10 @@ def compute_miscibility_transition_factor(
         This function computes how that mixing parameter varies with pressure near MMP.
     """
     # Fast path for extreme cases (>2 standard deviations from MMP)
-    if pressure >= minimum_miscibility_pressure + 2.0 * transition_width:
-        return 1.0  # Fully miscible (well above MMP)
-    elif pressure <= minimum_miscibility_pressure - 2.0 * transition_width:
-        return 0.0  # Fully immiscible (well below MMP)
+    if np.any(pressure >= minimum_miscibility_pressure + (2.0 * transition_width)):  # type: ignore
+        return np.full_like(pressure, 1.0)  # Fully miscible (well above MMP)
+    elif np.any(pressure <= minimum_miscibility_pressure - (2.0 * transition_width)):  # type: ignore
+        return np.full_like(pressure, 0.0)  # Fully immiscible (well below MMP)
 
     # Smooth transition using hyperbolic tangent
     # Normalize pressure relative to MMP and transition width
@@ -2661,16 +2856,16 @@ def compute_miscibility_transition_factor(
 
     # Transition factor varies from 0 (immiscible) to 1 (miscible)
     transition_factor = 0.5 * (1.0 + np.tanh(normalized))
-    return transition_factor
+    return transition_factor  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_effective_todd_longstaff_omega(
-    pressure: float,
-    base_omega: float,
-    minimum_miscibility_pressure: float,
-    transition_width: float = 500.0,
-) -> float:
+    pressure: NDimensionalGrid[NDimension],
+    base_omega: FloatOrArray,
+    minimum_miscibility_pressure: FloatOrArray,
+    transition_width: FloatOrArray = 500.0,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute pressure-dependent effective Todd-Longstaff omega parameter.
 
@@ -2700,25 +2895,24 @@ def compute_effective_todd_longstaff_omega(
     0.54  # Partial miscibility developed
     ```
     """
-    if base_omega == 0.0:
-        return 0.0
+    if min_(base_omega) <= 0.0:
+        return np.full_like(pressure, 0.0)
 
     transition_factor = compute_miscibility_transition_factor(
         pressure=pressure,
         minimum_miscibility_pressure=minimum_miscibility_pressure,
         transition_width=transition_width,
     )
+    return base_omega * transition_factor  # type: ignore[return-value]
 
-    return base_omega * transition_factor
 
-
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_todd_longstaff_effective_viscosity(
-    oil_viscosity: float,
-    solvent_viscosity: float,
-    solvent_concentration: float,
-    omega: float = 0.67,
-) -> float:
+    oil_viscosity: NDimensionalGrid[NDimension],
+    solvent_viscosity: NDimensionalGrid[NDimension],
+    solvent_concentration: NDimensionalGrid[NDimension],
+    omega: FloatOrArray = 0.67,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute effective viscosity using Todd-Longstaff mixing model.
 
@@ -2797,22 +2991,22 @@ def compute_todd_longstaff_effective_viscosity(
         JPT, July 1972, pp. 874-882.
     """
     # Validate inputs
-    if not (0.0 <= solvent_concentration <= 1.0):
+    if min_(solvent_concentration) < 0.0 or max_(solvent_concentration) > 1.0:
         raise ValueError(
             f"Solvent concentration must be in [0,1], got {solvent_concentration}"
         )
-    if not (0.0 <= omega <= 1.0):
+    if min_(omega) < 0.0 or max_(omega) > 1.0:
         raise ValueError(f"Omega must be in [0,1], got {omega}")
-    if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
+    if min_(oil_viscosity) <= 0.0 or min_(solvent_viscosity) <= 0.0:
         raise ValueError("Viscosities must be positive")
 
     C_s = solvent_concentration
     C_o = 1.0 - C_s
 
     # Handle edge cases
-    if C_s >= 1.0:
+    if np.any(C_s >= 1.0):
         return solvent_viscosity
-    if C_s <= 0.0:
+    if np.any(C_s <= 0.0):
         return oil_viscosity
 
     # Fully mixed viscosity (arithmetic/linear mean)
@@ -2830,18 +3024,18 @@ def compute_todd_longstaff_effective_viscosity(
     #   ω = 1: μ_eff = μ_mix (fully mixed, arithmetic mean)
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
-    return mu_effective
+    return mu_effective  # type: ignore[return-value]
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, fastmath=True)
 def compute_todd_longstaff_effective_density(
-    oil_density: float,
-    solvent_density: float,
-    oil_viscosity: float,
-    solvent_viscosity: float,
-    solvent_concentration: float = 1.0,
-    omega: float = 0.67,
-) -> float:
+    oil_density: NDimensionalGrid[NDimension],
+    solvent_density: NDimensionalGrid[NDimension],
+    oil_viscosity: NDimensionalGrid[NDimension],
+    solvent_viscosity: NDimensionalGrid[NDimension],
+    solvent_concentration: FloatOrArray = 1.0,
+    omega: FloatOrArray = 0.67,
+) -> NDimensionalGrid[NDimension]:
     """
     Compute effective density using Todd-Longstaff mixing model.
 
@@ -2925,24 +3119,24 @@ def compute_todd_longstaff_effective_density(
         Application of a Numerical Simulator for Predicting Miscible Flood Performance."
         JPT, July 1972, pp. 874-882.
     """
-    if not (0.0 <= solvent_concentration <= 1.0):
+    if min_(solvent_concentration) < 0.0 or max_(solvent_concentration) > 1.0:
         raise ValueError(
             f"Solvent concentration must be in [0,1], got {solvent_concentration}"
         )
-    if not (0.0 <= omega <= 1.0):
+    if min_(omega) < 0.0 or max_(omega) > 1.0:
         raise ValueError(f"Omega must be in [0,1], got {omega}")
-    if oil_density <= 0.0 or solvent_density <= 0.0:
+    if min_(oil_density) <= 0.0 or min_(solvent_density) <= 0.0:
         raise ValueError("Densities must be positive")
-    if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
+    if min_(oil_viscosity) <= 0.0 or min_(solvent_viscosity) <= 0.0:
         raise ValueError("Viscosities must be positive")
 
     C_s = solvent_concentration
     C_o = 1.0 - C_s
 
     # Handle edge cases
-    if C_s >= 1.0:
+    if np.any(C_s >= 1.0):
         return solvent_density
-    if C_s <= 0.0:
+    if np.any(C_s <= 0.0):
         return oil_density
 
     # Fully mixed density (volume-weighted, arithmetic mean)
@@ -2957,7 +3151,7 @@ def compute_todd_longstaff_effective_density(
     denominator = C_s * oil_viscosity + C_o * solvent_viscosity
 
     # Avoid division by zero (though should never happen with positive viscosities)
-    if denominator < 1e-15:
+    if np.any(denominator < 1e-15):
         # If both viscosities are essentially zero, fall back to volume weighting
         f_s = C_s
         f_o = C_o
@@ -2974,4 +3168,4 @@ def compute_todd_longstaff_effective_density(
     #   ω = 0: ρ_eff = ρ_segregated (flow-weighted, immiscible)
     #   ω = 1: ρ_eff = ρ_mix (volume-weighted, fully mixed)
     rho_effective = (rho_mix**omega) * (rho_segregated ** (1.0 - omega))
-    return rho_effective
+    return rho_effective  # type: ignore[return-value]
