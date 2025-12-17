@@ -8,11 +8,11 @@ app = marimo.App(width="full")
 def _():
     import numpy as np
 
-    import sim3D
+    import bores
 
-    sim3D.image_config(scale=3)
+    bores.image_config(scale=3)
 
-    viz = sim3D.plotly1d.DataVisualizer()
+    viz = bores.plotly1d.DataVisualizer()
     return np, viz
 
 

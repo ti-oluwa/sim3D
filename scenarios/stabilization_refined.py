@@ -1,7 +1,7 @@
 import marimo
 
-__generated_with = "0.17.7"
-app = marimo.App(width="full", app_title="SIM3D")
+__generated_with = "0.18.4"
+app = marimo.App(width="full", app_title="bores")
 
 
 @app.cell
@@ -10,19 +10,19 @@ def _():
     import typing
 
     import numpy as np
-    import sim3D
+    import bores
 
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
-    sim3D.use_32bit_precision()
-    sim3D.image_config(scale=3)
+    bores.use_32bit_precision()
+    bores.image_config(scale=3)
 
     def main():
         # Grid dimensions - typical field scale
         cell_dimension = (50.0, 50.0)  # 100ft x 100ft cells
         grid_shape = typing.cast(
-            sim3D.ThreeDimensions,
+            bores.ThreeDimensions,
             (40, 40, 10),  # 40x40 cells, 10 layers
         )
         dip_angle = 5.0
@@ -33,10 +33,10 @@ def _():
         thickness_values = np.array(
             [30.0, 20.0, 25.0, 30.0, 25.0, 30.0, 20.0, 25.0, 30.0, 25.0]
         )  # feet
-        thickness_grid = sim3D.layered_grid(
+        thickness_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=thickness_values,
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Pressure gradient: ~0.433 psi/ft for water, slightly less for oil
@@ -50,37 +50,37 @@ def _():
             layer_depths * pressure_gradient
         )  # Add atmospheric pressure
 
-        pressure_grid = sim3D.layered_grid(
+        pressure_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=layer_pressures,  # Ranges from ~3055 to ~3117 psi
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
-        oil_bubble_point_pressure_grid = sim3D.layered_grid(
+        oil_bubble_point_pressure_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=layer_pressures - 400.0,  # 400 psi below formation pressure
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Saturation endpoints - typical for sandstone reservoirs
-        residual_oil_saturation_water_grid = sim3D.uniform_grid(
+        residual_oil_saturation_water_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.25,  # Sor to water
         )
-        residual_oil_saturation_gas_grid = sim3D.uniform_grid(
+        residual_oil_saturation_gas_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.15,  # Sor to gas
         )
-        irreducible_water_saturation_grid = sim3D.uniform_grid(
+        irreducible_water_saturation_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.15,  # Swi
         )
-        connate_water_saturation_grid = sim3D.uniform_grid(
+        connate_water_saturation_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.12,  # Slightly less than Swi
         )
-        residual_gas_saturation_grid = sim3D.uniform_grid(
+        residual_gas_saturation_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.045,  # Sgr
         )
@@ -89,10 +89,10 @@ def _():
         porosity_values = np.array(
             [0.04, 0.07, 0.09, 0.1, 0.08, 0.12, 0.14, 0.16, 0.11, 0.08]
         )  # fraction
-        porosity_grid = sim3D.layered_grid(
+        porosity_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=porosity_values,
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Fluid contacts
@@ -100,9 +100,9 @@ def _():
         goc_depth = 8060.0
         owc_depth = 8220.0
 
-        depth_grid = sim3D.depth_grid(thickness_grid)
+        depth_grid = bores.depth_grid(thickness_grid)
         # Apply structural dip
-        depth_grid = sim3D.apply_structural_dip(
+        depth_grid = bores.apply_structural_dip(
             elevation_grid=depth_grid,
             elevation_direction="downward",
             cell_dimension=cell_dimension,
@@ -110,7 +110,7 @@ def _():
             dip_azimuth=dip_azimuth,
         )
         water_saturation_grid, oil_saturation_grid, gas_saturation_grid = (
-            sim3D.build_saturation_grids(
+            bores.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
                 oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
@@ -128,20 +128,20 @@ def _():
 
         # Oil viscosity - increases slightly with depth (heavier oil)
         oil_viscosity_values = np.linspace(1.2, 2.5, grid_shape[2])  # cP
-        oil_viscosity_grid = sim3D.layered_grid(
+        oil_viscosity_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=oil_viscosity_values,
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Oil compressibility - typical range for crude oil
-        oil_compressibility_grid = sim3D.uniform_grid(
+        oil_compressibility_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=1.2e-5,  # 1/psi
         )
 
         # Oil specific gravity (API ~35-40 degrees)
-        oil_specific_gravity_grid = sim3D.uniform_grid(
+        oil_specific_gravity_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.845,  # ~36 API
         )
@@ -150,61 +150,61 @@ def _():
         # Higher permeability in middle layers (better reservoir quality)
         # Anisotropy ratio kv/kh ~ 0.1 (typical for layered sandstone)
         x_perm_values = np.array([12, 25, 40, 18, 55, 70, 90, 35, 48, 22])  # mD
-        x_permeability_grid = sim3D.layered_grid(
+        x_permeability_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=x_perm_values,
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
         # Slight directional permeability difference
         y_permeability_grid = typing.cast(
-            sim3D.ThreeDimensionalGrid, x_permeability_grid * 0.8
+            bores.ThreeDimensionalGrid, x_permeability_grid * 0.8
         )
         # Vertical permeability much lower (layering effect)
         z_permeability_grid = typing.cast(
-            sim3D.ThreeDimensionalGrid, x_permeability_grid * 0.1
+            bores.ThreeDimensionalGrid, x_permeability_grid * 0.1
         )
 
-        absolute_permeability = sim3D.RockPermeability(
+        absolute_permeability = bores.RockPermeability(
             x=x_permeability_grid,
             y=y_permeability_grid,
             z=z_permeability_grid,
         )
 
         # RelPerm table
-        relative_permeability_table = sim3D.BrooksCoreyThreePhaseRelPermModel(
+        relative_permeability_table = bores.BrooksCoreyThreePhaseRelPermModel(
             irreducible_water_saturation=0.15,
             residual_oil_saturation_gas=0.15,
             residual_oil_saturation_water=0.25,
             residual_gas_saturation=0.045,
-            wettability=sim3D.WettabilityType.WATER_WET,
+            wettability=bores.WettabilityType.WATER_WET,
             water_exponent=2.0,
             oil_exponent=2.0,
             gas_exponent=2.0,
-            mixing_rule=sim3D.stone_II_rule,
+            mixing_rule=bores.stone_II_rule,
         )
 
         # Capillary pressure table
-        capillary_pressure_table = sim3D.BrooksCoreyCapillaryPressureModel(
+        capillary_pressure_table = bores.BrooksCoreyCapillaryPressureModel(
             oil_water_entry_pressure_water_wet=2.0,
             oil_water_pore_size_distribution_index_water_wet=2.0,
             gas_oil_entry_pressure=2.8,
             gas_oil_pore_size_distribution_index=2.0,
-            wettability=sim3D.Wettability.WATER_WET,
+            wettability=bores.Wettability.WATER_WET,
         )
 
         # Realistic temperature gradient (~1.5°F per 100 ft)
         surface_temp = 60.0  # °F
         temp_gradient = 0.015  # °F/ft
         layer_temps = surface_temp + (layer_depths * temp_gradient)
-        temperature_grid = sim3D.layered_grid(
+        temperature_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=layer_temps,  # ~180-182°F
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
         # Rock compressibility for sandstone
         rock_compressibility = 4.5e-6  # 1/psi
         # Net-to-gross ratio (accounting for shale layers)
-        net_to_gross_grid = sim3D.layered_grid(
+        net_to_gross_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=[
                 0.42,
@@ -218,25 +218,25 @@ def _():
                 0.63,
                 0.47,
             ],
-            orientation=sim3D.Orientation.Z,
+            orientation=bores.Orientation.Z,
         )
 
         # Boundary conditions - aquifer support from bottom
-        boundary_conditions = sim3D.BoundaryConditions(
+        boundary_conditions = bores.BoundaryConditions(
             conditions={
-                "pressure": sim3D.GridBoundaryCondition(
-                    bottom=sim3D.ConstantBoundary(3500),  # Aquifer pressure
+                "pressure": bores.GridBoundaryCondition(
+                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
                 ),
             }
         )
 
         # Natural gas (associated gas) properties
-        gas_gravity_grid = sim3D.uniform_grid(
+        gas_gravity_grid = bores.uniform_grid(
             grid_shape=grid_shape,
             value=0.65,  # Typical for associated gas
         )
 
-        model = sim3D.reservoir_model(
+        model = bores.reservoir_model(
             grid_shape=grid_shape,
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -267,19 +267,19 @@ def _():
             dip_azimuth=dip_azimuth,
         )
 
-        options = sim3D.Options(
+        options = bores.Options(
             scheme="impes",
-            total_time=sim3D.Time(days=sim3D.c.DAYS_PER_YEAR * 5),  # 3 years
-            time_step_size=sim3D.Time(hours=24),
-            max_time_steps=30,
+            total_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 3 years
+            time_step_size=bores.Time(days=2),
+            max_time_steps=500,
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
+            max_iterations=250,
         )
-        states = sim3D.run(model=model, wells=None, options=options)
+        states = bores.run(model=model, wells=None, options=options)
         return list(states)
-
-    return main, np, sim3D
+    return main, bores
 
 
 @app.cell
@@ -289,10 +289,10 @@ def _(main):
 
 
 @app.cell
-def _(sim3D, states):
+def _(bores, states):
     from pathlib import Path
 
-    sim3D.dump_states(
+    bores.dump_states(
         states,
         filepath=Path.cwd() / "scenarios/states/stabilization_refined.pkl",
         exist_ok=True,

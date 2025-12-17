@@ -1,0 +1,733 @@
+"""Physical constants and conversion factors"""
+
+from contextvars import ContextVar
+import typing
+
+import attrs
+
+
+__all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
+
+
+@attrs.frozen(slots=True)
+class Constant:
+    """A constant value with optional description and metadata.
+
+    This class wraps a constant value and provides additional context about
+    what the constant represents, its units, and any other relevant information.
+    """
+
+    value: typing.Any
+    """The actual value of the constant."""
+
+    description: typing.Optional[str] = None
+    """Optional description of what this constant represents."""
+
+    unit: typing.Optional[str] = None
+    """Optional unit of measurement for this constant."""
+
+    def __str__(self) -> str:
+        """Return a human-readable string representation of the `Constant`."""
+        return f"{self.value}{self.unit or ''}"
+
+    def __repr__(self) -> str:
+        """Return a string representation of the `Constant`."""
+        parts = [f"value={self.value}"]
+        if self.description:
+            parts.append(f"description='{self.description}'")
+        if self.unit:
+            parts.append(f"unit='{self.unit}'")
+        return f"Constant({', '.join(parts)})"
+
+
+# Default constants dictionary
+DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
+    # Standard Conditions
+    "STANDARD_PRESSURE": Constant(
+        value=101325, description="Standard atmospheric pressure", unit="Pa"
+    ),
+    "STANDARD_PRESSURE_IMPERIAL": Constant(
+        value=14.696, description="Standard atmospheric pressure", unit="psi"
+    ),
+    "STANDARD_TEMPERATURE": Constant(
+        value=288.7056, description="Standard temperature (15.6°C)", unit="K"
+    ),
+    "STANDARD_TEMPERATURE_IMPERIAL": Constant(
+        value=60.0, description="Standard temperature", unit="°F"
+    ),
+    "STANDARD_TEMPERATURE_RANKINE": Constant(
+        value=518.67, description="Standard temperature (15.6°C)", unit="°R"
+    ),
+    "STANDARD_TEMPERATURE_CELSIUS": Constant(
+        value=15.6, description="Standard temperature", unit="°C"
+    ),
+    # Thermal and Compressibility Properties
+    "OIL_THERMAL_EXPANSION_COEFFICIENT": Constant(
+        value=9.7e-4, description="Thermal expansion coefficient for oil", unit="1/K"
+    ),
+    "WATER_THERMAL_EXPANSION_COEFFICIENT": Constant(
+        value=3.0e-4, description="Thermal expansion coefficient for water", unit="1/K"
+    ),
+    "WATER_ISOTHERMAL_COMPRESSIBILITY": Constant(
+        value=4.6e-10,
+        description="Isothermal compressibility of water at 15.6°C",
+        unit="1/Pa",
+    ),
+    "OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
+        value=5.39e-4, description="Thermal expansion coefficient for oil", unit="1/°F"
+    ),
+    "WATER_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
+        value=1.67e-4,
+        description="Thermal expansion coefficient for water",
+        unit="1/°F",
+    ),
+    "WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL": Constant(
+        value=3.17e-6,
+        description="Isothermal compressibility of water at 15.6°C",
+        unit="1/psi",
+    ),
+    # Standard Densities
+    "STANDARD_WATER_DENSITY": Constant(
+        value=998.2, description="Standard water density at 15.6°C", unit="kg/m³"
+    ),
+    "STANDARD_WATER_DENSITY_IMPERIAL": Constant(
+        value=62.37, description="Standard water density at 15.6°C", unit="lb/ft³"
+    ),
+    "STANDARD_AIR_DENSITY": Constant(
+        value=1.225, description="Standard air density at 15.6°C", unit="kg/m³"
+    ),
+    "STANDARD_AIR_DENSITY_IMPERIAL": Constant(
+        value=0.0765, description="Standard air density at 15.6°C", unit="lb/ft³"
+    ),
+    # Molecular Weights
+    "MOLECULAR_WEIGHT_WATER": Constant(
+        value=18.01528, description="Molecular weight of water", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_CO2": Constant(
+        value=44.01, description="Molecular weight of carbon dioxide", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_N2": Constant(
+        value=28.0134, description="Molecular weight of nitrogen", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_METHANE": Constant(
+        value=16.04246, description="Molecular weight of methane", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_NACL": Constant(
+        value=58.44,
+        description="Molecular weight of sodium chloride (NaCl)",
+        unit="g/mol",
+    ),
+    "MOLECULAR_WEIGHT_AIR": Constant(
+        value=28.9644, description="Molecular weight of air", unit="g/mol"
+    ),
+    # Pressure Conversions
+    "PSI_TO_PA": Constant(
+        value=6894.757,
+        description="Conversion factor from psi to Pascals",
+        unit="Pa/psi",
+    ),
+    "PA_TO_PSI": Constant(
+        value=1 / 6894.757,
+        description="Conversion factor from Pascals to psi",
+        unit="psi/Pa",
+    ),
+    "PSI_TO_BAR": Constant(
+        value=0.0689476, description="Conversion factor from psi to bar", unit="bar/psi"
+    ),
+    # Temperature Conversions
+    "RANKINE_TO_KELVIN": Constant(
+        value=5 / 9,
+        description="Conversion factor from Rankine to Kelvin: T(K) = T(R) * 5/9",
+        unit="K/R",
+    ),
+    "KELVIN_TO_RANKINE": Constant(
+        value=9 / 5,
+        description="Conversion factor from Kelvin to Rankine: T(R) = T(K) * 9/5",
+        unit="R/K",
+    ),
+    # Viscosity Conversions
+    "CP_TO_PA_S": Constant(
+        value=0.001,
+        description="Conversion factor from centipoise to Pascal-seconds",
+        unit="Pa·s/cP",
+    ),
+    "CENTIPOISE_TO_PA_S": Constant(
+        value=0.001,
+        description="Conversion factor from centipoise to Pascal-seconds",
+        unit="Pa·s/cP",
+    ),
+    "PASCAL_SECONDS_TO_CENTIPOISE": Constant(
+        value=1000,
+        description="Conversion factor from Pascal-seconds to centipoise",
+        unit="cP/(Pa·s)",
+    ),
+    # Permeability Conversions
+    "MD_TO_M2": Constant(
+        value=9.869233e-16,
+        description="Conversion factor from millidarcies to square meters",
+        unit="m²/mD",
+    ),
+    # Gas-Oil Ratio Conversions
+    "SCF_PER_STB_TO_M3_PER_M3": Constant(
+        value=0.1781076,
+        description="Conversion factor from scf/STB to m³/m³",
+        unit="(m³/m³)/(scf/STB)",
+    ),
+    "M3_PER_M3_TO_SCF_PER_STB": Constant(
+        value=1 / 0.1781076,
+        description="Conversion factor from m³/m³ to scf/STB",
+        unit="(scf/STB)/(m³/m³)",
+    ),
+    # Formation Volume Factor Conversions
+    "M3_PER_M3_TO_BBL_PER_SCF": Constant(
+        value=5.614583,
+        description="Conversion factor from m³/m³ to BBL/scf",
+        unit="(BBL/scf)/(m³/m³)",
+    ),
+    "BBL_PER_SCF_TO_M3_PER_M3": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from BBL/scf to m³/m³",
+        unit="(m³/m³)/(BBL/scf)",
+    ),
+    "M3_PER_M3_TO_BBL_PER_STB": Constant(
+        value=1.0,
+        description="Conversion factor from m³/m³ to BBL/STB",
+        unit="(BBL/STB)/(m³/m³)",
+    ),
+    "BBL_PER_STB_TO_M3_PER_M3": Constant(
+        value=1.0,
+        description="Conversion factor from BBL/STB to m³/m³",
+        unit="(m³/m³)/(BBL/STB)",
+    ),
+    # Volume Conversions
+    "M3_TO_SCF": Constant(
+        value=35.3147,
+        description="Conversion factor from cubic meters to standard cubic feet",
+        unit="scf/m³",
+    ),
+    "SCF_TO_BBL": Constant(
+        value=0.1781076,
+        description="Conversion factor from standard cubic feet to barrels",
+        unit="BBL/scf",
+    ),
+    "BBL_TO_FT3": Constant(
+        value=5.614583,
+        description="Conversion factor from barrels to cubic feet",
+        unit="ft³/BBL",
+    ),
+    "FT3_TO_BBL": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from cubic feet to barrels",
+        unit="BBL/ft³",
+    ),
+    "STB_TO_FT3": Constant(
+        value=5.614583,
+        description="Conversion factor from stock tank barrels to cubic feet",
+        unit="ft³/STB",
+    ),
+    "FT3_TO_STB": Constant(
+        value=1 / 5.614583,
+        description="Conversion factor from cubic feet to stock tank barrels",
+        unit="STB/ft³",
+    ),
+    "STB_TO_M3": Constant(
+        value=0.158987,
+        description="Conversion factor from stock tank barrels to cubic meters",
+        unit="m³/STB",
+    ),
+    "BBL_TO_M3": Constant(
+        value=0.158987,
+        description="Conversion factor from barrels to cubic meters",
+        unit="m³/BBL",
+    ),
+    "M3_TO_BBL": Constant(
+        value=1 / 0.158987,
+        description="Conversion factor from cubic meters to barrels",
+        unit="BBL/m³",
+    ),
+    "SCF_TO_SCM": Constant(
+        value=0.0283168,
+        description="Conversion factor from standard cubic feet to standard cubic meters",
+        unit="m³/scf",
+    ),
+    # Gas Constant
+    "IDEAL_GAS_CONSTANT": Constant(
+        value=8.31446261815324, description="Universal gas constant", unit="J/(mol·K)"
+    ),
+    "IDEAL_GAS_CONSTANT_SI": Constant(
+        value=8.31446261815324e-3,
+        description="Universal gas constant",
+        unit="kJ/(mol·K)",
+    ),
+    "IDEAL_GAS_CONSTANT_IMPERIAL": Constant(
+        value=10.73159, description="Universal gas constant", unit="ft³·psi/(lb·mol·°R)"
+    ),
+    # Density Conversions
+    "POUNDS_PER_FT3_TO_KG_PER_M3": Constant(
+        value=16.0185,
+        description="Conversion factor from lb/ft³ to kg/m³",
+        unit="(kg/m³)/(lb/ft³)",
+    ),
+    "KG_PER_M3_TO_POUNDS_PER_FT3": Constant(
+        value=1 / 16.0185,
+        description="Conversion factor from kg/m³ to lb/ft³",
+        unit="(lb/ft³)/(kg/m³)",
+    ),
+    "POUNDS_PER_FT3_TO_GRAMS_PER_CM3": Constant(
+        value=0.01601846,
+        description="Conversion factor from lb/ft³ to g/cm³",
+        unit="(g/cm³)/(lb/ft³)",
+    ),
+    # Concentration Conversions
+    "PPM_TO_GRAMS_PER_LITER": Constant(
+        value=1e-3, description="Conversion factor from ppm to g/L", unit="(g/L)/ppm"
+    ),
+    "GRAMS_PER_LITER_TO_PPM": Constant(
+        value=1e3, description="Conversion factor from g/L to ppm", unit="ppm/(g/L)"
+    ),
+    "PPM_TO_WEIGHT_FRACTION": Constant(
+        value=1e-6,
+        description="Conversion factor from ppm to weight fraction",
+        unit="fraction/ppm",
+    ),
+    "PPM_TO_WEIGHT_PERCENT": Constant(
+        value=1e-4,
+        description="Conversion factor from ppm to weight percent",
+        unit="%/ppm",
+    ),
+    "WEIGHT_PERCENT_TO_PPM": Constant(
+        value=1e4,
+        description="Conversion factor from weight percent to ppm",
+        unit="ppm/%",
+    ),
+    # Molar Volume
+    "SCF_PER_POUND_MOLE": Constant(
+        value=379.49,
+        description="Standard cubic feet per pound-mole",
+        unit="scf/(lb·mol)",
+    ),
+    # Length Conversions
+    "INCHES_TO_METERS": Constant(
+        value=0.0254, description="Conversion factor from inches to meters", unit="m/in"
+    ),
+    "METERS_TO_INCHES": Constant(
+        value=1 / 0.0254,
+        description="Conversion factor from meters to inches",
+        unit="in/m",
+    ),
+    "FT_TO_METERS": Constant(
+        value=0.3048, description="Conversion factor from feet to meters", unit="m/ft"
+    ),
+    "METERS_TO_FT": Constant(
+        value=1 / 0.3048,
+        description="Conversion factor from meters to feet",
+        unit="ft/m",
+    ),
+    # Area Conversions
+    "ACRES_TO_FT2": Constant(
+        value=43560,
+        description="Conversion factor from acres to square feet",
+        unit="ft²/acre",
+    ),
+    "FT2_TO_ACRES": Constant(
+        value=1 / 43560,
+        description="Conversion factor from square feet to acres",
+        unit="acre/ft²",
+    ),
+    # Volume-Area Conversions
+    "ACRE_FT_TO_FT3": Constant(
+        value=43560,
+        description="Conversion factor from acre-feet to cubic feet",
+        unit="ft³/(acre·ft)",
+    ),
+    "FT3_TO_ACRE_FT": Constant(
+        value=1 / 43560,
+        description="Conversion factor from cubic feet to acre-feet",
+        unit="(acre·ft)/ft³",
+    ),
+    "ACRE_FT_TO_BBL": Constant(
+        value=7758,
+        description="Conversion factor from acre-feet to barrels",
+        unit="BBL/(acre·ft)",
+    ),
+    "BBL_TO_ACRE_FT": Constant(
+        value=1 / 7758,
+        description="Conversion factor from barrels to acre-feet",
+        unit="(acre·ft)/BBL",
+    ),
+    # Flow Rate Conversions
+    "M3_PER_SECOND_TO_STB_PER_DAY": Constant(
+        value=543168.384,
+        description="Conversion factor from m³/s to STB/day",
+        unit="(STB/day)/(m³/s)",
+    ),
+    "STB_PER_DAY_TO_M3_PER_SECOND": Constant(
+        value=1 / 543168.384,
+        description="Conversion factor from STB/day to m³/s",
+        unit="(m³/s)/(STB/day)",
+    ),
+    "M3_PER_SECOND_TO_SCF_PER_DAY": Constant(
+        value=3049492.8,
+        description="Conversion factor from m³/s to scf/day",
+        unit="(scf/day)/(m³/s)",
+    ),
+    "SCF_PER_DAY_TO_M3_PER_SECOND": Constant(
+        value=1 / 3049492.8,
+        description="Conversion factor from scf/day to m³/s",
+        unit="(m³/s)/(scf/day)",
+    ),
+    # Time Conversions
+    "SECONDS_PER_DAY": Constant(
+        value=86400.0, description="Number of seconds in a day", unit="s/day"
+    ),
+    "DAYS_PER_SECOND": Constant(
+        value=1 / 86400.0, description="Number of days in a second", unit="day/s"
+    ),
+    "DAYS_PER_YEAR": Constant(
+        value=365.25, description="Number of days in a year", unit="day/year"
+    ),
+    "SECONDS_PER_YEAR": Constant(
+        value=365.25 * 86400.0, description="Number of seconds in a year", unit="s/year"
+    ),
+    # Transmissibility Conversions
+    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY": Constant(
+        value=0.001127,
+        description="Conversion factor from mD/cP to ft²/(psi·day)",
+        unit="(ft²/(psi·day))/(mD/cP)",
+    ),
+    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND": Constant(
+        value=0.001127 / 86400.0,
+        description="Conversion factor from mD/cP to ft²/(psi·s)",
+        unit="(ft²/(psi·s))/(mD/cP)",
+    ),
+    "MILLIDARCIES_FT_PER_CENTIPOISE_TO_FT3_PER_PSI_PER_DAY": Constant(
+        value=0.001127,
+        unit="(ft³/(psi·day))/(mD·ft/cP)",
+        description="Conversion factor from mD·ft/cP to ft³/(psi·day)",
+    ),
+    # Gravity
+    "ACCELERATION_DUE_TO_GRAVITY_M_PER_S2": Constant(
+        value=9.80665, description="Standard acceleration due to gravity", unit="m/s²"
+    ),
+    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2": Constant(
+        value=32.174, description="Standard acceleration due to gravity", unit="ft/s²"
+    ),
+    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2": Constant(
+        value=32.174 * 86400.0**2,
+        description="Standard acceleration due to gravity",
+        unit="ft/day²",
+    ),
+    # Reservoir Fluid Defaults
+    "RESERVOIR_OIL_NAME": Constant(
+        value="n-Dodecane",
+        description="Default displaced fluid for simulations (CoolProp compatible)",
+        unit=None,
+    ),
+    "RESERVOIR_GAS_NAME": Constant(
+        value="Methane",
+        description="Default gas that exists with oil in the reservoir (CoolProp compatible)",
+        unit=None,
+    ),
+    # Valid Ranges
+    "MIN_VALID_PRESSURE": Constant(
+        value=14.5,
+        description="Minimum valid pressure (below this, fluid model may be non-reservoir like)",
+        unit="psi",
+    ),
+    "MAX_VALID_PRESSURE": Constant(
+        value=14_700.0,
+        description="Maximum valid pressure (above this, fluid model may be non-reservoir like)",
+        unit="psi",
+    ),
+    "MIN_VALID_TEMPERATURE": Constant(
+        value=32.0,
+        description="Minimum valid temperature (below this, fluid model may be non-reservoir like)",
+        unit="°F",
+    ),
+    "MAX_VALID_TEMPERATURE": Constant(
+        value=482.0,
+        description="Maximum valid temperature (above this, fluid model may be non-reservoir like)",
+        unit="°F",
+    ),
+    "GAS_PSEUDO_PRESSURE_THRESHOLD": Constant(
+        value=0.0,
+        description="Pressure threshold above which gas pseudo-pressure is used (psi)",
+        unit="psi",
+    ),
+    "GAS_PSEUDO_PRESSURE_POINTS": Constant(
+        value=1000,
+        description="Number of points to compute when generating gas pseudo-pressure table internally",
+        unit="points",
+    ),
+    "SATURATION_EPSILON": Constant(
+        value=1e-6,
+        description="Small epsilon value to prevent numerical issues with saturations at 0 or 1",
+        unit="fraction",
+    ),
+    "MIN_TRANSMISSIBILITY_FACTOR": Constant(
+        value=1e-12,
+        description="Minimum transmissibility factor to prevent numerical issues with very low transmissibility",
+        unit="fraction",
+    ),
+}
+
+
+class Constants:
+    """Physical constants and conversion factors used in reservoir simulations.
+
+    All constants are stored in an internal dictionary and can be accessed via dot notation.
+    Constants can be modified at runtime if needed. Use __getattr__ for value access and
+    __getitem__ for `Constant` object access.
+    """
+
+    __slots__ = ("_store",)
+
+    def __new__(cls) -> "Constants":
+        instance = super().__new__(cls)
+        instance._store = {}
+        return instance
+
+    def __init__(self) -> None:
+        """Initialize the constants store with default values."""
+        for name, value in DEFAULT_CONSTANTS.items():
+            if isinstance(value, Constant):
+                self._store[name] = value
+            else:
+                # Wrap raw values in Constant objects
+                self._store[name] = Constant(value=value)
+
+    def __getattr__(self, name: str) -> typing.Any:
+        """Get a constant's value using dot notation.
+
+        :param name: Name of the constant
+        :return: Value of the constant (unwrapped from Constant object)
+        :raises AttributeError: If the constant does not exist
+        """
+        if name.startswith("_"):
+            # Allow access to private attributes normally
+            return object.__getattribute__(self, name)
+
+        try:
+            constant = self._store[name]
+            return constant.value if isinstance(constant, Constant) else constant
+        except KeyError:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from None
+
+    def __getitem__(self, name: str) -> Constant:
+        """Get the Constant object (with metadata) using bracket notation.
+
+        :param name: Name of the constant
+        :return: Constant object with value, description, and unit
+        :raises KeyError: If the constant does not exist
+        """
+        return self._store[name]
+
+    def __setattr__(self, name: str, value: typing.Union[typing.Any, Constant]) -> None:
+        """Set a constant value using dot notation.
+
+        Accepts either a raw value (which will be wrapped in a Constant) or a Constant object.
+
+        :param name: Name of the constant
+        :param value: Value to set (raw value or Constant object)
+        """
+        if name.startswith("_"):
+            # Allow setting private attributes normally
+            object.__setattr__(self, name, value)
+        else:
+            if isinstance(value, Constant):
+                self._store[name] = value
+            else:
+                # Wrap raw values in Constant objects
+                self._store[name] = Constant(value=value)
+
+    def __setitem__(self, name: str, value: typing.Union[typing.Any, Constant]) -> None:
+        """Set a constant using bracket notation.
+
+        :param name: Name of the constant
+        :param value: Value to set (raw value or Constant object)
+        """
+        if isinstance(value, Constant):
+            self._store[name] = value
+        else:
+            # Wrap raw values in Constant objects
+            self._store[name] = Constant(value=value)
+
+    def __delattr__(self, name: str) -> None:
+        """Delete a constant from the store.
+
+        :param name: Name of the constant to delete
+        :raises AttributeError: If the constant does not exist
+        """
+        if name.startswith("_"):
+            object.__delattr__(self, name)
+        else:
+            try:
+                del self._store[name]
+            except KeyError:
+                raise AttributeError(
+                    f"'{type(self).__name__}' object has no attribute '{name}'"
+                ) from None
+
+    def __delitem__(self, name: str) -> None:
+        """Delete a constant using bracket notation.
+
+        :param name: Name of the constant to delete
+        :raises KeyError: If the constant does not exist
+        """
+        del self._store[name]
+
+    def __contains__(self, name: str) -> bool:
+        """Check if a constant exists.
+
+        :param name: Name of the constant
+        :return: True if the constant exists, False otherwise
+        """
+        return name in self._store
+
+    def keys(self) -> typing.KeysView[str]:
+        """Get all constant names.
+
+        :return: View of all constant names
+        """
+        return self._store.keys()
+
+    def values(self) -> typing.ValuesView[Constant]:
+        """Get all Constant objects.
+
+        :return: View of all Constant objects
+        """
+        return self._store.values()
+
+    def items(self) -> typing.ItemsView[str, Constant]:
+        """Get all constant name-Constant object pairs.
+
+        :return: View of all constant name-Constant pairs
+        """
+        return self._store.items()
+
+    def get(self, name: str, default: typing.Any = None) -> typing.Any:
+        """Get a constant's value with a default fallback.
+
+        :param name: Name of the constant
+        :param default: Default value if constant doesn't exist
+        :return: Value of the constant or default
+        """
+        constant = self._store.get(name)
+        if constant is None:
+            return default
+        return constant.value if isinstance(constant, Constant) else constant
+
+    def get_constant(
+        self, name: str, default: typing.Optional[Constant] = None
+    ) -> typing.Optional[Constant]:
+        """Get a `Constant` object with a default fallback.
+
+        :param name: Name of the constant
+        :param default: Default `Constant` if constant doesn't exist
+        :return: `Constant` object or default
+        """
+        return self._store.get(name, default)
+
+    def __repr__(self) -> str:
+        """Return a string representation of the Constants object."""
+        return f"{type(self).__name__}(constants={len(self._store)})"
+
+    def __len__(self) -> int:
+        """Return the number of constants in the store."""
+        return len(self._store)
+
+    def __call__(self) -> "ConstantsContext":
+        """
+        Create a context manager that within its context, temporarily overrides/set the default constants
+        accessed through the global constants proxy `bores.c`  to this `Constants` instance.
+
+        :return: `ConstantsContext` for temporary overrides
+        """
+        return ConstantsContext(self)
+
+
+_constants_context: ContextVar[Constants] = ContextVar(
+    "constants_context", default=Constants()
+)
+
+
+class ConstantsContext:
+    """
+    Context manager for temporary global `Constants` overrides.
+
+    This context manager allows for temporary overrides of the global `Constants`
+    instance within a specific context. Upon exiting the context, the previous
+    `Constants` instance is restored.
+    """
+
+    def __init__(self, constants: Constants) -> None:
+        """Initialize the context manager with a new Constants instance.
+
+        :param constants: New Constants instance to use within the context
+        """
+        self._new_constants = constants
+        self._token = None
+
+    def __enter__(self) -> Constants:
+        """Enter the context, setting the new Constants instance.
+
+        :return: The new Constants instance
+        """
+        self._token = _constants_context.set(self._new_constants)
+        return self._new_constants
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit the context, restoring the previous Constants instance."""
+        if self._token is not None:
+            _constants_context.reset(self._token)
+
+
+class _ConstantsProvider:
+    """
+    Proxy class to access the current context's `Constants` instance.
+
+    Use the `constants` property to get the current `Constants` instance.
+
+    Override the current `Constants` instance using the `ConstantsContext` context manager.
+    """
+
+    @property
+    def constants(self) -> Constants:
+        """Get the current context's `Constants` instance.
+
+        :return: Current `Constants` instance
+        """
+        return _constants_context.get()
+
+    def __getattr__(self, name: str) -> typing.Any:
+        """Get a constant's value from the current context's `Constants` instance.
+
+        :param name: Name of the constant
+        :return: Value of the constant
+        :raises AttributeError: If the constant does not exist
+        """
+        return getattr(self.constants, name)
+
+    def __getitem__(self, name: str) -> Constant:
+        """Get a Constant object from the current context's `Constants` instance.
+
+        :param name: Name of the constant
+        :return: Constant object
+        :raises KeyError: If the constant does not exist
+        """
+        return self.constants[name]
+
+
+c = _ConstantsProvider()
+"""Global proxy to access physical constants and conversion factors."""
+
+
+def get_constant(name: str) -> typing.Optional[Constant]:
+    """Get a `Constant` object by name from the global constants.
+
+    :param name: Name of the constant
+    :return: `Constant` object or None if not found
+    """
+    return c.constants.get_constant(name)

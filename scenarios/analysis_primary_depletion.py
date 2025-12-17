@@ -10,20 +10,20 @@ def _():
     import itertools
     from pathlib import Path
 
-    import sim3D
+    import bores
 
-    sim3D.image_config(scale=3)
+    bores.image_config(scale=3)
 
     DEPLETED_MODEL_STATES = (
         Path.cwd() / "scenarios/states/primary_depletion_coarse.pkl.xz"
     )
-    states = list(sim3D.load_states(filepath=DEPLETED_MODEL_STATES))
-    return itertools, np, sim3D, states
+    states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
+    return itertools, np, bores, states
 
 
 @app.cell
-def _(itertools, np, sim3D, states):
-    analyst = sim3D.ModelAnalyst(states)
+def _(itertools, np, bores, states):
+    analyst = bores.ModelAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
         interval=1,
@@ -128,9 +128,9 @@ def _(itertools, np, sim3D, states):
 
 
 @app.cell
-def _(avg_pressure_history, np, sim3D):
+def _(avg_pressure_history, np, bores):
     # Pressure
-    pressure_fig = sim3D.make_series_plot(
+    pressure_fig = bores.make_series_plot(
         data={"Avg. Reservoir Pressure": np.array(avg_pressure_history)},
         title="Pressure Analysis (CASE 2)",
         x_label="Time Step",
@@ -149,11 +149,11 @@ def _(
     gas_saturation_history,
     np,
     oil_saturation_history,
-    sim3D,
+    bores,
     water_saturation_history,
 ):
     # Saturation
-    saturation_fig = sim3D.make_series_plot(
+    saturation_fig = bores.make_series_plot(
         data={
             "Avg. Water Saturation": np.array(water_saturation_history),
             "Avg. Oil Saturation": np.array(oil_saturation_history),
@@ -175,10 +175,10 @@ def _(
     gas_oil_capillary_pressure_history,
     np,
     oil_water_capillary_pressure_history,
-    sim3D,
+    bores,
 ):
     # Capillary Pressure
-    capillary_pressure_fig = sim3D.make_series_plot(
+    capillary_pressure_fig = bores.make_series_plot(
         data={
             "Pcow": np.array(oil_water_capillary_pressure_history),
             "Pcgo": np.array(gas_oil_capillary_pressure_history),
@@ -195,9 +195,9 @@ def _(
 
 
 @app.cell
-def _(krg_history, kro_history, krw_history, np, sim3D):
+def _(krg_history, kro_history, krw_history, np, bores):
     # Rel Perm
-    relperm_fig = sim3D.make_series_plot(
+    relperm_fig = bores.make_series_plot(
         data={
             "Krw": np.array(krw_history),
             "Kro": np.array(kro_history),
@@ -219,10 +219,10 @@ def _(
     np,
     oil_effective_density_history,
     oil_effective_viscosity_history,
-    sim3D,
+    bores,
 ):
     # Oil Effective Density
-    oil_effective_density_fig = sim3D.make_series_plot(
+    oil_effective_density_fig = bores.make_series_plot(
         data={
             "Oil Effective Density": np.array(oil_effective_density_history),
         },
@@ -234,7 +234,7 @@ def _(
         height=460,
     )
     # Oil Effective Viscosity
-    oil_effective_viscosity_fig = sim3D.make_series_plot(
+    oil_effective_viscosity_fig = bores.make_series_plot(
         data={
             "Oil Effective Viscosity": np.array(oil_effective_viscosity_history),
         },
@@ -247,7 +247,7 @@ def _(
         line_colors="brown",
     )
 
-    effective_density_viscosity_fig = sim3D.merge_plots(
+    effective_density_viscosity_fig = bores.merge_plots(
         oil_effective_density_fig,
         oil_effective_viscosity_fig,
         cols=2,
@@ -258,9 +258,9 @@ def _(
 
 
 @app.cell
-def _(np, oil_relative_mobility_history, sim3D):
+def _(np, oil_relative_mobility_history, bores):
     # Oil Relative Mobility
-    oil_relative_mobility_fig = sim3D.make_series_plot(
+    oil_relative_mobility_fig = bores.make_series_plot(
         data={
             "Oil Relative Mobility": np.array(oil_relative_mobility_history),
         },
@@ -276,12 +276,12 @@ def _(np, oil_relative_mobility_history, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     # Production & Injection
     oil_production_history = analyst.oil_production_history(
         interval=1, cumulative=False, from_time_step=1
     )
-    oil_production_fig = sim3D.make_series_plot(
+    oil_production_fig = bores.make_series_plot(
         data={
             "Oil Production": np.array(list(oil_production_history)),
         },
@@ -297,11 +297,11 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     water_production_history = analyst.water_production_history(
         interval=1, cumulative=False, from_time_step=1
     )
-    water_production_fig = sim3D.make_series_plot(
+    water_production_fig = bores.make_series_plot(
         data={
             "Water Production": np.array(list(water_production_history)),
         },
@@ -317,11 +317,11 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     gas_production_history = analyst.free_gas_production_history(
         interval=1, cumulative=False, from_time_step=1
     )
-    gas_production_fig = sim3D.make_series_plot(
+    gas_production_fig = bores.make_series_plot(
         data={
             "Gas Production": np.array(list(gas_production_history)),
         },
@@ -337,11 +337,11 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     gas_injection_history = analyst.gas_injection_history(
         interval=1, cumulative=False, from_time_step=1
     )
-    gas_injection_fig = sim3D.make_series_plot(
+    gas_injection_fig = bores.make_series_plot(
         data={
             # "Water Injection": np.array(list(water_injection_history)),
             "Gas Injection": np.array(list(gas_injection_history)),
@@ -358,13 +358,13 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     # Cumulative production & injection
     cumulative_oil_production_history = analyst.oil_production_history(
         interval=1, cumulative=True, from_time_step=1
     )
 
-    cumulative_oil_production_fig = sim3D.make_series_plot(
+    cumulative_oil_production_fig = bores.make_series_plot(
         data={
             "Cumulative Oil Production": np.array(
                 list(cumulative_oil_production_history)
@@ -383,12 +383,12 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     cumulative_water_production_history = analyst.water_production_history(
         interval=1, cumulative=True, from_time_step=1
     )
 
-    cumulative_water_production_fig = sim3D.make_series_plot(
+    cumulative_water_production_fig = bores.make_series_plot(
         data={
             "Cumulative Water Production": np.array(
                 list(cumulative_water_production_history)
@@ -408,12 +408,12 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     cumulative_gas_production_history = analyst.free_gas_production_history(
         interval=1, cumulative=True, from_time_step=1
     )
 
-    cumulative_gas_production_fig = sim3D.make_series_plot(
+    cumulative_gas_production_fig = bores.make_series_plot(
         data={
             "Cumulative Gas Production": np.array(
                 list(cumulative_gas_production_history)
@@ -433,8 +433,8 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(gor_history, np, sim3D, water_cut_history):
-    water_cut_fig = sim3D.make_series_plot(
+def _(gor_history, np, bores, water_cut_history):
+    water_cut_fig = bores.make_series_plot(
         data={
             "Water Cut (WOR)": np.array(water_cut_history),
         },
@@ -445,7 +445,7 @@ def _(gor_history, np, sim3D, water_cut_history):
         width=720,
         height=460,
     )
-    gor_fig = sim3D.make_series_plot(
+    gor_fig = bores.make_series_plot(
         data={
             "Gas-Oil Ratio (GOR)": np.array(gor_history),
         },
@@ -457,7 +457,7 @@ def _(gor_history, np, sim3D, water_cut_history):
         height=460,
     )
 
-    fluid_cut_plots = sim3D.merge_plots(
+    fluid_cut_plots = bores.merge_plots(
         water_cut_fig, gor_fig, cols=2, title="Fluid Cut Analysis (CASE 2)"
     )
     fluid_cut_plots.show()
@@ -465,12 +465,12 @@ def _(gor_history, np, sim3D, water_cut_history):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     cumulative_gas_injection_history = analyst.gas_injection_history(
         interval=1, cumulative=True, from_time_step=1
     )
 
-    cumulative_gas_injection_fig = sim3D.make_series_plot(
+    cumulative_gas_injection_fig = bores.make_series_plot(
         data={
             "Cumulative Gas Injection": np.array(
                 list(cumulative_gas_injection_history)
@@ -488,7 +488,7 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     # Reserves
     oil_in_place_history = analyst.oil_in_place_history(interval=1, from_time_step=1)
     gas_in_place_history = analyst.gas_in_place_history(interval=1, from_time_step=1)
@@ -496,7 +496,7 @@ def _(analyst, np, sim3D):
         interval=1, from_time_step=1
     )
 
-    oil_water_reserves_fig = sim3D.make_series_plot(
+    oil_water_reserves_fig = bores.make_series_plot(
         data={
             "Oil In Place": np.array(list(oil_in_place_history)),
             "Water In Place": np.array(list(water_in_place_history)),
@@ -508,7 +508,7 @@ def _(analyst, np, sim3D):
         width=720,
         height=460,
     )
-    gas_reserve_fig = sim3D.make_series_plot(
+    gas_reserve_fig = bores.make_series_plot(
         data={
             "Gas In Place": np.array(list(gas_in_place_history)),
         },
@@ -520,7 +520,7 @@ def _(analyst, np, sim3D):
         height=460,
     )
 
-    reserves_plots = sim3D.merge_plots(
+    reserves_plots = bores.merge_plots(
         oil_water_reserves_fig,
         gas_reserve_fig,
         cols=2,
@@ -534,11 +534,11 @@ def _(analyst, np, sim3D):
 def _(
     displacement_efficiency_history,
     np,
-    sim3D,
+    bores,
     volumetric_sweep_efficiency_history,
 ):
     # Recovery
-    displacement_efficiency_fig = sim3D.make_series_plot(
+    displacement_efficiency_fig = bores.make_series_plot(
         data={
             "Displacement Efficiency": np.array(displacement_efficiency_history),
         },
@@ -549,7 +549,7 @@ def _(
         height=460,
         line_colors="green",
     )
-    vol_sweep_efficiency_fig = sim3D.make_series_plot(
+    vol_sweep_efficiency_fig = bores.make_series_plot(
         data={
             "Vol. Sweep Efficiency": np.array(volumetric_sweep_efficiency_history),
         },
@@ -560,7 +560,7 @@ def _(
         height=460,
     )
 
-    sweep_efficiency_plots = sim3D.merge_plots(
+    sweep_efficiency_plots = bores.merge_plots(
         displacement_efficiency_fig,
         vol_sweep_efficiency_fig,
         cols=2,
@@ -571,8 +571,8 @@ def _(
 
 
 @app.cell
-def _(analyst, np, recovery_efficiency_history, sim3D):
-    recovery_efficiency_fig = sim3D.make_series_plot(
+def _(analyst, np, recovery_efficiency_history, bores):
+    recovery_efficiency_fig = bores.make_series_plot(
         data={
             "Recovery Efficiency": np.array(recovery_efficiency_history),
         },
@@ -587,7 +587,7 @@ def _(analyst, np, recovery_efficiency_history, sim3D):
     oil_recovery_factor_history = analyst.oil_recovery_factor_history(
         interval=1, from_time_step=1
     )
-    recovery_factor_fig = sim3D.make_series_plot(
+    recovery_factor_fig = bores.make_series_plot(
         data={
             "Oil Recovery Factor": np.array(list(oil_recovery_factor_history)),
         },
@@ -598,7 +598,7 @@ def _(analyst, np, recovery_efficiency_history, sim3D):
         height=460,
     )
 
-    recovery_plots = sim3D.merge_plots(
+    recovery_plots = bores.merge_plots(
         recovery_efficiency_fig,
         recovery_factor_fig,
         cols=2,
@@ -609,7 +609,7 @@ def _(analyst, np, recovery_efficiency_history, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     recommended_model, results = analyst.recommend_decline_model(phase="oil")
     print("Recommended Decline Model: ", recommended_model)
     decline_curve = results[recommended_model]
@@ -619,7 +619,7 @@ def _(analyst, np, sim3D):
         production_forecast = analyst.forecast_production(
             decline_result=decline_curve, time_steps=500
         )
-        production_forecast_fig = sim3D.make_series_plot(
+        production_forecast_fig = bores.make_series_plot(
             data={
                 "Production Rate": np.array(production_forecast),
             },
@@ -633,19 +633,19 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(sim3D):
-    viz = sim3D.plotly3d.DataVisualizer()
+def _(bores):
+    viz = bores.plotly3d.DataVisualizer()
     return (viz,)
 
 
 @app.cell
-def _(sim3D, states, viz):
+def _(bores, states, viz):
     wells = states[0].wells
     injector_locations, producer_locations = wells.locations
     injector_names, producer_names = wells.names
     well_positions = [*injector_locations, *producer_locations]
     well_names = [*injector_names, *producer_names]
-    labels = sim3D.plotly3d.Labels()
+    labels = bores.plotly3d.Labels()
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
@@ -680,7 +680,7 @@ def _(sim3D, states, viz):
         figures.append(figure)
 
     if len(figures) > 1:
-        plots = sim3D.merge_plots(*figures, cols=2, height=620)
+        plots = bores.merge_plots(*figures, cols=2, height=620)
         plots.show()
         # for figure in figures:
         #     figure.show()

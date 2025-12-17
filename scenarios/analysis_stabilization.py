@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.18.4"
 app = marimo.App(width="full")
 
 
@@ -10,20 +10,20 @@ def _():
     import itertools
     from pathlib import Path
 
-    import sim3D
+    import bores
 
-    sim3D.image_config(scale=3)
+    bores.image_config(scale=3)
 
     DEPLETED_MODEL_STATES = (
-        Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
+        Path.cwd() / "scenarios/states/stabilization_refined.pkl.xz"
     )
-    states = list(sim3D.load_states(filepath=DEPLETED_MODEL_STATES))
-    return itertools, np, sim3D, states
+    states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
+    return itertools, np, bores, states
 
 
 @app.cell
-def _(itertools, np, sim3D, states):
-    analyst = sim3D.ModelAnalyst(states)
+def _(itertools, np, bores, states):
+    analyst = bores.ModelAnalyst(states)
 
     oil_saturation_history = []
     water_saturation_history = []
@@ -96,9 +96,9 @@ def _(itertools, np, sim3D, states):
 
 
 @app.cell
-def _(avg_pressure_history, np, sim3D):
+def _(avg_pressure_history, np, bores):
     # Pressure
-    pressure_fig = sim3D.make_series_plot(
+    pressure_fig = bores.make_series_plot(
         data={"Avg. Reservoir Pressure": np.array(avg_pressure_history)},
         title="Pressure Stability Analysis (Case 1)",
         x_label="Time Step",
@@ -116,11 +116,11 @@ def _(
     gas_saturation_history,
     np,
     oil_saturation_history,
-    sim3D,
+    bores,
     water_saturation_history,
 ):
     # Saturation
-    saturation_fig = sim3D.make_series_plot(
+    saturation_fig = bores.make_series_plot(
         data={
             "Avg. Oil Saturation": np.array(oil_saturation_history),
             "Avg. Water Saturation": np.array(water_saturation_history),
@@ -142,10 +142,10 @@ def _(
     gas_oil_capillary_pressure_history,
     np,
     oil_water_capillary_pressure_history,
-    sim3D,
+    bores,
 ):
     # Capillary Pressure
-    capillary_pressure_fig = sim3D.make_series_plot(
+    capillary_pressure_fig = bores.make_series_plot(
         data={
             "Pcow": np.array(oil_water_capillary_pressure_history),
             "Pcgo": np.array(gas_oil_capillary_pressure_history),
@@ -162,9 +162,9 @@ def _(
 
 
 @app.cell
-def _(krg_history, kro_history, krw_history, np, sim3D):
+def _(krg_history, kro_history, krw_history, np, bores):
     # Rel Perm
-    relperm_fig = sim3D.make_series_plot(
+    relperm_fig = bores.make_series_plot(
         data={
             "Krw": np.array(krw_history),
             "Kro": np.array(kro_history),
@@ -182,9 +182,9 @@ def _(krg_history, kro_history, krw_history, np, sim3D):
 
 
 @app.cell
-def _(krw_saturation_history, np, sim3D):
+def _(krw_saturation_history, np, bores):
     # RelPerm-Saturation
-    water_relperm_saturation_fig = sim3D.make_series_plot(
+    water_relperm_saturation_fig = bores.make_series_plot(
         data={
             "Krw/Sw": np.array(krw_saturation_history),
         },
@@ -200,8 +200,8 @@ def _(krw_saturation_history, np, sim3D):
 
 
 @app.cell
-def _(kro_saturation_history, np, sim3D):
-    oil_relperm_saturation_fig = sim3D.make_series_plot(
+def _(kro_saturation_history, np, bores):
+    oil_relperm_saturation_fig = bores.make_series_plot(
         data={
             "Kro/So": np.array(kro_saturation_history),
         },
@@ -217,8 +217,8 @@ def _(kro_saturation_history, np, sim3D):
 
 
 @app.cell
-def _(krg_saturation_history, np, sim3D):
-    gas_relperm_saturation_fig = sim3D.make_series_plot(
+def _(krg_saturation_history, np, bores):
+    gas_relperm_saturation_fig = bores.make_series_plot(
         data={
             "Krg/Sg": np.array(krg_saturation_history),
         },
@@ -238,10 +238,10 @@ def _(
     np,
     oil_effective_density_history,
     oil_effective_viscosity_history,
-    sim3D,
+    bores,
 ):
     # Oil Effective Density
-    oil_effective_density_fig = sim3D.make_series_plot(
+    oil_effective_density_fig = bores.make_series_plot(
         data={
             "Oil Effective Density": np.array(oil_effective_density_history),
         },
@@ -253,7 +253,7 @@ def _(
         height=460,
     )
     # Oil Effective Viscosity
-    oil_effective_viscosity_fig = sim3D.make_series_plot(
+    oil_effective_viscosity_fig = bores.make_series_plot(
         data={
             "Oil Effective Viscosity": np.array(oil_effective_viscosity_history),
         },
@@ -266,7 +266,7 @@ def _(
         line_colors="brown",
     )
 
-    effective_density_viscosity_fig = sim3D.merge_plots(
+    effective_density_viscosity_fig = bores.merge_plots(
         oil_effective_density_fig,
         oil_effective_viscosity_fig,
         cols=2,
@@ -277,9 +277,9 @@ def _(
 
 
 @app.cell
-def _(np, oil_relative_mobility_history, sim3D):
+def _(np, oil_relative_mobility_history, bores):
     # Oil Relative Mobility
-    oil_relative_mobility_fig = sim3D.make_series_plot(
+    oil_relative_mobility_fig = bores.make_series_plot(
         data={
             "Oil Relative Mobility": np.array(oil_relative_mobility_history),
         },
@@ -295,7 +295,7 @@ def _(np, oil_relative_mobility_history, sim3D):
 
 
 @app.cell
-def _(analyst, np, sim3D):
+def _(analyst, np, bores):
     oil_in_place_history = analyst.oil_in_place_history(interval=1, from_time_step=1)
     gas_in_place_history = analyst.gas_in_place_history(interval=1, from_time_step=1)
     water_in_place_history = analyst.water_in_place_history(
@@ -303,7 +303,7 @@ def _(analyst, np, sim3D):
     )
 
     # Reserves
-    oil_water_reserves_fig = sim3D.make_series_plot(
+    oil_water_reserves_fig = bores.make_series_plot(
         data={
             "Oil In Place": np.array(list(oil_in_place_history)),
             "Water In Place": np.array(list(water_in_place_history)),
@@ -315,7 +315,7 @@ def _(analyst, np, sim3D):
         width=720,
         height=460,
     )
-    gas_reserve_fig = sim3D.make_series_plot(
+    gas_reserve_fig = bores.make_series_plot(
         data={
             "Gas In Place": np.array(list(gas_in_place_history)),
         },
@@ -327,7 +327,7 @@ def _(analyst, np, sim3D):
         width=720,
         height=460,
     )
-    reserves_plot = sim3D.merge_plots(
+    reserves_plot = bores.merge_plots(
         oil_water_reserves_fig,
         gas_reserve_fig,
         cols=2,
@@ -338,19 +338,19 @@ def _(analyst, np, sim3D):
 
 
 @app.cell
-def _(sim3D):
-    viz = sim3D.plotly3d.DataVisualizer()
+def _(bores):
+    viz = bores.plotly3d.DataVisualizer()
     return (viz,)
 
 
 @app.cell
-def _(sim3D, states, viz):
+def _(bores, states, viz):
     wells = states[0].wells
     injector_locations, producer_locations = wells.locations
     injector_names, producer_names = wells.names
     well_positions = [*injector_locations, *producer_locations]
     well_names = [*injector_names, *producer_names]
-    labels = sim3D.plotly3d.Labels()
+    labels = bores.plotly3d.Labels()
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
@@ -380,7 +380,7 @@ def _(sim3D, states, viz):
         figures.append(figure)
 
     if len(figures) > 1:
-        # plots = sim3D.merge_plots(*figures, cols=2)
+        # plots = bores.merge_plots(*figures, cols=2)
         # plots.show()
         for figure in figures:
             figure.show()
