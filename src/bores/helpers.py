@@ -42,7 +42,7 @@ from bores.types import (
     MiscibilityModel,
     NDimension,
     NDimensionalGrid,
-    Options,
+    RelativeMobilityRange,
     ThreeDimensions,
 )
 from bores.wells import Wells
@@ -157,13 +157,28 @@ def build_rock_fluid_properties_grids(
     fluid_properties: FluidProperties[ThreeDimensions],
     rock_properties: RockProperties[ThreeDimensions],
     rock_fluid_properties: RockFluidProperties,
-    options: Options,
+    disable_capillary_effects: bool = False,
+    capillary_strength_factor: float = 1.0,
+    relative_mobility_range: typing.Optional[RelativeMobilityRange] = None,
 ) -> typing.Tuple[
     RelPermGrids[ThreeDimensions],
     RelativeMobilityGrids[ThreeDimensions],
     CapillaryPressureGrids[ThreeDimensions],
 ]:
-    """Builds the rock-fluid properties grids required for simulation."""
+    """
+    Builds the rock-fluid properties grids required for simulation.
+
+    :param fluid_properties: `FluidProperties` object containing fluid property grids.
+    :param rock_properties: `RockProperties` object containing rock property grids.
+    :param rock_fluid_properties: `RockFluidProperties` object containing rock-fluid property tables.
+    :param disable_capillary_effects: If True, capillary effects are disabled (zero capillary pressures).
+    :param capillary_strength_factor: Factor to scale capillary pressure grids.
+    :param relative_mobility_range: Optional clamping range for relative mobility grids.
+    :return: A tuple containing:
+        - RelPermGrids: Relative permeability grids for oil, water, and gas.
+        - RelativeMobilityGrids: Relative mobility grids for oil, water, and gas.
+        - CapillaryPressureGrids: Capillary pressure grids for oil-water and gas-oil.
+    """
     # Collect and clamp saturation grids
     water_saturation_grid = fluid_properties.water_saturation_grid
     oil_saturation_grid = fluid_properties.oil_saturation_grid
@@ -203,18 +218,20 @@ def build_rock_fluid_properties_grids(
         oil_viscosity_grid=oil_viscosity_grid,
         gas_viscosity_grid=gas_viscosity_grid,
     )
-    # Clamp relative mobility grids to avoid numerical issues
-    water_relative_mobility_grid = options.relative_mobility_range["water"].arrayclip(
-        water_relative_mobility_grid
-    )
-    oil_relative_mobility_grid = options.relative_mobility_range["oil"].arrayclip(
-        oil_relative_mobility_grid
-    )
-    gas_relative_mobility_grid = options.relative_mobility_range["gas"].arrayclip(
-        gas_relative_mobility_grid
-    )
 
-    if options.disable_capillary_effects:
+    if relative_mobility_range is not None:
+        # Clamp relative mobility grids to avoid numerical issues
+        water_relative_mobility_grid = relative_mobility_range["water"].arrayclip(
+            water_relative_mobility_grid
+        )
+        oil_relative_mobility_grid = relative_mobility_range["oil"].arrayclip(
+            oil_relative_mobility_grid
+        )
+        gas_relative_mobility_grid = relative_mobility_range["gas"].arrayclip(
+            gas_relative_mobility_grid
+        )
+
+    if disable_capillary_effects:
         logger.debug("Capillary effects disabled; using zero capillary pressure grids")
         oil_water_capillary_pressure_grid = build_uniform_grid(
             grid_shape=water_saturation_grid.shape, value=0.0
@@ -235,17 +252,17 @@ def build_rock_fluid_properties_grids(
             residual_gas_saturation_grid=residual_gas_saturation_grid,
             capillary_pressure_table=capillary_pressure_table,
         )
-        if options.capillary_strength_factor != 1.0:
+        if capillary_strength_factor != 1.0:
             logger.debug(
-                f"Scaling capillary pressure grids by factor {options.capillary_strength_factor}"
+                f"Scaling capillary pressure grids by factor {capillary_strength_factor}"
             )
             oil_water_capillary_pressure_grid = typing.cast(
                 NDimensionalGrid[ThreeDimensions],
-                oil_water_capillary_pressure_grid * options.capillary_strength_factor,
+                oil_water_capillary_pressure_grid * capillary_strength_factor,
             )
             gas_oil_capillary_pressure_grid = typing.cast(
                 NDimensionalGrid[ThreeDimensions],
-                gas_oil_capillary_pressure_grid * options.capillary_strength_factor,
+                gas_oil_capillary_pressure_grid * capillary_strength_factor,
             )
 
     padded_relperm_grids = RelPermGrids(

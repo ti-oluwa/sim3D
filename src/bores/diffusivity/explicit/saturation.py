@@ -4,8 +4,10 @@ import typing
 
 import numba
 import numpy as np
+import attrs
 
 from bores._precision import get_dtype
+from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
@@ -14,11 +16,10 @@ from bores.diffusivity.base import (
     compute_mobility_grids,
 )
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
-from bores.models import FluidProperties, RockFluidProperties, RockProperties
+from bores.models import FluidProperties, RockProperties
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,
-    Options,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
@@ -29,6 +30,42 @@ from bores.wells import Wells
 __all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation_explicitly"]
 
 logger = logging.getLogger(__name__)
+
+
+@attrs.frozen
+class CFLMeta:
+    cfl_threshold: float
+    max_cfl_encountered: float
+    cell: typing.Tuple[int, int, int]
+    time_step: int
+    violated: bool
+
+
+@attrs.frozen
+class FluxesMeta:
+    total_water_inflow: float
+    total_water_outflow: float
+    total_oil_inflow: float
+    total_oil_outflow: float
+    total_gas_inflow: float
+    total_gas_outflow: float
+    total_inflow: float
+    total_outflow: float
+
+
+@attrs.frozen
+class VolumesMeta:
+    oil_volume: float
+    water_volume: float
+    gas_volume: float
+    pore_volume: float
+
+
+@attrs.frozen
+class SaturationEvolutionMeta:
+    cfl_info: CFLMeta
+    fluxes: typing.Optional[FluxesMeta] = None
+    volumes: typing.Optional[VolumesMeta] = None
 
 
 def evolve_saturation_explicitly(
@@ -42,7 +79,7 @@ def evolve_saturation_explicitly(
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    options: Options,
+    config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
@@ -50,7 +87,8 @@ def evolve_saturation_explicitly(
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
 ) -> EvolutionResult[
-    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]
+    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
+    SaturationEvolutionMeta,
 ]:
     """
     Computes the new/updated saturation distribution for water, oil, and gas
@@ -66,7 +104,7 @@ def evolve_saturation_explicitly(
         including current pressure and saturation grids.
 
     :param wells: ``Wells`` object containing information about injection and production wells.
-    :param options: Simulation options and parameters.
+    :param config: Simulation config and parameters.
     :param injection_grid: Object supporting setitem to set cell injection rates for each phase in ft³/day.
     :param production_grid: Object supporting setitem to set cell production rates for each phase in ft³/day.
     :return: A tuple of 3-Dimensional numpy arrays representing the updated saturation distributions
@@ -81,9 +119,7 @@ def evolve_saturation_explicitly(
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
-    oil_pressure_grid = (
-        fluid_properties.pressure_grid
-    )  # This is P_oil or Pⁿ_{i,j}
+    oil_pressure_grid = fluid_properties.pressure_grid  # This is P_oil or Pⁿ_{i,j}
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
@@ -175,7 +211,7 @@ def evolve_saturation_explicitly(
             cell_size_y=cell_size_y,
             time_step=time_step,
             time_step_size=time_step_size,
-            options=options,
+            config=config,
             injection_grid=injection_grid,
             production_grid=production_grid,
             dtype=dtype,
@@ -206,7 +242,7 @@ def evolve_saturation_explicitly(
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
-        max_cfl_number=options.max_cfl_number.get(options.scheme, 1.0),
+        cfl_threshold=config.cfl_threshold.get(config.scheme, 1.0),
         dtype=dtype,
     )
 
@@ -217,8 +253,8 @@ def evolve_saturation_explicitly(
             int(cfl_violation_info[2]),
             int(cfl_violation_info[3]),
         )
-        cfl_number = cfl_violation_info[4]
-        max_cfl_number = cfl_violation_info[5]
+        max_cfl_encountered = cfl_violation_info[4]
+        cfl_threshold = cfl_violation_info[5]
         # Compute details for error message
         cell_thickness = thickness_grid[i, j, k]
         cell_total_volume = cell_size_x * cell_size_y * cell_thickness
@@ -269,16 +305,51 @@ def evolve_saturation_explicitly(
         water_volume = cell_pore_volume * water_saturation
         gas_volume = cell_pore_volume * gas_saturation
 
-        raise RuntimeError(
-            f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-            f"Max CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. \n"
-            f"Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, \n"
-            f"Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, \n"
-            f"Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, \n"
-            f"Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, \n"
-            f"Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, \n"
-            f"Pore volume = {cell_pore_volume:.12f} ft³. \n"
-            f"Consider reducing time step size from {time_step_size} seconds."
+        msg = f"""
+        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
+        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}. "
+        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, "
+        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, "
+        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, "
+        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, "
+        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, "
+        Pore volume = {cell_pore_volume:.12f} ft³. "
+        Consider reducing time step size from {time_step_size} seconds."
+        """
+        return EvolutionResult(
+            success=False,
+            value=(
+                updated_water_saturation_grid,
+                updated_oil_saturation_grid,
+                updated_gas_saturation_grid,
+            ),
+            scheme="explicit",
+            message=msg,
+            metadata=SaturationEvolutionMeta(
+                cfl_info=CFLMeta(
+                    cfl_threshold=cfl_threshold,
+                    max_cfl_encountered=max_cfl_encountered,
+                    cell=(i, j, k),
+                    time_step=time_step,
+                    violated=True,
+                ),
+                fluxes=FluxesMeta(
+                    total_water_inflow=total_water_inflow,
+                    total_water_outflow=total_water_outflow,
+                    total_oil_inflow=total_oil_inflow,
+                    total_oil_outflow=total_oil_outflow,
+                    total_gas_inflow=total_gas_inflow,
+                    total_gas_outflow=total_gas_outflow,
+                    total_inflow=total_inflow,
+                    total_outflow=total_outflow,
+                ),
+                volumes=VolumesMeta(
+                    oil_volume=oil_volume,
+                    water_volume=water_volume,
+                    gas_volume=gas_volume,
+                    pore_volume=cell_pore_volume,
+                ),
+            ),
         )
 
     # Normalize saturations
@@ -292,13 +363,31 @@ def evolve_saturation_explicitly(
         gas_saturation_grid=updated_gas_saturation_grid,
         saturation_epsilon=c.SATURATION_EPSILON,
     )
+
+    cfl_threshold = cfl_violation_info[5]
+    max_cfl_encountered = cfl_violation_info[4]
+    cfl_i, cfl_j, cfl_k = (
+        int(cfl_violation_info[1]),
+        int(cfl_violation_info[2]),
+        int(cfl_violation_info[3]),
+    )
     return EvolutionResult(
-        (
+        value=(
             updated_water_saturation_grid,
             updated_oil_saturation_grid,
             updated_gas_saturation_grid,
         ),
         scheme="explicit",
+        success=True,
+        metadata=SaturationEvolutionMeta(
+            cfl_info=CFLMeta(
+                cfl_threshold=cfl_threshold,
+                max_cfl_encountered=max_cfl_encountered,
+                cell=(cfl_i, cfl_j, cfl_k),
+                time_step=time_step,
+                violated=False,
+            )
+        ),
     )
 
 
@@ -694,7 +783,7 @@ def compute_well_rate_grids(
     cell_size_y: float,
     time_step: int,
     time_step_size: float,
-    options: Options,
+    config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ],
@@ -725,7 +814,7 @@ def compute_well_rate_grids(
     :param cell_size_y: Size of each cell in the y-direction (ft).
     :param time_step: Current time step index.
     :param time_step_size: Size of the time step (seconds).
-    :param options: Simulation options.
+    :param config: Simulation config.
     :param injection_grid: Optional 3D grid to record injection rates (water, oil, gas).
     :param production_grid: Optional 3D grid to record production rates (water, oil, gas).
     :param dtype: Numpy data type for computations.
@@ -803,7 +892,7 @@ def compute_well_rate_grids(
             )
 
             use_pseudo_pressure = (
-                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -822,7 +911,7 @@ def compute_well_rate_grids(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
             )
-            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
                 _warn_injector_is_producing(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
@@ -879,7 +968,7 @@ def compute_well_rate_grids(
                     ]
 
                 use_pseudo_pressure = (
-                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
+                    config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -898,7 +987,7 @@ def compute_well_rate_grids(
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
-                if production_rate > 0.0 and options.warn_rates_anomalies:
+                if production_rate > 0.0 and config.warn_rates_anomalies:
                     _warn_producer_is_injecting(
                         production_rate=production_rate,
                         well_name=production_well.name,
@@ -956,7 +1045,7 @@ def apply_saturation_updates(
     cell_size_x: float,
     cell_size_y: float,
     time_step_in_days: float,
-    max_cfl_number: float,
+    cfl_threshold: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[
     ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid, OneDimensionalGrid
@@ -981,7 +1070,7 @@ def apply_saturation_updates(
     :param cell_size_x: Size of each cell in the x-direction (ft).
     :param cell_size_y: Size of each cell in the y-direction (ft).
     :param time_step_in_days: Time step size in days.
-    :param max_cfl_number: Maximum allowed CFL number.
+    :param cfl_threshold: Maximum allowed CFL number.
     :param dtype: Numpy data type for computations.
     :return: Tuple of (updated_water_sat, updated_oil_sat, updated_gas_sat, cfl_violation_info)
     where `cfl_violation_info` is array [violated (bool), i, j, k, cfl_number, max_cfl]
@@ -993,6 +1082,7 @@ def apply_saturation_updates(
 
     # CFL violation tracking: [violated, i, j, k, cfl_number, max_cfl]
     cfl_violation_info = np.zeros(6, dtype=dtype)
+    max_cfl_encountered = 0.0
 
     # Parallel loop over interior cells
     for i in numba.prange(1, cell_count_x - 1):  # type: ignore
@@ -1031,14 +1121,15 @@ def apply_saturation_updates(
 
                 # CFL check
                 cfl_number = (total_outflow * time_step_in_days) / cell_pore_volume
-                if cfl_number > max_cfl_number and cfl_violation_info[0] == 0.0:
-                    # Record first violation
+                if cfl_number > cfl_threshold and cfl_number > max_cfl_encountered:
+                    # Record max CFL encountered
                     cfl_violation_info[0] = 1.0  # violated flag
                     cfl_violation_info[1] = float(i)
                     cfl_violation_info[2] = float(j)
                     cfl_violation_info[3] = float(k)
                     cfl_violation_info[4] = cfl_number
-                    cfl_violation_info[5] = max_cfl_number
+                    cfl_violation_info[5] = cfl_threshold
+                    max_cfl_encountered = cfl_number
 
                 # Calculate saturation changes
                 water_saturation_change = (
@@ -1126,7 +1217,7 @@ def evolve_miscible_saturation_explicitly(
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    options: Options,
+    config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
@@ -1139,7 +1230,8 @@ def evolve_miscible_saturation_explicitly(
         ThreeDimensionalGrid,  # oil_saturation
         ThreeDimensionalGrid,  # gas_saturation
         ThreeDimensionalGrid,  # solvent_concentration
-    ]
+    ],
+    SaturationEvolutionMeta,
 ]:
     """
     Evolve saturations explicitly with Todd-Longstaff miscible displacement.
@@ -1158,7 +1250,7 @@ def evolve_miscible_saturation_explicitly(
     :param relative_mobility_grids: `RelativeMobilityGrids` object with relative mobility grids.
     :param capillary_pressure_grids: `CapillaryPressureGrids` object with capillary pressure grids.
     :param wells: `Wells` object with injection and production wells.
-    :param options: Simulation options.
+    :param config: Simulation config.
     :param injection_grid: Optional 3D grid to record injection rates (water, oil, gas).
     :param production_grid: Optional 3D grid to record production rates (water, oil, gas).
     :return: `EvolutionResult` containing updated saturations and solvent concentration
@@ -1271,14 +1363,14 @@ def evolve_miscible_saturation_explicitly(
         cell_size_y=cell_size_y,
         time_step=time_step,
         time_step_size=time_step_size,
-        options=options,
+        config=config,
         injection_grid=injection_grid,
         production_grid=production_grid,
         dtype=dtype,
     )
 
     # Apply saturation and solvent concentration updates
-    max_cfl_number = options.max_cfl_number.get(options.scheme, 1.0)
+    cfl_threshold = config.cfl_threshold.get(config.scheme, 1.0)
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
     (
         updated_water_saturation_grid,
@@ -1305,7 +1397,7 @@ def evolve_miscible_saturation_explicitly(
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
-        max_cfl_number=max_cfl_number,
+        cfl_threshold=cfl_threshold,
     )
 
     # Check for CFL violation
@@ -1315,8 +1407,8 @@ def evolve_miscible_saturation_explicitly(
             int(cfl_violation_info[2]),
             int(cfl_violation_info[3]),
         )
-        cfl_number = cfl_violation_info[4]
-        max_cfl_number = cfl_violation_info[5]
+        max_cfl_encountered = cfl_violation_info[4]
+        cfl_threshold = cfl_violation_info[5]
         cell_pore_volume = (
             porosity_grid[i, j, k] * cell_size_x * cell_size_y * thickness_grid[i, j, k]
         )
@@ -1364,16 +1456,52 @@ def evolve_miscible_saturation_explicitly(
         total_inflow = total_water_inflow + total_oil_inflow + total_gas_inflow
         total_outflow = total_water_outflow + total_oil_outflow + total_gas_outflow
 
-        raise RuntimeError(
-            f"CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-            f"Max CFL number {cfl_number:.4f} exceeds limit {max_cfl_number:.4f}. \n"
-            f"Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, \n"
-            f"Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, \n"
-            f"Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, \n"
-            f"Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, \n"
-            f"Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, \n"
-            f"Pore volume = {cell_pore_volume:.12f} ft³. \n"
-            f"Consider reducing time step size from {time_step_size} seconds."
+        msg = f"""
+        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
+        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}. "
+        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, "
+        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, "
+        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, "
+        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, "
+        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, "
+        Pore volume = {cell_pore_volume:.12f} ft³. "
+        Consider reducing time step size from {time_step_size} seconds."
+        """
+        return EvolutionResult(
+            success=False,
+            value=(
+                updated_water_saturation_grid,
+                updated_oil_saturation_grid,
+                updated_gas_saturation_grid,
+                updated_solvent_concentration_grid,
+            ),
+            scheme="explicit",
+            message=msg,
+            metadata=SaturationEvolutionMeta(
+                cfl_info=CFLMeta(
+                    cfl_threshold=cfl_threshold,
+                    max_cfl_encountered=max_cfl_encountered,
+                    cell=(i, j, k),
+                    time_step=time_step,
+                    violated=True,
+                ),
+                fluxes=FluxesMeta(
+                    total_water_inflow=total_water_inflow,
+                    total_water_outflow=total_water_outflow,
+                    total_oil_inflow=total_oil_inflow,
+                    total_oil_outflow=total_oil_outflow,
+                    total_gas_inflow=total_gas_inflow,
+                    total_gas_outflow=total_gas_outflow,
+                    total_inflow=total_inflow,
+                    total_outflow=total_outflow,
+                ),
+                volumes=VolumesMeta(
+                    oil_volume=oil_volume,
+                    water_volume=water_volume,
+                    gas_volume=gas_volume,
+                    pore_volume=cell_pore_volume,
+                ),
+            ),
         )
 
     # Normalize saturations
@@ -1387,14 +1515,32 @@ def evolve_miscible_saturation_explicitly(
         gas_saturation_grid=updated_gas_saturation_grid,
         saturation_epsilon=c.SATURATION_EPSILON,
     )
+
+    cfl_threshold = cfl_violation_info[5]
+    cfl_i, cfl_j, cfl_k = (
+        int(cfl_violation_info[1]),
+        int(cfl_violation_info[2]),
+        int(cfl_violation_info[3]),
+    )
+    max_cfl_encountered = cfl_violation_info[4]
     return EvolutionResult(
-        (
+        value=(
             updated_water_saturation_grid,
             updated_oil_saturation_grid,
             updated_gas_saturation_grid,
             updated_solvent_concentration_grid,
         ),
         scheme="explicit",
+        success=True,
+        metadata=SaturationEvolutionMeta(
+            cfl_info=CFLMeta(
+                cfl_threshold=cfl_threshold,
+                max_cfl_encountered=max_cfl_encountered,
+                cell=(cfl_i, cfl_j, cfl_k),
+                time_step=time_step,
+                violated=False,
+            ),
+        ),
     )
 
 
@@ -1443,7 +1589,7 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
         1. water_flux: Volumetric flux of water (ft³/day).
         2. oil_flux: Volumetric flux of oil (ft³/day).
         3. gas_flux: Volumetric flux of gas (ft³/day).
-        4. solvent_flux_in_oil: Volumetric flux of solvent in oil phase (ft³/day).  
+        4. solvent_flux_in_oil: Volumetric flux of solvent in oil phase (ft³/day).
     """
     # Calculate pressure differences relative to current cell (Neighbour - Current)
     # These represent the gradients driving flow from Neighbour to currrent cell, or vice versa
@@ -1843,7 +1989,7 @@ def compute_miscible_well_rate_grids(
     cell_size_y: float,
     time_step: int,
     time_step_size: float,
-    options: Options,
+    config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ],
@@ -1883,7 +2029,7 @@ def compute_miscible_well_rate_grids(
     :param cell_size_y: Cell size in y direction (ft)
     :param time_step: Current time step number
     :param time_step_size: Time step size (seconds)
-    :param options: Evolution options
+    :param config: Evolution config
     :param injection_grid: Optional grid to store injection rates (ft³/day)
     :param production_grid: Optional grid to store production rates (ft³/day)
     :param dtype: Data type for output arrays
@@ -1970,7 +2116,7 @@ def compute_miscible_well_rate_grids(
             )
 
             use_pseudo_pressure = (
-                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -1987,7 +2133,7 @@ def compute_miscible_well_rate_grids(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
             )
-            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
                 _warn_injector_is_producing(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
@@ -2064,12 +2210,12 @@ def compute_miscible_well_rate_grids(
                     phase_mobility=phase_mobility,
                     fluid=produced_fluid,
                     fluid_compressibility=fluid_compressibility,
-                    use_pseudo_pressure=options.use_pseudo_pressure
+                    use_pseudo_pressure=config.use_pseudo_pressure
                     and produced_phase == FluidPhase.GAS,
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
 
-                if production_rate > 0.0 and options.warn_rates_anomalies:
+                if production_rate > 0.0 and config.warn_rates_anomalies:
                     _warn_producer_is_injecting(
                         production_rate=production_rate,
                         well_name=production_well.name,
@@ -2139,7 +2285,7 @@ def apply_saturation_and_solvent_updates(
     cell_size_x: float,
     cell_size_y: float,
     time_step_in_days: float,
-    max_cfl_number: float,
+    cfl_threshold: float,
 ) -> typing.Tuple[
     ThreeDimensionalGrid,
     ThreeDimensionalGrid,
@@ -2171,7 +2317,7 @@ def apply_saturation_and_solvent_updates(
     :param cell_size_x: Cell size in x direction (ft)
     :param cell_size_y: Cell size in y direction (ft)
     :param time_step_in_days: Time step size (days)
-    :param max_cfl_number: Maximum allowed CFL number
+    :param cfl_threshold: Maximum allowed CFL number
     :return: Tuple of (updated_water_sat, updated_oil_sat, updated_gas_sat, updated_solvent_conc, cfl_violation_info)
              where `cfl_violation_info` is [violated, i, j, k, cfl_number, max_cfl]
     """
@@ -2185,6 +2331,7 @@ def apply_saturation_and_solvent_updates(
 
     # CFL violation tracking: [violated (0 or 1), i, j, k, cfl_number, max_cfl]
     cfl_violation = np.zeros(6, dtype=np.float64)
+    max_cfl_encountered = 0.0
 
     # Update saturations in parallel
     for i in numba.prange(1, nx - 1):  # type: ignore
@@ -2231,14 +2378,15 @@ def apply_saturation_and_solvent_updates(
 
                 # CFL check
                 cfl_number = (total_outflow * time_step_in_days) / cell_pore_volume
-                if cfl_number > max_cfl_number and cfl_violation[0] == 0.0:
-                    # Record first violation
+                if cfl_number > cfl_threshold and cfl_number > max_cfl_encountered:
+                    # Record max CFL violation
                     cfl_violation[0] = 1.0
                     cfl_violation[1] = float(i)
                     cfl_violation[2] = float(j)
                     cfl_violation[3] = float(k)
                     cfl_violation[4] = cfl_number
-                    cfl_violation[5] = max_cfl_number
+                    cfl_violation[5] = cfl_threshold
+                    max_cfl_encountered = cfl_number
 
                 # Total flow rates (advection + wells) in lbm/day
                 total_water_flow = net_water_flux + net_water_well_rate

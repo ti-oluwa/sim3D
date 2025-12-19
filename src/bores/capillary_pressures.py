@@ -8,7 +8,7 @@ import numba
 import numpy as np
 from scipy.interpolate import interp1d
 
-from bores.utils import clip
+from bores.errors import ValidationError
 from bores.types import (
     ArrayLike,
     CapillaryPressures,
@@ -16,6 +16,7 @@ from bores.types import (
     Interpolator,
     WettabilityType,
 )
+from bores.utils import clip
 
 
 __all__ = [
@@ -111,19 +112,19 @@ class ThreePhaseCapillaryPressureTable:
             self.oil_water_table.wetting_phase,
             self.oil_water_table.non_wetting_phase,
         } != {FluidPhase.WATER, FluidPhase.OIL}:
-            raise ValueError("`oil_water_table` must be between water and oil phases.")
+            raise ValidationError("`oil_water_table` must be between water and oil phases.")
         if {self.gas_oil_table.wetting_phase, self.gas_oil_table.non_wetting_phase} != {
             FluidPhase.OIL,
             FluidPhase.GAS,
         }:
-            raise ValueError("`gas_oil_table` must be between oil and gas phases.")
+            raise ValidationError("`gas_oil_table` must be between oil and gas phases.")
 
         if self.oil_water_table.wetting_phase == self.gas_oil_table.non_wetting_phase:
-            raise ValueError(
+            raise ValidationError(
                 "Wetting phase of `oil_water_table` cannot be the same as non-wetting phase of `gas_oil_table`."
             )
         if self.gas_oil_table.wetting_phase != FluidPhase.OIL:
-            raise ValueError(
+            raise ValidationError(
                 "`gas_oil_table` wetting phase must be oil in three-phase system."
             )
 
@@ -391,7 +392,7 @@ class BrooksCoreyCapillaryPressureModel:
 
         # Ensure all required parameters are available
         if swc is None or sorw is None or sorg is None or sgr is None:
-            raise ValueError(
+            raise ValidationError(
                 "Residual saturations must be provided either as model defaults or in the call. "
                 f"Missing: Swc={swc}, Sorw={sorw}, Sorg={sorg}, Sgr={sgr}"
             )
@@ -668,7 +669,7 @@ class VanGenuchtenCapillaryPressureModel:
 
         # Ensure all required parameters are available
         if swc is None or sorw is None or sorg is None or sgr is None:
-            raise ValueError(
+            raise ValidationError(
                 "Residual saturations must be provided either as model defaults or in the call. "
                 f"Missing: Swc={swc}, Sorw={sorw}, Sorg={sorg}, Sgr={sgr}"
             )
@@ -960,7 +961,7 @@ class LeverettJCapillaryPressureModel:
 
         # Ensure all required parameters are available
         if swc is None or sorw is None or sorg is None or sgr is None:
-            raise ValueError(
+            raise ValidationError(
                 "Residual saturations must be provided either as model defaults or in the call. "
                 f"Missing: Swc={swc}, Sorw={sorw}, Sorg={sorg}, Sgr={sgr}"
             )

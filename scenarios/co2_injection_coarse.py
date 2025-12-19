@@ -121,18 +121,30 @@ def _():
         producers = [producer]
 
         wells = bores.wells_(injectors=injectors, producers=producers)
-        options = bores.Options(
-            scheme="impes",
-            total_time=bores.Time(
+        timer = bores.Timer(
+            initial_step_size=bores.Time(hours=30.0),
+            max_step_size=bores.Time(days=2.0),
+            min_step_size=bores.Time(hours=6.0),
+            simulation_time=bores.Time(
                 days=(bores.c.DAYS_PER_YEAR * 5) + 100
-            ),  # 5 years + 100 days
-            time_step_size=bores.Time(hours=30),
-            max_time_steps=2000,
+            ),  # 5 years
+            max_cfl_number=0.9,
+            ramp_up_factor=1.2,
+            backoff_factor=0.5,
+            aggressive_backoff_factor=0.25,
+        )
+        config = bores.Config(
+            scheme="impes",
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
         )
-        states = bores.run(model=model, wells=wells, options=options)
+        states = bores.run(
+            model=model,
+            timer=timer,
+            wells=wells,
+            config=config,
+        )
         return list(states)
 
     return Path, main, bores

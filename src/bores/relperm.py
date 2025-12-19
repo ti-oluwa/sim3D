@@ -2,13 +2,13 @@
 
 from functools import cached_property
 import typing
-import numpy as np
-import numba
 
 import attrs
+import numba
+import numpy as np
 from scipy.interpolate import interp1d
 
-from bores.utils import clip
+from bores.errors import ValidationError
 from bores.types import (
     ArrayLike,
     FluidPhase,
@@ -17,6 +17,7 @@ from bores.types import (
     RelativePermeabilities,
     WettabilityType,
 )
+from bores.utils import clip
 
 
 __all__ = [
@@ -547,19 +548,19 @@ class ThreePhaseRelPermTable:
             self.oil_water_table.wetting_phase,
             self.oil_water_table.non_wetting_phase,
         } != {FluidPhase.WATER, FluidPhase.OIL}:
-            raise ValueError("`oil_water_table` must be between water and oil phases.")
+            raise ValidationError("`oil_water_table` must be between water and oil phases.")
         if {self.gas_oil_table.wetting_phase, self.gas_oil_table.non_wetting_phase} != {
             FluidPhase.OIL,
             FluidPhase.GAS,
         }:
-            raise ValueError("`gas_oil_table` must be between oil and gas phases.")
+            raise ValidationError("`gas_oil_table` must be between oil and gas phases.")
 
         if self.oil_water_table.wetting_phase == self.gas_oil_table.non_wetting_phase:
-            raise ValueError(
+            raise ValidationError(
                 "Wetting phase of `oil_water_table` cannot be the same as non-wetting phase of `gas_oil_table`."
             )
         if self.gas_oil_table.wetting_phase != FluidPhase.OIL:
-            raise ValueError(
+            raise ValidationError(
                 "`gas_oil_table` wetting phase must be oil in three-phase system."
             )
 
@@ -581,7 +582,7 @@ class ThreePhaseRelPermTable:
             and 0 <= oil_saturation <= 1
             and 0 <= gas_saturation <= 1
         ):
-            raise ValueError(
+            raise ValidationError(
                 "Saturations must be between 0 and 1. "
                 f"Received: Sw={water_saturation}, So={oil_saturation}, Sg={gas_saturation}"
             )
@@ -872,7 +873,7 @@ class BrooksCoreyThreePhaseRelPermModel:
             else self.irreducible_water_saturation
         )
         if Swc is None or Sorw is None or Sorg is None or Srg is None:
-            raise ValueError(
+            raise ValidationError(
                 "Residual saturations must be provided either as arguments or set in the model instance."
                 f"Missing values: Swc={Swc}, Sorw={Sorw}, Sorw={Sorg}, Srg={Srg}"
             )

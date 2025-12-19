@@ -30,12 +30,12 @@ from bores.models import FluidProperties, RockFluidProperties, RockProperties
 from bores.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
 from bores.types import (
     FluidPhase,
-    Options,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
 )
 from bores.utils import clip
+from bores.config import Config
 from bores.wells import Wells
 from bores.diffusivity.implicit.jacobian import assemble_jacobian
 
@@ -79,7 +79,7 @@ def evolve_fully_implicit(
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    options: Options,
+    config: Config,
     boundary_conditions: BoundaryConditions[ThreeDimensions],
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
@@ -87,7 +87,7 @@ def evolve_fully_implicit(
     production_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
-) -> EvolutionResult[ImplicitSolution]:
+) -> EvolutionResult[ImplicitSolution, None]:
     """
     Solve fully implicit finite-difference equations for pressure and saturations (optimized with Numba JIT).
 
@@ -102,7 +102,7 @@ def evolve_fully_implicit(
     :param relative_mobility_grids: Mobility grids (kr/mu) for each phase
     :param capillary_pressure_grids: Capillary pressure grids
     :param wells: Well objects with controls
-    :param options: Solver options including tolerance and max iterations
+    :param config: Solver config including tolerance and max iterations
     :param boundary_conditions: Boundary conditions
     :param injection_grid: Object supporting setitem to set cell injection rates for each phase in ft³/day.
     :param production_grid: Object supporting setitem to set cell production rates for each phase in ft³/day.
@@ -117,7 +117,7 @@ def evolve_fully_implicit(
 
     cell_count_x, cell_count_y, cell_count_z = pressure_grid.shape
 
-    max_newton_iterations = options.max_iterations
+    max_newton_iterations = config.max_iterations
     convergence_tolerance = 1e-6
     converged = False
     iteration = 0
@@ -173,7 +173,7 @@ def evolve_fully_implicit(
             oil_density_grid=fluid_properties.oil_effective_density_grid,
             gas_density_grid=fluid_properties.gas_density_grid,
             water_density_grid=fluid_properties.water_density_grid,
-            options=options,
+            config=config,
             injection_grid=injection_grid,
             production_grid=production_grid,
             dtype=dtype,
@@ -323,7 +323,7 @@ def evolve_fully_implicit(
         update_vector = solve_newton_update_system(
             jacobian=jacobian,
             residual_vector=residual_vector,
-            options=options,
+            config=config,
         )
 
         # Apply Newton update and get iteration state
@@ -365,7 +365,7 @@ def evolve_fully_implicit(
         fluid_properties = update_pvt_properties(
             fluid_properties=fluid_properties,
             wells=wells,
-            miscibility_model=options.miscibility_model,
+            miscibility_model=config.miscibility_model,
         )
         # Rebuild rock-fluid property grids with updated saturations
         (
@@ -376,7 +376,7 @@ def evolve_fully_implicit(
             fluid_properties=fluid_properties,
             rock_properties=rock_properties,
             rock_fluid_properties=rock_fluid_properties,
-            options=options,
+            config=config,
         )
 
     solution = ImplicitSolution(
@@ -392,7 +392,7 @@ def evolve_fully_implicit(
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_accumulation_terms(
     porosity: float,
@@ -440,7 +440,7 @@ def compute_well_rate_grids(
     oil_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     water_density_grid: ThreeDimensionalGrid,
-    options: Options,
+    config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
@@ -467,7 +467,7 @@ def compute_well_rate_grids(
     :param absolute_permeability_z: Absolute permeability z component (md)
     :param fluid_properties: Fluid properties object
     :param relative_mobility_grids: Relative mobility grids for each phase
-    :param options: Evolution options
+    :param config: Evolution config
     :param injection_grid: Optional grid to store injection rates (ft³/day)
     :param production_grid: Optional grid to store production rates (ft³/day)
     :param dtype: Data type for output arrays
@@ -568,7 +568,7 @@ def compute_well_rate_grids(
             )
 
             use_pseudo_pressure = (
-                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(dx, dy, thickness),
@@ -641,7 +641,7 @@ def compute_well_rate_grids(
                     )
 
                 use_pseudo_pressure = (
-                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
+                    config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(dx, dy, thickness),
@@ -689,7 +689,7 @@ def compute_well_rate_grids(
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_flux_divergence_for_cell(
     i: int,
@@ -1166,7 +1166,7 @@ def compute_flux_divergence_for_cell(
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_residuals_for_cell(
     i: int,
@@ -1342,7 +1342,7 @@ def compute_residuals_for_cell(
 
 @numba.njit(
     parallel=True,
-    cache=True,
+    cache=True
 )
 def assemble_residual_vector(
     pressure_grid: ThreeDimensionalGrid,
@@ -1485,14 +1485,14 @@ def assemble_residual_vector(
 def solve_newton_update_system(
     jacobian: lil_matrix,
     residual_vector: np.ndarray,
-    options: Options,
+    config: Config,
 ) -> np.typing.NDArray:
     """
     Solve the Newton update system J·δx = -R for the update vector δx.
 
     :param jacobian: Jacobian matrix J
     :param residual_vector: Residual vector R
-    :param options: Options
+    :param config: Config
     :return: Update vector δx
     """
     jacobian_csr = jacobian.tocsr()
@@ -1500,9 +1500,9 @@ def solve_newton_update_system(
     return solve_linear_system(
         A_csr=jacobian_csr,
         b=rhs,
-        max_iterations=options.max_iterations,
-        solver=options.iterative_solver,
-        preconditioner=options.preconditioner,
+        max_iterations=config.max_iterations,
+        solver=config.iterative_solver,
+        preconditioner=config.preconditioner,
         rtol=1e-3,  # Use a looser tolerance for the inner linear solve (Truncated Newton approach)
     )
 

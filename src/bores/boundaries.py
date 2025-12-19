@@ -1,12 +1,14 @@
 """Boundary condition implementations for 2D/3D grids."""
 
-import typing
-import enum
-import attrs
-import copy
 from collections import defaultdict
+import copy
+import enum
+import typing
+
+import attrs
 import numpy as np
 
+from bores.errors import ValidationError
 from bores.types import NDimension, NDimensionalGrid
 
 
@@ -265,7 +267,7 @@ class BoundaryMetadata:
                 coordinates = np.stack([xx, yy, zz], axis=-1)
 
             else:
-                raise ValueError(
+                raise ValidationError(
                     f"Unsupported grid dimensionality: {len(self.grid_shape)}. Only 2D and 3D grids are supported."
                 )
 
@@ -455,7 +457,7 @@ class VariableBoundary(typing.Generic[NDimension]):
 
     def __attrs_post_init__(self) -> None:
         if not callable(self.func):
-            raise ValueError("func must be a callable function.")
+            raise ValidationError("func must be a callable function.")
 
     def apply(
         self,
@@ -538,7 +540,7 @@ class SpatialBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply spatial boundary condition using coordinate-based function."""
         if metadata is None or metadata.coordinates is None:
-            raise ValueError(f"{self.__class__.__name__} requires coordinate metadata")
+            raise ValidationError(f"{self.__class__.__name__} requires coordinate metadata")
 
         # Extract coordinates at boundary
         coords = metadata.coordinates[boundary_indices]
@@ -637,7 +639,7 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply time-dependent boundary condition."""
         if metadata is None or metadata.time is None:
-            raise ValueError(f"{self.__class__.__name__} requires time metadata")
+            raise ValidationError(f"{self.__class__.__name__} requires time metadata")
 
         value = self.time_func(metadata.time)
         grid[boundary_indices] = value
@@ -723,7 +725,7 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply linear gradient boundary condition."""
         if metadata is None or metadata.coordinates is None:
-            raise ValueError(f"{self.__class__.__name__} requires coordinate metadata")
+            raise ValidationError(f"{self.__class__.__name__} requires coordinate metadata")
 
         coords = metadata.coordinates[boundary_indices]
 
@@ -735,7 +737,7 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
         elif self.gradient_direction == "z":
             coord_values = coords[..., 2] if coords.shape[-1] > 2 else coords[..., 0]
         else:
-            raise ValueError(f"Invalid gradient direction: {self.gradient_direction}")
+            raise ValidationError(f"Invalid gradient direction: {self.gradient_direction}")
 
         # Calculate gradient
         coord_min = np.min(coord_values)
@@ -826,7 +828,7 @@ class FluxBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply flux boundary condition."""
         if metadata is None or metadata.cell_dimension is None:
-            raise ValueError(
+            raise ValidationError(
                 f"{self.__class__.__name__} requires cell dimension metadata"
             )
 
@@ -982,7 +984,7 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
                 metadata=metadata,
             )
         else:
-            raise ValueError(
+            raise ValidationError(
                 "`padded_grid` must be a 2D or 3D numpy array with ghost cells."
             )
 

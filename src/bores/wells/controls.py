@@ -7,6 +7,7 @@ import attrs
 import numba
 
 from bores.constants import c
+from bores.errors import ValidationError
 from bores.pvt.core import compute_gas_compressibility_factor
 from bores.types import FluidPhase
 from bores.wells.core import (
@@ -779,7 +780,7 @@ class MultiPhaseRateControl:
                 fluid_compressibility=fluid_compressibility,
             )
         else:
-            raise ValueError(f"Unsupported fluid phase: {fluid.phase}")
+            raise ValidationError(f"Unsupported fluid phase: {fluid.phase}")
 
     def update(
         self,

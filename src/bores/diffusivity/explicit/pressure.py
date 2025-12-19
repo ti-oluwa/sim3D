@@ -5,6 +5,7 @@ import numba
 import numpy as np
 
 from bores._precision import get_dtype
+from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
@@ -16,7 +17,7 @@ from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
 from bores.pvt.core import compute_harmonic_mean
-from bores.types import FluidPhase, Options, ThreeDimensionalGrid, ThreeDimensions
+from bores.types import FluidPhase, ThreeDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
 
 __all__ = ["evolve_pressure_explicitly"]
@@ -33,8 +34,8 @@ def evolve_pressure_explicitly(
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    options: Options,
-) -> EvolutionResult[ThreeDimensionalGrid]:
+    config: Config,
+) -> EvolutionResult[ThreeDimensionalGrid, None]:
     """
     Computes the pressure evolution (specifically, oil phase pressure P_oil) in the reservoir grid
     for one time step using an explicit finite volume method.
@@ -166,7 +167,7 @@ def evolve_pressure_explicitly(
         cell_size_y=cell_size_y,
         time_step=time_step,
         time_step_size=time_step_size,
-        options=options,
+        config=config,
         dtype=dtype,
     )
 
@@ -185,7 +186,7 @@ def evolve_pressure_explicitly(
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
     )
-    return EvolutionResult(updated_oil_pressure_grid, scheme="explicit")
+    return EvolutionResult(success=True, value=updated_oil_pressure_grid, scheme="explicit")
 
 
 @numba.njit(cache=True)
@@ -489,7 +490,7 @@ def compute_well_rate_grid(
     cell_size_y: float,
     time_step: int,
     time_step_size: float,
-    options: Options,
+    config: Config,
     dtype: np.typing.DTypeLike,
 ) -> ThreeDimensionalGrid:
     """
@@ -519,7 +520,7 @@ def compute_well_rate_grid(
     :param cell_size_y: Cell size in y-direction (ft)
     :param time_step: Current time step number
     :param time_step_size: Time step size (seconds)
-    :param options: Simulation options
+    :param config: Simulation config
     :param dtype: NumPy dtype for array allocation (np.float32 or np.float64)
     :return: 3D grid of net well flow rates (ft³/day), positive = injection, negative = production
     """
@@ -581,7 +582,7 @@ def compute_well_rate_grid(
             )
 
             use_pseudo_pressure = (
-                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -602,7 +603,7 @@ def compute_well_rate_grid(
             )
 
             # Check for backflow (negative injection)
-            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
                 _warn_injector_is_producing(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
@@ -655,7 +656,7 @@ def compute_well_rate_grid(
                     ]
 
                 use_pseudo_pressure = (
-                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
+                    config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -677,7 +678,7 @@ def compute_well_rate_grid(
                 )
 
                 # Check for backflow (positive production = injection)
-                if production_rate > 0.0 and options.warn_rates_anomalies:
+                if production_rate > 0.0 and config.warn_rates_anomalies:
                     _warn_producer_is_injecting(
                         production_rate=production_rate,
                         well_name=production_well.name,

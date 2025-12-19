@@ -11,6 +11,7 @@ from scipy.integrate import quad
 from scipy.interpolate import interp1d
 
 from bores.constants import c
+from bores.errors import ComputationError, ValidationError
 from bores.pvt.core import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
@@ -44,9 +45,7 @@ __all__ = [
 ]
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_well_index(
     permeability: float,
     interval_thickness: float,
@@ -84,9 +83,7 @@ def compute_well_index(
     return well_index
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_3D_effective_drainage_radius(
     interval_thickness: ThreeDimensions,
     permeability: ThreeDimensions,
@@ -138,14 +135,12 @@ def compute_3D_effective_drainage_radius(
             (delta_x**2 + delta_y**2) / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
         )
     else:
-        raise ValueError("Invalid well orientation")
+        raise ValidationError("Invalid well orientation")
 
     return effective_drainage_radius
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_2D_effective_drainage_radius(
     interval_thickness: TwoDimensions,
     permeability: TwoDimensions,
@@ -183,7 +178,7 @@ def compute_2D_effective_drainage_radius(
             / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
         )
     else:
-        raise ValueError("Invalid well orientation")
+        raise ValidationError("Invalid well orientation")
     return effective_drainage_radius
 
 
@@ -219,9 +214,9 @@ def compute_gas_pseudo_pressure(
         JPT, May 1966, pp. 624-636.
     """
     if pressure <= 0:
-        raise ValueError(f"Pressure must be positive, got {pressure}")
+        raise ValidationError(f"Pressure must be positive, got {pressure}")
     if reference_pressure <= 0:
-        raise ValueError(
+        raise ValidationError(
             f"Reference pressure must be positive, got {reference_pressure}"
         )
 
@@ -237,7 +232,7 @@ def compute_gas_pseudo_pressure(
         mu = viscosity_func(P)
 
         if Z <= 0 or mu <= 0:
-            raise ValueError(f"Invalid Z={Z} or μ={mu} at P={P}")
+            raise ValidationError(f"Invalid Z={Z} or μ={mu} at P={P}")
 
         return 2.0 * P / (mu * Z)
 
@@ -266,7 +261,7 @@ def compute_gas_pseudo_pressure(
             )
             return -float(result)
     except Exception as exc:
-        raise RuntimeError(
+        raise ComputationError(
             f"Failed to compute pseudo-pressure at P={pressure} psi: {exc}"
         )
 
@@ -365,9 +360,7 @@ class GasPseudoPressureTable:
         return 2.0 * pressure / (mu * Z)
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_oil_well_rate(
     well_index: float,
     pressure: float,
@@ -475,7 +468,7 @@ def compute_gas_well_rate(
     :return: The gas well rate (ft³/day).
     """
     if well_index <= 0:
-        raise ValueError("Well index must be a positive value.")
+        raise ValidationError("Well index must be a positive value.")
 
     Tsc = c.STANDARD_TEMPERATURE_RANKINE
     Psc = c.STANDARD_PRESSURE_IMPERIAL
@@ -523,9 +516,7 @@ def compute_gas_well_rate(
     return well_rate * gas_fvf  # ft³/day
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_required_bhp_for_oil_rate(
     target_rate: float,
     well_index: float,
@@ -554,9 +545,9 @@ def compute_required_bhp_for_oil_rate(
     :return: Required bottom-hole pressure (psi).
     """
     if well_index <= 0:
-        raise ValueError("Well index must be a positive value.")
+        raise ValidationError("Well index must be a positive value.")
     if phase_mobility <= 0:
-        raise ValueError("Phase mobility must be a positive value.")
+        raise ValidationError("Phase mobility must be a positive value.")
 
     conversion_factor = 7.08e-3
 
@@ -614,9 +605,9 @@ def compute_required_bhp_for_gas_rate(
     :return: Required bottom-hole pressure (psi).
     """
     if well_index <= 0:
-        raise ValueError("Well index must be a positive value.")
+        raise ValidationError("Well index must be a positive value.")
     if phase_mobility <= 0:
-        raise ValueError("Phase mobility must be a positive value.")
+        raise ValidationError("Phase mobility must be a positive value.")
 
     Tsc = c.STANDARD_TEMPERATURE_RANKINE
     Psc = c.STANDARD_PRESSURE_IMPERIAL
@@ -631,7 +622,7 @@ def compute_required_bhp_for_gas_rate(
 
     if use_pseudo_pressure:
         if pseudo_pressure_table is None:
-            raise ValueError(
+            raise ValidationError(
                 "Pseudo-pressure table is required for pseudo-pressure formulation."
             )
 
@@ -653,7 +644,7 @@ def compute_required_bhp_for_gas_rate(
         except ValueError as exc:
             min_pseudo_p = pseudo_pressure_table.pseudo_pressures[0]
             max_pseudo_p = pseudo_pressure_table.pseudo_pressures[-1]
-            raise ValueError(
+            raise ComputationError(
                 f"Cannot achieve target rate {target_rate:.2f} - "
                 f"required pseudo-pressure {required_pseudo_pressure:.2f} outside valid range. "
                 f"Valid range: [{min_pseudo_p:.2f}, {max_pseudo_p:.2f}]"
@@ -670,7 +661,7 @@ def compute_required_bhp_for_gas_rate(
         required_bhp_squared = pressure**2 + pressure_squared_change
 
         if required_bhp_squared < 0:
-            raise ValueError(
+            raise ComputationError(
                 f"Cannot achieve target rate {target_rate:.2f} - results in negative pressure squared."
             )
         required_bhp = np.sqrt(required_bhp_squared)
@@ -709,7 +700,7 @@ class WellFluid:
         :return: A `GasPseudoPressureTable` instance for the fluid.
         """
         if self.phase != FluidPhase.GAS:
-            raise ValueError("Pseudo-pressure table is only applicable for gas phase.")
+            raise ValidationError("Pseudo-pressure table is only applicable for gas phase.")
 
         @functools.lru_cache(maxsize=1024)
         def z_factor_func(pressure: float) -> float:
@@ -776,9 +767,9 @@ class InjectedFluid(WellFluid):
 
         if self.is_miscible:
             if self.phase != FluidPhase.GAS:
-                raise ValueError("Only gas phase fluids can be miscible.")
+                raise ValidationError("Only gas phase fluids can be miscible.")
             elif not self.minimum_miscibility_pressure or not self.todd_longstaff_omega:
-                raise ValueError(
+                raise ValidationError(
                     "Miscible fluids must have both `minimum_miscibility_pressure` and `todd_longstaff_omega` defined."
                 )
 
@@ -963,9 +954,7 @@ class ProducedFluid(WellFluid):
 WellFluidT = typing.TypeVar("WellFluidT", bound=WellFluid)
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def _geometric_mean(values: typing.Sequence[float]) -> float:
     prod = 1.0
     n = 0
@@ -973,13 +962,11 @@ def _geometric_mean(values: typing.Sequence[float]) -> float:
         prod *= max(v, 0.0)  # ensure non-negative
         n += 1
     if n == 0:
-        raise ValueError("No permeability values provided")
+        raise ValidationError("No permeability values provided")
     return prod ** (1.0 / n)
 
 
-@numba.njit(
-    cache=True,
-)
+@numba.njit(cache=True)
 def compute_effective_permeability_for_well(
     permeability: typing.Sequence[float], orientation: Orientation
 ) -> float:

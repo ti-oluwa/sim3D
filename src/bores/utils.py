@@ -11,7 +11,7 @@ from numba.extending import overload
 
 
 @numba.vectorize(
-    cache=True,
+    cache=True
 )
 def clip(val, min_, max_):
     return np.maximum(np.minimum(val, max_), min_)

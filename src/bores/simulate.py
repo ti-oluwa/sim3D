@@ -1,15 +1,14 @@
-"""Run a simulation workflow on a N-Dimensional reservoir model."""
+"""Run a simulation workflow on a 3-Dimensional reservoir model."""
 
 import copy
-from datetime import timedelta
 import logging
-import math
 import typing
 
 import attrs
 import numpy as np
 
 from bores.boundaries import BoundaryConditions, default_bc
+from bores.config import Config
 from bores.diffusivity import (
     evolve_fully_implicit,
     evolve_miscible_saturation_explicitly,
@@ -17,6 +16,7 @@ from bores.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
+from bores.errors import SimulationError, TimingError
 from bores.grids.base import (
     CapillaryPressureGrids,
     RateGrids,
@@ -40,18 +40,12 @@ from bores.models import (
     RockProperties,
 )
 from bores.states import ModelState
-from bores.types import (
-    MiscibilityModel,
-    NDimension,
-    NDimensionalGrid,
-    Options,
-    ThreeDimensions,
-    default_options,
-)
+from bores.timing import Timer
+from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
 
 
-__all__ = ["run", "Time"]
+__all__ = ["run"]
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +76,7 @@ Simulation aborted to avoid propagation of unphysical results.
 
 
 @attrs.frozen(slots=True)
-class TimeStepResult(typing.Generic[NDimension]):
+class StepResult(typing.Generic[NDimension]):
     """
     Result from executing one time step of the simulation.
     """
@@ -101,43 +95,15 @@ class TimeStepResult(typing.Generic[NDimension]):
     """Grid of water production rates during the time step."""
     gas_production_grid: NDimensionalGrid[NDimension]
     """Grid of gas production rates during the time step."""
+    success: bool = True
+    """Whether the time step evolution was successful."""
+    message: typing.Optional[str] = None
+    """Optional message providing additional information about the time step result."""
+    accept_kwargs: typing.Dict[str, typing.Any] = attrs.field(factory=dict)
 
 
-
-def Time(
-    milliseconds: int = 0,
-    seconds: int = 0,
-    minutes: int = 0,
-    hours: int = 0,
-    days: int = 0,
-    weeks: int = 0,
-) -> float:
-    """
-    Expresses time components as total seconds.
-
-    :param milliseconds: Number of milliseconds.
-    :param seconds: Number of seconds.
-    :param minutes: Number of minutes.
-    :param hours: Number of hours.
-    :param days: Number of days.
-    :param weeks: Number of weeks.
-    :return: Total time in seconds.
-    """
-    delta = timedelta(
-        weeks=weeks,
-        days=days,
-        hours=hours,
-        minutes=minutes,
-        seconds=seconds,
-        milliseconds=milliseconds,
-    )
-    return delta.total_seconds()
-
-
-
-def _run_fully_implicit(
+def _run_implicit_step(
     time_step: int,
-    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -151,12 +117,12 @@ def _run_fully_implicit(
     wells: Wells[ThreeDimensions],
     boundary_conditions: BoundaryConditions[ThreeDimensions],
     miscibility_model: MiscibilityModel,
-    options: Options,
-) -> TimeStepResult[ThreeDimensions]:
+    config: Config,
+) -> StepResult[ThreeDimensions]:
     """
     Execute one time step using fully implicit solver (simultaneous pressure-saturation).
 
-    Returns: `TimeStepResult` containing updated rates and fluid properties.
+    Returns: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure and saturation simultaneously (fully implicit)...")
     # Build zeros grids to track production and injection at each time step
@@ -167,7 +133,7 @@ def _run_fully_implicit(
     water_production_grid = zeros_grid.copy()
     gas_production_grid = zeros_grid.copy()
 
-    fully_implicit_result = evolve_fully_implicit(
+    result = evolve_fully_implicit(
         cell_dimension=cell_dimension,
         thickness_grid=padded_thickness_grid,
         elevation_grid=padded_elevation_grid,
@@ -179,7 +145,7 @@ def _run_fully_implicit(
         relative_mobility_grids=padded_relative_mobility_grids,
         capillary_pressure_grids=padded_capillary_pressure_grids,
         wells=wells,
-        options=options,
+        config=config,
         boundary_conditions=boundary_conditions,
         # Wrap the grids in a proxy to allow item assignment
         injection_grid=_RateGridsProxy(
@@ -193,8 +159,23 @@ def _run_fully_implicit(
             gas=gas_production_grid,
         ),
     )
+    if not result.success:
+        logger.error(
+            f"Fully implicit evolution failed at time step {time_step}: \n{result.message}"
+        )
+        return StepResult(
+            oil_injection_grid=oil_injection_grid,
+            water_injection_grid=water_injection_grid,
+            gas_injection_grid=gas_injection_grid,
+            oil_production_grid=oil_production_grid,
+            water_production_grid=water_production_grid,
+            gas_production_grid=gas_production_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=result.message,
+        )
 
-    solution = fully_implicit_result.value
+    solution = result.value
     padded_pressure_grid = solution.pressure_grid
     padded_oil_saturation_grid = solution.oil_saturation_grid
     padded_gas_saturation_grid = solution.gas_saturation_grid
@@ -229,7 +210,7 @@ def _run_fully_implicit(
         wells=wells,
         miscibility_model=miscibility_model,
     )
-    return TimeStepResult(
+    return StepResult(
         oil_injection_grid=oil_injection_grid,
         water_injection_grid=water_injection_grid,
         gas_injection_grid=gas_injection_grid,
@@ -237,12 +218,17 @@ def _run_fully_implicit(
         water_production_grid=water_production_grid,
         gas_production_grid=gas_production_grid,
         fluid_properties=padded_fluid_properties,
+        success=True,
+        message=result.message,
+        accept_kwargs={
+            "max_cfl_encountered": None,
+            "newton_iterations": solution.newton_iterations,
+        },
     )
 
 
-def _run_impes(
+def _run_impes_step(
     time_step: int,
-    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -250,19 +236,18 @@ def _run_impes(
     time_step_size: float,
     padded_rock_properties: RockProperties[ThreeDimensions],
     padded_fluid_properties: FluidProperties[ThreeDimensions],
-    rock_fluid_properties: RockFluidProperties,
     padded_relperm_grids: RelPermGrids[ThreeDimensions],
     padded_relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     padded_capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     miscibility_model: MiscibilityModel,
     evolve_saturation: typing.Callable,
-    options: Options,
-) -> TimeStepResult[ThreeDimensions]:
+    config: Config,
+) -> StepResult[ThreeDimensions]:
     """
     Execute one time step using IMPES (Implicit Pressure, Explicit Saturation).
 
-    Returns: `TimeStepResult` containing updated rates and fluid properties.
+    Returns: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (implicit)...")
     pressure_result = evolve_pressure_implicitly(
@@ -276,22 +261,49 @@ def _run_impes(
         relative_mobility_grids=padded_relative_mobility_grids,
         capillary_pressure_grids=padded_capillary_pressure_grids,
         wells=wells,
-        options=options,
+        config=config,
     )
+    if not pressure_result.success:
+        logger.error(
+            f"Implicit pressure evolution failed at time step {time_step}: \n{pressure_result.message}"
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=pressure_result.message,
+        )
+
+    logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_result.value
-    logger.debug(f"Pressure evolution completed! ({pressure_result.scheme} scheme)")
 
     if (negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
-        logger.error(
+        logger.warning(
             f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
         )
-        logger.error(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
-        logger.error(
+        logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
+        logger.warning(
             f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
         )
-        raise RuntimeError(
+        message = (
             NEGATIVE_PRESSURE_ERROR.format(indices=negative_pressure_indices.tolist())
             + f"\nAt Time Step {time_step}."
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=message,
         )
 
     # Update fluid properties with new pressure grid
@@ -302,7 +314,7 @@ def _run_impes(
 
     # For IMPES, we need to update the fluid properties
     # before proceeding to saturation evolution.
-    logger.debug("Updating PVT fluid properties for saturation evolution (IMPES)")
+    logger.debug("Updating PVT fluid properties for saturation evolution")
     padded_fluid_properties = update_pvt_properties(
         fluid_properties=padded_fluid_properties,
         wells=wells,
@@ -311,9 +323,7 @@ def _run_impes(
 
     # Recompute relative mobility grids with updated fluid properties
     # Since relative mobility depends on fluid viscosities which change with pressure
-    logger.debug(
-        "Rebuilding relative mobility grids for saturation evolution (IMPES)..."
-    )
+    logger.debug("Rebuilding relative mobility grids for saturation evolution...")
     (
         padded_water_relative_mobility_grid,
         padded_oil_relative_mobility_grid,
@@ -327,15 +337,15 @@ def _run_impes(
         gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
     )
     # Clamp relative mobility grids to avoid numerical issues
-    padded_water_relative_mobility_grid = options.relative_mobility_range[
+    padded_water_relative_mobility_grid = config.relative_mobility_range[
         "water"
     ].arrayclip(padded_water_relative_mobility_grid)
-    padded_oil_relative_mobility_grid = options.relative_mobility_range[
-        "oil"
-    ].arrayclip(padded_oil_relative_mobility_grid)
-    padded_gas_relative_mobility_grid = options.relative_mobility_range[
-        "gas"
-    ].arrayclip(padded_gas_relative_mobility_grid)
+    padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].arrayclip(
+        padded_oil_relative_mobility_grid
+    )
+    padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].arrayclip(
+        padded_gas_relative_mobility_grid
+    )
     padded_relative_mobility_grids = RelativeMobilityGrids(
         water_relative_mobility=padded_water_relative_mobility_grid,
         oil_relative_mobility=padded_oil_relative_mobility_grid,
@@ -364,7 +374,7 @@ def _run_impes(
         relative_mobility_grids=padded_relative_mobility_grids,
         capillary_pressure_grids=padded_capillary_pressure_grids,
         wells=wells,
-        options=options,
+        config=config,
         # Wrap the grids in a proxy to allow item assignment
         injection_grid=_RateGridsProxy(
             oil=oil_injection_grid,
@@ -377,6 +387,21 @@ def _run_impes(
             gas=gas_production_grid,
         ),
     )
+    if not saturation_result.success:
+        logger.error(
+            f"Explicit saturation evolution failed at time step {time_step}: \n{saturation_result.message}"
+        )
+        return StepResult(
+            oil_injection_grid=oil_injection_grid,
+            water_injection_grid=water_injection_grid,
+            gas_injection_grid=gas_injection_grid,
+            oil_production_grid=oil_production_grid,
+            water_production_grid=water_production_grid,
+            gas_production_grid=gas_production_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=saturation_result.message,
+        )
     logger.debug("Saturation evolution completed!")
 
     logger.debug("Updating fluid properties with new saturation grids...")
@@ -411,7 +436,7 @@ def _run_impes(
             f"Unexpected number of saturation grids returned: {other_grids_size + 2}"
         )
 
-    return TimeStepResult(
+    return StepResult(
         oil_injection_grid=oil_injection_grid,
         water_injection_grid=water_injection_grid,
         gas_injection_grid=gas_injection_grid,
@@ -419,12 +444,17 @@ def _run_impes(
         water_production_grid=water_production_grid,
         gas_production_grid=gas_production_grid,
         fluid_properties=padded_fluid_properties,
+        success=True,
+        message=saturation_result.message,
+        accept_kwargs={
+            "max_cfl_encountered": saturation_result.metadata.cfl_info.max_cfl_encountered,
+            "newton_iterations": None,
+        },
     )
 
 
-def _run_fully_explicit(
+def _run_explicit_step(
     time_step: int,
-    num_of_time_steps: int,
     zeros_grid: NDimensionalGrid[ThreeDimensions],
     cell_dimension: typing.Tuple[float, float],
     padded_thickness_grid: NDimensionalGrid[ThreeDimensions],
@@ -432,18 +462,17 @@ def _run_fully_explicit(
     time_step_size: float,
     padded_rock_properties: RockProperties[ThreeDimensions],
     padded_fluid_properties: FluidProperties[ThreeDimensions],
-    rock_fluid_properties: RockFluidProperties,
     padded_relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     padded_capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     miscibility_model: MiscibilityModel,
     evolve_saturation: typing.Callable,
-    options: Options,
-) -> TimeStepResult[ThreeDimensions]:
+    config: Config,
+) -> StepResult[ThreeDimensions]:
     """
     Execute one time step using fully explicit scheme (explicit pressure and saturation).
 
-    Returns: `TimeStepResult` containing updated rates and fluid properties.
+    Returns: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (explicit)...")
     pressure_result = evolve_pressure_explicitly(
@@ -457,22 +486,49 @@ def _run_fully_explicit(
         relative_mobility_grids=padded_relative_mobility_grids,
         capillary_pressure_grids=padded_capillary_pressure_grids,
         wells=wells,
-        options=options,
+        config=config,
     )
+    if not pressure_result.success:
+        logger.error(
+            f"Explicit pressure evolution failed at time step {time_step}: \n{pressure_result.message}"
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=pressure_result.message,
+        )
+
+    logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_result.value
-    logger.debug(f"Pressure evolution completed! ({pressure_result.scheme} scheme)")
 
     if (negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
-        logger.error(
+        logger.warning(
             f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
         )
-        logger.error(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
-        logger.error(
+        logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
+        logger.warning(
             f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
         )
-        raise RuntimeError(
+        message = (
             NEGATIVE_PRESSURE_ERROR.format(indices=negative_pressure_indices.tolist())
             + f"\nAt Time Step {time_step}."
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=message,
         )
 
     # For explicit schemes, we can re-use the current fluid properties
@@ -503,7 +559,7 @@ def _run_fully_explicit(
         relative_mobility_grids=padded_relative_mobility_grids,
         capillary_pressure_grids=padded_capillary_pressure_grids,
         wells=wells,
-        options=options,
+        config=config,
         # Wrap the grids in a proxy to allow item assignment
         injection_grid=_RateGridsProxy(
             oil=oil_injection_grid,
@@ -516,6 +572,22 @@ def _run_fully_explicit(
             gas=gas_production_grid,
         ),
     )
+    if not saturation_result.success:
+        logger.error(
+            f"Explicit saturation evolution failed at time step {time_step}: \n{saturation_result.message}"
+        )
+        return StepResult(
+            oil_injection_grid=oil_injection_grid,
+            water_injection_grid=water_injection_grid,
+            gas_injection_grid=gas_injection_grid,
+            oil_production_grid=oil_production_grid,
+            water_production_grid=water_production_grid,
+            gas_production_grid=gas_production_grid,
+            fluid_properties=padded_fluid_properties,
+            success=False,
+            message=saturation_result.message,
+        )
+
     logger.debug("Saturation evolution completed!")
 
     # Update fluid properties with new pressure after saturation update
@@ -566,7 +638,7 @@ def _run_fully_explicit(
         wells=wells,
         miscibility_model=miscibility_model,
     )
-    return TimeStepResult(
+    return StepResult(
         fluid_properties=padded_fluid_properties,
         oil_injection_grid=oil_injection_grid,
         water_injection_grid=water_injection_grid,
@@ -574,28 +646,38 @@ def _run_fully_explicit(
         oil_production_grid=oil_production_grid,
         water_production_grid=water_production_grid,
         gas_production_grid=gas_production_grid,
+        success=True,
+        message=saturation_result.message,
+        accept_kwargs={
+            "max_cfl_encountered": saturation_result.metadata.cfl_info.max_cfl_encountered,
+            "newton_iterations": None,
+        },
     )
 
 
-def _log_progress(
-    time_step: int, num_of_time_steps: int, time_step_size: float, interval: int = 10
+def log_progress(
+    step: int,
+    step_size: float,
+    time_elapsed: float,
+    total_time: float,
+    is_last_step: bool = False,
+    interval: int = 3,
 ):
     """Logs the simulation progress at specified intervals."""
-    if time_step % interval == 0 or time_step == num_of_time_steps:
-        elapsed_time = time_step * time_step_size
-        total_time = num_of_time_steps * time_step_size
-        percent_complete = (time_step / num_of_time_steps) * 100
+    if step <= 1 or step % interval == 0 or is_last_step:
+        percent_complete = (time_elapsed / total_time) * 100.0
         logger.info(
-            f"Time Step {time_step}/{num_of_time_steps} "
-            f"({percent_complete:.2f}%) - "
-            f"Elapsed Time: {elapsed_time:.2f}s / {total_time:.2f}s"
+            f"Time Step {step} with Δt = {step_size:.4f}s - "
+            f"({percent_complete:.4f}%) - "
+            f"Elapsed Time: {time_elapsed:.4f}s / {total_time:.4f}s"
         )
 
 
 def run(
     model: ReservoirModel[ThreeDimensions],
+    timer: Timer,
     wells: typing.Optional[Wells[ThreeDimensions]] = None,
-    options: typing.Optional[Options] = None,
+    config: typing.Optional[Config] = None,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     """
     Runs a dynamic simulation on a 3D reservoir model with specified properties and wells.
@@ -604,34 +686,41 @@ def run(
     3D simulations are computationally intensive and may require significant memory and processing power.
 
     :param model: The reservoir model containing grid, rock, and fluid properties.
+    :param timer: The time manager for controlling simulation time steps.
     :param wells: The wells configuration for the simulation.
-    :param options: Simulation run options and parameters.
+    :param config: Simulation run configuration and parameters.
     :yield: Yields the model state at specified output intervals.
     """
-    if options is None:
-        options = default_options
+    if config is None:
+        config = Config()
     if wells is None:
         wells = Wells()
 
     logger.info("Starting reservoir simulation workflow...")
-    logger.debug(f"Grid dimensions: {model.grid_shape}")
-    logger.debug(f"Cell dimensions: {model.cell_dimension}")
-    logger.debug(f"Evolution scheme: {options.scheme}")
-    logger.debug(f"Time step size: {options.time_step_size} seconds")
-    logger.debug(f"Total simulation time: {options.total_time} seconds")
 
     cell_dimension = model.cell_dimension
     boundary_conditions = model.boundary_conditions
     grid_shape = model.grid_shape
-    time_step_size = options.time_step_size
     has_wells = wells.exists()
+    output_frequency = config.output_frequency
+    convergence_tolerance = config.convergence_tolerance
+    scheme = config.scheme
+    miscibility_model = config.miscibility_model
+
+    logger.debug(f"Grid dimensions: {grid_shape}")
+    logger.debug(f"Cell dimensions: {cell_dimension}")
+    logger.debug(f"Evolution scheme: {scheme}")
+    logger.debug(f"Total simulation time: {timer.simulation_time} seconds")
+    logger.debug(f"Output frequency: every {output_frequency} steps")
+    logger.debug(f"Convergence tolerance: {convergence_tolerance}")
+    logger.debug(f"Has wells: {has_wells}")
     if has_wells:
         logger.debug("Checking well locations against grid shape")
         wells.check_location(grid_shape=grid_shape)
 
-    # Use the options context manager to ensure that constants defined in options are utilized
+    # Use the config context manager to ensure that constants defined in config are utilized
     # throughout the simulation run
-    with options.constants():
+    with config.constants():
         # Pad fluid and rock properties grids and other necesary grids with ghost cells
         # for boundary condition application
         # Ensure ghost cells mirror neighbour values by default
@@ -642,7 +731,7 @@ def run(
         padded_thickness_grid = pad_grid(thickness_grid, pad_width=1)
         padded_thickness_grid = _mirror_neighbour(padded_thickness_grid)
         elevation_grid = model.get_elevation_grid(
-            apply_dip=not options.disable_structural_dip
+            apply_dip=not config.disable_structural_dip
         )
         padded_elevation_grid = pad_grid(elevation_grid, pad_width=1)
         padded_elevation_grid = _mirror_neighbour(padded_elevation_grid)
@@ -658,9 +747,6 @@ def run(
             thickness_grid=thickness_grid,
             time=0.0,
         )
-
-        scheme = options.scheme
-        miscibility_model = options.miscibility_model
 
         if miscibility_model != "immiscible":
             logger.debug(
@@ -692,7 +778,9 @@ def run(
             fluid_properties=padded_fluid_properties,
             rock_properties=padded_rock_properties,
             rock_fluid_properties=rock_fluid_properties,
-            options=options,
+            disable_capillary_effects=config.disable_capillary_effects,
+            capillary_strength_factor=config.capillary_strength_factor,
+            relative_mobility_range=config.relative_mobility_range,
         )
         relative_mobility_grids = padded_relative_mobility_grids.unpad(pad_width=1)
         relperm_grids = padded_relperm_grids.unpad(pad_width=1)
@@ -705,11 +793,11 @@ def run(
         water_production_grid = zeros_grid.copy()
         gas_production_grid = zeros_grid.copy()
         state = ModelState(
-            time_step=0,
-            time_step_size=time_step_size,
+            step=0,
+            step_size=timer.step_size,
             model=model,
             wells=wells,
-            options=options,
+            config=config,
             relative_mobilities=relative_mobility_grids,
             relative_permeabilities=relperm_grids,
             capillary_pressures=capillary_pressure_grids,
@@ -725,17 +813,6 @@ def run(
             ),
         )
 
-        num_of_time_steps = min(
-            math.ceil(options.total_time // time_step_size), options.max_time_steps
-        )
-        output_frequency = options.output_frequency
-
-        logger.debug(f"Simulating for {num_of_time_steps} time steps")
-        logger.debug(f"Number of time steps to simulate: {int(num_of_time_steps)}")
-        logger.debug(f"Output frequency: every {output_frequency} steps")
-        logger.debug(f"Convergence tolerance: {options.convergence_tolerance}")
-        logger.debug(f"Has wells: {has_wells}")
-
         # Yield the Initial model state
         logger.debug("Yielding initial model state")
         yield state
@@ -744,32 +821,32 @@ def run(
             boundary_conditions["pressure"], type(default_bc)
         )
 
-        for time_step in range(1, num_of_time_steps + 1):
-            logger.debug(f"Running time step {time_step} of {num_of_time_steps}...")
+        while not timer.done():
+            # WE FIRST PROPOSE THE TIME STEP SIZE FOR THE NEXT STEP
+            # `timer.step` is still the last accepted step
+            # since we have not accepted the new step size proposal and hence, the step yet
+            # So we use `timer.next_step` to indicate the new step we are attempting
+            new_step = timer.next_step
+            step_size = timer.propose_step_size()
+            logger.debug(
+                f"Attempting time step {new_step} with size {step_size} seconds..."
+            )
             try:
                 if has_wells:
                     logger.debug(
-                        f"Updating wells configuration for time step {time_step}"
+                        f"Updating wells configuration for time step {new_step}"
                     )
                     wells.evolve(state)
                     logger.debug("Wells updated.")
 
-                _log_progress(
-                    time_step=time_step,
-                    num_of_time_steps=num_of_time_steps,
-                    time_step_size=time_step_size,
-                    interval=options.progress_log_interval,
-                )
-
                 if scheme == "implicit":
-                    result = _run_fully_implicit(
-                        time_step=time_step,
-                        num_of_time_steps=num_of_time_steps,
+                    result = _run_implicit_step(
+                        time_step=new_step,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
                         padded_elevation_grid=padded_elevation_grid,
-                        time_step_size=time_step_size,
+                        time_step_size=step_size,
                         padded_rock_properties=padded_rock_properties,
                         padded_fluid_properties=padded_fluid_properties,
                         rock_fluid_properties=rock_fluid_properties,
@@ -778,56 +855,82 @@ def run(
                         wells=wells,
                         boundary_conditions=boundary_conditions,
                         miscibility_model=miscibility_model,
-                        options=options,
+                        config=config,
                     )
                 elif scheme == "impes":
-                    result = _run_impes(
-                        time_step=time_step,
-                        num_of_time_steps=num_of_time_steps,
+                    result = _run_impes_step(
+                        time_step=new_step,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
                         padded_elevation_grid=padded_elevation_grid,
-                        time_step_size=time_step_size,
+                        time_step_size=step_size,
                         padded_rock_properties=padded_rock_properties,
                         padded_fluid_properties=padded_fluid_properties,
-                        rock_fluid_properties=rock_fluid_properties,
                         padded_relperm_grids=padded_relperm_grids,
                         padded_relative_mobility_grids=padded_relative_mobility_grids,
                         padded_capillary_pressure_grids=padded_capillary_pressure_grids,
                         wells=wells,
                         miscibility_model=miscibility_model,
                         evolve_saturation=evolve_saturation,
-                        options=options,
+                        config=config,
                     )
                 else:
-                    result = _run_fully_explicit(
-                        time_step=time_step,
-                        num_of_time_steps=num_of_time_steps,
+                    result = _run_explicit_step(
+                        time_step=new_step,
                         zeros_grid=zeros_grid,
                         cell_dimension=cell_dimension,
                         padded_thickness_grid=padded_thickness_grid,
                         padded_elevation_grid=padded_elevation_grid,
-                        time_step_size=time_step_size,
+                        time_step_size=step_size,
                         padded_rock_properties=padded_rock_properties,
                         padded_fluid_properties=padded_fluid_properties,
-                        rock_fluid_properties=rock_fluid_properties,
                         padded_relative_mobility_grids=padded_relative_mobility_grids,
                         padded_capillary_pressure_grids=padded_capillary_pressure_grids,
                         wells=wells,
                         miscibility_model=miscibility_model,
                         evolve_saturation=evolve_saturation,
-                        options=options,
+                        config=config,
                     )
+
+                # IF THE STEP WAS SUCCESSFUL, ACCEPT THAT STEP PROPOSAL
+                if result.success:
+                    # Now we can accept the proposed time step size
+                    # and we now agree that this is a new step
+                    logger.debug(f"Time step {new_step} completed successfully.")
+                    actual_step_size = timer.accept_step(
+                        step_size=step_size, **result.accept_kwargs
+                    )
+                    log_progress(
+                        step=timer.step,
+                        step_size=actual_step_size,
+                        time_elapsed=timer.elapsed_time,
+                        total_time=timer.simulation_time,
+                        is_last_step=timer.is_last_step,
+                        interval=config.log_interval,
+                    )
+                else:
+                    # REJECT AND ADJUST THE TIME STEP SIZE AND RETRY
+                    logger.warning(
+                        f"Time step {new_step} failed. Retrying with smaller time step."
+                    )
+                    try:
+                        timer.reject_step(
+                            step_size=step_size, aggressive=timer.rejection_count > 10
+                        )
+                    except TimingError as exc:
+                        raise SimulationError(
+                            f"Simulation failed at time step {new_step} and cannot reduce time step further. {exc}."
+                            f"\n{result.message}"
+                        ) from exc
+                    continue  # Retry the time step with a smaller size
 
                 # Get the updated fluid properties, which will also be used for the next time step
                 padded_fluid_properties = result.fluid_properties
 
                 # Take a snapshot of the model state at specified intervals and at the last time step
-                if (time_step % output_frequency == 0) or (
-                    time_step == num_of_time_steps
-                ):
-                    logger.debug(f"Capturing model state at time step {time_step}")
+                if (timer.step % output_frequency == 0) or timer.is_last_step:
+                    logger.debug(f"Capturing model state at time step {timer.step}")
                     # The production rates are negative in the evolution
                     # so we need to negate them to report positive production values
                     logger.debug(
@@ -879,11 +982,11 @@ def run(
                         pad_width=1
                     )
                     state = ModelState(
-                        time_step=time_step,
-                        time_step_size=time_step_size,
+                        step=timer.step,
+                        step_size=timer.step_size,
                         model=model_snapshot,
                         wells=wells_snapshot,
-                        options=options,
+                        config=config,
                         relative_mobilities=relative_mobility_grids,
                         relative_permeabilities=relperm_grids,
                         capillary_pressures=capillary_pressure_grids,
@@ -893,12 +996,12 @@ def run(
                     logger.debug("Yielding model state snapshot")
                     yield state
 
-                next_step = time_step + 1
-                if next_step > num_of_time_steps:
+                if timer.is_last_step:
                     # Break the loop if we've reached the final time step
                     # to avoid unnecessary computations
                     break
 
+                next_step = timer.next_step
                 # Apply boundary conditions before pressure update for the next time step
                 logger.debug(
                     f"Applying boundary conditions for time step {next_step}..."
@@ -911,7 +1014,7 @@ def run(
                         cell_dimension=cell_dimension,
                         grid_shape=grid_shape,
                         thickness_grid=thickness_grid,
-                        time=time_step * time_step_size,
+                        time=next_step * step_size,
                     )
                 )
                 logger.debug("Boundary conditions applied.")
@@ -927,7 +1030,7 @@ def run(
                         wells=wells,
                         miscibility_model=miscibility_model,
                     )
-                    logger.debug("PVT fluid properties updated.")
+                    logger.debug("PVT fluid properties updated")
 
                 # Build relative permeability, relative mobility, and capillary pressure grids
                 logger.debug(
@@ -941,13 +1044,14 @@ def run(
                     fluid_properties=padded_fluid_properties,
                     rock_properties=padded_rock_properties,
                     rock_fluid_properties=rock_fluid_properties,
-                    options=options,
+                    disable_capillary_effects=config.disable_capillary_effects,
+                    capillary_strength_factor=config.capillary_strength_factor,
+                    relative_mobility_range=config.relative_mobility_range,
                 )
 
             except Exception as exc:
-                logger.error(f"Error encountered at time step {time_step}: {exc}")
-                raise
+                raise SimulationError(
+                    f"Simulation failed at time step {timer.step} due to error: {exc}"
+                ) from exc
 
-    logger.info(
-        f"Simulation completed successfully after {num_of_time_steps} time steps"
-    )
+    logger.info(f"Simulation completed successfully after {timer.step} time steps")

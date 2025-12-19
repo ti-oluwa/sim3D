@@ -4,6 +4,7 @@ import warnings
 import numpy as np
 
 from bores._precision import get_dtype
+from bores.errors import ValidationError
 from bores.types import NDimension, NDimensionalGrid
 
 
@@ -85,7 +86,7 @@ def build_saturation_grids(
     :param oil_water_transition_thickness: Thickness of oil-water transition zone (ft).
     :param transition_curvature_exponent: Controls nonlinearity of saturation gradient.
     :return: Tuple of (water_saturation, oil_saturation, gas_saturation) grids.
-    :raises ValueError: If contact depths are invalid or transitions overlap.
+    :raises ValidationError: If contact depths are invalid or transitions overlap.
     """
     # Input validation
     _validate_inputs(
@@ -196,13 +197,13 @@ def _validate_inputs(
     :param gas_oil_transition_thickness: Gas-oil transition zone thickness (ft).
     :param oil_water_transition_thickness: Oil-water transition zone thickness (ft).
     :param transition_curvature_exponent: Transition curvature exponent (dimensionless).
-    :raises ValueError: If any validation check fails.
+    :raises ValidationError: If any validation check fails.
     :raises UserWarning: If oil column is very thin (< 1.0 ft) or Sor_g > Sor_w.
     """
 
     # Check contact depth ordering
     if gas_oil_contact >= oil_water_contact:
-        raise ValueError(
+        raise ValidationError(
             f"Gas-oil contact ({gas_oil_contact}) must be above oil-water contact ({oil_water_contact}). "
             "Depths increase downward."
         )
@@ -216,36 +217,36 @@ def _validate_inputs(
         == residual_gas_saturation.shape
         == porosity.shape
     ):
-        raise ValueError("All grid arrays must have the same shape.")
+        raise ValidationError("All grid arrays must have the same shape.")
 
     # Check saturation ranges
     if np.any((connate_water_saturation < 0) | (connate_water_saturation > 1)):
-        raise ValueError("Connate water saturation must be in [0, 1].")
+        raise ValidationError("Connate water saturation must be in [0, 1].")
     if np.any(
         (residual_oil_saturation_water < 0) | (residual_oil_saturation_water > 1)
     ):
-        raise ValueError("Residual oil saturation (water) must be in [0, 1].")
+        raise ValidationError("Residual oil saturation (water) must be in [0, 1].")
     if np.any((residual_oil_saturation_gas < 0) | (residual_oil_saturation_gas > 1)):
-        raise ValueError("Residual oil saturation (gas) must be in [0, 1].")
+        raise ValidationError("Residual oil saturation (gas) must be in [0, 1].")
     if np.any((residual_gas_saturation < 0) | (residual_gas_saturation > 1)):
-        raise ValueError("Residual gas saturation must be in [0, 1].")
+        raise ValidationError("Residual gas saturation must be in [0, 1].")
 
     # Check for physically impossible saturation combinations
     active = np.isfinite(porosity) & (porosity > 0)
     if np.any(
         (connate_water_saturation[active] + residual_oil_saturation_gas[active]) > 1.0
     ):
-        raise ValueError(
+        raise ValidationError(
             "Swc + Sor_gas exceeds 1.0 in some cells (gas zone constraint)."
         )
     if np.any(
         (connate_water_saturation[active] + residual_gas_saturation[active]) > 1.0
     ):
-        raise ValueError("Swc + Sgr exceeds 1.0 in some cells (oil zone constraint).")
+        raise ValidationError("Swc + Sgr exceeds 1.0 in some cells (oil zone constraint).")
     if np.any(
         (residual_oil_saturation_water[active] + residual_gas_saturation[active]) > 1.0
     ):
-        raise ValueError(
+        raise ValidationError(
             "Sor_water + Sgr exceeds 1.0 in some cells (not physical in any zone)."
         )
 
@@ -262,17 +263,17 @@ def _validate_inputs(
     # Check transition zone parameters
     if use_transitions:
         if gas_oil_transition_thickness <= 0 or oil_water_transition_thickness <= 0:
-            raise ValueError("Transition thicknesses must be positive.")
+            raise ValidationError("Transition thicknesses must be positive.")
 
         if transition_curvature_exponent <= 0:
-            raise ValueError("Transition curvature exponent must be positive.")
+            raise ValidationError("Transition curvature exponent must be positive.")
 
         # Check for overlapping transitions
         gas_oil_contact_bottom = gas_oil_contact + gas_oil_transition_thickness / 2
         oil_water_contact_top = oil_water_contact - oil_water_transition_thickness / 2
 
         if gas_oil_contact_bottom >= oil_water_contact_top:
-            raise ValueError(
+            raise ValidationError(
                 f"Transition zones overlap: GOC transition ends at {gas_oil_contact_bottom:.2f}, "
                 f"but OWC transition starts at {oil_water_contact_top:.2f}. "
                 "Reduce transition thicknesses or increase contact separation."

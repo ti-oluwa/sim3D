@@ -16,7 +16,7 @@ __all__ = ["assemble_jacobian"]
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_accumulation_derivatives(
     porosity: float,
@@ -71,7 +71,7 @@ def compute_accumulation_derivatives(
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_phase_flux_derivatives(
     cell_index: typing.Tuple[int, int, int],

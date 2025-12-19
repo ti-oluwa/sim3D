@@ -8,6 +8,7 @@ import numpy as np
 from scipy.sparse import lil_matrix
 
 from bores._precision import get_dtype
+from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
@@ -21,8 +22,9 @@ from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
 from bores.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
-from bores.types import FluidPhase, Options, ThreeDimensionalGrid, ThreeDimensions
+from bores.types import FluidPhase, ThreeDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
+from bores.errors import SolverError
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,8 @@ def evolve_pressure_implicitly(
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
-    options: Options,
-) -> EvolutionResult[ThreeDimensionalGrid]:
+    config: Config,
+) -> EvolutionResult[ThreeDimensionalGrid, None]:
     """
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
     three-phase flow system in a 3D reservoir.
@@ -66,7 +68,7 @@ def evolve_pressure_implicitly(
     :param relative_mobility_grids: Tuple of relative mobility grids for (water, oil, gas)
     :param capillary_pressure_grids: Tuple of capillary pressure grids for (oil-water, gas-oil)
     :param wells: `Wells` object containing well definitions and properties
-    :param options: `Options` object containing simulation options
+    :param config: `Config` object containing simulation config
     :return: `EvolutionResult` containing the new pressure grid and scheme used
     """
     absolute_permeability = rock_properties.absolute_permeability
@@ -204,17 +206,28 @@ def evolve_pressure_implicitly(
         cell_size_y=cell_size_y,
         time_step=time_step,
         time_step_size=time_step_size,
-        options=options,
+        config=config,
     )
 
     # Solve the linear system A·pⁿ⁺¹ = b
-    new_1D_pressure_grid = solve_linear_system(
-        A_csr=A.tocsr(),
-        b=b,
-        max_iterations=options.max_iterations,
-        solver=options.iterative_solver,
-        preconditioner=options.preconditioner,
-    )
+    try:
+        new_1D_pressure_grid = solve_linear_system(
+            A_csr=A.tocsr(),
+            b=b,
+            max_iterations=config.max_iterations,
+            solver=config.iterative_solver,
+            preconditioner=config.preconditioner,
+        )
+    except SolverError as exc:
+        logger.error(
+            f"Pressure solve failed at time step {time_step}: {exc}", exc_info=True
+        )
+        return EvolutionResult(
+            value=current_oil_pressure_grid,
+            success=False,
+            scheme="implicit",
+            message=str(exc),
+        )
 
     # Map solution back to 3D grid (preserves boundary values)
     new_pressure_grid = map_solution_to_grid(
@@ -225,7 +238,7 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
     )
     new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
-    return EvolutionResult(new_pressure_grid, scheme="implicit")
+    return EvolutionResult(value=new_pressure_grid, success=True, scheme="implicit")
 
 
 @numba.njit(parallel=True, cache=True)
@@ -765,7 +778,7 @@ def add_well_contributions(
     cell_size_y: float,
     time_step: int,
     time_step_size: float,
-    options: Options,
+    config: Config,
 ) -> typing.Tuple[lil_matrix, np.ndarray]:
     """
     Compute well flow rates and add contributions to the RHS vector b.
@@ -799,7 +812,7 @@ def add_well_contributions(
     :param cell_size_y: Cell size in y-direction (ft)
     :param time_step: Current time step number
     :param time_step_size: Time step size (seconds)
-    :param options: Simulation options
+    :param config: Simulation config
     :return: Tuple of (A, b) with well contributions added to b (A unchanged, returned for consistency)
     """
     _to_1D_index = functools.partial(
@@ -868,7 +881,7 @@ def add_well_contributions(
             )
 
             use_pseudo_pressure = (
-                options.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
                 interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -889,7 +902,7 @@ def add_well_contributions(
             )
 
             # Check for backflow (negative injection)
-            if cell_injection_rate < 0.0 and options.warn_rates_anomalies:
+            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
                 _warn_injector_is_producing(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
@@ -940,7 +953,7 @@ def add_well_contributions(
                     ]
 
                 use_pseudo_pressure = (
-                    options.use_pseudo_pressure and produced_phase == FluidPhase.GAS
+                    config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
                     interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
@@ -961,7 +974,7 @@ def add_well_contributions(
                 )
 
                 # Check for backflow (positive production = injection)
-                if production_rate > 0.0 and options.warn_rates_anomalies:
+                if production_rate > 0.0 and config.warn_rates_anomalies:
                     _warn_producer_is_injecting(
                         production_rate=production_rate,
                         well_name=production_well.name,

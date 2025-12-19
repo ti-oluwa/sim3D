@@ -6,6 +6,7 @@ import numpy as np
 from typing_extensions import Self
 
 from bores._precision import get_dtype
+from bores.errors import ValidationError
 from bores.types import (
     ArrayLike,
     NDimension,
@@ -73,13 +74,13 @@ def build_layered_grid(
     :return: N-Dimensional numpy array representing the grid
     """
     if len(layer_values) < 1:
-        raise ValueError("At least one layer value must be provided.")
+        raise ValidationError("At least one layer value must be provided.")
 
     dtype = get_dtype()
     layered_grid = build_uniform_grid(grid_shape=grid_shape, value=0.0)
     if orientation == Orientation.X:  # Layering along x-axis
         if len(layer_values) != grid_shape[0]:
-            raise ValueError(
+            raise ValidationError(
                 "Number of layer values must match number of cells in x direction."
             )
 
@@ -89,7 +90,7 @@ def build_layered_grid(
 
     elif orientation == Orientation.Y:  # Layering along y-axis
         if len(layer_values) != grid_shape[1]:
-            raise ValueError(
+            raise ValidationError(
                 "Number of layer values must match number of cells in y direction."
             )
 
@@ -99,12 +100,12 @@ def build_layered_grid(
 
     elif orientation == Orientation.Z:  # Layering along z-axis
         if len(grid_shape) != 3:
-            raise ValueError(
+            raise ValidationError(
                 "Grid dimension must be N-Dimensional for z-direction layering."
             )
 
         if len(layer_values) != grid_shape[2]:
-            raise ValueError(
+            raise ValidationError(
                 "Number of layer values must match number of cells in z direction."
             )
 
@@ -112,7 +113,7 @@ def build_layered_grid(
             layered_grid[:, :, k] = layer_value
         return layered_grid.astype(dtype)
 
-    raise ValueError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
+    raise ValidationError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
 
 
 layered_grid = build_layered_grid  # Alias for convenience
@@ -189,7 +190,7 @@ def _build_elevation_grid(
     :return: N-dimensional numpy array representing the elevation of each cell in the reservoir (ft).
     """
     if direction not in {"downward", "upward"}:
-        raise ValueError("direction must be 'downward' or 'upward'")
+        raise ValidationError("direction must be 'downward' or 'upward'")
 
     dtype = get_dtype()
 
@@ -347,13 +348,13 @@ def apply_structural_dip(
     :return: Elevation grid with structural dip applied
     """
     if elevation_direction not in {"downward", "upward"}:
-        raise ValueError("`elevation_direction` must be 'downward' or 'upward'")
+        raise ValidationError("`elevation_direction` must be 'downward' or 'upward'")
 
     if not (0.0 <= dip_angle <= 90.0):
-        raise ValueError("`dip_angle` must be between 0 and 90 degrees")
+        raise ValidationError("`dip_angle` must be between 0 and 90 degrees")
 
     if not (0.0 <= dip_azimuth < 360.0):
-        raise ValueError("`dip_azimuth` must be between 0 and 360 degrees")
+        raise ValidationError("`dip_azimuth` must be between 0 and 360 degrees")
 
     dtype = get_dtype()
     dipped_elevation_grid = elevation_grid.copy().astype(dtype)
@@ -515,7 +516,7 @@ def coarsen_grid(
     elif method == "min":
         pad_value = np.inf
     else:
-        raise ValueError(f"Unsupported method '{method}'")
+        raise ValidationError(f"Unsupported method '{method}'")
 
     data_padded = np.pad(
         data, pad_width=pad_width, mode="constant", constant_values=pad_value
@@ -581,7 +582,7 @@ def flatten_multilayer_grid_to_surface(
         # Apply function along z axis: shape → (nx, ny)
         return np.apply_along_axis(strategy, axis=2, arr=multilayer_grid)
 
-    raise ValueError(f"Unsupported flatten strategy: {strategy}")
+    raise ValidationError(f"Unsupported flatten strategy: {strategy}")
 
 
 class PadMixin(typing.Generic[NDimension]):

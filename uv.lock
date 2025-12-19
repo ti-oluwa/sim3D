@@ -203,6 +203,83 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/53/8d/94fade74736b4e94dd8dd45c2a2d12fc4863f3ffe8decc26abc7353be21d/auto-mix-prep-0.2.0.tar.gz", hash = "sha256:5e7d9c6e3fd73c49bf22a216e04d7249d529d8822f5ee3d25f3dcf6c982a92d6", size = 2901, upload-time = "2015-05-23T18:20:59.465Z" }
 
 [[package]]
+name = "bores"
+version = "0.0.1a0"
+source = { virtual = "." }
+dependencies = [
+    { name = "attrs" },
+    { name = "coolprop" },
+    { name = "imageio" },
+    { name = "intel-cmplr-lib-rt", marker = "sys_platform != 'darwin'" },
+    { name = "ipython", version = "8.37.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "ipython", version = "9.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "kaleido" },
+    { name = "numba" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform == 'darwin')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine != 'x86_64') or (python_full_version >= '3.11' and sys_platform == 'darwin')" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "plotly" },
+    { name = "pyamg" },
+    { name = "scikit-image" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform == 'darwin')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine != 'x86_64') or (python_full_version >= '3.11' and sys_platform == 'darwin')" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+    { name = "thermo" },
+    { name = "trame" },
+    { name = "typing-extensions" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "auto-mix-prep" },
+    { name = "marimo" },
+    { name = "mypy" },
+    { name = "rich" },
+    { name = "ruff" },
+    { name = "ty" },
+    { name = "watchdog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "marimo" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "attrs", specifier = ">=25.3.0" },
+    { name = "auto-mix-prep", marker = "extra == 'dev'", specifier = ">=0.2.0" },
+    { name = "coolprop", specifier = ">=6.8.0" },
+    { name = "imageio", specifier = ">=2.37.0" },
+    { name = "intel-cmplr-lib-rt", marker = "sys_platform != 'darwin'", specifier = ">=2025.3.1" },
+    { name = "ipython", specifier = ">=8.37.0" },
+    { name = "kaleido", specifier = ">=1.0.0" },
+    { name = "marimo", marker = "extra == 'dev'", specifier = ">=0.18.4" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.16.1" },
+    { name = "numba", specifier = ">=0.63.0" },
+    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=2.0.0" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=2.0.0", index = "https://urob.github.io/numpy-mkl" },
+    { name = "plotly", specifier = ">=6.2.0" },
+    { name = "pyamg", specifier = ">=5.3.0" },
+    { name = "rich", marker = "extra == 'dev'", specifier = ">=14.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
+    { name = "scikit-image", specifier = ">=0.25.2" },
+    { name = "scipy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=1.13.0" },
+    { name = "scipy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=1.13.0", index = "https://urob.github.io/numpy-mkl" },
+    { name = "thermo", specifier = ">=0.4.2" },
+    { name = "trame", specifier = ">=3.12.0" },
+    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.1a26" },
+    { name = "typing-extensions", specifier = ">=4.15.0" },
+    { name = "watchdog", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "marimo", specifier = ">=0.18.4" }]
+
+[[package]]
 name = "chemicals"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2585,83 +2662,6 @@ wheels = [
     { url = "https://github.com/urob/numpy-mkl/releases/download/0.1.2/scipy-1.16.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:92756f22310ece2e27df010f1dc30ae5c473bafb7f9f5d5e9e04a532e4399bfd" },
     { url = "https://github.com/urob/numpy-mkl/releases/download/0.1.2/scipy-1.16.3-cp314-cp314-win_amd64.whl", hash = "sha256:90af63e42b02812edd3eae50236de9953d439b2cc4b153aecaec586df9d944fb" },
 ]
-
-[[package]]
-name = "sim3d"
-version = "0.0.1"
-source = { virtual = "." }
-dependencies = [
-    { name = "attrs" },
-    { name = "coolprop" },
-    { name = "imageio" },
-    { name = "intel-cmplr-lib-rt", marker = "sys_platform != 'darwin'" },
-    { name = "ipython", version = "8.37.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "ipython", version = "9.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "kaleido" },
-    { name = "numba" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform == 'darwin')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
-    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine != 'x86_64') or (python_full_version >= '3.11' and sys_platform == 'darwin')" },
-    { name = "numpy", version = "2.3.5", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
-    { name = "plotly" },
-    { name = "pyamg" },
-    { name = "scikit-image" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform == 'darwin')" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
-    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine != 'x86_64') or (python_full_version >= '3.11' and sys_platform == 'darwin')" },
-    { name = "scipy", version = "1.16.3", source = { registry = "https://urob.github.io/numpy-mkl" }, marker = "python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform != 'darwin'" },
-    { name = "thermo" },
-    { name = "trame" },
-    { name = "typing-extensions" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "auto-mix-prep" },
-    { name = "marimo" },
-    { name = "mypy" },
-    { name = "rich" },
-    { name = "ruff" },
-    { name = "ty" },
-    { name = "watchdog" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "marimo" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "attrs", specifier = ">=25.3.0" },
-    { name = "auto-mix-prep", marker = "extra == 'dev'", specifier = ">=0.2.0" },
-    { name = "coolprop", specifier = ">=6.8.0" },
-    { name = "imageio", specifier = ">=2.37.0" },
-    { name = "intel-cmplr-lib-rt", marker = "sys_platform != 'darwin'", specifier = ">=2025.3.1" },
-    { name = "ipython", specifier = ">=8.37.0" },
-    { name = "kaleido", specifier = ">=1.0.0" },
-    { name = "marimo", marker = "extra == 'dev'", specifier = ">=0.18.4" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.16.1" },
-    { name = "numba", specifier = ">=0.63.0" },
-    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=2.0.0" },
-    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=2.0.0", index = "https://urob.github.io/numpy-mkl" },
-    { name = "plotly", specifier = ">=6.2.0" },
-    { name = "pyamg", specifier = ">=5.3.0" },
-    { name = "rich", marker = "extra == 'dev'", specifier = ">=14.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
-    { name = "scikit-image", specifier = ">=0.25.2" },
-    { name = "scipy", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=1.13.0" },
-    { name = "scipy", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=1.13.0", index = "https://urob.github.io/numpy-mkl" },
-    { name = "thermo", specifier = ">=0.4.2" },
-    { name = "trame", specifier = ">=3.12.0" },
-    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.1a26" },
-    { name = "typing-extensions", specifier = ">=4.15.0" },
-    { name = "watchdog", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "marimo", specifier = ">=0.18.4" }]
 
 [[package]]
 name = "simplejson"

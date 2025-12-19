@@ -20,3 +20,5 @@ from .grids import *  # noqa
 from .states import *  # noqa
 from .fractures import *  # noqa
 from .utils import *  # noqa
+from .timing import *  # noqa
+from .config import *  # noqa

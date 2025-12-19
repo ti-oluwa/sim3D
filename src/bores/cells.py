@@ -3,6 +3,8 @@ import typing
 import attrs
 import numpy as np
 
+from bores.errors import ValidationError
+
 __all__ = ["Cells", "CellFilter", "CellLocation"]
 
 
@@ -153,7 +155,7 @@ def _get_cell_mask(
     if isinstance(cells, str):
         # Filter by well name
         if wells is None:
-            raise ValueError("Wells object required when filtering by well name")
+            raise ValidationError("Wells object required when filtering by well name")
 
         # Find the well
         well = None
@@ -169,7 +171,7 @@ def _get_cell_mask(
                     break
 
         if well is None:
-            raise ValueError(f"Well '{cells}' not found")
+            raise ValidationError(f"Well '{cells}' not found")
 
         # Get all perforated cells for this well
         cell_locations = _expand_intervals(
@@ -194,7 +196,7 @@ def _get_cell_mask(
             else:
                 mask[cells[0], cells[1], cells[2]] = True
         else:
-            raise ValueError("Tuple must be either all slices or all integers")
+            raise ValidationError("Tuple must be either all slices or all integers")
 
     elif isinstance(cells, (tuple, list)):
         # Tuple/list of cells (multiple cell locations)
@@ -205,7 +207,7 @@ def _get_cell_mask(
                 mask[cell[0], cell[1], cell[2]] = True
 
     else:
-        raise ValueError(
+        raise ValidationError(
             f"Invalid cells parameter type: {type(cells)}. "
             "Expected None, str (well name), `Well` object, `Wells` object, sequence of `Well` objects, "
             "tuple (cell/slices/multiple cells)."

@@ -15,14 +15,14 @@ def _():
     bores.image_config(scale=3)
 
     DEPLETED_MODEL_STATES = (
-        Path.cwd() / "scenarios/states/stabilization_refined.pkl.xz"
+        Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
     )
     states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
-    return itertools, np, bores, states
+    return bores, itertools, np, states
 
 
 @app.cell
-def _(itertools, np, bores, states):
+def _(bores, itertools, np, states):
     analyst = bores.ModelAnalyst(states)
 
     oil_saturation_history = []
@@ -44,7 +44,7 @@ def _(itertools, np, bores, states):
 
     for state in itertools.islice(states, 0, None, 1):
         model = state.model
-        time_step = state.time_step
+        time_step = state.step
         fluid_properties = model.fluid_properties
         avg_oil_sat = np.mean(fluid_properties.oil_saturation_grid)
         avg_water_sat = np.mean(fluid_properties.water_saturation_grid)
@@ -96,7 +96,7 @@ def _(itertools, np, bores, states):
 
 
 @app.cell
-def _(avg_pressure_history, np, bores):
+def _(avg_pressure_history, bores, np):
     # Pressure
     pressure_fig = bores.make_series_plot(
         data={"Avg. Reservoir Pressure": np.array(avg_pressure_history)},
@@ -113,10 +113,10 @@ def _(avg_pressure_history, np, bores):
 
 @app.cell
 def _(
+    bores,
     gas_saturation_history,
     np,
     oil_saturation_history,
-    bores,
     water_saturation_history,
 ):
     # Saturation
@@ -139,10 +139,10 @@ def _(
 
 @app.cell
 def _(
+    bores,
     gas_oil_capillary_pressure_history,
     np,
     oil_water_capillary_pressure_history,
-    bores,
 ):
     # Capillary Pressure
     capillary_pressure_fig = bores.make_series_plot(
@@ -162,7 +162,7 @@ def _(
 
 
 @app.cell
-def _(krg_history, kro_history, krw_history, np, bores):
+def _(bores, krg_history, kro_history, krw_history, np):
     # Rel Perm
     relperm_fig = bores.make_series_plot(
         data={
@@ -182,7 +182,7 @@ def _(krg_history, kro_history, krw_history, np, bores):
 
 
 @app.cell
-def _(krw_saturation_history, np, bores):
+def _(bores, krw_saturation_history, np):
     # RelPerm-Saturation
     water_relperm_saturation_fig = bores.make_series_plot(
         data={
@@ -200,7 +200,7 @@ def _(krw_saturation_history, np, bores):
 
 
 @app.cell
-def _(kro_saturation_history, np, bores):
+def _(bores, kro_saturation_history, np):
     oil_relperm_saturation_fig = bores.make_series_plot(
         data={
             "Kro/So": np.array(kro_saturation_history),
@@ -217,7 +217,7 @@ def _(kro_saturation_history, np, bores):
 
 
 @app.cell
-def _(krg_saturation_history, np, bores):
+def _(bores, krg_saturation_history, np):
     gas_relperm_saturation_fig = bores.make_series_plot(
         data={
             "Krg/Sg": np.array(krg_saturation_history),
@@ -235,10 +235,10 @@ def _(krg_saturation_history, np, bores):
 
 @app.cell
 def _(
+    bores,
     np,
     oil_effective_density_history,
     oil_effective_viscosity_history,
-    bores,
 ):
     # Oil Effective Density
     oil_effective_density_fig = bores.make_series_plot(
@@ -277,7 +277,7 @@ def _(
 
 
 @app.cell
-def _(np, oil_relative_mobility_history, bores):
+def _(bores, np, oil_relative_mobility_history):
     # Oil Relative Mobility
     oil_relative_mobility_fig = bores.make_series_plot(
         data={
@@ -295,11 +295,11 @@ def _(np, oil_relative_mobility_history, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
-    oil_in_place_history = analyst.oil_in_place_history(interval=1, from_time_step=1)
-    gas_in_place_history = analyst.gas_in_place_history(interval=1, from_time_step=1)
+def _(analyst, bores, np):
+    oil_in_place_history = analyst.oil_in_place_history(interval=1, from_step=1)
+    gas_in_place_history = analyst.gas_in_place_history(interval=1, from_step=1)
     water_in_place_history = analyst.water_in_place_history(
-        interval=1, from_time_step=1
+        interval=1, from_step=1
     )
 
     # Reserves

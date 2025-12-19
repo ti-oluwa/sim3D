@@ -8,6 +8,7 @@ import attrs
 import numpy as np
 from typing_extensions import Self
 
+from bores.errors import ValidationError
 from bores.types import (
     ActionFunc,
     HookFunc,
@@ -632,7 +633,7 @@ def _expand_interval(
             )
         )
     else:
-        raise ValueError("Invalid well orientation")
+        raise ValidationError("Invalid well orientation")
 
     return typing.cast(typing.List[WellLocation], locations)
 
@@ -691,7 +692,7 @@ class WellsProxy(typing.Generic[WellLocation, WellT]):
         )
         actual_location_count = len(self.wells_map)
         if expected_location_count != actual_location_count:
-            raise ValueError(
+            raise ValidationError(
                 f"Overlapping wells found at some locations. Expected {expected_location_count} unique locations, but got {actual_location_count}."
             )
 
@@ -760,7 +761,7 @@ class Wells(typing.Generic[WellLocation]):
                 self.producers.wells_map
             )
             if overlapping_locations:
-                raise ValueError(
+                raise ValidationError(
                     f"Overlapping wells found at locations: {overlapping_locations}"
                 )
 

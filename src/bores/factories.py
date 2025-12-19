@@ -5,6 +5,7 @@ import numpy as np
 
 from bores.boundaries import BoundaryConditions, GridBoundaryCondition
 from bores.constants import c
+from bores.errors import ValidationError
 from bores.fractures import Fracture, apply_fractures
 from bores.grids.base import build_uniform_grid
 from bores.grids.pvt import (
@@ -121,7 +122,7 @@ def validate_saturation_grids(
             water_saturation_grid = water_saturation_grid / total_saturation_safe  # type: ignore
             gas_saturation_grid = gas_saturation_grid / total_saturation_safe  # type: ignore
         else:
-            raise ValueError(
+            raise ValidationError(
                 "The sum of oil, water, and gas saturations does not equal 1 everywhere in active cells."
             )
 
@@ -130,7 +131,7 @@ def validate_saturation_grids(
         (oil_saturation_grid[active_cells] < 0)
         | (oil_saturation_grid[active_cells] >= 1)
     ):
-        raise ValueError(
+        raise ValidationError(
             "Oil saturation grid values must be in the range [0, 1) in active cells."
         )
 
@@ -138,7 +139,7 @@ def validate_saturation_grids(
         (water_saturation_grid[active_cells] < 0)
         | (water_saturation_grid[active_cells] >= 1)
     ):
-        raise ValueError(
+        raise ValidationError(
             "Water saturation grid values must be in the range [0, 1) in active cells."
         )
 
@@ -146,7 +147,7 @@ def validate_saturation_grids(
         (gas_saturation_grid[active_cells] < 0)
         | (gas_saturation_grid[active_cells] >= 1)
     ):
-        raise ValueError(
+        raise ValidationError(
             "Gas saturation grid values must be in the range [0, 1) in active cells."
         )
 
@@ -283,11 +284,11 @@ def reservoir_model(
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
     if not 1 <= len(grid_shape) <= 3:
-        raise ValueError(
+        raise ValidationError(
             "`grid_shape` must be a tuple of one to three integers (rows, columns, [depth])."
         )
     if len(cell_dimension) < 2:
-        raise ValueError(
+        raise ValidationError(
             "`cell_dimension` must be a tuple of two floats (cell width, cell height)."
         )
 

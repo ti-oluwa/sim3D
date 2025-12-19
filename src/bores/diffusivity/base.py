@@ -18,7 +18,7 @@ from scipy.sparse.linalg import (
     tfqmr,
 )
 
-# from bores._precision import get_floating_point_info
+from bores.errors import SolverError, PreconditionerError
 from bores.types import (
     IterativeSolver,
     IterativeSolverFunc,
@@ -79,10 +79,25 @@ def _warn_injector_is_producing(
     )
 
 
-@attrs.frozen(slots=True)
-class EvolutionResult(typing.Generic[T]):
+M = typing.TypeVar("M")
+
+
+@attrs.frozen
+class EvolutionResult(typing.Generic[T, M]):
+    """
+    Result of a single evolution step in the simulation.
+    """
+
     value: T
+    """The result value if successful, otherwise None."""
     scheme: typing.Literal["implicit", "explicit"]
+    """The numerical scheme used for the evolution step."""
+    success: bool = True
+    """Indicates if the evolution step was successful."""
+    message: typing.Optional[str] = None
+    """A message providing additional information about the result."""
+    metadata: typing.Optional[M] = None
+    """Optional metadata related to the evolution step."""
 
 
 @numba.njit(inline="always", cache=True)
@@ -170,7 +185,7 @@ def from_1D_index_interior_only(
 
 
 @numba.njit(
-    cache=True,
+    cache=True
 )
 def compute_mobility_grids(
     absolute_permeability_x: ThreeDimensionalGrid,
@@ -395,7 +410,7 @@ def build_cpr_preconditioner(
     try:
         M_amg = build_amg_preconditioner(A_pp, **amg_kwargs)
     except Exception as exc:
-        raise RuntimeError(
+        raise PreconditionerError(
             f"AMG construction for pressure block failed: {exc}"
         ) from exc
 
@@ -403,7 +418,7 @@ def build_cpr_preconditioner(
     try:
         M_ilu = build_ilu_preconditioner(A_csr, **ilu_kwargs)
     except Exception as exc:
-        raise RuntimeError(f"ILU factorization failed for CPR: {exc}") from exc
+        raise PreconditionerError(f"ILU factorization failed for CPR: {exc}") from exc
 
     # Restriction and prolongation operators (implicit)
     def restrict_to_pressure(vec_full: np.typing.NDArray) -> np.typing.NDArray:
@@ -554,7 +569,7 @@ def solve_linear_system(
             )
 
     if not fallback_to_direct:
-        raise RuntimeError(
+        raise SolverError(
             f"All iterative solvers failed to converge within {max_iterations} iterations."
         )
 
@@ -563,7 +578,7 @@ def solve_linear_system(
         x = spsolve(A_csr, b)
     except Exception as exc:
         logger.error(f"Direct solver failed: {exc}")
-        raise RuntimeError(
+        raise SolverError(
             "All iterative solvers and direct solver failed to solve the system."
         ) from exc
     return x  # type: ignore[return-value]

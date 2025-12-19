@@ -26,10 +26,10 @@ def _(itertools, np, bores, states):
     analyst = bores.ProductionAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
-        interval=1, from_time_step=1, displacing_phase="gas"
+        interval=1, from_step=1, displacing_phase="gas"
     )
     production_rate_history = analyst.instantaneous_rates_history(
-        interval=1, from_time_step=1, rate_type="production"
+        interval=1, from_step=1, rate_type="production"
     )
 
     oil_saturation_history = []
@@ -299,7 +299,7 @@ def _(np, oil_relative_mobility_history, bores):
 def _(analyst, np, bores):
     # Production & Injection
     oil_production_history = analyst.oil_production_history(
-        interval=1, cumulative=False, from_time_step=1
+        interval=1, cumulative=False, from_step=1
     )
     oil_production_fig = bores.make_series_plot(
         data={
@@ -319,7 +319,7 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     water_production_history = analyst.water_production_history(
-        interval=1, cumulative=False, from_time_step=1
+        interval=1, cumulative=False, from_step=1
     )
     water_production_fig = bores.make_series_plot(
         data={
@@ -339,7 +339,7 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     gas_production_history = analyst.free_gas_production_history(
-        interval=1, cumulative=False, from_time_step=1
+        interval=1, cumulative=False, from_step=1
     )
     gas_production_fig = bores.make_series_plot(
         data={
@@ -359,7 +359,7 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     gas_injection_history = analyst.gas_injection_history(
-        interval=1, cumulative=False, from_time_step=7
+        interval=1, cumulative=False, from_step=7
     )
     gas_injection_fig = bores.make_series_plot(
         data={
@@ -381,7 +381,7 @@ def _(analyst, np, bores):
 def _(analyst, np, bores):
     # Cumulative production & injection
     cumulative_oil_production_history = analyst.oil_production_history(
-        interval=1, cumulative=True, from_time_step=1
+        interval=1, cumulative=True, from_step=1
     )
 
     cumulative_oil_production_fig = bores.make_series_plot(
@@ -405,7 +405,7 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     cumulative_water_production_history = analyst.water_production_history(
-        interval=1, cumulative=True, from_time_step=1
+        interval=1, cumulative=True, from_step=1
     )
 
     cumulative_water_production_fig = bores.make_series_plot(
@@ -430,7 +430,7 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     cumulative_gas_production_history = analyst.free_gas_production_history(
-        interval=1, cumulative=True, from_time_step=1
+        interval=1, cumulative=True, from_step=1
     )
 
     cumulative_gas_production_fig = bores.make_series_plot(
@@ -487,7 +487,7 @@ def _(gor_history, np, bores, water_cut_history):
 @app.cell
 def _(analyst, np, bores):
     cumulative_gas_injection_history = analyst.gas_injection_history(
-        interval=1, cumulative=True, from_time_step=1
+        interval=1, cumulative=True, from_step=1
     )
 
     cumulative_gas_injection_fig = bores.make_series_plot(
@@ -510,10 +510,10 @@ def _(analyst, np, bores):
 @app.cell
 def _(analyst, np, bores):
     # Reserves
-    oil_in_place_history = analyst.oil_in_place_history(interval=1, from_time_step=1)
-    gas_in_place_history = analyst.gas_in_place_history(interval=1, from_time_step=1)
+    oil_in_place_history = analyst.oil_in_place_history(interval=1, from_step=1)
+    gas_in_place_history = analyst.gas_in_place_history(interval=1, from_step=1)
     water_in_place_history = analyst.water_in_place_history(
-        interval=1, from_time_step=1
+        interval=1, from_step=1
     )
 
     oil_water_reserves_fig = bores.make_series_plot(
@@ -594,7 +594,7 @@ def _(
 def _(analyst, np, bores):
     # Displacement ratios
     vrr_history = analyst.voidage_replacement_ratio_history(
-        from_time_step=1, interval=1
+        from_step=1, interval=1
     )
     vrr_fig = bores.make_series_plot(
         data={
@@ -609,7 +609,7 @@ def _(analyst, np, bores):
     )
 
     mobility_ratio_history = analyst.mobility_ratio_history(
-        from_time_step=1, interval=1, displaced_phase="oil", displacing_phase="gas"
+        from_step=1, interval=1, displaced_phase="oil", displacing_phase="gas"
     )
     mobility_ratio_fig = bores.make_series_plot(
         data={
@@ -647,7 +647,7 @@ def _(analyst, np, recovery_efficiency_history, bores):
     )
 
     oil_recovery_factor_history = analyst.oil_recovery_factor_history(
-        interval=1, from_time_step=1
+        interval=1, from_step=1
     )
     recovery_factor_fig = bores.make_series_plot(
         data={

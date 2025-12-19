@@ -267,17 +267,32 @@ def _():
             dip_azimuth=dip_azimuth,
         )
 
-        options = bores.Options(
+        timer = bores.Timer(
+            initial_step_size=bores.Time(days=4.5),
+            max_step_size=bores.Time(days=15.0),
+            min_step_size=bores.Time(hours=6.0),
+            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
+            max_cfl_number=0.9,
+            ramp_up_factor=1.2,
+            backoff_factor=0.5,
+            aggressive_backoff_factor=0.25,
+        )
+        config = bores.Config(
             scheme="impes",
-            total_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 3 years
-            time_step_size=bores.Time(days=2),
-            max_time_steps=500,
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
-            max_iterations=250,
+            max_iterations=500,
+            iterative_solver="bicgstab",
+            preconditioner="ilu",
+            log_interval=10,
         )
-        states = bores.run(model=model, wells=None, options=options)
+        states = bores.run(
+            model=model, 
+            timer=timer, 
+            wells=None, 
+            config=config
+        )
         return list(states)
     return main, bores
 

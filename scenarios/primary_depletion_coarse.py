@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.18.4"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -14,10 +14,10 @@ def _():
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
-    bores.use_64bit_precision()
+    bores.use_32bit_precision()
     bores.image_config(scale=3)
 
-    STABILIZED_MODEL_STATE = Path.cwd() / "scenarios/states/stabilized_coarse.pkl.xz"
+    STABILIZED_MODEL_STATE = Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl.xz"
 
     def main():
         state = bores.ModelState.load(filepath=STABILIZED_MODEL_STATE)
@@ -77,19 +77,33 @@ def _():
 
         producers = [producer]
         wells = bores.wells_(injectors=None, producers=producers)
-        options = bores.Options(
-            scheme="implicit",
-            total_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
-            time_step_size=bores.Time(hours=20),
-            max_time_steps=2000,
+        timer = bores.Timer(
+            initial_step_size=bores.Time(hours=20.0),
+            max_step_size=bores.Time(days=5),
+            min_step_size=bores.Time(hours=2.0),
+            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
+            max_cfl_number=0.9,
+            ramp_up_factor=1.2,
+            backoff_factor=0.5,
+            aggressive_backoff_factor=0.25,
+        )
+        config = bores.Config(
+            scheme="impes",
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
+            log_interval=2,
+            iterative_solver="bicgstab",
+            preconditioner="ilu"
         )
-        states = bores.run(model=model, wells=wells, options=options)
+        states = bores.run(
+            model=model,
+            timer=timer,
+            wells=wells,
+            config=config,
+        )
         return list(states)
-
-    return Path, main, bores
+    return Path, bores, main
 
 
 @app.cell
