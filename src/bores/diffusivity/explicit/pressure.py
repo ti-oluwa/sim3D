@@ -1,6 +1,7 @@
 import itertools
 import typing
 
+import attrs
 import numba
 import numpy as np
 
@@ -23,6 +24,12 @@ from bores.wells import Wells
 __all__ = ["evolve_pressure_explicitly"]
 
 
+@attrs.frozen
+class PressureEvolutionMeta:
+    max_cfl_encountered: float
+    cfl_threshold: float
+
+
 def evolve_pressure_explicitly(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -35,7 +42,7 @@ def evolve_pressure_explicitly(
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     config: Config,
-) -> EvolutionResult[ThreeDimensionalGrid, None]:
+) -> EvolutionResult[ThreeDimensionalGrid, PressureEvolutionMeta]:
     """
     Computes the pressure evolution (specifically, oil phase pressure P_oil) in the reservoir grid
     for one time step using an explicit finite volume method.
@@ -116,6 +123,36 @@ def evolve_pressure_explicitly(
         (water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z),
     ) = mobility_grids
 
+    # Compute CFL number for this time step
+    pressure_cfl = compute_pressure_cfl_number(
+        time_step_size_in_days=time_step_size_in_days,
+        porosity_grid=porosity_grid,
+        total_compressibility_grid=total_compressibility_grid,
+        thickness_grid=thickness_grid,
+        cell_size_x=cell_size_x,
+        cell_size_y=cell_size_y,
+        water_mobility_grid_x=water_mobility_grid_x,
+        oil_mobility_grid_x=oil_mobility_grid_x,
+        gas_mobility_grid_x=gas_mobility_grid_x,
+        water_mobility_grid_y=water_mobility_grid_y,
+        oil_mobility_grid_y=oil_mobility_grid_y,
+        gas_mobility_grid_y=gas_mobility_grid_y,
+        water_mobility_grid_z=water_mobility_grid_z,
+        oil_mobility_grid_z=oil_mobility_grid_z,
+        gas_mobility_grid_z=gas_mobility_grid_z,
+    )
+    max_pressure_cfl = config.explicit_pressure_cfl_threshold
+    if pressure_cfl > max_pressure_cfl:
+        return EvolutionResult(
+            success=False,
+            value=current_oil_pressure_grid,
+            scheme="explicit",
+            metadata=PressureEvolutionMeta(
+                max_cfl_encountered=pressure_cfl, cfl_threshold=max_pressure_cfl
+            ),
+            message=f"Pressure evolution failed with CFL={pressure_cfl:.4f}.",
+        )
+
     dtype = get_dtype()
 
     # Compute net flux contributions from neighbors
@@ -186,7 +223,108 @@ def evolve_pressure_explicitly(
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
     )
-    return EvolutionResult(success=True, value=updated_oil_pressure_grid, scheme="explicit")
+    return EvolutionResult(
+        success=True,
+        value=updated_oil_pressure_grid,
+        scheme="explicit",
+        metadata=PressureEvolutionMeta(
+            max_cfl_encountered=pressure_cfl, cfl_threshold=max_pressure_cfl
+        ),
+        message=f"Pressure evolution from time step {time_step} successful with CFL={pressure_cfl:.4f}.",
+    )
+
+
+@numba.njit(cache=True)
+def compute_pressure_cfl_number(
+    time_step_size_in_days: float,
+    porosity_grid: ThreeDimensionalGrid,
+    total_compressibility_grid: ThreeDimensionalGrid,
+    thickness_grid: ThreeDimensionalGrid,
+    cell_size_x: float,
+    cell_size_y: float,
+    water_mobility_grid_x: ThreeDimensionalGrid,
+    oil_mobility_grid_x: ThreeDimensionalGrid,
+    gas_mobility_grid_x: ThreeDimensionalGrid,
+    water_mobility_grid_y: ThreeDimensionalGrid,
+    oil_mobility_grid_y: ThreeDimensionalGrid,
+    gas_mobility_grid_y: ThreeDimensionalGrid,
+    water_mobility_grid_z: ThreeDimensionalGrid,
+    oil_mobility_grid_z: ThreeDimensionalGrid,
+    gas_mobility_grid_z: ThreeDimensionalGrid,
+) -> float:
+    """
+    Compute the maximum CFL number across all cells for pressure evolution.
+
+    CFL = Δt * (Σ Transmissibility) / (φ * c_t * V)
+
+    For stability, CFL should be ≤ 1.0 (or a safety factor like 0.5)
+
+    :param time_step_size_in_days: Current time step size (days)
+    :param porosity_grid: Porosity grid (fraction)
+    :param total_compressibility_grid: Total compressibility (1/psi)
+    :param thickness_grid: Cell thickness (ft)
+    :param cell_size_x: Cell size in x (ft)
+    :param cell_size_y: Cell size in y (ft)
+    :param water_mobility_grid_x: Water mobility in x-direction (ft²/psi·day)
+    :param oil_mobility_grid_x: Oil mobility in x-direction (ft²/psi·day)
+    :param gas_mobility_grid_x: Gas mobility in x-direction (ft²/psi·day)
+    :param water_mobility_grid_y: Water mobility in y-direction (ft²/psi·day)
+    :param oil_mobility_grid_y: Oil mobility in y-direction (ft²/psi·day)
+    :param gas_mobility_grid_y: Gas mobility in y-direction (ft²/psi·day)
+    :param water_mobility_grid_z: Water mobility in z-direction (ft²/psi·day)
+    :param oil_mobility_grid_z: Oil mobility in z-direction (ft²/psi·day)
+    :param gas_mobility_grid_z: Gas mobility in z-direction (ft²/psi·day)
+    :return: Maximum CFL number across all cells
+    """
+    cell_count_x, cell_count_y, cell_count_z = porosity_grid.shape
+    max_cfl = 0.0
+
+    for i in range(1, cell_count_x - 1):
+        for j in range(1, cell_count_y - 1):
+            for k in range(1, cell_count_z - 1):
+                cell_thickness = thickness_grid[i, j, k]
+                cell_volume = cell_size_x * cell_size_y * cell_thickness
+                cell_porosity = porosity_grid[i, j, k]
+                cell_compressibility = total_compressibility_grid[i, j, k]
+
+                # Compute total transmissibility to all neighbors
+                total_transmissibility = 0.0
+
+                # X-direction transmissibilities (2 neighbors: i+1 and i-1)
+                geometric_factor_x = cell_size_y * cell_thickness / cell_size_x
+                total_mobility_x = (
+                    water_mobility_grid_x[i, j, k]
+                    + oil_mobility_grid_x[i, j, k]
+                    + gas_mobility_grid_x[i, j, k]
+                )
+                total_transmissibility += 2.0 * total_mobility_x * geometric_factor_x
+
+                # Y-direction transmissibilities (2 neighbors: j+1 and j-1)
+                geometric_factor_y = cell_size_x * cell_thickness / cell_size_y
+                total_mobility_y = (
+                    water_mobility_grid_y[i, j, k]
+                    + oil_mobility_grid_y[i, j, k]
+                    + gas_mobility_grid_y[i, j, k]
+                )
+                total_transmissibility += 2.0 * total_mobility_y * geometric_factor_y
+
+                # Z-direction transmissibilities (2 neighbors: k+1 and k-1)
+                geometric_factor_z = cell_size_x * cell_size_y / cell_thickness
+                total_mobility_z = (
+                    water_mobility_grid_z[i, j, k]
+                    + oil_mobility_grid_z[i, j, k]
+                    + gas_mobility_grid_z[i, j, k]
+                )
+                total_transmissibility += 2.0 * total_mobility_z * geometric_factor_z
+
+                # Compute CFL number for this cell
+                if cell_compressibility > 0.0 and cell_porosity > 0.0:
+                    cell_cfl = (time_step_size_in_days * total_transmissibility) / (
+                        cell_porosity * cell_compressibility * cell_volume
+                    )
+
+                    max_cfl = max(max_cfl, cell_cfl)
+    return max_cfl
 
 
 @numba.njit(cache=True)

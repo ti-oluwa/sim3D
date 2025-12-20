@@ -79,20 +79,21 @@ def _():
         wells = bores.wells_(injectors=None, producers=producers)
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=20.0),
-            max_step_size=bores.Time(days=5),
-            min_step_size=bores.Time(hours=2.0),
+            max_step_size=bores.Time(days=1.2),
+            min_step_size=bores.Time(hours=4),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
+            max_rejects=20,
         )
         config = bores.Config(
             scheme="impes",
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
-            log_interval=2,
+            log_interval=5,
             iterative_solver="bicgstab",
             preconditioner="ilu"
         )

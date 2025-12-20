@@ -242,7 +242,9 @@ def _validate_inputs(
     if np.any(
         (connate_water_saturation[active] + residual_gas_saturation[active]) > 1.0
     ):
-        raise ValidationError("Swc + Sgr exceeds 1.0 in some cells (oil zone constraint).")
+        raise ValidationError(
+            "Swc + Sgr exceeds 1.0 in some cells (oil zone constraint)."
+        )
     if np.any(
         (residual_oil_saturation_water[active] + residual_gas_saturation[active]) > 1.0
     ):

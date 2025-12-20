@@ -11,7 +11,8 @@ import numpy as np
 from scipy.optimize import brentq, root_scalar
 
 from bores.constants import c
-from bores.types import FloatOrArray, NDimension, NDimensionalGrid
+from bores.errors import ValidationError, ComputationError
+from bores.types import FloatOrArray
 from bores.utils import clip
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,6 @@ __all__ = [
     "fahrenheit_to_celsius",
     "fahrenheit_to_rankine",
     "compute_harmonic_mean",
-    "compute_harmonic_mobility",
 ]
 
 
@@ -38,7 +38,7 @@ def validate_input_temperature(temperature: FloatOrArray) -> None:
     Accepts scalar or ndarray input.
 
     :param temperature: Temperature(s) in Kelvin (°F)
-    :raises ValueError: If any temperature is outside the valid range.
+    :raises ValidationError: If any temperature is outside the valid range.
     """
     temp_array = np.asarray(temperature)
     invalid_mask = (temp_array < c.MIN_VALID_TEMPERATURE) | (
@@ -47,7 +47,7 @@ def validate_input_temperature(temperature: FloatOrArray) -> None:
 
     if np.any(invalid_mask):
         invalid: np.ndarray = temp_array[invalid_mask]
-        raise ValueError(
+        raise ValidationError(
             f"Temperature(s) out of valid range [{c.MIN_VALID_TEMPERATURE}, {c.MAX_VALID_TEMPERATURE}] K: "
             f"{invalid}"
         )
@@ -60,7 +60,7 @@ def validate_input_pressure(pressure: FloatOrArray) -> None:
     Accepts scalar or ndarray input.
 
     :param pressure: Pressure(s) in Pascals (psi)
-    :raises ValueError: If any pressure is outside the valid range.
+    :raises ValidationError: If any pressure is outside the valid range.
     """
     pressure_array = np.asarray(pressure)
     invalid = (pressure_array < c.MIN_VALID_PRESSURE) | (
@@ -68,7 +68,7 @@ def validate_input_pressure(pressure: FloatOrArray) -> None:
     )
 
     if np.any(invalid):
-        raise ValueError(
+        raise ValidationError(
             f"Pressure(s) out of valid range [{c.MIN_VALID_PRESSURE}, {c.MAX_VALID_PRESSURE}] Pa: "
             f"{pressure_array[invalid]}"
         )
@@ -115,33 +115,25 @@ def clip_temperature(temperature: FloatOrArray, fluid: str) -> FloatOrArray:
     )  # Add small buffer
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def kelvin_to_fahrenheit(temp_K: FloatOrArray) -> FloatOrArray:
     """Converts temperature from Kelvin to Fahrenheit."""
     return (temp_K - 273.15) * 9 / 5 + 32  # type: ignore[return-value]
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def fahrenheit_to_kelvin(temp_F: FloatOrArray) -> FloatOrArray:
     """Converts temperature from Fahrenheit to Kelvin."""
     return (temp_F - 32) * 5 / 9 + 273.15  # type: ignore[return-value]
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def fahrenheit_to_celsius(temp_F: FloatOrArray) -> FloatOrArray:
     """Converts temperature from Fahrenheit to Celsius."""
     return (temp_F - 32) * 5 / 9  # type: ignore[return-value]
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def fahrenheit_to_rankine(temp_F: FloatOrArray) -> FloatOrArray:
     """Converts temperature from Fahrenheit to Rankine."""
     return temp_F + 459.67  # type: ignore[return-value]
@@ -298,9 +290,7 @@ def compute_gas_gravity_from_density(
     return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_total_fluid_compressibility(
     water_saturation: float,
     oil_saturation: float,
@@ -330,9 +320,7 @@ def compute_total_fluid_compressibility(
     return total_fluid_compressibility
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_harmonic_mean(value1: float, value2: float) -> float:
     """
     Computes the harmonic mean of two values.
@@ -345,31 +333,6 @@ def compute_harmonic_mean(value1: float, value2: float) -> float:
     if summation == 0:
         return 0.0
     return (2 * value1 * value2) / summation
-
-
-@numba.njit(
-    cache=True
-)
-def compute_harmonic_mobility(
-    index1: NDimension,
-    index2: NDimension,
-    mobility_grid: NDimensionalGrid[NDimension],
-) -> float:
-    """
-    Computes harmonic average mobility between two cells.
-
-    If both mobilities are zero, returns zero to avoid division by zero.
-
-    :param index1: Index of the first cell in the mobility grid comprising
-        of N-dimensional indices (x, y, z, ...).
-    :param index2: Index of the second cell in the mobility grid comprising
-        of N-dimensional indices (x, y, z, ...).
-    :param mobility_grid: N-dimensional grid containing mobility values.
-    """
-    λ1: float = mobility_grid[index1]
-    λ2: float = mobility_grid[index2]
-    λ_harmonic = compute_harmonic_mean(λ1, λ2)
-    return λ_harmonic
 
 
 def compute_oil_specific_gravity_from_density(
@@ -421,9 +384,7 @@ def compute_oil_specific_gravity_from_density(
     return oil_density_at_stp / c.STANDARD_WATER_DENSITY_IMPERIAL
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def convert_surface_rate_to_reservoir(
     surface_rate: float, formation_volume_factor: float
 ) -> float:
@@ -439,9 +400,7 @@ def convert_surface_rate_to_reservoir(
     return surface_rate / formation_volume_factor
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def convert_reservoir_rate_to_surface(
     reservoir_rate: float, formation_volume_factor: float
 ) -> float:
@@ -457,9 +416,7 @@ def convert_reservoir_rate_to_surface(
     return reservoir_rate * formation_volume_factor
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_standing(
     temperature: float,
     oil_specific_gravity: float,
@@ -492,11 +449,11 @@ def compute_oil_formation_volume_factor_standing(
     :return: Formation volume factor (Bo) in bbl/STB
     """
     if oil_specific_gravity <= 0 or gas_gravity <= 0:
-        raise ValueError("Specific gravities must be positive.")
+        raise ValidationError("Specific gravities must be positive.")
     if gas_to_oil_ratio < 0:
-        raise ValueError("Gas-to-oil ratio must be non-negative.")
+        raise ValidationError("Gas-to-oil ratio must be non-negative.")
     if temperature < 32:
-        raise ValueError("Temperature seems unphysical (<32 °F). Check units.")
+        raise ValidationError("Temperature seems unphysical (<32 °F). Check units.")
 
     x = (gas_to_oil_ratio * (gas_gravity / oil_specific_gravity) ** 0.5) + (
         1.25 * temperature
@@ -517,9 +474,7 @@ def _get_vazquez_beggs_oil_fvf_coefficients(
     return 4.670e-4, 1.100e-5, 1.337e-9
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor_vazquez_and_beggs(
     temperature: float,
     oil_specific_gravity: float,
@@ -564,9 +519,7 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
     return oil_fvf
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def correct_oil_fvf_for_pressure(
     saturated_oil_fvf: float,
     oil_compressibility: float,
@@ -593,9 +546,7 @@ def correct_oil_fvf_for_pressure(
     return saturated_oil_fvf * correction_factor
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_formation_volume_factor(
     pressure: float,
     temperature: float,
@@ -669,17 +620,15 @@ def compute_water_formation_volume_factor(
         salinity=salinity,
     )
     if water_density <= 0:
-        raise ValueError("Water density must be positive.")
+        raise ValidationError("Water density must be positive.")
     if standard_water_density <= 0:
-        raise ValueError("Standard water density must be positive.")
+        raise ValidationError("Standard water density must be positive.")
 
     water_fvf = standard_water_density / water_density
     return water_fvf
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_water_formation_volume_factor_mccain(
     pressure: float,
     temperature: float,
@@ -752,9 +701,9 @@ def compute_gas_formation_volume_factor(
     :return: Gas formation volume factor (ft³/SCF)
     """
     if pressure <= 0 or temperature <= 0:
-        raise ValueError("Pressure and temperature must be positive.")
+        raise ValidationError("Pressure and temperature must be positive.")
     if gas_compressibility_factor <= 0:
-        raise ValueError("Z-factor must be positive.")
+        raise ValidationError("Z-factor must be positive.")
 
     return (
         gas_compressibility_factor
@@ -764,9 +713,7 @@ def compute_gas_formation_volume_factor(
     )
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_gas_compressibility_factor(
     pressure: float,
     temperature: float,
@@ -807,15 +754,15 @@ def compute_gas_compressibility_factor(
     :return: Compressibility factor Z (dimensionless)
     """
     if pressure <= 0 or temperature <= 0 or gas_gravity <= 0:
-        raise ValueError(
+        raise ValidationError(
             "Pressure, temperature, and gas specific gravity must be positive."
         )
     if h2s_mole_fraction < 0 or h2s_mole_fraction > 1:
-        raise ValueError("H2S mole fraction must be between 0 and 1.")
+        raise ValidationError("H2S mole fraction must be between 0 and 1.")
     if co2_mole_fraction < 0 or co2_mole_fraction > 1:
-        raise ValueError("CO2 mole fraction must be between 0 and 1.")
+        raise ValidationError("CO2 mole fraction must be between 0 and 1.")
     if n2_mole_fraction < 0 or n2_mole_fraction > 1:
-        raise ValueError("N2 mole fraction must be between 0 and 1.")
+        raise ValidationError("N2 mole fraction must be between 0 and 1.")
 
     pseudo_critical_pressure, pseudo_critical_temperature = (
         compute_gas_pseudocritical_properties(
@@ -848,9 +795,7 @@ def compute_gas_compressibility_factor(
     return np.maximum(compressibility_factor, 0.1)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     """
     Computes the API gravity (in degrees) from oil specific gravity.
@@ -867,14 +812,12 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
     :return: API gravity in degrees (°API)
     """
     if oil_specific_gravity <= 0:
-        raise ValueError("Oil specific gravity must be greater than zero.")
+        raise ValidationError("Oil specific gravity must be greater than zero.")
 
     return (141.5 / oil_specific_gravity) - 131.5
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     oil_api_gravity: float,
 ) -> typing.Tuple[float, float, float]:
@@ -897,9 +840,7 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     return 0.0178, 1.1870, 23.9310
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_bubble_point_pressure(
     gas_gravity: float,
     oil_api_gravity: float,
@@ -933,13 +874,13 @@ def compute_oil_bubble_point_pressure(
     :return: Bubble point pressure (psi)
     """
     if gas_gravity <= 0:
-        raise ValueError("Gas specific gravity must be greater than zero.")
+        raise ValidationError("Gas specific gravity must be greater than zero.")
     if oil_api_gravity <= 0:
-        raise ValueError("Oil API gravity must be greater than zero.")
+        raise ValidationError("Oil API gravity must be greater than zero.")
     if temperature <= 32:
-        raise ValueError("Temperature must be greater than absolute zero (32 °F).")
+        raise ValidationError("Temperature must be greater than absolute zero (32 °F).")
     if gas_to_oil_ratio < 0:
-        raise ValueError("Gas-to-oil ratio must be non-negative.")
+        raise ValidationError("Gas-to-oil ratio must be non-negative.")
 
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         oil_api_gravity
@@ -952,9 +893,7 @@ def compute_oil_bubble_point_pressure(
     return pressure
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_water_bubble_point_pressure_mccain(
     temperature: float,
     gas_solubility_in_water: float,
@@ -1005,8 +944,8 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    lower_bound_pressure = 0.5
-    upper_bound_pressure = 14700
+    lower_bound_pressure = c.MIN_VALID_PRESSURE - 1e-3
+    upper_bound_pressure = c.MAX_VALID_PRESSURE + 1e-3
 
     lower_bound_solubility = compute_gas_solubility_in_water(
         pressure=lower_bound_pressure,
@@ -1024,10 +963,10 @@ def compute_water_bubble_point_pressure(
     if not (
         lower_bound_solubility <= gas_solubility_in_water <= upper_bound_solubility
     ):
-        raise RuntimeError(
-            f"Target gas solubility {gas_solubility_in_water} SCF/STB is outside the range "
-            f"[{lower_bound_solubility:.2f}, {upper_bound_solubility:.2f}] "
-            f"for gas '{gas}' at T={temperature}°F and salinity={salinity} ppm."
+        raise ComputationError(
+            f"Target gas solubility {gas_solubility_in_water}SCF/STB is outside the range "
+            f"[{lower_bound_solubility:.6f}, {upper_bound_solubility:.6f}] "
+            f"for gas '{gas}' at T={temperature}°F and salinity={salinity}ppm."
         )
 
     # Use numerical solver for Duan/Henry
@@ -1050,9 +989,7 @@ def compute_water_bubble_point_pressure(
     return bubble_point_pressure  # type: ignore[return-value]
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_gas_to_oil_ratio(
     pressure: float,
     temperature: float,
@@ -1096,7 +1033,7 @@ def compute_gas_to_oil_ratio(
     :return: Gas-to-oil ratio SCF/STB
     """
     if pressure <= 0:
-        raise ValueError("Pressure must be greater than zero.")
+        raise ValidationError("Pressure must be greater than zero.")
 
     temperature_in_rankine = temperature + 459.67
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
@@ -1125,14 +1062,12 @@ def compute_gas_to_oil_ratio(
     return np.maximum(0.0, gor)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _compute_dead_oil_viscosity_modified_beggs(
     temperature: float, oil_api_gravity: float
 ) -> float:
     if temperature <= 0:
-        raise ValueError("Temperature (°F) must be > 0 for this correlation.")
+        raise ValidationError("Temperature (°F) must be > 0 for this correlation.")
 
     temperature_rankine = temperature + 459.67
     oil_specific_gravity = 141.5 / (131.5 + oil_api_gravity)
@@ -1168,15 +1103,13 @@ def compute_dead_oil_viscosity_modified_beggs(
     oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
     if not (5 <= oil_api_gravity <= 75):
         warnings.warn(
-            f"API gravity {oil_api_gravity:.2f} is outside typical range [5, 75]. "
+            f"API gravity {oil_api_gravity:.6f} is outside typical range [5, 75]. "
             f"Dead oil viscosity may be inaccurate."
         )
     return _compute_dead_oil_viscosity_modified_beggs(temperature, oil_api_gravity)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _compute_oil_viscosity(
     pressure: float,
     bubble_point_pressure: float,
@@ -1246,9 +1179,9 @@ def compute_oil_viscosity(
     :return: Oil viscosity in cP
     """
     if temperature <= 0 or pressure <= 0 or bubble_point_pressure <= 0:
-        raise ValueError("Temperature and pressures must be positive.")
+        raise ValidationError("Temperature and pressures must be positive.")
     if oil_specific_gravity <= 0:
-        raise ValueError("Oil specific gravity must be positive.")
+        raise ValidationError("Oil specific gravity must be positive.")
 
     # Dead oil viscosity (mu_od)
     dead_oil_viscosity = compute_dead_oil_viscosity_modified_beggs(
@@ -1279,13 +1212,11 @@ def compute_gas_molecular_weight(gas_gravity: float) -> float:
     :return: Molecular weight of the gas in grams per mole (g/mol)
     """
     if gas_gravity <= 0:
-        raise ValueError("Gas specific gravity must be greater than zero.")
+        raise ValidationError("Gas specific gravity must be greater than zero.")
     return gas_gravity * c.MOLECULAR_WEIGHT_AIR
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_gas_pseudocritical_properties(
     gas_gravity: float,
     h2s_mole_fraction: float = 0.0,
@@ -1319,7 +1250,7 @@ def compute_gas_pseudocritical_properties(
     :return: Tuple (P_pc in psi, T_pc in °F)
     """
     if gas_gravity <= 0:
-        raise ValueError("Gas specific gravity must be greater than zero.")
+        raise ValidationError("Gas specific gravity must be greater than zero.")
 
     # Sutton's pseudocritical properties (psia and Rankine)
     pseudocritical_pressure = 756.8 - 131.0 * gas_gravity - 3.6 * gas_gravity**2
@@ -1433,9 +1364,7 @@ def compute_gas_viscosity(
     return np.maximum(0.0, gas_viscosity)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _compute_water_viscosity(
     temperature: float,
     salinity: float,
@@ -1494,24 +1423,24 @@ def compute_water_viscosity(
     :return: Water viscosity in centipoise (cP)
     """
     if salinity < 0:
-        raise ValueError("Salinity must be non-negative.")
+        raise ValidationError("Salinity must be non-negative.")
 
     if pressure is not None and pressure < 0:
-        raise ValueError("Pressure must be non-negative.")
+        raise ValidationError("Pressure must be non-negative.")
 
     if temperature < 60 or temperature > 400:
         warnings.warn(
-            f"Temperature {temperature:.2f}°F is outside the valid range for McCain's water viscosity correlation (60°F to 400°F)."
+            f"Temperature {temperature:.6f}°F is outside the valid range for McCain's water viscosity correlation (60°F to 400°F)."
         )
 
     if salinity > 300_000:
         warnings.warn(
-            f"Salinity {salinity:.2f} ppm is unusually high for McCain's water viscosity correlation."
+            f"Salinity {salinity:.6f}ppm is unusually high for McCain's water viscosity correlation."
         )
 
     if pressure is not None and pressure > 10_000:
         warnings.warn(
-            f"Pressure {pressure:.2f} psi is unusually high for McCain's water viscosity correlation."
+            f"Pressure {pressure:.6f}psi is unusually high for McCain's water viscosity correlation."
         )
     return _compute_water_viscosity(
         temperature=temperature,
@@ -1521,9 +1450,7 @@ def compute_water_viscosity(
     )
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _compute_oil_compressibility_liberation_correction_term(
     pressure: float,
     temperature: float,
@@ -1551,7 +1478,6 @@ def _compute_oil_compressibility_liberation_correction_term(
     - Bo is the oil formation volume factor (bbl/STB).
     - 5.615 is a conversion factor to convert from scf/STB to bbl/STB.
     - x is the correction term for oil compressibility.
-
 
     :param pressure: Current reservoir pressure (psi).
     :param bubble_point_pressure: Bubble point pressure (psi).
@@ -1591,9 +1517,7 @@ def _compute_oil_compressibility_liberation_correction_term(
     return (gas_formation_volume_factor / oil_formation_volume_factor) * dRs_dp / 5.615
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_oil_compressibility(
     pressure: float,
     temperature: float,
@@ -1655,7 +1579,7 @@ def compute_oil_compressibility(
         or gas_gravity <= 0
         or oil_api_gravity <= 0
     ):
-        raise ValueError(
+        raise ValidationError(
             "All input parameters (P, Pb, T, Gas SG, API) must be positive."
         )
 
@@ -1694,9 +1618,7 @@ def compute_oil_compressibility(
     return base_comp + correction_term
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_gas_compressibility(
     pressure: float,
     temperature: float,
@@ -1721,7 +1643,7 @@ def compute_gas_compressibility(
     :return: Gas compressibility in psi⁻¹.
     """
     if pressure <= 0 or temperature <= 0 or gas_gravity <= 0:
-        raise ValueError(
+        raise ValidationError(
             "Pressure, temperature, and gas specific gravity must be positive."
         )
 
@@ -1765,7 +1687,7 @@ def compute_gas_compressibility(
     # C_g = (1/P) - (1/(Z * Ppc)) * (dZ/dPpr)
     # Ensure Ppc is not zero, which should be handled by compute_gas_pseudocritical_properties
     if pseudo_critical_pressure == 0:
-        raise ValueError(
+        raise ValidationError(
             "Pseudo-critical pressure cannot be zero for compressibility calculation."
         )
 
@@ -1776,9 +1698,7 @@ def compute_gas_compressibility(
     return np.maximum(0.0, gas_compressibility)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _gas_solubility_in_water_mccain_methane(
     pressure: float,
     temperature: float,
@@ -1809,10 +1729,10 @@ def _gas_solubility_in_water_mccain_methane(
     :return: Gas solubility in water in SCF/STB.
     """
     if pressure < 0 or temperature < 0 or salinity < 0:
-        raise ValueError("Pressure, temperature, and salinity must be non-negative.")
+        raise ValidationError("Pressure, temperature, and salinity must be non-negative.")
 
     if not (100 <= temperature <= 400):
-        raise ValueError(
+        raise ValidationError(
             "Temperature out of valid range for McCain's Rsw correlation (311 K to 478 K)."
         )
 
@@ -1828,9 +1748,7 @@ def _gas_solubility_in_water_mccain_methane(
     return np.maximum(0.0, gas_solubility)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def _gas_solubility_in_water_duan_sun_co2(
     pressure: float,
     temperature: float,
@@ -1870,17 +1788,17 @@ def _gas_solubility_in_water_duan_sun_co2(
     :return: CO₂ solubility in SCF/STB.
     """
     if pressure <= 0 or temperature <= 0:
-        raise ValueError("Pressure and temperature must be positive.")
+        raise ValidationError("Pressure and temperature must be positive.")
 
     P = pressure * psi_to_bar  # Convert pressure from psi to bar
     T = fahrenheit_to_kelvin(temperature)
 
     if not (273.15 <= T <= 533.15):
-        raise ValueError(
+        raise ValidationError(
             "Temperature is out of the valid range for this model (0-260°C)."
         )
     if not (0 < P <= 2000):
-        raise ValueError(
+        raise ValidationError(
             "Pressure is out of the valid range for this model (0-2000 bar)."
         )
 
@@ -1970,7 +1888,7 @@ def _gas_solubility_in_water_henry_law(
     """
     gas = gas.lower()
     if gas not in henry_coefficients:
-        raise ValueError(f"Unsupported gas '{gas}' for Henry's Law fallback.")
+        raise ValidationError(f"Unsupported gas '{gas}' for Henry's Law fallback.")
 
     A, B, C = henry_coefficients[gas]
     M = molar_masses[gas]
@@ -2075,7 +1993,7 @@ def compute_gas_free_water_formation_volume_factor(
     :return: Dissolved-gas-free Water Formation Volume Factor (Bw_gas_free) in bbl/STB.
     """
     if pressure < 0 or temperature < 0:
-        raise ValueError(
+        raise ValidationError(
             "Pressure and temperature cannot be negative for gas-free water FVF."
         )
 
@@ -2095,7 +2013,7 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     Returns dRsw/dP in scf/(STB*psi).
     """
     if temperature < 0 or salinity < 0:
-        raise ValueError("Temperature and salinity cannot be negative for dRsw/dP.")
+        raise ValidationError("Temperature and salinity cannot be negative for dRsw/dP.")
 
     derivative_pure_water = (
         0.0000164 + (0.000000134 * temperature) - (0.00000000185 * temperature**2)
@@ -2113,7 +2031,7 @@ def _compute_dBw_gas_free_dp_mccain(pressure: float, temperature: float) -> floa
     Returns dBw_gas_free/dP in res bbl/(STB*psi). This value will be negative.
     """
     if pressure < 0:
-        raise ValueError("Pressure cannot be negative for dBw_gas_free/dP.")
+        raise ValidationError("Pressure cannot be negative for dBw_gas_free/dP.")
 
     thermal_expansion_term = (
         1.0  # This 1.0 is part of (1 + VT)
@@ -2179,7 +2097,7 @@ def compute_water_compressibility(
     if pressure >= bubble_point_pressure:
         # Undersaturated Water (P >= Pwb)
         if np.any(gas_free_water_formation_volume_factor <= 0):
-            raise ValueError("Calculated Bw for undersaturated water is non-positive.")
+            raise ValidationError("Calculated Bw for undersaturated water is non-positive.")
         c_w = -(1.0 / gas_free_water_formation_volume_factor) * dBw_gas_free_dP
     else:
         # Saturated Water (P < Pwb)
@@ -2187,7 +2105,7 @@ def compute_water_compressibility(
             gas_solubility_in_water * gas_fvf_in_bbl_per_scf
         )
         if np.any(water_fvf_in_bbl_per_stb <= 0):
-            raise ValueError("Calculated Bw for saturated water is non-positive.")
+            raise ValidationError("Calculated Bw for saturated water is non-positive.")
 
         c_w_gas_free_component = -(1.0 / water_fvf_in_bbl_per_stb) * dBw_gas_free_dP
         gas_liberation_component = (
@@ -2269,9 +2187,9 @@ def compute_water_density_mccain(
     :return: Live brine density in lb/ft³.
     """
     if salinity < 0:
-        raise ValueError("Salinity cannot be negative.")
+        raise ValidationError("Salinity cannot be negative.")
     if pressure < 0:
-        raise ValueError("Pressure cannot be negative.")
+        raise ValidationError("Pressure cannot be negative.")
 
     salinity_in_wt_percent = salinity / 10000.0
 
@@ -2287,9 +2205,7 @@ def compute_water_density_mccain(
     return water_density
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_water_density_batzle(
     pressure: float, temperature: float, salinity: float
 ) -> float:
@@ -2320,9 +2236,9 @@ def compute_water_density_batzle(
     :return: Brine density in lb/ft³.
     """
     if salinity < 0:
-        raise ValueError("Salinity cannot be negative.")
+        raise ValidationError("Salinity cannot be negative.")
     if pressure < 0:
-        raise ValueError("Pressure cannot be negative.")
+        raise ValidationError("Pressure cannot be negative.")
 
     # Convert units
     temperature_in_celsius = fahrenheit_to_celsius(temperature)  # °F to °C
@@ -2379,7 +2295,7 @@ def compute_water_density(
     :return: Live water/brine density (lb/ft³) at reservoir conditions.
     """
     if salinity < 0 or gas_gravity < 0:
-        raise ValueError("Salinity and gas gravity must be non-negative.")
+        raise ValidationError("Salinity and gas gravity must be non-negative.")
 
     standard_water_density_in_lb_per_ft3 = compute_water_density_batzle(
         pressure=pressure, temperature=temperature, salinity=salinity
@@ -2394,7 +2310,7 @@ def compute_water_density(
     # For simplicity and given the formula structure, we use the bw_gas_free as the Bw in denominator.
 
     if gas_free_water_formation_volume_factor <= 0:
-        raise ValueError(
+        raise ValidationError(
             "Calculated water formation volume factor (Bw) is non-positive, cannot calculate density."
         )
 
@@ -2429,9 +2345,7 @@ def compute_water_density(
     return np.maximum(0.0, live_water_density_in_lb_per_ft3)
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_gas_to_oil_ratio_standing(
     pressure: float, oil_api_gravity: float, gas_gravity: float
 ) -> float:
@@ -2460,10 +2374,10 @@ def compute_gas_to_oil_ratio_standing(
     :return: Solution gas-oil ratio (Rs) in (SCF/STB).
     """
     if oil_api_gravity < 0 or gas_gravity < 0 or pressure < 0:
-        raise ValueError("All inputs must be non-negative for Rs calculation.")
+        raise ValidationError("All inputs must be non-negative for Rs calculation.")
 
     if oil_api_gravity < 10:
-        raise ValueError(
+        raise ValidationError(
             "API gravity must be greater than or equal to 10 for Standing's correlation."
         )
 
@@ -2515,15 +2429,13 @@ def estimate_bubble_point_pressure_standing(
 
     solver = root_scalar(residual, bracket=[14.696, 10000], method="brentq")
     if not solver.converged:
-        raise RuntimeError("Could not converge to a bubble point pressure.")
+        raise ComputationError("Could not converge to a bubble point pressure.")
 
     bubble_point_pressure = solver.root
     return bubble_point_pressure
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_hydrocarbon_in_place(
     area: float,
     thickness: float,
@@ -2579,15 +2491,15 @@ def compute_hydrocarbon_in_place(
     :return: Free hydrocarbon/water in place (OIP/WIP in STB, and GIP in SCF).
     """
     if hydrocarbon_type not in {"oil", "gas", "water"}:
-        raise ValueError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
+        raise ValidationError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
     if area <= 0 or thickness <= 0:
-        raise ValueError("Area and thickness must be positive values.")
+        raise ValidationError("Area and thickness must be positive values.")
     if porosity < 0 or porosity > 1:
-        raise ValueError("Porosity must be a fraction between 0 and 1.")
+        raise ValidationError("Porosity must be a fraction between 0 and 1.")
     if phase_saturation < 0 or phase_saturation > 1:
-        raise ValueError("Phase saturation must be a fraction between 0 and 1.")
+        raise ValidationError("Phase saturation must be a fraction between 0 and 1.")
     if formation_volume_factor <= 0:
-        raise ValueError("Formation volume factor must be a positive value.")
+        raise ValidationError("Formation volume factor must be a positive value.")
 
     if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
         # Oil in Place (OIP) calculation (May include dissolved gas in undersaturated reservoirs)
@@ -2615,9 +2527,7 @@ def compute_hydrocarbon_in_place(
     return free_gip
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_miscibility_transition_factor(
     pressure: float,
     minimum_miscibility_pressure: float,
@@ -2700,9 +2610,7 @@ def compute_miscibility_transition_factor(
     return transition_factor
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_effective_todd_longstaff_omega(
     pressure: float,
     base_omega: float,
@@ -2749,9 +2657,7 @@ def compute_effective_todd_longstaff_omega(
     return base_omega * transition_factor
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_todd_longstaff_effective_viscosity(
     oil_viscosity: float,
     solvent_viscosity: float,
@@ -2798,7 +2704,7 @@ def compute_todd_longstaff_effective_viscosity(
     :return: Effective mixture viscosity (cP)
 
     Raises:
-        ValueError: If concentrations or omega are outside [0,1], or viscosities ≤ 0
+        ValidationError: If concentrations or omega are outside [0,1], or viscosities ≤ 0
 
     Example:
     ```python
@@ -2837,13 +2743,13 @@ def compute_todd_longstaff_effective_viscosity(
     """
     # Validate inputs
     if solvent_concentration < 0.0 or solvent_concentration > 1.0:
-        raise ValueError(
+        raise ValidationError(
             f"Solvent concentration must be in [0,1], got {solvent_concentration}"
         )
     if omega < 0.0 or omega > 1.0:
-        raise ValueError(f"Omega must be in [0,1], got {omega}")
+        raise ValidationError(f"Omega must be in [0,1], got {omega}")
     if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
-        raise ValueError("Viscosities must be positive")
+        raise ValidationError("Viscosities must be positive")
 
     C_s = solvent_concentration
     C_o = 1.0 - C_s
@@ -2872,9 +2778,7 @@ def compute_todd_longstaff_effective_viscosity(
     return mu_effective
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_todd_longstaff_effective_density(
     oil_density: float,
     solvent_density: float,
@@ -2929,7 +2833,7 @@ def compute_todd_longstaff_effective_density(
     :return: Effective mixture density (same units as input densities)
 
     Raises:
-        ValueError: If concentrations or omega are outside [0,1], or inputs ≤ 0
+        ValidationError: If concentrations or omega are outside [0,1], or inputs ≤ 0
 
     Example:
     ```python
@@ -2967,15 +2871,15 @@ def compute_todd_longstaff_effective_density(
         JPT, July 1972, pp. 874-882.
     """
     if solvent_concentration < 0.0 or solvent_concentration > 1.0:
-        raise ValueError(
+        raise ValidationError(
             f"Solvent concentration must be in [0,1], got {solvent_concentration}"
         )
     if omega < 0.0 or omega > 1.0:
-        raise ValueError(f"Omega must be in [0,1], got {omega}")
+        raise ValidationError(f"Omega must be in [0,1], got {omega}")
     if oil_density <= 0.0 or solvent_density <= 0.0:
-        raise ValueError("Densities must be positive")
+        raise ValidationError("Densities must be positive")
     if oil_viscosity <= 0.0 or solvent_viscosity <= 0.0:
-        raise ValueError("Viscosities must be positive")
+        raise ValidationError("Viscosities must be positive")
 
     C_s = solvent_concentration
     C_o = 1.0 - C_s

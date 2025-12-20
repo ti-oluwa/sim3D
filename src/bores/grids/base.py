@@ -113,7 +113,9 @@ def build_layered_grid(
             layered_grid[:, :, k] = layer_value
         return layered_grid.astype(dtype)
 
-    raise ValidationError("Invalid layering direction. Must be one of 'x', 'y', or 'z'.")
+    raise ValidationError(
+        "Invalid layering direction. Must be one of 'x', 'y', or 'z'."
+    )
 
 
 layered_grid = build_layered_grid  # Alias for convenience

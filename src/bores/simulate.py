@@ -50,7 +50,7 @@ __all__ = ["run"]
 logger = logging.getLogger(__name__)
 
 
-NEGATIVE_PRESSURE_ERROR = """
+NEGATIVE_PRESSURE_ERROR_MSG = """
 Negative pressure encountered in the pressure grid at the following indices:
 {indices}
 This indicates a likely issue with the simulation setup, numerical stability, or physical parameters.
@@ -122,7 +122,7 @@ def _run_implicit_step(
     """
     Execute one time step using fully implicit solver (simultaneous pressure-saturation).
 
-    Returns: `StepResult` containing updated rates and fluid properties.
+    :return: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure and saturation simultaneously (fully implicit)...")
     # Build zeros grids to track production and injection at each time step
@@ -247,7 +247,7 @@ def _run_impes_step(
     """
     Execute one time step using IMPES (Implicit Pressure, Explicit Saturation).
 
-    Returns: `StepResult` containing updated rates and fluid properties.
+    :return: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (implicit)...")
     pressure_result = evolve_pressure_implicitly(
@@ -282,16 +282,16 @@ def _run_impes_step(
     logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_result.value
 
-    if (negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
+    if (negative_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
         logger.warning(
-            f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
+            f"Negative pressure detected at {negative_indices.size} grid cells"
         )
         logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
         logger.warning(
-            f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
+            f"First few negative pressure indices: {negative_indices.tolist()[:10]}"
         )
         message = (
-            NEGATIVE_PRESSURE_ERROR.format(indices=negative_pressure_indices.tolist())
+            NEGATIVE_PRESSURE_ERROR_MSG.format(indices=negative_indices.tolist())
             + f"\nAt Time Step {time_step}."
         )
         return StepResult(
@@ -337,13 +337,13 @@ def _run_impes_step(
         gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
     )
     # Clamp relative mobility grids to avoid numerical issues
-    padded_water_relative_mobility_grid = config.relative_mobility_range[
-        "water"
-    ].arrayclip(padded_water_relative_mobility_grid)
-    padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].arrayclip(
+    padded_water_relative_mobility_grid = config.relative_mobility_range["water"].clip(
+        padded_water_relative_mobility_grid
+    )
+    padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].clip(
         padded_oil_relative_mobility_grid
     )
-    padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].arrayclip(
+    padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].clip(
         padded_gas_relative_mobility_grid
     )
     padded_relative_mobility_grids = RelativeMobilityGrids(
@@ -387,6 +387,13 @@ def _run_impes_step(
             gas=gas_production_grid,
         ),
     )
+    metadata = saturation_result.metadata
+    assert metadata is not None
+    accept_kwargs = {
+        "max_cfl_encountered": metadata.cfl_info.max_cfl_encountered,
+        "cfl_threshold": metadata.cfl_info.cfl_threshold,
+    }
+
     if not saturation_result.success:
         logger.error(
             f"Explicit saturation evolution failed at time step {time_step}: \n{saturation_result.message}"
@@ -401,6 +408,7 @@ def _run_impes_step(
             fluid_properties=padded_fluid_properties,
             success=False,
             message=saturation_result.message,
+            accept_kwargs=accept_kwargs,
         )
     logger.debug("Saturation evolution completed!")
 
@@ -432,7 +440,7 @@ def _run_impes_step(
             solvent_concentration_grid=padded_solvent_concentration_grid,
         )
     else:
-        raise RuntimeError(
+        raise SimulationError(
             f"Unexpected number of saturation grids returned: {other_grids_size + 2}"
         )
 
@@ -446,10 +454,7 @@ def _run_impes_step(
         fluid_properties=padded_fluid_properties,
         success=True,
         message=saturation_result.message,
-        accept_kwargs={
-            "max_cfl_encountered": saturation_result.metadata.cfl_info.max_cfl_encountered,
-            "newton_iterations": None,
-        },
+        accept_kwargs=accept_kwargs,
     )
 
 
@@ -472,7 +477,7 @@ def _run_explicit_step(
     """
     Execute one time step using fully explicit scheme (explicit pressure and saturation).
 
-    Returns: `StepResult` containing updated rates and fluid properties.
+    :return: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (explicit)...")
     pressure_result = evolve_pressure_explicitly(
@@ -488,6 +493,13 @@ def _run_explicit_step(
         wells=wells,
         config=config,
     )
+    metadata = pressure_result.metadata
+    assert metadata is not None
+    accept_kwargs = {
+        "max_cfl_encountered": metadata.max_cfl_encountered,
+        "cfl_threshold": metadata.cfl_threshold,
+    }
+
     if not pressure_result.success:
         logger.error(
             f"Explicit pressure evolution failed at time step {time_step}: \n{pressure_result.message}"
@@ -502,21 +514,22 @@ def _run_explicit_step(
             fluid_properties=padded_fluid_properties,
             success=False,
             message=pressure_result.message,
+            accept_kwargs=accept_kwargs,
         )
 
     logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_result.value
 
-    if (negative_pressure_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
+    if (negative_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
         logger.warning(
-            f"Negative pressure detected at {negative_pressure_indices.size} grid cells"
+            f"Negative pressure detected at {negative_indices.size} grid cells"
         )
         logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
         logger.warning(
-            f"First few negative pressure indices: {negative_pressure_indices.tolist()[:10]}"
+            f"First few negative pressure indices: {negative_indices.tolist()[:10]}"
         )
         message = (
-            NEGATIVE_PRESSURE_ERROR.format(indices=negative_pressure_indices.tolist())
+            NEGATIVE_PRESSURE_ERROR_MSG.format(indices=negative_indices.tolist())
             + f"\nAt Time Step {time_step}."
         )
         return StepResult(
@@ -529,6 +542,7 @@ def _run_explicit_step(
             fluid_properties=padded_fluid_properties,
             success=False,
             message=message,
+            accept_kwargs=accept_kwargs,
         )
 
     # For explicit schemes, we can re-use the current fluid properties
@@ -572,6 +586,13 @@ def _run_explicit_step(
             gas=gas_production_grid,
         ),
     )
+    metadata = saturation_result.metadata
+    assert metadata is not None
+    accept_kwargs = {
+        "max_cfl_encountered": metadata.cfl_info.max_cfl_encountered,
+        "cfl_threshold": metadata.cfl_info.cfl_threshold,
+    }
+
     if not saturation_result.success:
         logger.error(
             f"Explicit saturation evolution failed at time step {time_step}: \n{saturation_result.message}"
@@ -586,10 +607,10 @@ def _run_explicit_step(
             fluid_properties=padded_fluid_properties,
             success=False,
             message=saturation_result.message,
+            accept_kwargs=accept_kwargs,
         )
 
     logger.debug("Saturation evolution completed!")
-
     # Update fluid properties with new pressure after saturation update
     logger.debug(
         "Updating fluid properties with new pressure grid (explicit scheme)..."
@@ -627,7 +648,7 @@ def _run_explicit_step(
             solvent_concentration_grid=padded_solvent_concentration_grid,
         )
     else:
-        raise RuntimeError(
+        raise SimulationError(
             f"Unexpected number of saturation grids returned: {other_grids_size + 2}"
         )
 
@@ -648,10 +669,7 @@ def _run_explicit_step(
         gas_production_grid=gas_production_grid,
         success=True,
         message=saturation_result.message,
-        accept_kwargs={
-            "max_cfl_encountered": saturation_result.metadata.cfl_info.max_cfl_encountered,
-            "newton_iterations": None,
-        },
+        accept_kwargs=accept_kwargs,
     )
 
 
@@ -680,7 +698,7 @@ def run(
     config: typing.Optional[Config] = None,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     """
-    Runs a dynamic simulation on a 3D reservoir model with specified properties and wells.
+    Run a simulation on a 3D static reservoir model and wells.
 
     The 3D simulation evolves pressure and saturation over time using the specified evolution scheme.
     3D simulations are computationally intensive and may require significant memory and processing power.
@@ -916,7 +934,8 @@ def run(
                     )
                     try:
                         timer.reject_step(
-                            step_size=step_size, aggressive=timer.rejection_count > 10
+                            step_size=step_size,
+                            aggressive=timer.rejection_count > 10,
                         )
                     except TimingError as exc:
                         raise SimulationError(
@@ -1051,7 +1070,7 @@ def run(
 
             except Exception as exc:
                 raise SimulationError(
-                    f"Simulation failed at time step {timer.step} due to error: {exc}"
+                    f"Simulation failed while attempting time step {new_step} due to error: {exc}"
                 ) from exc
 
     logger.info(f"Simulation completed successfully after {timer.step} time steps")

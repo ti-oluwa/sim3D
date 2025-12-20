@@ -669,7 +669,7 @@ def compute_required_bhp_for_gas_rate(
     return float(required_bhp)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class WellFluid:
     """Base class for fluid properties in wells."""
 
@@ -700,7 +700,9 @@ class WellFluid:
         :return: A `GasPseudoPressureTable` instance for the fluid.
         """
         if self.phase != FluidPhase.GAS:
-            raise ValidationError("Pseudo-pressure table is only applicable for gas phase.")
+            raise ValidationError(
+                "Pseudo-pressure table is only applicable for gas phase."
+            )
 
         @functools.lru_cache(maxsize=1024)
         def z_factor_func(pressure: float) -> float:
@@ -731,7 +733,7 @@ class WellFluid:
         )
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class InjectedFluid(WellFluid):
     """Properties of the fluid being injected into or produced by a well."""
 
@@ -944,7 +946,7 @@ class InjectedFluid(WellFluid):
         )
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ProducedFluid(WellFluid):
     """Properties of the fluid being produced by a well."""
 

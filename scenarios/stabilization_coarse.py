@@ -287,13 +287,9 @@ def _():
             preconditioner="ilu",
             log_interval=2,
         )
-        states = bores.run(
-            model=model, 
-            timer=timer, 
-            wells=None, 
-            config=config
-        )
+        states = bores.run(model=model, timer=timer, wells=None, config=config)
         return list(states)
+
     return bores, main
 
 

@@ -11,7 +11,8 @@ __all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
 
 @attrs.frozen(slots=True)
 class Constant:
-    """A constant value with optional description and metadata.
+    """
+    A constant value with optional description and metadata.
 
     This class wraps a constant value and provides additional context about
     what the constant represents, its units, and any other relevant information.
@@ -473,7 +474,8 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
 
 
 class Constants:
-    """Physical constants and conversion factors used in reservoir simulations.
+    """
+    Physical constants and conversion factors used in reservoir simulations.
 
     All constants are stored in an internal dictionary and can be accessed via dot notation.
     Constants can be modified at runtime if needed. Use __getattr__ for value access and
@@ -684,7 +686,7 @@ class ConstantsContext:
             _constants_context.reset(self._token)
 
 
-class _ConstantsProvider:
+class _ConstantsProxy:
     """
     Proxy class to access the current context's `Constants` instance.
 
@@ -694,7 +696,7 @@ class _ConstantsProvider:
     """
 
     @property
-    def constants(self) -> Constants:
+    def _constants(self) -> Constants:
         """Get the current context's `Constants` instance.
 
         :return: Current `Constants` instance
@@ -708,7 +710,7 @@ class _ConstantsProvider:
         :return: Value of the constant
         :raises AttributeError: If the constant does not exist
         """
-        return getattr(self.constants, name)
+        return getattr(self._constants, name)
 
     def __getitem__(self, name: str) -> Constant:
         """Get a Constant object from the current context's `Constants` instance.
@@ -717,10 +719,10 @@ class _ConstantsProvider:
         :return: Constant object
         :raises KeyError: If the constant does not exist
         """
-        return self.constants[name]
+        return self._constants[name]
 
 
-c = _ConstantsProvider()
+c = _ConstantsProxy()
 """Global proxy to access physical constants and conversion factors."""
 
 
@@ -730,4 +732,4 @@ def get_constant(name: str) -> typing.Optional[Constant]:
     :param name: Name of the constant
     :return: `Constant` object or None if not found
     """
-    return c.constants.get_constant(name)
+    return c._constants.get_constant(name)

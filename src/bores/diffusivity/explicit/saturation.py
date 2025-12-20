@@ -242,7 +242,7 @@ def evolve_saturation_explicitly(
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
-        cfl_threshold=config.cfl_threshold.get(config.scheme, 1.0),
+        cfl_threshold=config.explicit_saturation_cfl_threshold,
         dtype=dtype,
     )
 
@@ -388,6 +388,7 @@ def evolve_saturation_explicitly(
                 violated=False,
             )
         ),
+        message=f"Explicit saturation evolution time step {time_step} successful."
     )
 
 
@@ -1370,7 +1371,7 @@ def evolve_miscible_saturation_explicitly(
     )
 
     # Apply saturation and solvent concentration updates
-    cfl_threshold = config.cfl_threshold.get(config.scheme, 1.0)
+    cfl_threshold = config.explicit_saturation_cfl_threshold
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
     (
         updated_water_saturation_grid,
@@ -1541,6 +1542,7 @@ def evolve_miscible_saturation_explicitly(
                 violated=False,
             ),
         ),
+        message=f"Explicit saturation evolution time step {time_step} successful."
     )
 
 

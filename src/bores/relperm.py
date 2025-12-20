@@ -454,7 +454,7 @@ def linear_interpolation_rule(
     return (kro_g * gas_fraction) + (kro_w * water_fraction)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class TwoPhaseRelPermTable:
     """
     Two-phase relative permeability lookup table.
@@ -508,7 +508,7 @@ class TwoPhaseRelPermTable:
         return self.wetting_phase_interpolator, self.non_wetting_phase_interpolator
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ThreePhaseRelPermTable:
     """
     Three-phase relative permeability lookup table, with mixing rules.
@@ -548,7 +548,9 @@ class ThreePhaseRelPermTable:
             self.oil_water_table.wetting_phase,
             self.oil_water_table.non_wetting_phase,
         } != {FluidPhase.WATER, FluidPhase.OIL}:
-            raise ValidationError("`oil_water_table` must be between water and oil phases.")
+            raise ValidationError(
+                "`oil_water_table` must be between water and oil phases."
+            )
         if {self.gas_oil_table.wetting_phase, self.gas_oil_table.non_wetting_phase} != {
             FluidPhase.OIL,
             FluidPhase.GAS,
@@ -789,7 +791,7 @@ def compute_corey_three_phase_relative_permeabilities(
     return float(krw), float(kro), float(krg)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class BrooksCoreyThreePhaseRelPermModel:
     """
     Brooks-Corey-type three-phase relative permeability model.

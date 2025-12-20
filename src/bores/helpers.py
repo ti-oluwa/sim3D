@@ -221,13 +221,13 @@ def build_rock_fluid_properties_grids(
 
     if relative_mobility_range is not None:
         # Clamp relative mobility grids to avoid numerical issues
-        water_relative_mobility_grid = relative_mobility_range["water"].arrayclip(
+        water_relative_mobility_grid = relative_mobility_range["water"].clip(
             water_relative_mobility_grid
         )
-        oil_relative_mobility_grid = relative_mobility_range["oil"].arrayclip(
+        oil_relative_mobility_grid = relative_mobility_range["oil"].clip(
             oil_relative_mobility_grid
         )
-        gas_relative_mobility_grid = relative_mobility_range["gas"].arrayclip(
+        gas_relative_mobility_grid = relative_mobility_range["gas"].clip(
             gas_relative_mobility_grid
         )
 

@@ -78,7 +78,7 @@ class FluidProperties(PadMixin[NDimension]):
     oil_viscosity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the reservoir fluid (Oil) viscosity distribution in the reservoir in (cP)."""
     oil_compressibility_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the oil compressibility distribution in the reservoir (psi⁻¹)."""
+    """N-dimensional numpy array representing the oil compressibility distribution (on bulk volume basis) in the reservoir (psi⁻¹)."""
     oil_specific_gravity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the oil specific gravity distribution in the reservoir (dimensionless). Should be constant for a given oil, e.g., 0.85 for light oil)."""
     oil_api_gravity_grid: NDimensionalGrid[NDimension]
@@ -92,7 +92,7 @@ class FluidProperties(PadMixin[NDimension]):
     water_viscosity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the reservoir fluid (Water) viscosity distribution in the reservoir in (cP)."""
     water_compressibility_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the water compressibility distribution in the reservoir (psi⁻¹)."""
+    """N-dimensional numpy array representing the water compressibility distribution (on bulk volume basis) in the reservoir (psi⁻¹)."""
     water_density_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the water density distribution in the reservoir (lbm/ft³)."""
     gas_saturation_grid: NDimensionalGrid[NDimension]
@@ -100,7 +100,7 @@ class FluidProperties(PadMixin[NDimension]):
     gas_viscosity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the reservoir fluid (Gas) viscosity distribution in the reservoir in (cP)."""
     gas_compressibility_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the gas compressibility distribution in the reservoir (psi⁻¹)."""
+    """N-dimensional numpy array representing the gas compressibility distribution (on bulk volume basis) in the reservoir (psi⁻¹)."""
     gas_gravity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas gravity distribution in the reservoir (dimensionless). Should be constant for a given gas, e.g., Methane = 0.556)."""
     gas_molecular_weight_grid: NDimensionalGrid[NDimension]

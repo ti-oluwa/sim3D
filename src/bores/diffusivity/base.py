@@ -184,9 +184,7 @@ def from_1D_index_interior_only(
     return i, j, k
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_mobility_grids(
     absolute_permeability_x: ThreeDimensionalGrid,
     absolute_permeability_y: ThreeDimensionalGrid,

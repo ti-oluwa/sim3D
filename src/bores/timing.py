@@ -40,7 +40,7 @@ def Time(
     return delta.total_seconds()
 
 
-@attrs.define(slots=True)
+@attrs.define
 class Timer:
     """
     Simulation time manager for adaptive time stepping.
@@ -55,7 +55,7 @@ class Timer:
     simulation_time: float
     """Total simulation time in seconds."""
     max_cfl_number: float = 0.9
-    """Maximum allowable CFL number."""
+    """Default maximum CFL number for time step adjustments."""
     ramp_up_factor: typing.Optional[float] = None
     """Factor by which to ramp up time step size on successful steps."""
     backoff_factor: float = 0.5
@@ -74,7 +74,7 @@ class Timer:
     """Number of accepted time steps completed so far (0-indexed)."""
     last_step_failed: bool = attrs.field(init=False, default=False)
     """Whether the most recent step attempt was rejected."""
-    max_rejects: int = 20
+    max_rejects: int = 10
     """Maximum number of consecutive time step rejections allowed."""
     rejection_count: int = attrs.field(init=False, default=0)
     """Count of consecutive time step rejections."""
@@ -101,7 +101,6 @@ class Timer:
 
         if self.max_steps is not None and self.step >= self.max_steps:
             return True
-
         return False
 
     @property
@@ -125,7 +124,7 @@ class Timer:
         """Proposes the next time step size without updating state."""
         if self.use_constant_step_size:
             return self.initial_step_size
-        
+
         dt = self.next_step_size
         remaining_time = self.time_remaining
 
@@ -152,7 +151,7 @@ class Timer:
         """
         if self.rejection_count >= self.max_rejects:
             raise TimingError(
-                "Maximum number of consecutive time step rejections exceeded."
+                "Maximum number of consecutive time step rejections exceeded"
             )
 
         if self.use_constant_step_size:
@@ -173,6 +172,7 @@ class Timer:
         self,
         step_size: float,
         max_cfl_encountered: typing.Optional[float] = None,
+        cfl_threshold: typing.Optional[float] = None,
         newton_iterations: typing.Optional[int] = None,
     ) -> float:
         """
@@ -181,14 +181,17 @@ class Timer:
 
         :param step_size: The time step size that was just accepted.
         :param max_cfl_encountered: The maximum CFL number encountered during the step.
+        :param cfl_threshold: The CFL threshold used during the step.
         :param newton_iterations: Number of Newton iterations taken (if applicable).
         :return: The accepted time step size.
         """
         # Ensure step size doesn't exceed remaining time (would indicate a bug)
-        assert step_size <= self.time_remaining, (
-            f"Step size {step_size} exceeds remaining time {self.time_remaining}. "
-            "This indicates a bug in the time stepping logic."
-        )
+        if step_size > self.time_remaining:
+            raise TimingError(
+                f"Step size {step_size} exceeds remaining time {self.time_remaining}. "
+                "This indicates a bug in the time stepping logic."
+            )
+        
         if self.use_constant_step_size:
             return self.initial_step_size
 
@@ -200,8 +203,9 @@ class Timer:
         dt = self.next_step_size
 
         # Limit by CFL
+        max_cfl = cfl_threshold if cfl_threshold is not None else self.max_cfl_number
         if max_cfl_encountered is not None and max_cfl_encountered > 0.0:
-            dt *= self.max_cfl_number / max_cfl_encountered
+            dt *= max_cfl / max_cfl_encountered
 
         # Apply ramp-up factor
         if self.ramp_up_factor is not None and not self.last_step_failed:

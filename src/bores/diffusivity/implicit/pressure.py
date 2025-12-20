@@ -18,13 +18,18 @@ from bores.diffusivity.base import (
     solve_linear_system,
     to_1D_index_interior_only,
 )
+from bores.errors import SolverError
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
-from bores.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
-from bores.types import FluidPhase, ThreeDimensionalGrid, ThreeDimensions
+from bores.pvt.core import compute_harmonic_mean
+from bores.types import (
+    FluidPhase,
+    OneDimensionalGrid,
+    ThreeDimensionalGrid,
+    ThreeDimensions,
+)
 from bores.wells import Wells
-from bores.errors import SolverError
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +51,8 @@ def evolve_pressure_implicitly(
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
     three-phase flow system in a 3D reservoir.
 
-    This version treats well terms explicitly by computing flow rates directly (like the explicit method)
-    rather than linearizing them. This approach:
-    1. Handles pseudo-pressure for gas wells correctly
-    2. Simplifies unit conversions
-    3. Maintains stability through implicit treatment of inter-cell fluxes
-    4. Uses lagged well rates (computed at beginning of time step)
+    This treats well terms explicitly by computing flow rates directly (like the explicit method)
+    rather than linearizing them.
 
     The well treatment is explicit in time but doesn't compromise overall stability because:
     - Wells are localized (affect only specific cells)
@@ -230,7 +231,7 @@ def evolve_pressure_implicitly(
         )
 
     # Map solution back to 3D grid (preserves boundary values)
-    new_pressure_grid = map_solution_to_grid(
+    new_pressure_grid = map_1D_solution_to_grid(
         solution_1D=new_1D_pressure_grid,
         current_grid=current_oil_pressure_grid,
         cell_count_x=cell_count_x,
@@ -238,12 +239,17 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
     )
     new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
-    return EvolutionResult(value=new_pressure_grid, success=True, scheme="implicit")
+    return EvolutionResult(
+        value=new_pressure_grid,
+        success=True,
+        scheme="implicit",
+        message=f"Implicit pressure evolution for time step {time_step} successful.",
+    )
 
 
 @numba.njit(parallel=True, cache=True)
-def map_solution_to_grid(
-    solution_1D: np.ndarray,
+def map_1D_solution_to_grid(
+    solution_1D: OneDimensionalGrid,
     current_grid: ThreeDimensionalGrid,
     cell_count_x: int,
     cell_count_y: int,
@@ -403,9 +409,8 @@ def add_accumulation_terms(
     return A, b
 
 
-@numba.njit(
-    cache=True
-)  # NOTE: Do not usage parallel=True here. Prone to race conditions.
+# NOTE: Do not usage parallel=True here. Prone to race conditions.
+@numba.njit(cache=True)
 def compute_face_transmissibility_arrays(
     cell_count_x: int,
     cell_count_y: int,
@@ -745,7 +750,8 @@ def add_face_transmissibilities_and_fluxes(
 
     # Add to diagonal (element-wise addition)
     current_diagonal = A.diagonal()
-    A.setdiag(current_diagonal + diagonal_additions)
+    new_diagonal = current_diagonal + diagonal_additions
+    A.setdiag(new_diagonal)
 
     # Add off-diagonal entries
     for i in range(len(rows)):
@@ -822,7 +828,7 @@ def add_well_contributions(
         cell_count_z=cell_count_z,
     )
 
-    # THIRD PASS: Compute well flow rates and add to RHS
+    # Compute well flow rates and add to RHS
     # This is done explicitly (using current pressure) similar to explicit method
     for i, j, k in itertools.product(
         range(1, cell_count_x - 1),
@@ -1069,14 +1075,14 @@ def compute_pseudo_fluxes_from_neighbour(
     )
 
     # Calculate harmonic mobilities for each phase across the face
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=water_mobility_grid
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid[neighbour_indices], water_mobility_grid[cell_indices]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=oil_mobility_grid
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid[neighbour_indices], oil_mobility_grid[cell_indices]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_indices, index2=neighbour_indices, mobility_grid=gas_mobility_grid
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid[neighbour_indices], gas_mobility_grid[cell_indices]
     )
     total_harmonic_mobility = (
         water_harmonic_mobility + oil_harmonic_mobility + gas_harmonic_mobility

@@ -10,9 +10,7 @@ import numpy as np
 from numba.extending import overload
 
 
-@numba.vectorize(
-    cache=True
-)
+@numba.vectorize(cache=True)
 def clip(val, min_, max_):
     return np.maximum(np.minimum(val, max_), min_)
 

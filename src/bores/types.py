@@ -265,23 +265,16 @@ class Range:
         if self.min > self.max:
             raise ValueError("Minimum value cannot be greater than maximum value.")
 
-    def clip(self, value: float) -> float:
+    def clip(self, value: T) -> T:
         """
         Clips the given value between the minimum and maximum values.
 
         :param value: The value to be clipped.
         :return: The clipped value.
         """
-        return max(self.min, min(self.max, value))
+        from bores.utils import clip
 
-    def arrayclip(self, value: np.typing.NDArray) -> np.typing.NDArray:
-        """
-        Clips the given NumPy array between the minimum and maximum values.
-
-        :param value: The NumPy array to be clipped.
-        :return: The clipped NumPy array.
-        """
-        return np.clip(value, self.min, self.max)
+        return clip(value, self.min, self.max)
 
     def __len__(self) -> int:
         return 2

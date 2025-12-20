@@ -15,11 +15,9 @@ from bores.types import (
 __all__ = ["Config"]
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class Config:
-    """
-    Simulation run configuration and parameters.
-    """
+    """Simulation run configuration and parameters."""
 
     convergence_tolerance: float = attrs.field(
         default=1e-6, validator=attrs.validators.le(1e-2)
@@ -47,8 +45,8 @@ class Config:
     """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default=RelativeMobilityRange(
-            oil=Range(min=1e-12, max=1e6),
-            water=Range(min=1e-12, max=1e6),
+            oil=Range(min=1e-9, max=1e6),
+            water=Range(min=1e-9, max=1e6),
             gas=Range(min=1e-12, max=1e6),
         )
     )
@@ -77,17 +75,30 @@ class Config:
     """Whether to disable structural dip effects in reservoir modeling/simulation."""
     miscibility_model: MiscibilityModel = "immiscible"
     """Miscibility model: 'immiscible', 'todd_longstaff'"""
-    cfl_threshold: typing.Dict[EvolutionScheme, float] = attrs.field(
-        factory=lambda: {"impes": 1.0, "explicit": 0.9, "implicit": 1.0}
-    )
+    impes_cfl_threshold: float = 0.9
+    """Maximum allowable CFL number for the 'impes' evolution scheme to ensure numerical stability.
+
+    Typically kept below 1.0 to prevent instability in explicit pressure updates.
+
+    Lowering this value increases stability but may require smaller time steps.
+    Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
     """
-    Maximum allowable CFL number for different evolution schemes to ensure numerical stability.
+    explicit_saturation_cfl_threshold: float = 0.5
+    """
+    Maximum allowable saturation CFL number for the 'explicit' evolution scheme to ensure numerical stability.
 
-    Adjust these values based on the chosen evolution scheme:
-    - 'impes': Higher CFL number allowed due to implicit pressure treatment.
-    - 'explicit': Lower CFL number required due to explicit treatment of both pressure and saturation.
+    Typically kept below 1.0 to prevent instability in explicit saturation updates.
 
-    Lowering these values increases stability but may require smaller time steps.
+    Lowering this value increases stability but may require smaller time steps.
+    Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
+    """
+    explicit_pressure_cfl_threshold: float = 0.9
+    """
+    Maximum allowable pressure CFL number for the 'explicit' evolution scheme to ensure numerical stability.
+
+    Typically kept below 1.0 to prevent instability in explicit pressure updates.
+    
+    Lowering this value increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
     """
     constants: Constants = attrs.field(factory=Constants)

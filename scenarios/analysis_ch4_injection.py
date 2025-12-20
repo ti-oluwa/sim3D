@@ -510,9 +510,7 @@ def _(analyst, np, bores):
     # Reserves
     oil_in_place_history = analyst.oil_in_place_history(interval=1, from_step=1)
     gas_in_place_history = analyst.gas_in_place_history(interval=1, from_step=1)
-    water_in_place_history = analyst.water_in_place_history(
-        interval=1, from_step=1
-    )
+    water_in_place_history = analyst.water_in_place_history(interval=1, from_step=1)
 
     oil_water_reserves_fig = bores.make_series_plot(
         data={
@@ -591,9 +589,7 @@ def _(
 @app.cell
 def _(analyst, np, bores):
     # Displacement ratios
-    vrr_history = analyst.voidage_replacement_ratio_history(
-        from_step=1, interval=1
-    )
+    vrr_history = analyst.voidage_replacement_ratio_history(from_step=1, interval=1)
     vrr_fig = bores.make_series_plot(
         data={
             "Voidage Replacement Ratio (VRR)": np.array(list(vrr_history)),

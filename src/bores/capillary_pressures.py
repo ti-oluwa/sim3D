@@ -31,7 +31,7 @@ __all__ = [
 ]
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class TwoPhaseCapillaryPressureTable:
     """
     Two-phase capillary pressure lookup table.
@@ -80,7 +80,7 @@ class TwoPhaseCapillaryPressureTable:
         return self.get_capillary_pressure(wetting_phase_saturation)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ThreePhaseCapillaryPressureTable:
     """
     Three-phase capillary pressure lookup table.
@@ -112,7 +112,9 @@ class ThreePhaseCapillaryPressureTable:
             self.oil_water_table.wetting_phase,
             self.oil_water_table.non_wetting_phase,
         } != {FluidPhase.WATER, FluidPhase.OIL}:
-            raise ValidationError("`oil_water_table` must be between water and oil phases.")
+            raise ValidationError(
+                "`oil_water_table` must be between water and oil phases."
+            )
         if {self.gas_oil_table.wetting_phase, self.gas_oil_table.non_wetting_phase} != {
             FluidPhase.OIL,
             FluidPhase.GAS,
@@ -311,7 +313,7 @@ def compute_brooks_corey_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class BrooksCoreyCapillaryPressureModel:
     """
     Brooks-Corey capillary pressure model for three-phase systems.
@@ -588,7 +590,7 @@ def compute_van_genuchten_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class VanGenuchtenCapillaryPressureModel:
     """
     van Genuchten capillary pressure model for three-phase systems.
@@ -880,7 +882,7 @@ def compute_leverett_j_capillary_pressures(
     return float(oil_water_capillary_pressure), float(gas_oil_capillary_pressure)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class LeverettJCapillaryPressureModel:
     """
     Leverett J-function capillary pressure model for three-phase systems.

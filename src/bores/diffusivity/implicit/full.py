@@ -27,14 +27,13 @@ from bores.helpers import (
     update_pvt_properties,
 )
 from bores.models import FluidProperties, RockFluidProperties, RockProperties
-from bores.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
+from bores.pvt.core import compute_harmonic_mean
 from bores.types import (
     FluidPhase,
     SupportsSetItem,
     ThreeDimensionalGrid,
     ThreeDimensions,
 )
-from bores.utils import clip
 from bores.config import Config
 from bores.wells import Wells
 from bores.diffusivity.implicit.jacobian import assemble_jacobian
@@ -170,9 +169,6 @@ def evolve_fully_implicit(
             absolute_permeability_z=rock_properties.absolute_permeability.z,
             fluid_properties=fluid_properties,
             relative_mobility_grids=relative_mobility_grids,
-            oil_density_grid=fluid_properties.oil_effective_density_grid,
-            gas_density_grid=fluid_properties.gas_density_grid,
-            water_density_grid=fluid_properties.water_density_grid,
             config=config,
             injection_grid=injection_grid,
             production_grid=production_grid,
@@ -197,9 +193,6 @@ def evolve_fully_implicit(
             oil_density_grid=fluid_properties.oil_effective_density_grid,
             gas_density_grid=fluid_properties.gas_density_grid,
             water_density_grid=fluid_properties.water_density_grid,
-            old_oil_density_grid=old_fluid_properties.oil_effective_density_grid,
-            old_gas_density_grid=old_fluid_properties.gas_density_grid,
-            old_water_density_grid=old_fluid_properties.water_density_grid,
             porosity_grid=rock_properties.porosity_grid,
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
@@ -376,7 +369,9 @@ def evolve_fully_implicit(
             fluid_properties=fluid_properties,
             rock_properties=rock_properties,
             rock_fluid_properties=rock_fluid_properties,
-            config=config,
+            disable_capillary_effects=config.disable_capillary_effects,
+            capillary_strength_factor=config.capillary_strength_factor,
+            relative_mobility_range=config.relative_mobility_range,
         )
 
     solution = ImplicitSolution(
@@ -391,17 +386,12 @@ def evolve_fully_implicit(
     return EvolutionResult(value=solution, scheme="implicit")
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_accumulation_terms(
     porosity: float,
     oil_saturation: float,
     gas_saturation: float,
     water_saturation: float,
-    oil_density: float,
-    gas_density: float,
-    water_density: float,
     cell_volume: float = 1.0,
 ) -> typing.Tuple[float, float, float]:
     """
@@ -414,12 +404,12 @@ def compute_accumulation_terms(
     :param gas_saturation: Gas saturation at cell
     :param water_saturation: Water saturation at cell
     :param cell_volume: Cell volume in ft³ (default 1.0)
-    :return: (oil_accumulation, gas_accumulation, water_accumulation) in lbm
+    :return: (oil_accumulation, gas_accumulation, water_accumulation) in ft³
     """
-    # Accumulation in reservoir conditions: φ·S·ρ·V (lbm)
-    oil_accumulation = porosity * oil_saturation * oil_density * cell_volume
-    gas_accumulation = porosity * gas_saturation * gas_density * cell_volume
-    water_accumulation = porosity * water_saturation * water_density * cell_volume
+    # Accumulation in reservoir conditions: φ·S·V (ft³)
+    oil_accumulation = porosity * oil_saturation * cell_volume
+    gas_accumulation = porosity * gas_saturation * cell_volume
+    water_accumulation = porosity * water_saturation * cell_volume
     return oil_accumulation, gas_accumulation, water_accumulation
 
 
@@ -437,9 +427,6 @@ def compute_well_rate_grids(
     absolute_permeability_z: ThreeDimensionalGrid,
     fluid_properties: FluidProperties[ThreeDimensions],
     relative_mobility_grids: RelativeMobilityGrids[ThreeDimensions],
-    oil_density_grid: ThreeDimensionalGrid,
-    gas_density_grid: ThreeDimensionalGrid,
-    water_density_grid: ThreeDimensionalGrid,
     config: Config,
     injection_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
@@ -450,9 +437,7 @@ def compute_well_rate_grids(
     dtype: np.typing.DTypeLike = np.float64,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
-    Pre-compute well rate contributions for all cells.
-
-    This function handles injection and production wells
+    Compute well rate contributions for all cells.
 
     :param cell_count_x: Number of cells in x direction
     :param cell_count_y: Number of cells in y direction
@@ -688,9 +673,7 @@ def compute_well_rate_grids(
     return oil_well_rate_grid, gas_well_rate_grid, water_well_rate_grid
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_flux_divergence_for_cell(
     i: int,
     j: int,
@@ -744,7 +727,7 @@ def compute_flux_divergence_for_cell(
     :param pcow_grid: Oil-water capillary pressure grid (psi)
     :param pcgo_grid: Gas-oil capillary pressure grid (psi)
     :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²)
-    :return: (oil_flux_div, gas_flux_div, water_flux_div) in lbm/day
+    :return: (oil_flux_div, gas_flux_div, water_flux_div) in ft³/day
     """
     dx, dy = cell_dimension
     dz = thickness_grid[i, j, k]
@@ -758,14 +741,14 @@ def compute_flux_divergence_for_cell(
     ni, nj, nk = i + 1, j, k
     geometric_factor = dy * dz / dx
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_x
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_x[ni, nj, nk], water_mobility_grid_x[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_x
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_x[ni, nj, nk], oil_mobility_grid_x[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_x
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_x[ni, nj, nk], gas_mobility_grid_x[i, j, k]
     )
 
     total_mobility = (
@@ -818,22 +801,22 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     # West: (i-1, j, k)
     ni, nj, nk = i - 1, j, k
     geometric_factor = dy * dz / dx
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_x
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_x[ni, nj, nk], water_mobility_grid_x[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_x
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_x[ni, nj, nk], oil_mobility_grid_x[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_x
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_x[ni, nj, nk], gas_mobility_grid_x[i, j, k]
     )
 
     total_mobility = (
@@ -886,22 +869,22 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     # North: (i, j-1, k)
     ni, nj, nk = i, j - 1, k
     geometric_factor = dx * dz / dy
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_y
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_y[ni, nj, nk], water_mobility_grid_y[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_y
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_y[ni, nj, nk], oil_mobility_grid_y[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_y
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_y[ni, nj, nk], gas_mobility_grid_y[i, j, k]
     )
 
     total_mobility = (
@@ -954,22 +937,22 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     # South: (i, j+1, k)
     ni, nj, nk = i, j + 1, k
     geometric_factor = dx * dz / dy
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_y
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_y[ni, nj, nk], water_mobility_grid_y[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_y
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_y[ni, nj, nk], oil_mobility_grid_y[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_y
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_y[ni, nj, nk], gas_mobility_grid_y[i, j, k]
     )
 
     total_mobility = (
@@ -1022,22 +1005,22 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     # Top: (i, j, k-1)
     ni, nj, nk = i, j, k - 1
     geometric_factor = dx * dy / dz
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_z
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_z[ni, nj, nk], water_mobility_grid_z[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_z
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_z[ni, nj, nk], oil_mobility_grid_z[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_z
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_z[ni, nj, nk], gas_mobility_grid_z[i, j, k]
     )
 
     total_mobility = (
@@ -1090,22 +1073,22 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     # Bottom: (i, j, k+1)
     ni, nj, nk = i, j, k + 1
     geometric_factor = dx * dy / dz
 
-    water_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=water_mobility_grid_z
+    water_harmonic_mobility = compute_harmonic_mean(
+        water_mobility_grid_z[ni, nj, nk], water_mobility_grid_z[i, j, k]
     )
-    oil_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=oil_mobility_grid_z
+    oil_harmonic_mobility = compute_harmonic_mean(
+        oil_mobility_grid_z[ni, nj, nk], oil_mobility_grid_z[i, j, k]
     )
-    gas_harmonic_mobility = compute_harmonic_mobility(
-        index1=(i, j, k), index2=(ni, nj, nk), mobility_grid=gas_mobility_grid_z
+    gas_harmonic_mobility = compute_harmonic_mean(
+        gas_mobility_grid_z[ni, nj, nk], gas_mobility_grid_z[i, j, k]
     )
 
     total_mobility = (
@@ -1158,16 +1141,14 @@ def compute_flux_divergence_for_cell(
         gas_flux = gas_harmonic_mobility * gas_potential_difference * geometric_factor
 
         # Accumulate fluxes multiplied by density to get mass flux divergence
-        oil_flux_div += oil_flux * harmonic_oil_density
-        gas_flux_div += gas_flux * harmonic_gas_density
-        water_flux_div += water_flux * harmonic_water_density
+        oil_flux_div += oil_flux
+        gas_flux_div += gas_flux
+        water_flux_div += water_flux
 
     return oil_flux_div, gas_flux_div, water_flux_div
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_residuals_for_cell(
     i: int,
     j: int,
@@ -1191,9 +1172,6 @@ def compute_residuals_for_cell(
     oil_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     water_density_grid: ThreeDimensionalGrid,
-    old_oil_density_grid: ThreeDimensionalGrid,
-    old_gas_density_grid: ThreeDimensionalGrid,
-    old_water_density_grid: ThreeDimensionalGrid,
     pcow_grid: ThreeDimensionalGrid,
     pcgo_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
@@ -1246,46 +1224,34 @@ def compute_residuals_for_cell(
     :param gas_well_rate_grid: Pre-computed gas well rates (ft³/day)
     :param water_well_rate_grid: Pre-computed water well rates (ft³/day)
     :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²)
-    :return: (oil_residual, gas_residual, water_residual) in lbm
+    :return: (oil_residual, gas_residual, water_residual) in ft³
     """
     dx, dy = cell_dimension
     dz = thickness_grid[i, j, k]
     cell_volume = dx * dy * dz
     porosity = porosity_grid[i, j, k]
 
-    # Get current state accumulation (φ·S·ρ·V) (lbm)
+    # Get current state accumulation (φ·S·V) (ft³)
     oil_saturation = oil_saturation_grid[i, j, k]
     gas_saturation = gas_saturation_grid[i, j, k]
     water_saturation = water_saturation_grid[i, j, k]
-    oil_density = oil_density_grid[i, j, k]
-    gas_density = gas_density_grid[i, j, k]
-    water_density = water_density_grid[i, j, k]
     accumulation_new = compute_accumulation_terms(
         porosity=porosity,
         oil_saturation=oil_saturation,
         gas_saturation=gas_saturation,
         water_saturation=water_saturation,
-        oil_density=oil_density,
-        gas_density=gas_density,
-        water_density=water_density,
         cell_volume=cell_volume,
     )
 
-    # Get old state accumulation (φ·S·V) (lbm)
+    # Get old state accumulation (φ·S·V) (ft³)
     oil_saturation_old = old_oil_saturation_grid[i, j, k]
     gas_saturation_old = old_gas_saturation_grid[i, j, k]
     water_saturation_old = old_water_saturation_grid[i, j, k]
-    oil_density_old = old_oil_density_grid[i, j, k]
-    gas_density_old = old_gas_density_grid[i, j, k]
-    water_density_old = old_water_density_grid[i, j, k]
     accumulation_old = compute_accumulation_terms(
         porosity=porosity,
         oil_saturation=oil_saturation_old,
         gas_saturation=gas_saturation_old,
         water_saturation=water_saturation_old,
-        oil_density=oil_density_old,
-        gas_density=gas_density_old,
-        water_density=water_density_old,
         cell_volume=cell_volume,
     )
 
@@ -1323,8 +1289,8 @@ def compute_residuals_for_cell(
     )
 
     # Change in pore volume occupied = time x (net flow rate)
-    # (φ·S·ρ·V)^new - (φ·S·ρ·V)^old = Δt x (Flow_in - Flow_out + Wells)
-    # Residual = (φ·S·ρ·V)^new - (φ·S·ρ·V)^old - Δt x (Flow_in - Flow_out + Wells)
+    # (φ·S·V)^new - (φ·S·V)^old = Δt x (Flow_in - Flow_out + Wells)
+    # Residual = (φ·S·V)^new - (φ·S·V)^old - Δt x (Flow_in - Flow_out + Wells)
 
     # Note: flux_divergence is (Flow_in - Flow_out) in ft³/day
     # Note: well_rates is (Injection - Production) in ft³/day
@@ -1340,10 +1306,7 @@ def compute_residuals_for_cell(
     return oil_residual, gas_residual, water_residual
 
 
-@numba.njit(
-    parallel=True,
-    cache=True
-)
+@numba.njit(parallel=True, cache=True)
 def assemble_residual_vector(
     pressure_grid: ThreeDimensionalGrid,
     oil_saturation_grid: ThreeDimensionalGrid,
@@ -1355,9 +1318,6 @@ def assemble_residual_vector(
     oil_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     water_density_grid: ThreeDimensionalGrid,
-    old_oil_density_grid: ThreeDimensionalGrid,
-    old_gas_density_grid: ThreeDimensionalGrid,
-    old_water_density_grid: ThreeDimensionalGrid,
     porosity_grid: ThreeDimensionalGrid,
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -1450,9 +1410,6 @@ def assemble_residual_vector(
                     oil_density_grid=oil_density_grid,
                     gas_density_grid=gas_density_grid,
                     water_density_grid=water_density_grid,
-                    old_oil_density_grid=old_oil_density_grid,
-                    old_gas_density_grid=old_gas_density_grid,
-                    old_water_density_grid=old_water_density_grid,
                     pcow_grid=pcow_grid,
                     pcgo_grid=pcgo_grid,
                     elevation_grid=elevation_grid,

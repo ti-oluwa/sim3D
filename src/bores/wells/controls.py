@@ -224,7 +224,7 @@ def _compute_required_bhp(
     )
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ProductionClamp:
     """Clamp condition for production wells."""
 
@@ -240,7 +240,7 @@ class ProductionClamp:
         return None
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class InjectionClamp:
     """Clamp condition for injection wells."""
 
@@ -256,7 +256,7 @@ class InjectionClamp:
         return None
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class BHPControl(typing.Generic[WellFluidT_con]):
     """
     Bottom Hole Pressure (BHP) control.
@@ -357,7 +357,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         return f"BHP Control (BHP={self.bottom_hole_pressure:.4f} psi)"
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ConstantRateControl(typing.Generic[WellFluidT_con]):
     """
     Constant rate control.
@@ -502,7 +502,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         return f"Constant Rate Control (Rate={self.target_rate:.4f})"
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
     """
     Adaptive control that switches between rate and BHP control.
@@ -697,7 +697,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.4f}, Min BHP={self.minimum_bottom_hole_pressure:.4f} psi)"
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class MultiPhaseRateControl:
     """
     Multi-phase rate control for wells.

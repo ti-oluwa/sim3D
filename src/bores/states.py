@@ -333,7 +333,7 @@ def load_states(
     return _load_states(states, as_tuple=as_tuple)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ReservoirVolumetrics:
     """Reservoir volumetrics analysis results."""
 
@@ -349,7 +349,7 @@ class ReservoirVolumetrics:
     """Hydrocarbon pore volume in cubic feet (ft³)."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class InstantaneousRates:
     """Instantaneous production/injection rates."""
 
@@ -367,7 +367,7 @@ class InstantaneousRates:
     """Water cut as a fraction (0 to 1) of total liquid production."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class CumulativeProduction:
     """Cumulative production analysis results."""
 
@@ -383,7 +383,7 @@ class CumulativeProduction:
     """Gas recovery factor as a fraction (0 to 1) of initial gas in place."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class MaterialBalanceAnalysis:
     """Material balance analysis results."""
 
@@ -403,7 +403,7 @@ class MaterialBalanceAnalysis:
     """Estimated aquifer influx in stock tank barrels (STB)."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ProductivityAnalysis:
     """Well productivity analysis results based on actual flow rates and reservoir properties."""
 
@@ -421,7 +421,7 @@ class ProductivityAnalysis:
     """Average phase mobility at perforation intervals in 1/cp."""
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen
 class SweepEfficiencyAnalysis:
     """Sweep efficiency analysis results."""
 
@@ -447,7 +447,7 @@ class SweepEfficiencyAnalysis:
     """Vertical sweep efficiency (0 to 1) computed using saturation-weighted column fractions."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class DeclineCurveResult:
     """Decline curve analysis results."""
 
@@ -1001,9 +1001,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 if mask is not None:
                     oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
 
-                step_production += np.nansum(
-                    oil_production_stb_day * step_in_days
-                )
+                step_production += np.nansum(oil_production_stb_day * step_in_days)
 
             total_production += step_production
         return float(total_production)
@@ -1064,9 +1062,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 if mask is not None:
                     gas_production_SCF_day = np.where(mask, gas_production_SCF_day, 0.0)
 
-                step_production += np.nansum(
-                    gas_production_SCF_day * step_in_days
-                )
+                step_production += np.nansum(gas_production_SCF_day * step_in_days)
 
             total_production += step_production
         return float(total_production)
@@ -1133,9 +1129,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                         mask, water_production_stb_day, 0.0
                     )
 
-                step_production += np.nansum(
-                    water_production_stb_day * step_in_days
-                )
+                step_production += np.nansum(water_production_stb_day * step_in_days)
 
             total_production += step_production
         return float(total_production)
@@ -1195,9 +1189,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 if mask is not None:
                     oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
 
-                step_injection += np.nansum(
-                    oil_injection_stb_day * step_in_days
-                )
+                step_injection += np.nansum(oil_injection_stb_day * step_in_days)
             total_injection += step_injection
         return float(total_injection)
 
@@ -1256,9 +1248,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 if mask is not None:
                     gas_injection_SCF_day = np.where(mask, gas_injection_SCF_day, 0.0)
 
-                step_injection += np.nansum(
-                    gas_injection_SCF_day * step_in_days
-                )
+                step_injection += np.nansum(gas_injection_SCF_day * step_in_days)
             total_injection += step_injection
         return float(total_injection)
 
@@ -1323,9 +1313,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                         mask, water_injection_stb_day, 0.0
                     )
 
-                step_injection += np.nansum(
-                    water_injection_stb_day * step_in_days
-                )
+                step_injection += np.nansum(water_injection_stb_day * step_in_days)
             total_injection += step_injection
         return float(total_injection)
 
@@ -1906,9 +1894,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             stgiip=stgiip,
         )
 
-    def reservoir_volumetrics_analysis(
-        self, step: int = -1
-    ) -> ReservoirVolumetrics:
+    def reservoir_volumetrics_analysis(self, step: int = -1) -> ReservoirVolumetrics:
         """
         Comprehensive reservoir volumetrics analysis at a specific time step.
 
@@ -2124,9 +2110,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             water_cut=water_cut,
         )
 
-    def cumulative_production_analysis(
-        self, step: int = -1
-    ) -> CumulativeProduction:
+    def cumulative_production_analysis(self, step: int = -1) -> CumulativeProduction:
         """
         Comprehensive cumulative production analysis at a specific time step.
 
@@ -2916,20 +2900,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
             return 0.0
 
         # Get cumulative injection volumes (with optional cell filter)
-        cumulative_water_injected = self.water_injected(
-            0, step, cells=cells_obj
-        )  # STB
+        cumulative_water_injected = self.water_injected(0, step, cells=cells_obj)  # STB
         cumulative_gas_injected = self.gas_injected(
             0, step, cells=cells_obj
         )  # SCF (free gas only)
 
         # Get cumulative production volumes (with optional cell filter)
-        cumulative_oil_produced = self.oil_produced(
-            0, step, cells=cells_obj
-        )  # STB
-        cumulative_water_produced = self.water_produced(
-            0, step, cells=cells_obj
-        )  # STB
+        cumulative_oil_produced = self.oil_produced(0, step, cells=cells_obj)  # STB
+        cumulative_water_produced = self.water_produced(0, step, cells=cells_obj)  # STB
         cumulative_free_gas_produced = self.free_gas_produced(
             0, step, cells=cells_obj
         )  # SCF (free gas only)
@@ -3537,9 +3515,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if decline_result.error:
             return []
 
-        last_step = (
-            decline_result.steps[-1] if decline_result.steps else 0
-        )
+        last_step = decline_result.steps[-1] if decline_result.steps else 0
         forecast = []
         decline_rate_per_timestep = decline_result.decline_rate_per_timestep
 
@@ -3745,10 +3721,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: Mobility ratio (M). Returns float('inf') if calculation is not possible.
         """
         if displaced_phase not in {"oil", "water"}:
-            raise ValidationError("Invalid displaced phase specified for mobility ratio.")
+            raise ValidationError(
+                "Invalid displaced phase specified for mobility ratio."
+            )
 
         if displacing_phase not in {"oil", "water", "gas"}:
-            raise ValidationError("Invalid displacing phase specified for mobility ratio.")
+            raise ValidationError(
+                "Invalid displacing phase specified for mobility ratio."
+            )
 
         state = self.get_state(step)
         if state is None:

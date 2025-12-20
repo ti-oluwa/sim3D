@@ -232,7 +232,7 @@ def reservoir_model(
     Constructs a N-Dimensional reservoir model with given rock and fluid properties.
 
     Note:
-    
+
     - If both `oil_bubble_point_pressure_grid` and `solution_gas_to_oil_ratio_grid` are omitted,
       the function attempts to estimate these based on pressure, temperature, and oil properties,
       but this may lead to less accurate results.

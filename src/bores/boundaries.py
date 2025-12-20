@@ -100,7 +100,7 @@ def get_neighbor_indices(
     return tuple(neighbor_indices)
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class BoundaryMetadata:
     """
     Optional metadata for boundary condition evaluation.
@@ -302,7 +302,7 @@ class BoundaryCondition(typing.Protocol):
         ...
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class NoFlowBoundary(typing.Generic[NDimension]):
     """
     Implements a no-flow boundary condition.
@@ -350,7 +350,7 @@ class NoFlowBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = grid[neighbor_indices]
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class ConstantBoundary(typing.Generic[NDimension]):
     """
     Implements a constant boundary condition (Dirichlet).
@@ -401,7 +401,7 @@ class ConstantBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = self.constant
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class VariableBoundary(typing.Generic[NDimension]):
     """
     Implements a variable boundary condition using a callable function.
@@ -477,7 +477,7 @@ NeumannBoundary = VariableBoundary
 """Alias for `VariableBoundary` representing Neumann boundary conditions."""
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class SpatialBoundary(typing.Generic[NDimension]):
     """
     Implements a spatial boundary condition using coordinate-based functions.
@@ -540,7 +540,9 @@ class SpatialBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply spatial boundary condition using coordinate-based function."""
         if metadata is None or metadata.coordinates is None:
-            raise ValidationError(f"{self.__class__.__name__} requires coordinate metadata")
+            raise ValidationError(
+                f"{self.__class__.__name__} requires coordinate metadata"
+            )
 
         # Extract coordinates at boundary
         coords = metadata.coordinates[boundary_indices]
@@ -574,7 +576,7 @@ class SpatialBoundary(typing.Generic[NDimension]):
             grid[boundary_indices] = result.reshape(coords.shape[:-1])
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class TimeDependentBoundary(typing.Generic[NDimension]):
     """
     Implements a time-dependent boundary condition.
@@ -645,7 +647,7 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = value
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class LinearGradientBoundary(typing.Generic[NDimension]):
     """
     Implements a linear gradient boundary condition.
@@ -725,7 +727,9 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
     ) -> None:
         """Apply linear gradient boundary condition."""
         if metadata is None or metadata.coordinates is None:
-            raise ValidationError(f"{self.__class__.__name__} requires coordinate metadata")
+            raise ValidationError(
+                f"{self.__class__.__name__} requires coordinate metadata"
+            )
 
         coords = metadata.coordinates[boundary_indices]
 
@@ -737,7 +741,9 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
         elif self.gradient_direction == "z":
             coord_values = coords[..., 2] if coords.shape[-1] > 2 else coords[..., 0]
         else:
-            raise ValidationError(f"Invalid gradient direction: {self.gradient_direction}")
+            raise ValidationError(
+                f"Invalid gradient direction: {self.gradient_direction}"
+            )
 
         # Calculate gradient
         coord_min = np.min(coord_values)
@@ -754,7 +760,7 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
             )
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class FluxBoundary(typing.Generic[NDimension]):
     """
     Implements a flux boundary condition (Neumann with physical interpretation).
@@ -853,7 +859,7 @@ class FluxBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = neighbor_values + self.flux_value * spacing
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen
 class GridBoundaryCondition(typing.Generic[NDimension]):
     """
     Container for defining boundary conditions for a grid.

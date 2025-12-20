@@ -8,76 +8,58 @@ from scipy.sparse import lil_matrix
 
 from bores.diffusivity.base import to_1D_index_interior_only
 from bores.models import FluidProperties, RockProperties
-from bores.pvt.core import compute_harmonic_mean, compute_harmonic_mobility
+from bores.pvt.core import compute_harmonic_mean
 from bores.types import ThreeDimensionalGrid, ThreeDimensions
 
 
-__all__ = ["assemble_jacobian"]
-
-
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_accumulation_derivatives(
     porosity: float,
     cell_volume: float,
     oil_saturation: float,
     gas_saturation: float,
     water_saturation: float,
-    oil_density: float,
-    gas_density: float,
-    water_density: float,
     oil_compressibility: float,
     gas_compressibility: float,
     water_compressibility: float,
     dtype: np.typing.DTypeLike,
 ) -> np.ndarray:
     """
-    Compute ALL accumulation term derivatives.
+    Compute all accumulation term derivatives.
 
-    Accumulation: A_α = φ·V·ρ_α·S_α
+    Accumulation: A_α = φ·V·S_α
 
     Derivatives:
-    ∂A_α/∂P = φ·V·S_α·ρ_α·c_α
-    ∂A_oil/∂S_o = φ·V·ρ_oil
-    ∂A_gas/∂S_g = φ·V·ρ_gas
-    ∂A_water/∂S_o = -φ·V·ρ_water (since ∂S_w/∂S_o = -1)
-    ∂A_water/∂S_g = -φ·V·ρ_water (since ∂S_w/∂S_g = -1)
+    ∂A_α/∂P = φ·V·S_α·c_α
+    ∂A_oil/∂S_o = φ·V
+    ∂A_gas/∂S_g = φ·V
+    ∂A_water/∂S_o = -φ·V (since ∂S_w/∂S_o = -1)
+    ∂A_water/∂S_g = -φ·V (since ∂S_w/∂S_g = -1)
     """
     derivatives = np.zeros((3, 3), dtype=dtype)
-    porosity_times_volume = porosity * cell_volume
+    pore_volume = porosity * cell_volume
 
     # ∂R/∂P (column 0)
-    derivatives[0, 0] = (
-        porosity_times_volume * oil_saturation * oil_density * oil_compressibility
-    )
-    derivatives[1, 0] = (
-        porosity_times_volume * gas_saturation * gas_density * gas_compressibility
-    )
-    derivatives[2, 0] = (
-        porosity_times_volume * water_saturation * water_density * water_compressibility
-    )
+    derivatives[0, 0] = pore_volume * oil_saturation * oil_compressibility
+    derivatives[1, 0] = pore_volume * gas_saturation * gas_compressibility
+    derivatives[2, 0] = pore_volume * water_saturation * water_compressibility
 
     # ∂R/∂S_o (column 1)
-    derivatives[0, 1] = porosity_times_volume * oil_density
+    derivatives[0, 1] = pore_volume
     derivatives[1, 1] = 0.0
-    derivatives[2, 1] = -porosity_times_volume * water_density
+    derivatives[2, 1] = -pore_volume
 
     # ∂R/∂S_g (column 2)
     derivatives[0, 2] = 0.0
-    derivatives[1, 2] = porosity_times_volume * gas_density
-    derivatives[2, 2] = -porosity_times_volume * water_density
+    derivatives[1, 2] = pore_volume
+    derivatives[2, 2] = -pore_volume
     return derivatives
 
 
-@numba.njit(
-    cache=True
-)
+@numba.njit(cache=True)
 def compute_phase_flux_derivatives(
     cell_index: typing.Tuple[int, int, int],
     neighbour_index: typing.Tuple[int, int, int],
-    cell_density: float,
-    neighbour_density: float,
     mobility_grid: ThreeDimensionalGrid,
     geometric_factor: float,
 ) -> typing.Tuple[float, float]:
@@ -108,13 +90,10 @@ def compute_phase_flux_derivatives(
     --------
     (dF_dP_cell, dF_dP_neighbour)
     """
-    harmonic_mobility = compute_harmonic_mobility(
-        index1=cell_index,
-        index2=neighbour_index,
-        mobility_grid=mobility_grid,
+    harmonic_mobility = compute_harmonic_mean(
+        mobility_grid[neighbour_index], mobility_grid[cell_index]
     )
-    harmonic_density = compute_harmonic_mean(cell_density, neighbour_density)
-    transmissibility = harmonic_mobility * harmonic_density * geometric_factor
+    transmissibility = harmonic_mobility * geometric_factor
 
     dF_dP_cell = -transmissibility
     dF_dP_neighbour = transmissibility
@@ -161,11 +140,6 @@ def assemble_jacobian(
     dx, dy = cell_dimension
     porosity_grid = rock_properties.porosity_grid
 
-    # Extract fluid property grids
-    oil_density_grid = fluid_properties.oil_effective_density_grid
-    gas_density_grid = fluid_properties.gas_density_grid
-    water_density_grid = fluid_properties.water_density_grid
-
     oil_compressibility_grid = fluid_properties.oil_compressibility_grid
     gas_compressibility_grid = fluid_properties.gas_compressibility_grid
     water_compressibility_grid = fluid_properties.water_compressibility_grid
@@ -197,20 +171,14 @@ def assemble_jacobian(
         if cell_1d_index < 0:
             continue
 
-        # Cell properties
         thickness = thickness_grid[i, j, k]
         cell_volume = dx * dy * thickness
         porosity = porosity_grid[i, j, k]
 
-        # Current state
         pressure = pressure_grid[i, j, k]
         oil_saturation = oil_saturation_grid[i, j, k]
         gas_saturation = gas_saturation_grid[i, j, k]
         water_saturation = water_saturation_grid[i, j, k]
-
-        oil_density = oil_density_grid[i, j, k]
-        gas_density = gas_density_grid[i, j, k]
-        water_density = water_density_grid[i, j, k]
 
         oil_compressibility = oil_compressibility_grid[i, j, k]
         gas_compressibility = gas_compressibility_grid[i, j, k]
@@ -225,9 +193,6 @@ def assemble_jacobian(
             oil_saturation=oil_saturation,
             gas_saturation=gas_saturation,
             water_saturation=water_saturation,
-            oil_density=oil_density,
-            gas_density=gas_density,
-            water_density=water_density,
             oil_compressibility=oil_compressibility,
             gas_compressibility=gas_compressibility,
             water_compressibility=water_compressibility,
@@ -248,34 +213,26 @@ def assemble_jacobian(
                 continue
 
             # Geometric factor and select correct mobility grid based on direction
-            cell_thickness = thickness_grid[i, j, k]
             if direction == "x":
-                geometric_factor = dy * cell_thickness / dx
+                geometric_factor = dy * thickness / dx
                 oil_mobility_grid = oil_mobility_grid_x
                 gas_mobility_grid = gas_mobility_grid_x
                 water_mobility_grid = water_mobility_grid_x
             elif direction == "y":
-                geometric_factor = dx * cell_thickness / dy
+                geometric_factor = dx * thickness / dy
                 oil_mobility_grid = oil_mobility_grid_y
                 gas_mobility_grid = gas_mobility_grid_y
                 water_mobility_grid = water_mobility_grid_y
             else:  # z
-                geometric_factor = dx * dy / cell_thickness
+                geometric_factor = dx * dy / thickness
                 oil_mobility_grid = oil_mobility_grid_z
                 gas_mobility_grid = gas_mobility_grid_z
                 water_mobility_grid = water_mobility_grid_z
-
-            # Get neighbour densities
-            neighbour_oil_density = oil_density_grid[ni, nj, nk]
-            neighbour_gas_density = gas_density_grid[ni, nj, nk]
-            neighbour_water_density = water_density_grid[ni, nj, nk]
 
             # Compute flux derivatives for each phase
             oil_dF_dP_current, _ = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=oil_density,
-                neighbour_density=neighbour_oil_density,
                 mobility_grid=oil_mobility_grid,
                 geometric_factor=geometric_factor,
             )
@@ -283,8 +240,6 @@ def assemble_jacobian(
             gas_dF_dP_current, _ = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=gas_density,
-                neighbour_density=neighbour_gas_density,
                 mobility_grid=gas_mobility_grid,
                 geometric_factor=geometric_factor,
             )
@@ -292,8 +247,6 @@ def assemble_jacobian(
             water_dF_dP_current, _ = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=water_density,
-                neighbour_density=neighbour_water_density,
                 mobility_grid=water_mobility_grid,
                 geometric_factor=geometric_factor,
             )
@@ -345,34 +298,26 @@ def assemble_jacobian(
             off_diagonal_block = np.zeros((3, 3), dtype=dtype)
 
             # Geometric factor and select correct mobility grid based on direction
-            cell_thickness = thickness_grid[i, j, k]
             if direction == "x":
-                geometric_factor = dy * cell_thickness / dx
+                geometric_factor = dy * thickness / dx
                 oil_mobility_grid = oil_mobility_grid_x
                 gas_mobility_grid = gas_mobility_grid_x
                 water_mobility_grid = water_mobility_grid_x
             elif direction == "y":
-                geometric_factor = dx * cell_thickness / dy
+                geometric_factor = dx * thickness / dy
                 oil_mobility_grid = oil_mobility_grid_y
                 gas_mobility_grid = gas_mobility_grid_y
                 water_mobility_grid = water_mobility_grid_y
             else:
-                geometric_factor = dx * dy / cell_thickness
+                geometric_factor = dx * dy / thickness
                 oil_mobility_grid = oil_mobility_grid_z
                 gas_mobility_grid = gas_mobility_grid_z
                 water_mobility_grid = water_mobility_grid_z
-
-            # Get neighbour densities
-            neighbour_oil_density = oil_density_grid[ni, nj, nk]
-            neighbour_gas_density = gas_density_grid[ni, nj, nk]
-            neighbour_water_density = water_density_grid[ni, nj, nk]
 
             # Compute derivatives w.r.t. neighbour pressure
             _, oil_dF_dP_neighbour = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=oil_density,
-                neighbour_density=neighbour_oil_density,
                 mobility_grid=oil_mobility_grid,
                 geometric_factor=geometric_factor,
             )
@@ -380,8 +325,6 @@ def assemble_jacobian(
             _, gas_dF_dP_neighbour = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=gas_density,
-                neighbour_density=neighbour_gas_density,
                 mobility_grid=gas_mobility_grid,
                 geometric_factor=geometric_factor,
             )
@@ -389,8 +332,6 @@ def assemble_jacobian(
             _, water_dF_dP_neighbour = compute_phase_flux_derivatives(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
-                cell_density=water_density,
-                neighbour_density=neighbour_water_density,
                 mobility_grid=water_mobility_grid,
                 geometric_factor=geometric_factor,
             )
