@@ -18,7 +18,7 @@ from bores.types import (
 
 
 @numba.njit(cache=True)
-def assmeble_accumulation_derivatives(
+def assemble_accumulation_derivatives(
     porosity: float,
     cell_volume: float,
     oil_saturation: float,
@@ -290,6 +290,126 @@ def compute_mobility_derivatives(
     return dλo_dSo, dλg_dSg, dλw_dSw
 
 
+def compute_capillary_pressure_derivative(
+    saturation: float,
+    saturation_min: float,
+    saturation_max: float,
+    pc_func: typing.Callable[[float], float],
+    absolute_perturbation: float,
+    relative_perturbation: float,
+    phase_appearance_tolerance: float = 1e-6,
+) -> float:
+    # Phase absent → no capillary gradient
+    if saturation <= saturation_min + phase_appearance_tolerance:
+        return 0.0
+
+    delta = compute_saturation_perturbation(
+        saturation=saturation,
+        saturation_min=saturation_min,
+        saturation_max=saturation_max,
+        absolute_perturbation=absolute_perturbation,
+        relative_perturbation=relative_perturbation,
+    )
+
+    can_forward = saturation + delta <= saturation_max
+    can_backward = saturation - delta >= saturation_min
+
+    if can_forward and can_backward:
+        pc_plus = pc_func(saturation + delta)
+        pc_minus = pc_func(saturation - delta)
+        return (pc_plus - pc_minus) / (2.0 * delta)
+
+    elif can_forward:
+        pc_plus = pc_func(saturation + delta)
+        pc_0 = pc_func(saturation)
+        return (pc_plus - pc_0) / delta
+
+    elif can_backward:
+        pc_0 = pc_func(saturation)
+        pc_minus = pc_func(saturation - delta)
+        return (pc_0 - pc_minus) / delta
+
+    return 0.0
+
+
+def compute_capillary_pressure_derivatives(
+    cell_index: typing.Tuple[int, int, int],
+    oil_saturation_grid: ThreeDimensionalGrid,
+    water_saturation_grid: ThreeDimensionalGrid,
+    gas_saturation_grid: ThreeDimensionalGrid,
+    residual_oil_saturation_water_grid: ThreeDimensionalGrid,
+    residual_oil_saturation_gas_grid: ThreeDimensionalGrid,
+    residual_gas_saturation_grid: ThreeDimensionalGrid,
+    irreducible_water_saturation_grid: ThreeDimensionalGrid,
+    capillary_pressure_table: CapillaryPressureTable,
+    absolute_perturbation: float = 1e-8,
+    relative_perturbation: float = 1e-6,
+    phase_appearance_tolerance: float = 1e-6,
+) -> typing.Tuple[float, float]:
+    i, j, k = cell_index
+
+    Sw = water_saturation_grid[i, j, k]
+    Sg = gas_saturation_grid[i, j, k]
+    So = oil_saturation_grid[i, j, k]
+
+    Sorw = residual_oil_saturation_water_grid[i, j, k]
+    Sorg = residual_oil_saturation_gas_grid[i, j, k]
+    Sgr = residual_gas_saturation_grid[i, j, k]
+    Swirr = irreducible_water_saturation_grid[i, j, k]
+
+    # Saturation bounds
+    Sw_min = Swirr
+    Sw_max = 1.0 - Sorw - Sgr
+
+    Sg_min = Sgr
+    Sg_max = 1.0 - Swirr - Sorg
+
+    # Pcow(Sw)
+    def pcow(S):
+        return capillary_pressure_table(
+            water_saturation=S,
+            oil_saturation=So,
+            gas_saturation=Sg,
+            irreducible_water_saturation=Swirr,
+            residual_oil_saturation_water=Sorw,
+            residual_oil_saturation_gas=Sorg,
+            residual_gas_saturation=Sgr,
+        )["oil_water"]
+
+    dPcow_dSw = compute_capillary_pressure_derivative(
+        saturation=Sw,
+        saturation_min=Sw_min,
+        saturation_max=Sw_max,
+        pc_func=pcow,
+        absolute_perturbation=absolute_perturbation,
+        relative_perturbation=relative_perturbation,
+        phase_appearance_tolerance=phase_appearance_tolerance,
+    )
+
+    # Pcgo(Sg)
+    def pcgo(S):
+        return capillary_pressure_table(
+            water_saturation=Sw,
+            oil_saturation=So,
+            gas_saturation=S,
+            irreducible_water_saturation=Swirr,
+            residual_oil_saturation_water=Sorw,
+            residual_oil_saturation_gas=Sorg,
+            residual_gas_saturation=Sgr,
+        )["gas_oil"]
+
+    dPcgo_dSg = compute_capillary_pressure_derivative(
+        saturation=Sg,
+        saturation_min=Sg_min,
+        saturation_max=Sg_max,
+        pc_func=pcgo,
+        absolute_perturbation=absolute_perturbation,
+        relative_perturbation=relative_perturbation,
+        phase_appearance_tolerance=phase_appearance_tolerance,
+    )
+    return dPcow_dSw, dPcgo_dSg
+
+
 def assemble_jacobian(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -332,6 +452,9 @@ def assemble_jacobian(
     gas_compressibility_grid = fluid_properties.gas_compressibility_grid
     water_compressibility_grid = fluid_properties.water_compressibility_grid
 
+    capillary_pressure_table = rock_fluid_properties.capillary_pressure_table
+    relative_permeability_table = rock_fluid_properties.relative_permeability_table
+
     _to_1d_index = functools.partial(
         to_1D_index_interior_only,
         cell_count_x=cell_count_x,
@@ -372,10 +495,8 @@ def assemble_jacobian(
         gas_compressibility = gas_compressibility_grid[i, j, k]
         water_compressibility = water_compressibility_grid[i, j, k]
 
-        # =====================================================================
         # DIAGONAL BLOCK: ∂R/∂x at current cell
-        # =====================================================================
-        diagonal_block = assmeble_accumulation_derivatives(
+        diagonal_block = assemble_accumulation_derivatives(
             porosity=porosity,
             cell_volume=cell_volume,
             oil_saturation=oil_saturation,
@@ -471,9 +592,7 @@ def assemble_jacobian(
                     row_offset, column_offset
                 ]
 
-        # =====================================================================
         # OFF-DIAGONAL BLOCKS: ∂R/∂x at neighbour cells
-        # =====================================================================
         for di, dj, dk, direction in neighbour_offsets:
             ni = i + di
             nj = j + dj

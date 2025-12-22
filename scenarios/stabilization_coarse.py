@@ -269,7 +269,7 @@ def _():
 
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
-            max_step_size=bores.Time(days=15.0),
+            max_step_size=bores.Time(days=5.0),
             min_step_size=bores.Time(hours=2.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,

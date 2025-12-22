@@ -95,7 +95,11 @@ class Timer:
         return self.step + 1
 
     def done(self) -> bool:
-        """Checks if the simulation has reached its end criteria."""
+        """
+        Checks if the simulation has reached its end criteria.
+
+        If True, simulation has reached it ends.
+        """
         if self.elapsed_time >= self.simulation_time:
             return True
 

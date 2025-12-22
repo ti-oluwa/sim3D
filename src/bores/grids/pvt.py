@@ -293,18 +293,19 @@ def build_three_phase_relative_permeabilities_grids(
     gas_relative_permeability_grid = build_uniform_grid(
         grid_shape=water_saturation_grid.shape, value=0.0
     )
+    nx, ny, nz = water_saturation_grid.shape
 
-    for indices in itertools.product(*map(range, water_saturation_grid.shape)):
+    for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
         # Get current saturations for the cell
-        water_saturation = water_saturation_grid[indices]
-        oil_saturation = oil_saturation_grid[indices]
-        gas_saturation = gas_saturation_grid[indices]
+        water_saturation = water_saturation_grid[i, j, k]
+        oil_saturation = oil_saturation_grid[i, j, k]
+        gas_saturation = gas_saturation_grid[i, j, k]
 
         # Get cell-specific rock properties
-        irreducible_water_saturation = irreducible_water_saturation_grid[indices]
-        residual_oil_saturation_water = residual_oil_saturation_water_grid[indices]
-        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
-        residual_gas_saturation = residual_gas_saturation_grid[indices]
+        irreducible_water_saturation = irreducible_water_saturation_grid[i, j, k]
+        residual_oil_saturation_water = residual_oil_saturation_water_grid[i, j, k]
+        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[i, j, k]
+        residual_gas_saturation = residual_gas_saturation_grid[i, j, k]
 
         # Compute three-phase relative permeabilities
         relative_permeabilities = relative_permeability_table(
@@ -322,7 +323,7 @@ def build_three_phase_relative_permeabilities_grids(
             effective_residual_oil_saturation = residual_oil_saturation_water
         else:
             effective_residual_oil_saturation = residual_oil_saturation_gas
-        
+
         water_inactive = (
             water_saturation
             <= irreducible_water_saturation + phase_appearance_tolerance
@@ -334,13 +335,13 @@ def build_three_phase_relative_permeabilities_grids(
         gas_inactive = (
             gas_saturation <= residual_gas_saturation + phase_appearance_tolerance
         )
-        water_relative_permeability_grid[indices] = (
+        water_relative_permeability_grid[i, j, k] = (
             relative_permeabilities["water"] if not water_inactive else 0.0
         )
-        oil_relative_permeability_grid[indices] = (
+        oil_relative_permeability_grid[i, j, k] = (
             relative_permeabilities["oil"] if not oil_inactive else 0.0
         )
-        gas_relative_permeability_grid[indices] = (
+        gas_relative_permeability_grid[i, j, k] = (
             relative_permeabilities["gas"] if not gas_inactive else 0.0
         )
 

@@ -218,7 +218,7 @@ class RockProperties(PadMixin[NDimension]):
 
     def pad(
         self,
-        pad_width: int,
+        pad_width: int = 1,
         hook: typing.Optional[
             typing.Callable[
                 [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
@@ -230,7 +230,20 @@ class RockProperties(PadMixin[NDimension]):
         padded_absolute_permeability = self.absolute_permeability.pad(
             pad_width=pad_width, hook=hook, exclude=exclude
         )
-        return attrs.evolve(padded, absolute_permeability=padded_absolute_permeability)
+        object.__setattr__(
+            padded, "absolute_permeability", padded_absolute_permeability
+        )
+        return padded
+
+    def unpad(self, pad_width: int = 1) -> Self:
+        unpadded = super().unpad(pad_width=pad_width)
+        unpadded_absolute_permeability = self.absolute_permeability.unpad(
+            pad_width=pad_width
+        )
+        object.__setattr__(
+            unpadded, "absolute_permeability", unpadded_absolute_permeability
+        )
+        return unpadded
 
 
 @attrs.frozen(slots=True)

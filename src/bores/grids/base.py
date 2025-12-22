@@ -596,7 +596,7 @@ class PadMixin(typing.Generic[NDimension]):
 
     def pad(
         self,
-        pad_width: int,
+        pad_width: int = 1,
         hook: typing.Optional[
             typing.Callable[
                 [NDimensionalGrid[NDimension]], NDimensionalGrid[NDimension]
@@ -618,20 +618,30 @@ class PadMixin(typing.Generic[NDimension]):
             )
 
         target_fields = self.get_paddable_fields()
-        padded_fields = {}
+        padded_fields_values = {}
+        non_init_fields_values = {}
         for field in target_fields:
             value = getattr(self, field.name)
             if not isinstance(value, np.ndarray):
                 raise TypeError(
                     f"Field '{field.name}' is not a numpy array and cannot be padded"
                 )
+
             padded_value = pad_grid(grid=value, pad_width=pad_width)
             if hook and (not exclude or field.name not in exclude):
                 padded_value = hook(padded_value)
-            padded_fields[field.name] = padded_value
-        return attrs.evolve(self, **padded_fields)
 
-    def unpad(self, pad_width: int) -> Self:
+            if not field.init:
+                non_init_fields_values[field.name] = padded_value
+            else:
+                padded_fields_values[field.name] = padded_value
+
+        instance = attrs.evolve(self, **padded_fields_values)
+        for name, value in non_init_fields_values:
+            object.__setattr__(instance, name, value)
+        return instance
+
+    def unpad(self, pad_width: int = 1) -> Self:
         """
         Remove padding from all numpy array fields in the attrs class.
 
@@ -644,16 +654,25 @@ class PadMixin(typing.Generic[NDimension]):
             )
 
         target_fields = self.get_paddable_fields()
-        unpadded_fields = {}
+        unpadded_fields_values = {}
+        non_init_fields_values = {}
         for field in target_fields:
             value = getattr(self, field.name)
             if not isinstance(value, np.ndarray):
                 raise TypeError(
                     f"Field '{field.name}' is not a numpy array and cannot be padded"
                 )
+
             padded_value = unpad_grid(grid=value, pad_width=pad_width)
-            unpadded_fields[field.name] = padded_value
-        return attrs.evolve(self, **unpadded_fields)
+            if not field.init:
+                non_init_fields_values[field.name] = padded_value
+            else:
+                unpadded_fields_values[field.name] = padded_value
+
+        instance = attrs.evolve(self, **unpadded_fields_values)
+        for name, value in non_init_fields_values:
+            object.__setattr__(instance, name, value)
+        return instance
 
     def apply_hook(
         self,
