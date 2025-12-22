@@ -63,7 +63,7 @@ def get_neighbor_indices(
 
     Example usage:
     ```python
-    from bores.boundaries import get_neighbor_indices, BoundaryDirection
+    from bores.boundary_conditions import get_neighbor_indices, BoundaryDirection
 
     # For left boundary (x=0 ghost cells)
     boundary_slice = (slice(0, 1), slice(None))
@@ -111,7 +111,7 @@ class BoundaryMetadata:
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import BoundaryMetadata, SpatialBoundary
+    from bores.boundary_conditions import BoundaryMetadata, SpatialBoundary
 
     # Option 1: Auto-generate 2D coordinates from cell dimensions and grid shape
     metadata_2d = BoundaryMetadata(
@@ -313,7 +313,7 @@ class NoFlowBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import NoFlowBoundary, GridBoundaryCondition, get_neighbor_indices
+    from bores.boundary_conditions import NoFlowBoundary, GridBoundaryCondition, get_neighbor_indices
 
     # Create a sealed reservoir boundary
     sealed_boundary = NoFlowBoundary()
@@ -361,7 +361,7 @@ class ConstantBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import ConstantBoundary, GridBoundaryCondition
+    from bores.boundary_conditions import ConstantBoundary, GridBoundaryCondition
 
     # Create constant pressure inlet at 2000 psi
     pressure_inlet = ConstantBoundary(constant=2000.0)
@@ -412,7 +412,7 @@ class VariableBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import VariableBoundary, BoundaryDirection, get_neighbor_indices
+    from bores.boundary_conditions import VariableBoundary, BoundaryDirection, get_neighbor_indices
 
     def pressure_gradient_func(grid, boundary_indices, direction, metadata):
         # Example: Pressure increases with depth
@@ -488,7 +488,7 @@ class SpatialBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import SpatialBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import SpatialBoundary, BoundaryMetadata, GridBoundaryCondition
 
     # Create coordinate grid (1000 ft x 500 ft reservoir)
     x_coords = np.linspace(0, 1000, 51)  # 0 to 1000 ft
@@ -587,7 +587,7 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import TimeDependentBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import TimeDependentBoundary, BoundaryMetadata, GridBoundaryCondition
 
     # Example 1: Sinusoidal injection pressure (daily cycle)
     daily_cycle = TimeDependentBoundary(
@@ -659,7 +659,7 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import LinearGradientBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import LinearGradientBoundary, BoundaryMetadata, GridBoundaryCondition
 
     # Create coordinate grid for a 1000x500 ft reservoir
     x_coords = np.linspace(0, 1000, 51)
@@ -771,7 +771,7 @@ class FluxBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundaries import FluxBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import FluxBoundary, BoundaryMetadata, GridBoundaryCondition
 
     # Define cell dimensions (20x20 ft cells)
     cell_dims = (20.0, 20.0)
@@ -1005,7 +1005,7 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
     Example usage with the new enhanced boundary conditions:
     ```python
     import numpy as np
-    from bores.boundaries import *
+    from bores.boundary_conditions import *
 
     # Create coordinate metadata for spatial boundaries
     x_coords = np.linspace(0, 1000, 50)  # 1000 ft wide

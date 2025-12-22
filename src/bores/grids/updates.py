@@ -1,17 +1,8 @@
-import logging
-import typing
-
 import attrs
+import typing
 import numpy as np
 
 from bores._precision import get_dtype
-from bores.boundaries import BoundaryConditions, BoundaryMetadata, default_bc
-from bores.grids.base import (
-    CapillaryPressureGrids,
-    RelPermGrids,
-    RelativeMobilityGrids,
-    build_uniform_grid,
-)
 from bores.grids.pvt import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -28,276 +19,27 @@ from bores.grids.pvt import (
     build_oil_formation_volume_factor_grid,
     build_oil_viscosity_grid,
     build_solution_gas_to_oil_ratio_grid,
-    build_three_phase_capillary_pressure_grids,
-    build_three_phase_relative_mobilities_grids,
-    build_three_phase_relative_permeabilities_grids,
     build_water_bubble_point_pressure_grid,
     build_water_compressibility_grid,
     build_water_density_grid,
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from bores.models import FluidProperties, RockFluidProperties, RockProperties
-from bores.types import (
-    MiscibilityModel,
-    NDimension,
-    NDimensionalGrid,
-    RelativeMobilityRange,
-    ThreeDimensions,
-)
+from bores.models import FluidProperties, SaturationHistory, RockProperties
+from bores.types import MiscibilityModel, NDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
-
-logger = logging.getLogger(__name__)
-
-
-def _mirror_neighbour(
-    grid: NDimensionalGrid[NDimension],
-) -> NDimensionalGrid[NDimension]:
-    """Mirrors the neighbour cells for boundary padding."""
-    default_bc.apply(grid)
-    return grid
+from bores.grids.rock_fluid import build_effective_residual_saturation_grids
 
 
-def apply_boundary_conditions(
-    fluid_properties: FluidProperties[ThreeDimensions],
-    rock_properties: RockProperties[ThreeDimensions],
-    boundary_conditions: BoundaryConditions[ThreeDimensions],
-    cell_dimension: typing.Tuple[float, float],
-    grid_shape: typing.Tuple[int, int, int],
-    thickness_grid: NDimensionalGrid[ThreeDimensions],
-    time: float,
-) -> typing.Tuple[FluidProperties, RockProperties]:
-    """
-    Applies boundary conditions to the fluid property grids.
-
-    :param fluid_properties: The padded fluid properties.
-    :param rock_properties: The padded rock properties.
-    :param boundary_conditions: The boundary conditions to apply.
-    :param cell_dimension: The dimensions of each grid cell.
-    :param grid_shape: The shape of the simulation grid.
-    :param thickness_grid: The (unpadded) thickness grid of the reservoir.
-    :param time: The current simulation time.
-    """
-    boundary_conditions["pressure"].apply(
-        fluid_properties.pressure_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time,
-            grid_shape=grid_shape,
-            property_name="pressure",
-        ),
-    )
-    boundary_conditions["oil_saturation"].apply(
-        fluid_properties.oil_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time,
-            grid_shape=grid_shape,
-            property_name="oil_saturation",
-        ),
-    )
-    boundary_conditions["water_saturation"].apply(
-        fluid_properties.water_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time,
-            grid_shape=grid_shape,
-            property_name="water_saturation",
-        ),
-    )
-    boundary_conditions["gas_saturation"].apply(
-        fluid_properties.gas_saturation_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time,
-            grid_shape=grid_shape,
-            property_name="gas_saturation",
-        ),
-    )
-    boundary_conditions["temperature"].apply(
-        fluid_properties.temperature_grid,
-        metadata=BoundaryMetadata(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            time=time,
-            grid_shape=grid_shape,
-            property_name="temperature",
-        ),
-    )
-    # Clamp saturations to [0, 1] after applying BCs
-    dtype = get_dtype()
-    fluid_properties.oil_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.oil_saturation_grid, dtype=dtype
-    )
-    fluid_properties.water_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.water_saturation_grid, dtype=dtype
-    )
-    fluid_properties.gas_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.gas_saturation_grid, dtype=dtype
-    )
-    excluded_fluid_properties = (
-        "pressure_grid",
-        "oil_saturation_grid",
-        "water_saturation_grid",
-        "gas_saturation_grid",
-        "temperature_grid",
-    )
-    fluid_properties = fluid_properties.apply_hook(
-        hook=_mirror_neighbour, exclude=excluded_fluid_properties
-    )
-    rock_properties = rock_properties.apply_hook(hook=_mirror_neighbour)
-    return fluid_properties, rock_properties
-
-
-def build_rock_fluid_properties_grids(
-    fluid_properties: FluidProperties[ThreeDimensions],
-    rock_properties: RockProperties[ThreeDimensions],
-    rock_fluid_properties: RockFluidProperties,
-    disable_capillary_effects: bool = False,
-    capillary_strength_factor: float = 1.0,
-    relative_mobility_range: typing.Optional[RelativeMobilityRange] = None,
-) -> typing.Tuple[
-    RelPermGrids[ThreeDimensions],
-    RelativeMobilityGrids[ThreeDimensions],
-    CapillaryPressureGrids[ThreeDimensions],
-]:
-    """
-    Builds the rock-fluid properties grids required for simulation.
-
-    :param fluid_properties: `FluidProperties` object containing fluid property grids.
-    :param rock_properties: `RockProperties` object containing rock property grids.
-    :param rock_fluid_properties: `RockFluidProperties` object containing rock-fluid property tables.
-    :param disable_capillary_effects: If True, capillary effects are disabled (zero capillary pressures).
-    :param capillary_strength_factor: Factor to scale capillary pressure grids.
-    :param relative_mobility_range: Optional clamping range for relative mobility grids.
-    :return: A tuple containing:
-        - RelPermGrids: Relative permeability grids for oil, water, and gas.
-        - RelativeMobilityGrids: Relative mobility grids for oil, water, and gas.
-        - CapillaryPressureGrids: Capillary pressure grids for oil-water and gas-oil.
-    """
-    # Collect and clamp saturation grids
-    water_saturation_grid = fluid_properties.water_saturation_grid
-    oil_saturation_grid = fluid_properties.oil_saturation_grid
-    gas_saturation_grid = fluid_properties.gas_saturation_grid
-    irreducible_water_saturation_grid = (
-        rock_properties.irreducible_water_saturation_grid
-    )
-    residual_oil_saturation_water_grid = (
-        rock_properties.residual_oil_saturation_water_grid
-    )
-    residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
-    residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
-    water_viscosity_grid = fluid_properties.water_viscosity_grid
-    oil_viscosity_grid = fluid_properties.oil_effective_viscosity_grid
-    gas_viscosity_grid = fluid_properties.gas_viscosity_grid
-    relperm_table = rock_fluid_properties.relative_permeability_table
-    capillary_pressure_table = rock_fluid_properties.capillary_pressure_table
-    krw_grid, kro_grid, krg_grid = build_three_phase_relative_permeabilities_grids(
-        water_saturation_grid=water_saturation_grid,
-        oil_saturation_grid=oil_saturation_grid,
-        gas_saturation_grid=gas_saturation_grid,
-        irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-        residual_gas_saturation_grid=residual_gas_saturation_grid,
-        relative_permeability_table=relperm_table,
-    )
-    (
-        water_relative_mobility_grid,
-        oil_relative_mobility_grid,
-        gas_relative_mobility_grid,
-    ) = build_three_phase_relative_mobilities_grids(
-        oil_relative_permeability_grid=kro_grid,
-        water_relative_permeability_grid=krw_grid,
-        gas_relative_permeability_grid=krg_grid,
-        water_viscosity_grid=water_viscosity_grid,
-        oil_viscosity_grid=oil_viscosity_grid,
-        gas_viscosity_grid=gas_viscosity_grid,
-    )
-
-    if relative_mobility_range is not None:
-        # Clamp relative mobility grids to avoid numerical issues
-        water_relative_mobility_grid = relative_mobility_range["water"].clip(
-            water_relative_mobility_grid
-        )
-        oil_relative_mobility_grid = relative_mobility_range["oil"].clip(
-            oil_relative_mobility_grid
-        )
-        gas_relative_mobility_grid = relative_mobility_range["gas"].clip(
-            gas_relative_mobility_grid
-        )
-
-    if disable_capillary_effects:
-        logger.debug("Capillary effects disabled; using zero capillary pressure grids")
-        oil_water_capillary_pressure_grid = build_uniform_grid(
-            grid_shape=water_saturation_grid.shape, value=0.0
-        )
-        gas_oil_capillary_pressure_grid = build_uniform_grid(
-            grid_shape=water_saturation_grid.shape, value=0.0
-        )
-    else:
-        (
-            oil_water_capillary_pressure_grid,
-            gas_oil_capillary_pressure_grid,
-        ) = build_three_phase_capillary_pressure_grids(
-            water_saturation_grid=water_saturation_grid,
-            gas_saturation_grid=gas_saturation_grid,
-            irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-            residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-            residual_gas_saturation_grid=residual_gas_saturation_grid,
-            capillary_pressure_table=capillary_pressure_table,
-        )
-        if capillary_strength_factor != 1.0:
-            logger.debug(
-                f"Scaling capillary pressure grids by factor {capillary_strength_factor}"
-            )
-            oil_water_capillary_pressure_grid = typing.cast(
-                NDimensionalGrid[ThreeDimensions],
-                oil_water_capillary_pressure_grid * capillary_strength_factor,
-            )
-            gas_oil_capillary_pressure_grid = typing.cast(
-                NDimensionalGrid[ThreeDimensions],
-                gas_oil_capillary_pressure_grid * capillary_strength_factor,
-            )
-
-    padded_relperm_grids = RelPermGrids(
-        oil_relative_permeability=kro_grid,
-        water_relative_permeability=krw_grid,
-        gas_relative_permeability=krg_grid,
-    )
-    padded_relative_mobility_grids = RelativeMobilityGrids(
-        water_relative_mobility=water_relative_mobility_grid,
-        oil_relative_mobility=oil_relative_mobility_grid,
-        gas_relative_mobility=gas_relative_mobility_grid,
-    )
-    padded_relative_mobility_grids = typing.cast(
-        RelativeMobilityGrids[ThreeDimensions], padded_relative_mobility_grids
-    )
-    padded_capillary_pressure_grids = CapillaryPressureGrids[ThreeDimensions](
-        oil_water_capillary_pressure=oil_water_capillary_pressure_grid,
-        gas_oil_capillary_pressure=gas_oil_capillary_pressure_grid,
-    )
-    return (
-        padded_relperm_grids,
-        padded_relative_mobility_grids,
-        padded_capillary_pressure_grids,
-    )
-
-
-def update_phase_densities(
+def update_density_grids(
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     miscibility_model: MiscibilityModel,
 ) -> FluidProperties[ThreeDimensions]:
     """
-    Updates only the phase density grids based on current pressure, temperature, and composition.
+    Updates phase density grids based on current pressure, temperature, and composition.
 
-    This is a lightweight version of update_pvt_properties that only recalculates densities,
+    This is a simplified version of `update_pvt_grids` that only recalculates densities,
     making it suitable for use in perturbation calculations where only densities are needed.
 
     Updates:
@@ -421,13 +163,13 @@ def update_phase_densities(
     return updated_fluid_properties
 
 
-def update_pvt_properties(
+def update_pvt_grids(
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     miscibility_model: MiscibilityModel,
 ) -> FluidProperties[ThreeDimensions]:
     """
-    Updates PVT fluid properties across the simulation grid using the current pressure and temperature values.
+    Updates PVT fluid properties grids using the current pressure and temperature values.
     This function recalculates the fluid PVT properties in a physically consistent sequence:
 
     ```markdown
@@ -694,3 +436,77 @@ def update_pvt_properties(
         gas_density_grid=new_gas_density_grid,
     )
     return updated_fluid_properties
+
+
+def update_residual_saturation_grids(
+    rock_properties: RockProperties[ThreeDimensions],
+    saturation_history: SaturationHistory[ThreeDimensions],
+    water_saturation_grid: NDimensionalGrid[ThreeDimensions],
+    gas_saturation_grid: NDimensionalGrid[ThreeDimensions],
+    residual_oil_drainage_ratio_water_flood: float = 0.6,  # Sorw_drainage = 0.6 × Sorw_imbibition
+    residual_oil_drainage_ratio_gas_flood: float = 0.6,  # Sorg_drainage = 0.6 × Sorg_imbibition
+    residual_gas_drainage_ratio: float = 0.5,  # Sgr_drainage = 0.5 × Sgr_imbibition
+    tolerance: float = 1e-6,
+) -> typing.Tuple[RockProperties[ThreeDimensions], SaturationHistory[ThreeDimensions]]:
+    """
+    Updates the effective residual saturation grids based on current displacement regimes
+    (drainage or imbibition) determined from saturation history and current saturations.
+
+    :param rock_properties: Current rock properties including residual saturations
+    :param saturation_history: Current saturation history including max saturations and imbibition flags
+    :param water_saturation_grid: Current water saturation grid
+    :param gas_saturation_grid: Current gas saturation grid
+    :param residual_oil_drainage_ratio_water_flood: Ratio to compute oil drainage residual from imbibition value.
+    :param residual_gas_drainage_ratio: Ratio to compute gas drainage residual from imbibition value.
+    :param residual_oil_drainage_ratio_gas_flood: Ratio to compute oil drainage residual from gas flooding imbibition value.
+    :param tolerance: Tolerance to determine significant saturation changes.
+    :return: Tuple of updated `RockProperties` and `SaturationHistory` with new effective residual saturations
+    """
+    residual_oil_saturation_water_grid = (
+        rock_properties.residual_oil_saturation_water_grid
+    )
+    residual_oil_saturation_gas_grid = rock_properties.residual_oil_saturation_gas_grid
+    residual_gas_saturation_grid = rock_properties.residual_gas_saturation_grid
+    max_water_saturation_grid = saturation_history.max_water_saturation_grid
+    max_gas_saturation_grid = saturation_history.max_gas_saturation_grid
+    water_imbibition_flag_grid = saturation_history.water_imbibition_flag_grid
+    gas_imbibition_flag_grid = saturation_history.gas_imbibition_flag_grid
+
+    (
+        new_max_water_saturation_grid,
+        new_max_gas_saturation_grid,
+        effective_residual_oil_saturation_water_grid,
+        effective_residual_oil_saturation_gas_grid,
+        effective_residual_gas_saturation_grid,
+        new_water_imbibition_flag_grid,
+        new_gas_imbibition_flag_grid,
+    ) = build_effective_residual_saturation_grids(
+        water_saturation_grid=water_saturation_grid,
+        gas_saturation_grid=gas_saturation_grid,
+        residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+        residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+        residual_gas_saturation_grid=residual_gas_saturation_grid,
+        max_water_saturation_grid=max_water_saturation_grid,
+        max_gas_saturation_grid=max_gas_saturation_grid,
+        water_imbibition_flag_grid=water_imbibition_flag_grid,
+        gas_imbibition_flag_grid=gas_imbibition_flag_grid,
+        residual_oil_drainage_ratio_water_flood=residual_oil_drainage_ratio_water_flood,
+        residual_oil_drainage_ratio_gas_flood=residual_oil_drainage_ratio_gas_flood,
+        residual_gas_drainage_ratio=residual_gas_drainage_ratio,
+        tolerance=tolerance,
+    )
+
+    updated_rock_properties = attrs.evolve(
+        rock_properties,
+        residual_oil_saturation_water_grid=effective_residual_oil_saturation_water_grid,
+        residual_oil_saturation_gas_grid=effective_residual_oil_saturation_gas_grid,
+        residual_gas_saturation_grid=effective_residual_gas_saturation_grid,
+    )
+    updated_saturation_history = attrs.evolve(
+        saturation_history,
+        max_water_saturation_grid=new_max_water_saturation_grid,
+        max_gas_saturation_grid=new_max_gas_saturation_grid,
+        water_imbibition_flag_grid=new_water_imbibition_flag_grid,
+        gas_imbibition_flag_grid=new_gas_imbibition_flag_grid,
+    )
+    return updated_rock_properties, updated_saturation_history

@@ -1,7 +1,7 @@
 """
 *BORES*
 
-3D 3-Phase black-oil reservoir modelling and simulation framework.
+3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework.
 """
 
 from ._precision import *  # noqa
@@ -10,7 +10,7 @@ from .simulate import *  # noqa
 from .constants import *  # noqa
 from .grids import *  # noqa
 from .factories import *  # noqa
-from .boundaries import *  # noqa
+from .boundary_conditions import *  # noqa
 from .wells import *  # noqa
 from .types import *  # noqa
 from .relperm import *  # noqa

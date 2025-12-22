@@ -212,7 +212,7 @@ def evolve_pressure_implicitly(
 
     # Solve the linear system A·pⁿ⁺¹ = b
     try:
-        new_1D_pressure_grid = solve_linear_system(
+        new_1D_pressure_grid, _ = solve_linear_system(
             A_csr=A.tocsr(),
             b=b,
             max_iterations=config.max_iterations,

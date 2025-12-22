@@ -10,9 +10,11 @@ import attrs
 import numba
 import numpy as np
 from scipy.sparse import lil_matrix
+from scipy.sparse.linalg import LinearOperator
 
 from bores._precision import get_dtype
-from bores.boundaries import BoundaryConditions
+from bores.boundary_conditions import BoundaryConditions
+from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
@@ -20,12 +22,11 @@ from bores.diffusivity.base import (
     solve_linear_system,
     to_1D_index_interior_only,
 )
+from bores.diffusivity.implicit.jacobian import assemble_jacobian
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
-from bores.helpers import (
-    apply_boundary_conditions,
-    build_rock_fluid_properties_grids,
-    update_pvt_properties,
-)
+from bores.grids.boundary_conditions import apply_boundary_conditions
+from bores.grids.rock_fluid import build_rock_fluid_properties_grids
+from bores.grids.updates import update_pvt_grids
 from bores.models import FluidProperties, RockFluidProperties, RockProperties
 from bores.pvt.core import compute_harmonic_mean
 from bores.types import (
@@ -34,9 +35,8 @@ from bores.types import (
     ThreeDimensionalGrid,
     ThreeDimensions,
 )
-from bores.config import Config
+from bores.utils import clip
 from bores.wells import Wells
-from bores.diffusivity.implicit.jacobian import assemble_jacobian
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ def evolve_fully_implicit(
     ] = None,
 ) -> EvolutionResult[ImplicitSolution, None]:
     """
-    Solve fully implicit finite-difference equations for pressure and saturations (optimized with Numba JIT).
+    Solve fully implicit finite-difference equations for pressure and saturations.
 
     :param cell_dimension: (dx, dy) in feet
     :param thickness_grid: Cell thickness (dz) grid in feet
@@ -108,16 +108,24 @@ def evolve_fully_implicit(
     :return: `EvolutionResult` containing `ImplicitSolution` with updated pressure and saturations
     """
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
-    old_fluid_properties = fluid_properties
+    old_oil_saturation_grid = fluid_properties.oil_saturation_grid.copy()
+    old_gas_saturation_grid = fluid_properties.gas_saturation_grid.copy()
+    old_water_saturation_grid = fluid_properties.water_saturation_grid.copy()
+
     pressure_grid = fluid_properties.pressure_grid.copy()
     oil_saturation_grid = fluid_properties.oil_saturation_grid.copy()
     gas_saturation_grid = fluid_properties.gas_saturation_grid.copy()
     water_saturation_grid = fluid_properties.water_saturation_grid.copy()
 
+    porosity_grid = rock_properties.porosity_grid
+    absolute_permeability_x = rock_properties.absolute_permeability.x
+    absolute_permeability_y = rock_properties.absolute_permeability.y
+    absolute_permeability_z = rock_properties.absolute_permeability.z
+
     cell_count_x, cell_count_y, cell_count_z = pressure_grid.shape
 
     max_newton_iterations = config.max_iterations
-    convergence_tolerance = 1e-6
+    convergence_tolerance = config.convergence_tolerance
     converged = False
     iteration = 0
     initial_residual_norm = 0.0
@@ -142,14 +150,15 @@ def evolve_fully_implicit(
         c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY
     )
     acceleration_due_to_gravity_ft_per_s2 = c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+
     for iteration in range(max_newton_iterations):
         logger.debug(
             "Pre-computing mobility grids and well rates for iteration %d...", iteration
         )
         mobility_grids = compute_mobility_grids(
-            absolute_permeability_x=rock_properties.absolute_permeability.x,
-            absolute_permeability_y=rock_properties.absolute_permeability.y,
-            absolute_permeability_z=rock_properties.absolute_permeability.z,
+            absolute_permeability_x=absolute_permeability_x,
+            absolute_permeability_y=absolute_permeability_y,
+            absolute_permeability_z=absolute_permeability_z,
             water_relative_mobility_grid=relative_mobility_grids.water_relative_mobility,
             oil_relative_mobility_grid=relative_mobility_grids.oil_relative_mobility,
             gas_relative_mobility_grid=relative_mobility_grids.gas_relative_mobility,
@@ -160,13 +169,13 @@ def evolve_fully_implicit(
             cell_count_y=cell_count_y,
             cell_count_z=cell_count_z,
             wells=wells,
-            pressure_grid=fluid_properties.pressure_grid,
+            pressure_grid=pressure_grid,
             temperature_grid=fluid_properties.temperature_grid,
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
-            absolute_permeability_x=rock_properties.absolute_permeability.x,
-            absolute_permeability_y=rock_properties.absolute_permeability.y,
-            absolute_permeability_z=rock_properties.absolute_permeability.z,
+            absolute_permeability_x=absolute_permeability_x,
+            absolute_permeability_y=absolute_permeability_y,
+            absolute_permeability_z=absolute_permeability_z,
             fluid_properties=fluid_properties,
             relative_mobility_grids=relative_mobility_grids,
             config=config,
@@ -183,17 +192,17 @@ def evolve_fully_implicit(
         oil_well_rate_grid, gas_well_rate_grid, water_well_rate_grid = well_rate_grids
 
         residual_vector = assemble_residual_vector(
-            pressure_grid=fluid_properties.pressure_grid,
-            oil_saturation_grid=fluid_properties.oil_saturation_grid,
-            gas_saturation_grid=fluid_properties.gas_saturation_grid,
-            water_saturation_grid=fluid_properties.water_saturation_grid,
-            old_oil_saturation_grid=old_fluid_properties.oil_saturation_grid,
-            old_gas_saturation_grid=old_fluid_properties.gas_saturation_grid,
-            old_water_saturation_grid=old_fluid_properties.water_saturation_grid,
+            pressure_grid=pressure_grid,
+            oil_saturation_grid=oil_saturation_grid,
+            gas_saturation_grid=gas_saturation_grid,
+            water_saturation_grid=water_saturation_grid,
+            old_oil_saturation_grid=old_oil_saturation_grid,
+            old_gas_saturation_grid=old_gas_saturation_grid,
+            old_water_saturation_grid=old_water_saturation_grid,
             oil_density_grid=fluid_properties.oil_effective_density_grid,
             gas_density_grid=fluid_properties.gas_density_grid,
             water_density_grid=fluid_properties.water_density_grid,
-            porosity_grid=rock_properties.porosity_grid,
+            porosity_grid=porosity_grid,
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
             elevation_grid=elevation_grid,
@@ -278,7 +287,6 @@ def evolve_fully_implicit(
         jacobian = assemble_jacobian(
             cell_dimension=cell_dimension,
             thickness_grid=thickness_grid,
-            elevation_grid=elevation_grid,
             pressure_grid=pressure_grid,
             oil_saturation_grid=oil_saturation_grid,
             gas_saturation_grid=gas_saturation_grid,
@@ -286,6 +294,7 @@ def evolve_fully_implicit(
             time_step_size=time_step_in_days,
             rock_properties=rock_properties,
             fluid_properties=fluid_properties,
+            rock_fluid_properties=rock_fluid_properties,
             oil_mobility_grid_x=oil_mobility_grid_x,
             oil_mobility_grid_y=oil_mobility_grid_y,
             oil_mobility_grid_z=oil_mobility_grid_z,
@@ -298,10 +307,8 @@ def evolve_fully_implicit(
             oil_well_rate_grid=oil_well_rate_grid,
             gas_well_rate_grid=gas_well_rate_grid,
             water_well_rate_grid=water_well_rate_grid,
-            pcow_grid=capillary_pressure_grids.oil_water_capillary_pressure,
-            pcgo_grid=capillary_pressure_grids.gas_oil_capillary_pressure,
-            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
             dtype=dtype,
+            phase_appearance_tolerance=config.phase_appearance_tolerance,
         )
         jacobian_csr = jacobian.tocsr()
         diag = jacobian_csr.diagonal()
@@ -313,7 +320,7 @@ def evolve_fully_implicit(
         )
         logger.info(f"Jacobian nnz: {jacobian_csr.nnz}")
 
-        update_vector = solve_newton_update_system(
+        update_vector, preconditioner = solve_newton_update_system(
             jacobian=jacobian,
             residual_vector=residual_vector,
             config=config,
@@ -355,7 +362,7 @@ def evolve_fully_implicit(
             time=time_step * time_step_size,
         )
         # Update other PVT properties based on new pressure and saturations
-        fluid_properties = update_pvt_properties(
+        fluid_properties = update_pvt_grids(
             fluid_properties=fluid_properties,
             wells=wells,
             miscibility_model=config.miscibility_model,
@@ -366,9 +373,18 @@ def evolve_fully_implicit(
             relative_mobility_grids,
             capillary_pressure_grids,
         ) = build_rock_fluid_properties_grids(
-            fluid_properties=fluid_properties,
-            rock_properties=rock_properties,
-            rock_fluid_properties=rock_fluid_properties,
+            water_saturation_grid=water_saturation_grid,
+            oil_saturation_grid=oil_saturation_grid,
+            gas_saturation_grid=gas_saturation_grid,
+            irreducible_water_saturation_grid=rock_properties.irreducible_water_saturation_grid,
+            residual_oil_saturation_water_grid=rock_properties.residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid=rock_properties.residual_oil_saturation_gas_grid,
+            residual_gas_saturation_grid=rock_properties.residual_gas_saturation_grid,
+            water_viscosity_grid=fluid_properties.water_viscosity_grid,
+            oil_viscosity_grid=fluid_properties.oil_viscosity_grid,
+            gas_viscosity_grid=fluid_properties.gas_viscosity_grid,
+            relative_permeability_table=rock_fluid_properties.relative_permeability_table,
+            capillary_pressure_table=rock_fluid_properties.capillary_pressure_table,
             disable_capillary_effects=config.disable_capillary_effects,
             capillary_strength_factor=config.capillary_strength_factor,
             relative_mobility_range=config.relative_mobility_range,
@@ -392,7 +408,7 @@ def compute_accumulation_terms(
     oil_saturation: float,
     gas_saturation: float,
     water_saturation: float,
-    cell_volume: float = 1.0,
+    cell_volume: float,
 ) -> typing.Tuple[float, float, float]:
     """
     Compute accumulation terms for oil, gas, and water phases in reservoir conditions.
@@ -403,7 +419,7 @@ def compute_accumulation_terms(
     :param oil_saturation: Oil saturation at cell
     :param gas_saturation: Gas saturation at cell
     :param water_saturation: Water saturation at cell
-    :param cell_volume: Cell volume in ft³ (default 1.0)
+    :param cell_volume: Cell volume in ft³
     :return: (oil_accumulation, gas_accumulation, water_accumulation) in ft³
     """
     # Accumulation in reservoir conditions: φ·S·V (ft³)
@@ -457,7 +473,7 @@ def compute_well_rate_grids(
     :param production_grid: Optional grid to store production rates (ft³/day)
     :param dtype: Data type for output arrays
     :return: Tuple of (oil_well_rate_grid, gas_well_rate_grid, water_well_rate_grid)
-             where rates are in lbm/day (positive for injection, negative for production)
+             where rates are in ft³/day (positive for injection, negative for production)
     """
     # Initialize well rate grids
     oil_well_rate_grid = np.zeros(
@@ -486,9 +502,9 @@ def compute_well_rate_grids(
             absolute_permeability_z[i, j, k],
         )
 
-        oil_mass_rate = 0.0
-        gas_mass_rate = 0.0
-        water_mass_rate = 0.0
+        oil_rate = 0.0
+        gas_rate = 0.0
+        water_rate = 0.0
 
         cell_oil_injection_rate = 0.0
         cell_water_injection_rate = 0.0
@@ -496,13 +512,6 @@ def compute_well_rate_grids(
         cell_oil_production_rate = 0.0
         cell_water_production_rate = 0.0
         cell_gas_production_rate = 0.0
-
-        # Get densities for mass conversion
-        produced_water_density = fluid_properties.water_density_grid[i, j, k]
-        produced_oil_density = fluid_properties.oil_effective_density_grid[i, j, k]
-        produced_gas_density = fluid_properties.gas_density_grid[i, j, k]
-        injected_water_density = produced_water_density
-        injected_gas_density = produced_gas_density
 
         injection_well, production_well = wells[i, j, k]
 
@@ -515,10 +524,6 @@ def compute_well_rate_grids(
             injected_phase = injected_fluid.phase
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = relative_mobility_grids.gas_relative_mobility[i, j, k]
-                injected_gas_density = injected_fluid.get_density(
-                    pressure=pressure,
-                    temperature=temperature,
-                )
                 compressibility_kwargs = {}
             else:
                 phase_mobility = relative_mobility_grids.water_relative_mobility[
@@ -527,11 +532,6 @@ def compute_well_rate_grids(
                 gas_solubility_in_water = fluid_properties.gas_solubility_in_water_grid[
                     i, j, k
                 ]
-                injected_water_density = injected_fluid.get_density(
-                    pressure=pressure,
-                    temperature=temperature,
-                    gas_solubility_in_water=gas_solubility_in_water,
-                )
                 compressibility_kwargs = {
                     "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
                         i, j, k
@@ -575,10 +575,10 @@ def compute_well_rate_grids(
 
             # Volumetric rates at reservoir conditions (ft³/day)
             if injected_phase == FluidPhase.GAS:
-                gas_mass_rate += cell_injection_rate * injected_gas_density
+                gas_rate += cell_injection_rate
                 cell_gas_injection_rate = cell_injection_rate
             else:
-                water_mass_rate += cell_injection_rate * injected_water_density
+                water_rate += cell_injection_rate
                 cell_water_injection_rate = cell_injection_rate
 
             # Record injection rate for the cell
@@ -648,13 +648,13 @@ def compute_well_rate_grids(
 
                 # Volumetric rates at reservoir conditions (ft³/day)
                 if produced_phase == FluidPhase.GAS:
-                    gas_mass_rate += production_rate * produced_gas_density
+                    gas_rate += production_rate
                     cell_gas_production_rate += production_rate
                 elif produced_phase == FluidPhase.WATER:
-                    water_mass_rate += production_rate * produced_water_density
+                    water_rate += production_rate
                     cell_water_production_rate += production_rate
                 else:
-                    oil_mass_rate += production_rate * produced_oil_density
+                    oil_rate += production_rate
                     cell_oil_production_rate += production_rate
 
             # Record total production rate for the cell (all phases)
@@ -665,16 +665,16 @@ def compute_well_rate_grids(
                     cell_gas_production_rate,
                 )
 
-        # Store well rates for this cell in lbm/day
-        oil_well_rate_grid[i, j, k] = oil_mass_rate
-        gas_well_rate_grid[i, j, k] = gas_mass_rate
-        water_well_rate_grid[i, j, k] = water_mass_rate
+        # Store well rates for this cell in ft³/day
+        oil_well_rate_grid[i, j, k] = oil_rate
+        gas_well_rate_grid[i, j, k] = gas_rate
+        water_well_rate_grid[i, j, k] = water_rate
 
     return oil_well_rate_grid, gas_well_rate_grid, water_well_rate_grid
 
 
 @numba.njit(cache=True)
-def compute_flux_divergence_for_cell(
+def compute_phase_fluxes_from_neighbour(
     i: int,
     j: int,
     k: int,
@@ -1149,7 +1149,7 @@ def compute_flux_divergence_for_cell(
 
 
 @numba.njit(cache=True)
-def compute_residuals_for_cell(
+def compute_residuals(
     i: int,
     j: int,
     k: int,
@@ -1256,7 +1256,7 @@ def compute_residuals_for_cell(
     )
 
     # Get flow terms (ft³/day)
-    flux_divergence = compute_flux_divergence_for_cell(
+    fluxes = compute_phase_fluxes_from_neighbour(
         i=i,
         j=j,
         k=k,
@@ -1292,16 +1292,16 @@ def compute_residuals_for_cell(
     # (φ·S·V)^new - (φ·S·V)^old = Δt x (Flow_in - Flow_out + Wells)
     # Residual = (φ·S·V)^new - (φ·S·V)^old - Δt x (Flow_in - Flow_out + Wells)
 
-    # Note: flux_divergence is (Flow_in - Flow_out) in ft³/day
+    # Note: flux is (Flow_in - Flow_out) in ft³/day
     # Note: well_rates is (Injection - Production) in ft³/day
     oil_residual = (accumulation_new[0] - accumulation_old[0]) - (
-        time_step_in_days * (flux_divergence[0] + well_rates[0])
+        time_step_in_days * (fluxes[0] + well_rates[0])
     )
     gas_residual = (accumulation_new[1] - accumulation_old[1]) - (
-        time_step_in_days * (flux_divergence[1] + well_rates[1])
+        time_step_in_days * (fluxes[1] + well_rates[1])
     )
     water_residual = (accumulation_new[2] - accumulation_old[2]) - (
-        time_step_in_days * (flux_divergence[2] + well_rates[2])
+        time_step_in_days * (fluxes[2] + well_rates[2])
     )
     return oil_residual, gas_residual, water_residual
 
@@ -1387,7 +1387,7 @@ def assemble_residual_vector(
     for i in numba.prange(1, cell_count_x - 1):  # type: ignore
         for j in range(1, cell_count_y - 1):
             for k in range(1, cell_count_z - 1):
-                residuals = compute_residuals_for_cell(
+                residuals = compute_residuals(
                     i=i,
                     j=j,
                     k=k,
@@ -1443,25 +1443,29 @@ def solve_newton_update_system(
     jacobian: lil_matrix,
     residual_vector: np.ndarray,
     config: Config,
-) -> np.typing.NDArray:
+    preconditioner: typing.Optional[LinearOperator] = None,
+) -> typing.Tuple[np.typing.NDArray, typing.Optional[LinearOperator]]:
     """
     Solve the Newton update system J·δx = -R for the update vector δx.
 
     :param jacobian: Jacobian matrix J
     :param residual_vector: Residual vector R
     :param config: Config
-    :return: Update vector δx
+    :param preconditioner: Optional preconditioner to use
+    :return: A tuple of the update vector/array, δx and the preconditioner, M.
     """
     jacobian_csr = jacobian.tocsr()
     rhs = -residual_vector
-    return solve_linear_system(
+
+    solution, M = solve_linear_system(
         A_csr=jacobian_csr,
         b=rhs,
         max_iterations=config.max_iterations,
         solver=config.iterative_solver,
-        preconditioner=config.preconditioner,
+        preconditioner=preconditioner or config.preconditioner,
         rtol=1e-3,  # Use a looser tolerance for the inner linear solve (Truncated Newton approach)
     )
+    return solution, M
 
 
 @numba.njit(parallel=True, cache=True)
@@ -1534,20 +1538,20 @@ def _apply_newton_update(
                     gas_saturation_grid[i, j, k] + gas_saturation_update
                 )
 
-                # # Clamp to physical bounds
-                # new_pressure = clip(
-                #     new_pressure, min_valid_pressure, max_valid_pressure
-                # )
-                # new_oil_saturation = clip(new_oil_saturation, 0.0, 1.0)
-                # new_gas_saturation = clip(new_gas_saturation, 0.0, 1.0)
+                # Clamp to physical bounds
+                new_pressure = clip(
+                    new_pressure, min_valid_pressure, max_valid_pressure
+                )
+                new_oil_saturation = clip(new_oil_saturation, 0.0, 1.0)
+                new_gas_saturation = clip(new_gas_saturation, 0.0, 1.0)
 
-                # # Enforce saturation constraint: So + Sg + Sw = 1
-                # # If So + Sg > 1, scale them down proportionally
-                # saturation_sum = new_oil_saturation + new_gas_saturation
-                # if saturation_sum > 1.0:
-                #     scale_factor = 1.0 / saturation_sum
-                #     new_oil_saturation *= scale_factor
-                #     new_gas_saturation *= scale_factor
+                # Enforce saturation constraint: So + Sg + Sw = 1
+                # If So + Sg > 1, scale them down proportionally
+                saturation_sum = new_oil_saturation + new_gas_saturation
+                if saturation_sum > 1.0:
+                    scale_factor = 1.0 / saturation_sum
+                    new_oil_saturation *= scale_factor
+                    new_gas_saturation *= scale_factor
 
                 new_pressure_grid[i, j, k] = new_pressure
                 new_oil_saturation_grid[i, j, k] = new_oil_saturation
@@ -1594,16 +1598,7 @@ def apply_newton_update(
     :param iteration: Current Newton iteration number
     :return: `IterationState` with updated grids
     """
-    damping_factor: float = 1.0
-    # Optionally implement iteration-dependent damping:
-    # if iteration == 0:
-    #     damping_factor = 0.1  # Only 10% of update
-    # elif iteration < 10:
-    #     damping_factor = 0.2  # 20% for early iterations
-    # elif iteration < 20:
-    #     damping_factor = 0.5  # 50% for mid iterations
-    # else:
-    #     damping_factor = 0.8  # 80% for later iterations (never full 1.0)
+    damping_factor = 0.1
 
     (
         new_pressure_grid,

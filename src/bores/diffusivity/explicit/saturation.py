@@ -2,9 +2,9 @@ import itertools
 import logging
 import typing
 
+import attrs
 import numba
 import numpy as np
-import attrs
 
 from bores._precision import get_dtype
 from bores.config import Config
@@ -68,6 +68,16 @@ class SaturationEvolutionMeta:
     volumes: typing.Optional[VolumesMeta] = None
 
 
+@attrs.frozen
+class ExplicitSaturationSolution:
+    water_saturation_grid: ThreeDimensionalGrid
+    oil_saturation_grid: ThreeDimensionalGrid
+    gas_saturation_grid: ThreeDimensionalGrid
+    max_cfl_encountered: float
+    cfl_threshold: float
+    solvent_concentration_grid: typing.Optional[ThreeDimensionalGrid] = None
+
+
 def evolve_saturation_explicitly(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -86,10 +96,7 @@ def evolve_saturation_explicitly(
     production_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
-) -> EvolutionResult[
-    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
-    SaturationEvolutionMeta,
-]:
+) -> EvolutionResult[ExplicitSaturationSolution, SaturationEvolutionMeta]:
     """
     Computes the new/updated saturation distribution for water, oil, and gas
     across the reservoir grid using an explicit upwind finite difference method.
@@ -318,10 +325,12 @@ def evolve_saturation_explicitly(
         """
         return EvolutionResult(
             success=False,
-            value=(
-                updated_water_saturation_grid,
-                updated_oil_saturation_grid,
-                updated_gas_saturation_grid,
+            value=ExplicitSaturationSolution(
+                water_saturation_grid=updated_water_saturation_grid,
+                oil_saturation_grid=updated_oil_saturation_grid,
+                gas_saturation_grid=updated_gas_saturation_grid,
+                max_cfl_encountered=max_cfl_encountered,
+                cfl_threshold=cfl_threshold,
             ),
             scheme="explicit",
             message=msg,
@@ -372,10 +381,12 @@ def evolve_saturation_explicitly(
         int(cfl_violation_info[3]),
     )
     return EvolutionResult(
-        value=(
-            updated_water_saturation_grid,
-            updated_oil_saturation_grid,
-            updated_gas_saturation_grid,
+        value=ExplicitSaturationSolution(
+            water_saturation_grid=updated_water_saturation_grid,
+            oil_saturation_grid=updated_oil_saturation_grid,
+            gas_saturation_grid=updated_gas_saturation_grid,
+            max_cfl_encountered=max_cfl_encountered,
+            cfl_threshold=cfl_threshold,
         ),
         scheme="explicit",
         success=True,
@@ -388,7 +399,7 @@ def evolve_saturation_explicitly(
                 violated=False,
             )
         ),
-        message=f"Explicit saturation evolution time step {time_step} successful."
+        message=f"Explicit saturation evolution time step {time_step} successful.",
     )
 
 
@@ -1225,15 +1236,7 @@ def evolve_miscible_saturation_explicitly(
     production_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
-) -> EvolutionResult[
-    typing.Tuple[
-        ThreeDimensionalGrid,  # water_saturation
-        ThreeDimensionalGrid,  # oil_saturation
-        ThreeDimensionalGrid,  # gas_saturation
-        ThreeDimensionalGrid,  # solvent_concentration
-    ],
-    SaturationEvolutionMeta,
-]:
+) -> EvolutionResult[ExplicitSaturationSolution, SaturationEvolutionMeta]:
     """
     Evolve saturations explicitly with Todd-Longstaff miscible displacement.
 
@@ -1470,11 +1473,13 @@ def evolve_miscible_saturation_explicitly(
         """
         return EvolutionResult(
             success=False,
-            value=(
-                updated_water_saturation_grid,
-                updated_oil_saturation_grid,
-                updated_gas_saturation_grid,
-                updated_solvent_concentration_grid,
+            value=ExplicitSaturationSolution(
+                water_saturation_grid=updated_water_saturation_grid,
+                oil_saturation_grid=updated_oil_saturation_grid,
+                gas_saturation_grid=updated_gas_saturation_grid,
+                solvent_concentration_grid=updated_solvent_concentration_grid,
+                max_cfl_encountered=max_cfl_encountered,
+                cfl_threshold=cfl_threshold,
             ),
             scheme="explicit",
             message=msg,
@@ -1525,11 +1530,13 @@ def evolve_miscible_saturation_explicitly(
     )
     max_cfl_encountered = cfl_violation_info[4]
     return EvolutionResult(
-        value=(
-            updated_water_saturation_grid,
-            updated_oil_saturation_grid,
-            updated_gas_saturation_grid,
-            updated_solvent_concentration_grid,
+        value=ExplicitSaturationSolution(
+            water_saturation_grid=updated_water_saturation_grid,
+            oil_saturation_grid=updated_oil_saturation_grid,
+            gas_saturation_grid=updated_gas_saturation_grid,
+            solvent_concentration_grid=updated_solvent_concentration_grid,
+            max_cfl_encountered=max_cfl_encountered,
+            cfl_threshold=cfl_threshold,
         ),
         scheme="explicit",
         success=True,
@@ -1542,7 +1549,7 @@ def evolve_miscible_saturation_explicitly(
                 violated=False,
             ),
         ),
-        message=f"Explicit saturation evolution time step {time_step} successful."
+        message=f"Explicit saturation evolution time step {time_step} successful.",
     )
 
 

@@ -129,13 +129,11 @@ Interpolator = typing.Callable[[float], float]
 
 PreconditionerStr = typing.Literal["cpr", "ilu", "amg", "diagonal"]
 PreconditionerFactory = typing.Callable[
-    [typing.Union[csr_array, csr_matrix]],
-    typing.Union[LinearOperator, np.typing.NDArray],
+    [typing.Union[csr_array, csr_matrix]], LinearOperator
 ]
 Preconditioner = typing.Union[
     LinearOperator, PreconditionerStr, PreconditionerFactory, str
 ]
-
 
 IterativeSolverStr = typing.Literal["gmres", "lgmres", "bicgstab", "tfqmr"]
 

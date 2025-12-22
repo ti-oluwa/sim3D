@@ -263,6 +263,7 @@ def build_three_phase_relative_permeabilities_grids(
     residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension],
     residual_gas_saturation_grid: NDimensionalGrid[NDimension],
     relative_permeability_table: RelativePermeabilityTable,
+    phase_appearance_tolerance: float = 1e-6,
 ) -> typing.Tuple[
     NDimensionalGrid[NDimension],
     NDimensionalGrid[NDimension],
@@ -315,9 +316,33 @@ def build_three_phase_relative_permeabilities_grids(
             residual_oil_saturation_gas=residual_oil_saturation_gas,
             residual_gas_saturation=residual_gas_saturation,
         )
-        water_relative_permeability_grid[indices] = relative_permeabilities["water"]
-        oil_relative_permeability_grid[indices] = relative_permeabilities["oil"]
-        gas_relative_permeability_grid[indices] = relative_permeabilities["gas"]
+        # Mark phases as inactive if below residual/irreducible saturations + tolerance
+        # Use hysteresis-aware residual oil saturation since not flux or mobility info is available here
+        if water_saturation > gas_saturation:
+            effective_residual_oil_saturation = residual_oil_saturation_water
+        else:
+            effective_residual_oil_saturation = residual_oil_saturation_gas
+        
+        water_inactive = (
+            water_saturation
+            <= irreducible_water_saturation + phase_appearance_tolerance
+        )
+        oil_inactive = (
+            oil_saturation
+            <= effective_residual_oil_saturation + phase_appearance_tolerance
+        )
+        gas_inactive = (
+            gas_saturation <= residual_gas_saturation + phase_appearance_tolerance
+        )
+        water_relative_permeability_grid[indices] = (
+            relative_permeabilities["water"] if not water_inactive else 0.0
+        )
+        oil_relative_permeability_grid[indices] = (
+            relative_permeabilities["oil"] if not oil_inactive else 0.0
+        )
+        gas_relative_permeability_grid[indices] = (
+            relative_permeabilities["gas"] if not gas_inactive else 0.0
+        )
 
     return (
         water_relative_permeability_grid,

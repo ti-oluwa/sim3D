@@ -24,6 +24,7 @@ from bores.types import (
     IterativeSolverFunc,
     Preconditioner,
     T,
+    PreconditionerFactory,
     ThreeDimensions,
     ThreeDimensionalGrid,
 )
@@ -465,7 +466,7 @@ __iterative_solvers = {
 def _get_preconditioner(
     A_csr: typing.Union[csr_array, csr_matrix],
     preconditioner: typing.Optional[Preconditioner],
-) -> typing.Optional[typing.Union[LinearOperator, np.typing.NDArray]]:
+) -> typing.Optional[LinearOperator]:
     if isinstance(preconditioner, str):
         if preconditioner in __preconditioner_factories:
             preconditioner_factory = __preconditioner_factories[preconditioner]
@@ -474,9 +475,10 @@ def _get_preconditioner(
         else:
             raise ValueError(f"Unknown preconditioner type: {preconditioner!r}")
     elif callable(preconditioner):
-        M = preconditioner(A_csr)
+        preconditioner_factory = typing.cast(PreconditionerFactory, preconditioner)
+        M = preconditioner_factory(A_csr)
         return M
-    return preconditioner
+    return preconditioner  # type: ignore[return-value]
 
 
 def _get_solver_funcs(
@@ -486,7 +488,7 @@ def _get_solver_funcs(
         if solver in __iterative_solvers:
             solver_func = __iterative_solvers[solver]
             if isinstance(solver_func, (list, tuple)):
-                return list(solver_func)
+                return list(solver_func)  # type: ignore[return-value]
             return [solver_func]
         raise ValueError(f"Unknown solver type: {solver!r}")
     elif isinstance(solver, (list, tuple, set)):
@@ -508,10 +510,12 @@ def solve_linear_system(
     max_iterations: int,
     rtol: typing.Optional[float] = None,
     atol: typing.Optional[float] = None,
-    solver: typing.Union[IterativeSolver, typing.Iterable[IterativeSolver]] = "lgmres",
-    preconditioner: typing.Optional[Preconditioner] = "cpr",
+    solver: typing.Union[
+        IterativeSolver, typing.Iterable[IterativeSolver]
+    ] = "bicgstab",
+    preconditioner: typing.Optional[Preconditioner] = "ilu",
     fallback_to_direct: bool = False,
-) -> np.typing.NDArray:
+) -> typing.Tuple[np.typing.NDArray, typing.Optional[LinearOperator]]:
     """
     Solves the linear system A·x = b using an iterative solver with a fallback strategy.
 
@@ -535,7 +539,7 @@ def solve_linear_system(
     :param atol: Absolute tolerance for convergence (optional).
     :param fallback_to_direct: Whether to fall back to a direct solver if all iterative solvers fail.
         Not suitable for large or production use cases due to performance and memory constraints.
-    :return: Solution vector x.
+    :return: A tuple (x, M) where x is the solution vector and M is the preconditioner used,
     :raises RuntimeError: If both solvers fail to converge.
     """
     M = _get_preconditioner(A_csr, preconditioner)
@@ -560,7 +564,7 @@ def solve_linear_system(
             callback=None,
         )
         if info == 0:
-            return x
+            return x, M
         else:
             logger.warning(
                 f"Solver {solver_func!r} failed to converge within {max_iterations} iterations. Info: {info}"
@@ -579,7 +583,8 @@ def solve_linear_system(
         raise SolverError(
             "All iterative solvers and direct solver failed to solve the system."
         ) from exc
-    return x  # type: ignore[return-value]
+
+    return x, M  # type: ignore[return-value]
 
 
 """

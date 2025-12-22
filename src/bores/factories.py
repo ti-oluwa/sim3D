@@ -3,7 +3,7 @@ import warnings
 
 import numpy as np
 
-from bores.boundaries import BoundaryConditions, GridBoundaryCondition
+from bores.boundary_conditions import BoundaryConditions, GridBoundaryCondition
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.fractures import Fracture, apply_fractures
@@ -34,6 +34,7 @@ from bores.models import (
     RockFluidProperties,
     RockPermeability,
     RockProperties,
+    SaturationHistory,
 )
 from bores.pvt.arrays import compute_gas_to_oil_ratio_standing
 from bores.pvt.core import (
@@ -223,6 +224,7 @@ def reservoir_model(
     oil_effective_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_effective_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     boundary_conditions: typing.Optional[BoundaryConditions] = None,
+    saturation_history: typing.Optional[SaturationHistory[NDimension]] = None,
     fractures: typing.Optional[typing.Iterable[Fracture]] = None,
     dip_angle: float = 0.0,
     dip_azimuth: float = 0.0,
@@ -244,7 +246,6 @@ def reservoir_model(
     :param cell_dimension: Physical size of each cell (dx, dy) in feets.
     :param thickness_grid: Reservoir cells' thickness grid (ft).
     :param pressure_grid: Reservoir cells' pressure grid (psi).
-    :param oil_bubble_point_pressure_grid: Oil bubble point pressure grid (psi).
     :param rock_compressibility: Rock compressibility in psi⁻¹.
     :param absolute_permeability_grid: Absolute permeability grid (mD).
     :param porosity_grid: Porosity grid (fraction).
@@ -253,6 +254,7 @@ def reservoir_model(
     :param oil_viscosity_grid: Oil viscosity grid (cP).
     :param oil_compressibility_grid: Oil compressibility grid (psi⁻¹).
     :param oil_specific_gravity_grid: Oil specific gravity grid (dimensionless).
+    :param oil_bubble_point_pressure_grid: Oil bubble point pressure grid (psi).
     :param gas_gravity_grid: Gas gravity grid (dimensionless), optional.
     :param residual_oil_saturation_water_grid: Residual oil saturation during water flooding grid (fraction).
     :param residual_oil_saturation_gas_grid: Residual oil saturation during gas flooding grid (fraction).
@@ -554,6 +556,13 @@ def reservoir_model(
         relative_permeability_table=relative_permeability_table,
         capillary_pressure_table=capillary_pressure_table,
     )
+
+    if saturation_history is None:
+        # Just store the initial saturations as the max saturations
+        saturation_history = SaturationHistory.from_initial_saturations(
+            water_saturation_grid=water_saturation_grid.copy(),
+            gas_saturation_grid=gas_saturation_grid.copy(),
+        )
     if boundary_conditions is None:
         boundary_conditions = BoundaryConditions(
             conditions={
@@ -571,6 +580,7 @@ def reservoir_model(
         fluid_properties=fluid_properties,
         rock_properties=rock_properties,
         rock_fluid_properties=rock_fluid_properties,
+        saturation_history=saturation_history,
         boundary_conditions=boundary_conditions,
         dip_angle=dip_angle,
         dip_azimuth=dip_azimuth,

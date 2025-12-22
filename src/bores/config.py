@@ -113,3 +113,19 @@ class Config:
         IterativeSolver, typing.Iterable[IterativeSolver]
     ] = "bicgstab"
     """Iterative solver(s) to use for solving linear systems."""
+    phase_appearance_tolerance: float = attrs.field(
+        default=1e-6, validator=attrs.validators.ge(0)
+    )
+    """
+    Tolerance for determining phase appearance/disappearance based on saturation levels.
+
+    Used to avoid numerical issues when a phase's saturation approaches zero. This helps
+    maintain stability in relative permeability and mobility calculations by treating phases
+    with saturations below this threshold as absent from the system.
+    """
+    residual_oil_drainage_ratio_water_flood: float = 0.6
+    """Ratio to compute oil drainage residual from imbibition value during water flooding."""
+    residual_oil_drainage_ratio_gas_flood: float = 0.6
+    """Ratio to compute oil drainage residual from imbibition value during gas flooding."""
+    residual_gas_drainage_ratio: float = 0.5
+    """Ratio to compute gas drainage residual from imbibition value."""

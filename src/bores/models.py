@@ -6,12 +6,12 @@ import attrs
 import numpy as np
 from typing_extensions import Self
 
-from bores.boundaries import BoundaryConditions
+from bores.boundary_conditions import BoundaryConditions
 from bores.grids.base import (
+    PadMixin,
     apply_structural_dip,
     build_depth_grid,
     build_elevation_grid,
-    PadMixin,
 )
 from bores.types import (
     CapillaryPressureTable,
@@ -21,7 +21,13 @@ from bores.types import (
 )
 
 
-__all__ = ["FluidProperties", "RockProperties", "ReservoirModel", "RockPermeability"]
+__all__ = [
+    "FluidProperties",
+    "RockProperties",
+    "ReservoirModel",
+    "RockPermeability",
+    "SaturationHistory",
+]
 
 
 @attrs.frozen(slots=True)
@@ -194,13 +200,13 @@ class RockProperties(PadMixin[NDimension]):
     connate_water_saturation_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the connate water saturation distribution (fraction)."""
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the irreducible water saturation distribution (fraction)."""
+    """N-dimensional numpy array representing the irreducible water saturation distribution (fraction). This assumes imbibition process."""
     residual_oil_saturation_water_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the residual oil saturation distribution during water flooding (fraction)."""
+    """N-dimensional numpy array representing the residual oil saturation distribution during water flooding (fraction). This assumes imbibition process."""
     residual_oil_saturation_gas_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the residual oil saturation distribution during gas flooding (fraction)."""
+    """N-dimensional numpy array representing the residual oil saturation distribution during gas flooding (fraction). This assumes imbibition process."""
     residual_gas_saturation_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the residual gas saturation distribution (fraction)."""
+    """N-dimensional numpy array representing the residual gas saturation distribution (fraction). This assumes imbibition process."""
 
     def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
         excluded_fields = ("compressibility", "absolute_permeability")
@@ -240,6 +246,49 @@ class RockFluidProperties:
     """Callable that evaluates the capillary pressure curves based on fluid saturations."""
 
 
+@attrs.frozen
+class SaturationHistory(PadMixin[NDimension]):
+    """
+    Tracks historical maximum saturations and displacement regimes in the reservoir.
+    """
+
+    max_water_saturation_grid: NDimensionalGrid[NDimension]
+    """Maximum water saturation reached (historical)"""
+    max_gas_saturation_grid: NDimensionalGrid[NDimension]
+    """Maximum gas saturation reached (historical)"""
+
+    # Flags to track current displacement regime
+    water_imbibition_flag_grid: np.ndarray[NDimension, np.dtype[np.bool]]
+    """Flag grid indicating if the current water displacement is imbibition (True) or drainage (False)"""
+    gas_imbibition_flag_grid: np.ndarray[NDimension, np.dtype[np.bool]]
+    """Flag grid indicating if the current gas displacement is imbibition (True) or drainage (False)"""
+
+    @classmethod
+    def from_initial_saturations(
+        cls,
+        water_saturation_grid: NDimensionalGrid[NDimension],
+        gas_saturation_grid: NDimensionalGrid[NDimension],
+    ) -> Self:
+        """
+        Create a `SaturationHistory` instance from initial water and gas saturation grids.
+
+        :param water_saturation_grid: N-dimensional numpy array representing the initial water saturation distribution in the reservoir (fraction).
+        :param gas_saturation_grid: N-dimensional numpy array representing the initial gas saturation distribution in the reservoir (fraction).
+        :return: `SaturationHistory` instance initialized with the provided saturation grids.
+        """
+        water_imbibition_flag_grid = np.zeros_like(water_saturation_grid, dtype=bool)
+        gas_imbibition_flag_grid = np.zeros_like(gas_saturation_grid, dtype=bool)
+        return cls(
+            max_water_saturation_grid=water_saturation_grid,
+            max_gas_saturation_grid=gas_saturation_grid,
+            water_imbibition_flag_grid=water_imbibition_flag_grid,  # type: ignore[arg-type]
+            gas_imbibition_flag_grid=gas_imbibition_flag_grid,  # type: ignore[arg-type]
+        )
+
+    def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
+        return attrs.fields(type(self))
+
+
 @attrs.frozen(slots=True)
 class ReservoirModel(typing.Generic[NDimension]):
     """Models a reservoir in N-dimensional space for simulation."""
@@ -256,6 +305,8 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock properties of the reservoir model."""
     rock_fluid_properties: RockFluidProperties
     """Rock-fluid properties of the reservoir model."""
+    saturation_history: SaturationHistory[NDimension]
+    """Tracks historical maximum saturations and displacement regimes in the reservoir."""
     boundary_conditions: BoundaryConditions = attrs.field(factory=BoundaryConditions)
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
     dip_angle: float = attrs.field(

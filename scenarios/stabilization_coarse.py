@@ -225,7 +225,7 @@ def _():
         boundary_conditions = bores.BoundaryConditions(
             conditions={
                 "pressure": bores.GridBoundaryCondition(
-                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
+                    bottom=bores.ConstantBoundary(5600),  # Aquifer pressure
                 ),
             }
         )
@@ -268,9 +268,9 @@ def _():
         )
 
         timer = bores.Timer(
-            initial_step_size=bores.Time(days=4.5),
+            initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=15.0),
-            min_step_size=bores.Time(hours=6.0),
+            min_step_size=bores.Time(hours=2.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
@@ -289,7 +289,6 @@ def _():
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
         return list(states)
-
     return bores, main
 
 

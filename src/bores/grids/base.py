@@ -49,7 +49,7 @@ def build_uniform_grid(
     :param value: Initial value to fill the grid with
     :return: Numpy array representing the grid
     """
-    return np.full(grid_shape, fill_value=value, dtype=get_dtype(), order="C")
+    return np.full(grid_shape, fill_value=value, dtype=get_dtype(), order="C")  # type: ignore
 
 
 uniform_grid = build_uniform_grid  # Alias for convenience

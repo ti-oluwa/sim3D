@@ -25,7 +25,8 @@ __all__ = ["evolve_pressure_explicitly"]
 
 
 @attrs.frozen
-class PressureEvolutionMeta:
+class ExplicitPressureSolution:
+    pressure_grid: ThreeDimensionalGrid
     max_cfl_encountered: float
     cfl_threshold: float
 
@@ -42,7 +43,7 @@ def evolve_pressure_explicitly(
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     config: Config,
-) -> EvolutionResult[ThreeDimensionalGrid, PressureEvolutionMeta]:
+) -> EvolutionResult[ExplicitPressureSolution, None]:
     """
     Computes the pressure evolution (specifically, oil phase pressure P_oil) in the reservoir grid
     for one time step using an explicit finite volume method.
@@ -145,10 +146,11 @@ def evolve_pressure_explicitly(
     if pressure_cfl > max_pressure_cfl:
         return EvolutionResult(
             success=False,
-            value=current_oil_pressure_grid,
             scheme="explicit",
-            metadata=PressureEvolutionMeta(
-                max_cfl_encountered=pressure_cfl, cfl_threshold=max_pressure_cfl
+            value=ExplicitPressureSolution(
+                pressure_grid=current_oil_pressure_grid,
+                max_cfl_encountered=pressure_cfl,
+                cfl_threshold=max_pressure_cfl,
             ),
             message=f"Pressure evolution failed with CFL={pressure_cfl:.4f}.",
         )
@@ -225,10 +227,11 @@ def evolve_pressure_explicitly(
     )
     return EvolutionResult(
         success=True,
-        value=updated_oil_pressure_grid,
         scheme="explicit",
-        metadata=PressureEvolutionMeta(
-            max_cfl_encountered=pressure_cfl, cfl_threshold=max_pressure_cfl
+        value=ExplicitPressureSolution(
+            pressure_grid=updated_oil_pressure_grid,
+            max_cfl_encountered=pressure_cfl,
+            cfl_threshold=max_pressure_cfl,
         ),
         message=f"Pressure evolution from time step {time_step} successful with CFL={pressure_cfl:.4f}.",
     )
