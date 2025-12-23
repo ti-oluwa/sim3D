@@ -64,6 +64,8 @@ class IterationState:
     gas_saturation_grid: ThreeDimensionalGrid
     iteration: int
     residual_norm: float
+    max_saturation_change: float
+    max_pressure_change: float
 
 
 def evolve_fully_implicit(
@@ -128,8 +130,13 @@ def evolve_fully_implicit(
     convergence_tolerance = config.convergence_tolerance
     converged = False
     iteration = 0
-    initial_residual_norm = 0.0
-    final_residual_norm = 0.0
+    previous_residual_norm = 0.0
+    current_residual_norm = 0.0
+
+    cached_jacobian = None
+    cached_preconditioner = None
+    needs_reassembly = True
+    jacobian_reuse_count = 0
     dtype = get_dtype()
 
     if not np.all(np.isfinite(pressure_grid)):
@@ -224,15 +231,14 @@ def evolve_fully_implicit(
             acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
             dtype=dtype,
         )
-        final_residual_norm = float(np.linalg.norm(residual_vector))
+        current_residual_norm = float(np.linalg.norm(residual_vector))
 
         # Log first iteration residual for diagnostics
         if iteration == 0:
-            initial_residual_norm = final_residual_norm
             logger.info("=" * 60)
             logger.info("INITIAL STATE DIAGNOSTICS")
             logger.info("=" * 60)
-            logger.info(f"Residual norm: {final_residual_norm:.6e}")
+            logger.info(f"Residual norm: {current_residual_norm:.6e}")
             logger.info(f"Max residual: {np.max(np.abs(residual_vector)):.6e}")
             logger.info(f"Min residual: {np.min(np.abs(residual_vector)):.6e}")
             logger.info(f"Mean residual: {np.mean(np.abs(residual_vector)):.6e}")
@@ -262,54 +268,73 @@ def evolve_fully_implicit(
             logger.info("=" * 60)
 
         # Check for NaN or Inf in residuals
-        if not np.isfinite(final_residual_norm):
+        if not np.isfinite(current_residual_norm):
             logger.error(
-                f"Non-finite residual norm at iteration {iteration}: {final_residual_norm}. "
+                f"Non-finite residual norm at iteration {iteration}: {current_residual_norm}. "
                 f"NaN count: {np.isnan(residual_vector).sum()}, "
                 f"Inf count: {np.isinf(residual_vector).sum()}"
             )
             break
 
-        # Use both absolute and relative criteria
         relative_reduction = (
-            final_residual_norm / initial_residual_norm
-            if initial_residual_norm > 0
+            current_residual_norm / previous_residual_norm
+            if previous_residual_norm > 0
             else 0
         )
         logger.info(
-            f"Iteration {iteration}: Residual norm = {final_residual_norm:.2e}, "
+            f"Iteration {iteration}: Residual norm = {current_residual_norm:.2e}, "
             f"Relative reduction = {relative_reduction:.2e}"
         )
-        if (final_residual_norm < convergence_tolerance) or (relative_reduction < 1e-3):
+        if current_residual_norm < convergence_tolerance:
             converged = True
             break
 
-        jacobian = assemble_jacobian(
-            cell_dimension=cell_dimension,
-            thickness_grid=thickness_grid,
-            pressure_grid=pressure_grid,
-            oil_saturation_grid=oil_saturation_grid,
-            gas_saturation_grid=gas_saturation_grid,
-            water_saturation_grid=water_saturation_grid,
-            time_step_size=time_step_in_days,
-            rock_properties=rock_properties,
-            fluid_properties=fluid_properties,
-            rock_fluid_properties=rock_fluid_properties,
-            oil_mobility_grid_x=oil_mobility_grid_x,
-            oil_mobility_grid_y=oil_mobility_grid_y,
-            oil_mobility_grid_z=oil_mobility_grid_z,
-            gas_mobility_grid_x=gas_mobility_grid_x,
-            gas_mobility_grid_y=gas_mobility_grid_y,
-            gas_mobility_grid_z=gas_mobility_grid_z,
-            water_mobility_grid_x=water_mobility_grid_x,
-            water_mobility_grid_y=water_mobility_grid_y,
-            water_mobility_grid_z=water_mobility_grid_z,
-            oil_well_rate_grid=oil_well_rate_grid,
-            gas_well_rate_grid=gas_well_rate_grid,
-            water_well_rate_grid=water_well_rate_grid,
-            dtype=dtype,
-            phase_appearance_tolerance=config.phase_appearance_tolerance,
-        )
+        if jacobian_reuse_count >= 3 or relative_reduction > 0.85:
+            needs_reassembly = True
+
+        if needs_reassembly or cached_jacobian is None:
+            jacobian = assemble_jacobian(
+                cell_dimension=cell_dimension,
+                thickness_grid=thickness_grid,
+                pressure_grid=pressure_grid,
+                elevation_grid=elevation_grid,
+                oil_saturation_grid=oil_saturation_grid,
+                gas_saturation_grid=gas_saturation_grid,
+                water_saturation_grid=water_saturation_grid,
+                time_step_size=time_step_in_days,
+                rock_properties=rock_properties,
+                fluid_properties=fluid_properties,
+                rock_fluid_properties=rock_fluid_properties,
+                oil_mobility_grid_x=oil_mobility_grid_x,
+                oil_mobility_grid_y=oil_mobility_grid_y,
+                oil_mobility_grid_z=oil_mobility_grid_z,
+                gas_mobility_grid_x=gas_mobility_grid_x,
+                gas_mobility_grid_y=gas_mobility_grid_y,
+                gas_mobility_grid_z=gas_mobility_grid_z,
+                water_mobility_grid_x=water_mobility_grid_x,
+                water_mobility_grid_y=water_mobility_grid_y,
+                water_mobility_grid_z=water_mobility_grid_z,
+                oil_well_rate_grid=oil_well_rate_grid,
+                gas_well_rate_grid=gas_well_rate_grid,
+                water_well_rate_grid=water_well_rate_grid,
+                pcow_grid=capillary_pressure_grids.oil_water_capillary_pressure,
+                pcgo_grid=capillary_pressure_grids.gas_oil_capillary_pressure,
+                dtype=dtype,
+                phase_appearance_tolerance=config.phase_appearance_tolerance,
+                acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+            )
+            cached_jacobian = jacobian
+            needs_reassembly = False
+            jacobian_reuse_count = 0
+            # Invalidate cached preconditioner on reassembly
+            cached_preconditioner = None
+        else:
+            jacobian = cached_jacobian
+            jacobian_reuse_count += 1
+            logger.debug(
+                f"Reusing cached Jacobian for iteration {iteration} (reuse count={jacobian_reuse_count})"
+            )
+
         jacobian_csr = jacobian.tocsr()
         diag = jacobian_csr.diagonal()
         logger.info(
@@ -320,11 +345,21 @@ def evolve_fully_implicit(
         )
         logger.info(f"Jacobian nnz: {jacobian_csr.nnz}")
 
-        update_vector, preconditioner = solve_newton_update_system(
-            jacobian=jacobian,
-            residual_vector=residual_vector,
-            config=config,
-        )
+        if cached_preconditioner is None:
+            update_vector, preconditioner = solve_newton_update_system(
+                jacobian=jacobian,
+                residual_vector=residual_vector,
+                config=config,
+                preconditioner=None,
+            )
+            cached_preconditioner = preconditioner
+        else:
+            update_vector, _ = solve_newton_update_system(
+                jacobian=jacobian,
+                residual_vector=residual_vector,
+                config=config,
+                preconditioner=cached_preconditioner,
+            )
 
         # Apply Newton update and get iteration state
         iteration_state = apply_newton_update(
@@ -337,6 +372,11 @@ def evolve_fully_implicit(
             cell_count_z=cell_count_z,
             iteration=iteration,
         )
+        if (
+            iteration_state.max_saturation_change > 0.2
+            or iteration_state.max_pressure_change > 500.0
+        ):
+            needs_reassembly = True
 
         pressure_grid = iteration_state.pressure_grid
         oil_saturation_grid = iteration_state.oil_saturation_grid
@@ -390,6 +430,9 @@ def evolve_fully_implicit(
             relative_mobility_range=config.relative_mobility_range,
         )
 
+        # Update previous residual norm for next iteration
+        previous_residual_norm = current_residual_norm
+
     solution = ImplicitSolution(
         pressure_grid=pressure_grid,
         oil_saturation_grid=oil_saturation_grid,
@@ -397,7 +440,7 @@ def evolve_fully_implicit(
         water_saturation_grid=water_saturation_grid,
         converged=converged,
         newton_iterations=iteration + 1,
-        final_residual_norm=final_residual_norm,
+        final_residual_norm=current_residual_norm,
     )
     return EvolutionResult(value=solution, scheme="implicit")
 
@@ -1631,4 +1674,6 @@ def apply_newton_update(
         gas_saturation_grid=new_gas_saturation_grid,
         iteration=iteration,
         residual_norm=residual_norm,
+        max_saturation_change=max_saturation_change,
+        max_pressure_change=max_pressure_change,
     )

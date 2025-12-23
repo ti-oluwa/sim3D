@@ -268,7 +268,7 @@ def _():
         )
 
         timer = bores.Timer(
-            initial_step_size=bores.Time(hours=4.5),
+            initial_step_size=bores.Time(minutes=4.5),
             max_step_size=bores.Time(days=5.0),
             min_step_size=bores.Time(hours=2.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
@@ -278,13 +278,13 @@ def _():
             aggressive_backoff_factor=0.25,
         )
         config = bores.Config(
-            scheme="impes",
+            scheme="implicit",
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
             max_iterations=500,
-            iterative_solver="bicgstab",
-            preconditioner="ilu",
+            iterative_solver="lgmres",
+            preconditioner="cpr",
             log_interval=2,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
