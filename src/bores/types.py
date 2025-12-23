@@ -7,6 +7,8 @@ from scipy.sparse import csr_array, csr_matrix
 from scipy.sparse.linalg import LinearOperator
 from typing_extensions import TypeAlias, TypedDict
 
+from bores.errors import ValidationError
+
 
 __all__ = [
     "NDimension",
@@ -261,7 +263,7 @@ class Range:
 
     def __attrs_post_init__(self) -> None:
         if self.min > self.max:
-            raise ValueError("Minimum value cannot be greater than maximum value.")
+            raise ValidationError("Minimum value cannot be greater than maximum value.")
 
     def clip(self, value: T) -> T:
         """

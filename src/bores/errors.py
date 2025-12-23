@@ -38,3 +38,9 @@ class TimingError(SimulationError):
     """Raised when there is an error related to simulation timing."""
 
     pass
+
+
+class StopSimulation(Exception):
+    """Raised to signal that the simulation should stop gracefully."""
+
+    pass

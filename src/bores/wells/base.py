@@ -142,15 +142,15 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         Check if the well's perforating intervals are within the grid dimensions.
 
         :param grid_dimensions: The dimensions of the reservoir grid (i, j, k).
-        :raises ValueError: If any of the well's perforating intervals are out of bounds.
+        :raises ValidationError: If any of the well's perforating intervals are out of bounds.
         """
         for interval_idx, (start, end) in enumerate(self.perforating_intervals):
             if not all(0 <= coord < dim for coord, dim in zip(start, grid_dimensions)):
-                raise ValueError(
+                raise ValidationError(
                     f"Start location {start} for interval {interval_idx} of well {self.name!r} is out of bounds."
                 )
             if not all(0 <= coord < dim for coord, dim in zip(end, grid_dimensions)):
-                raise ValueError(
+                raise ValidationError(
                     f"End location {end} for interval {interval_idx} of well {self.name!r} is out of bounds."
                 )
 
@@ -168,11 +168,11 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         """
         dimensions = len(interval_thickness)
         if dimensions < 2 or dimensions > 3:
-            raise ValueError("2D/3D locations are required")
+            raise ValidationError("2D/3D locations are required")
 
         if dimensions == 2:
             if len(permeability) != 2:
-                raise ValueError("Permeability must be a 2D tuple for 2D locations")
+                raise ValidationError("Permeability must be a 2D tuple for 2D locations")
             interval_thickness = typing.cast(TwoDimensions, interval_thickness)
             permeability = typing.cast(TwoDimensions, permeability)
             return compute_2D_effective_drainage_radius(
@@ -182,7 +182,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
             )
 
         if len(permeability) != 3:
-            raise ValueError("Permeability must be a 3D tuple for 3D locations")
+            raise ValidationError("Permeability must be a 3D tuple for 3D locations")
         interval_thickness = typing.cast(ThreeDimensions, interval_thickness)
         permeability = typing.cast(ThreeDimensions, permeability)
         return compute_3D_effective_drainage_radius(
@@ -206,7 +206,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         """
         dimensions = len(interval_thickness)
         if dimensions < 2 or dimensions > 3:
-            raise ValueError("2D/3D locations are required")
+            raise ValidationError("2D/3D locations are required")
 
         orientation = self.orientation
         effective_drainage_radius = self.get_effective_drainage_radius(
@@ -226,7 +226,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         elif dimensions == 3 and orientation == Orientation.Z:
             directional_thickness = interval_thickness[2]
         else:  # dimensions == 2 and orientation == Orientation.Z:
-            raise ValueError("Z-oriented wells are not supported in 2D models")
+            raise ValidationError("Z-oriented wells are not supported in 2D models")
 
         return compute_well_index(
             permeability=effective_permeability,
@@ -334,7 +334,7 @@ class WellTimeHook:
         :param time: The specific simulation time at which to trigger the event.
         """
         if not (time_step or time):
-            raise ValueError("Either time_step or time must be provided.")
+            raise ValidationError("Either time_step or time must be provided.")
         self.time_step = time_step
         self.time = time
 
@@ -406,7 +406,7 @@ class WellUpdateAction:
             ]
         )
         if not valid:
-            raise ValueError("At least one property must be provided to update.")
+            raise ValidationError("At least one property must be provided to update.")
 
         self.control = control
         self.skin_factor = skin_factor
@@ -445,7 +445,7 @@ class WellActions:
         :param actions: A sequence of action functions to be chained.
         """
         if not actions:
-            raise ValueError("At least one action must be provided to chain.")
+            raise ValidationError("At least one action must be provided to chain.")
         self.actions = actions
 
     def __call__(self, well: Well, model_state: typing.Any) -> None:
@@ -596,7 +596,7 @@ def _expand_interval(
     start, end = interval
     dimensions = len(start)
     if dimensions < 2:
-        raise ValueError("2D/3D locations are required")
+        raise ValidationError("2D/3D locations are required")
 
     # Normalize start and end to ensure ranges are valid regardless of order
     start = tuple(min(s, e) for s, e in zip(start, end))
@@ -833,7 +833,7 @@ class Wells(typing.Generic[WellLocation]):
         Check if all wells' perforating intervals are within the grid dimensions.
 
         :param grid_shape: The shape of the reservoir grid (nx, ny, nz).
-        :raises ValueError: If any well's perforating interval is out of bounds.
+        :raises ValidationError: If any well's perforating interval is out of bounds.
         """
         for well in itertools.chain(self.injection_wells, self.production_wells):
             well.check_location(grid_shape)

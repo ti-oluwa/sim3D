@@ -97,6 +97,10 @@ def evolve_pressure_explicitly(
     total_compressibility_grid = (
         total_fluid_compressibility_grid * porosity_grid
     ) + rock_compressibility
+    # Clamp the compressibility within range
+    total_compressibility_grid = config.total_compressibility_range.clip(
+        total_compressibility_grid
+    )
 
     (
         water_relative_mobility_grid,

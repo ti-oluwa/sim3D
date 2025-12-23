@@ -317,7 +317,8 @@ def build_three_phase_relative_permeabilities_grids(
             residual_oil_saturation_gas=residual_oil_saturation_gas,
             residual_gas_saturation=residual_gas_saturation,
         )
-        # Mark phases as inactive if below residual/irreducible saturations + tolerance
+        # Mark phases as inactive by setting relative permeability to the phase as zero
+        # if below 'residual/irreducible saturations + tolerance'
         # Use hysteresis-aware residual oil saturation since not flux or mobility info is available here
         if water_saturation > gas_saturation:
             effective_residual_oil_saturation = residual_oil_saturation_water

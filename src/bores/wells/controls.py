@@ -163,7 +163,7 @@ def _apply_clamp(
         clamped_rate = clamp(rate=rate, pressure=pressure)
         if clamped_rate is not None:
             logger.debug(
-                f"Clamping rate {rate:.4f} to {clamped_rate:.4f} "
+                f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
                 f"({control_name}, pressure={pressure:.3f} psi)"
             )
             return clamped_rate
@@ -341,8 +341,8 @@ class BHPControl(typing.Generic[WellFluidT_con]):
                 phase_mobility=phase_mobility,
                 fluid_compressibility=fluid_compressibility,
             )
-        logger.info(f"BHP Control: {rate:.4f} (BHP={bhp:.4f}, Pr={pressure:.4f})")
-
+        
+        logger.info(f"BHP Control: {rate:.6f} (BHP={bhp:.6f}, Pr={pressure:.6f})")
         # Apply clamp condition if any
         clamped = _apply_clamp(
             rate=rate,
@@ -354,7 +354,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
 
     def __str__(self) -> str:
         """String representation."""
-        return f"BHP Control (BHP={self.bottom_hole_pressure:.4f} psi)"
+        return f"BHP Control (BHP={self.bottom_hole_pressure:.6f} psi)"
 
 
 @attrs.frozen
@@ -445,13 +445,13 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
 
             except (ValueError, ZeroDivisionError) as exc:
                 logger.warning(
-                    f"Failed to compute required BHP for target rate {target_rate:.4f}: {exc}. "
+                    f"Failed to compute required BHP for target rate {target_rate:.6f}: {exc}. "
                     "Returning 0."
                 )
                 return 0.0
             else:
                 logger.debug(
-                    f"Required BHP: {required_bhp:.4f} psi, Reservoir pressure: {pressure:.4f} psi, Fluid phase: {fluid.phase}"
+                    f"Required BHP: {required_bhp:.6f} psi, Reservoir pressure: {pressure:.6f} psi, Fluid phase: {fluid.phase}"
                 )
                 if is_production:
                     can_achieve_rate = required_bhp >= min_bhp
@@ -460,7 +460,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
 
                 if can_achieve_rate is False:
                     logger.debug(
-                        f"Cannot achieve target rate {target_rate:.4f} "
+                        f"Cannot achieve target rate {target_rate:.6f} "
                         f"without violating minimum bottom hole pressure {min_bhp:.3f} psi "
                         f"(required BHP: {required_bhp:.3f} psi, pressure: {pressure:.3f} psi)"
                     )
@@ -499,7 +499,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
 
     def __str__(self) -> str:
         """String representation."""
-        return f"Constant Rate Control (Rate={self.target_rate:.4f})"
+        return f"Constant Rate Control (Rate={self.target_rate:.6f})"
 
 
 @attrs.frozen
@@ -597,7 +597,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
             )
         else:
             logger.debug(
-                f"Required BHP: {required_bhp:.4f} psi, Reservoir pressure: {pressure:.4f} psi, Fluid phase: {fluid.phase}"
+                f"Required BHP: {required_bhp:.6f} psi, Reservoir pressure: {pressure:.6f} psi, Fluid phase: {fluid.phase}"
             )
             if is_production:
                 can_achieve_rate = required_bhp >= min_bhp
@@ -616,7 +616,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                     return clamped
 
                 logger.debug(
-                    f"Using rate control at {target_rate:.4f} "
+                    f"Using rate control at {target_rate:.6f} "
                     f"(required BHP: {required_bhp:.3f} psi > minimum: {min_bhp:.3f} psi)"
                 )
                 return target_rate
@@ -694,7 +694,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         )
 
     def __str__(self) -> str:
-        return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.4f}, Min BHP={self.minimum_bottom_hole_pressure:.4f} psi)"
+        return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.minimum_bottom_hole_pressure:.6f} psi)"
 
 
 @attrs.frozen

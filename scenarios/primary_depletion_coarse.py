@@ -17,7 +17,10 @@ def _():
     bores.use_32bit_precision()
     bores.image_config(scale=3)
 
-    STABILIZED_MODEL_STATE = Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl.xz"
+    STABILIZED_MODEL_STATE = (
+        Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl.xz"
+    )
+
 
     def main():
         state = bores.ModelState.load(filepath=STABILIZED_MODEL_STATE)
@@ -78,15 +81,15 @@ def _():
         producers = [producer]
         wells = bores.wells_(injectors=None, producers=producers)
         timer = bores.Timer(
-            initial_step_size=bores.Time(hours=4.5),
-            max_step_size=bores.Time(days=1.2),
+            initial_step_size=bores.Time(hours=20),
+            max_step_size=bores.Time(days=1),
             min_step_size=bores.Time(hours=2.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
-            max_rejects=20,
+            max_rejects=10,
         )
         config = bores.Config(
             scheme="impes",
@@ -95,14 +98,9 @@ def _():
             use_pseudo_pressure=True,
             log_interval=5,
             iterative_solver="bicgstab",
-            preconditioner="ilu"
+            preconditioner="ilu",
         )
-        states = bores.run(
-            model=model,
-            timer=timer,
-            wells=wells,
-            config=config,
-        )
+        states = bores.run(model=model, timer=timer, wells=wells, config=config)
         return list(states)
     return Path, bores, main
 

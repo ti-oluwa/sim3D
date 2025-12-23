@@ -534,11 +534,10 @@ def compute_phase_potentials(
         pressure_difference - pcow_difference + water_gravity_potential
     )
     gas_phase_potential = pressure_difference + pcgo_difference + gas_gravity_potential
-
     return oil_phase_potential, water_phase_potential, gas_phase_potential
 
 
-def assemble_jacobian_quasi_newton(
+def assemble_jacobian_with_frozen_mobility(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
     pressure_grid: ThreeDimensionalGrid,
@@ -566,7 +565,7 @@ def assemble_jacobian_quasi_newton(
     phase_appearance_tolerance: float = 1e-6,
 ) -> lil_matrix:
     """
-    Assemble quasi-Newton Jacobian with frozen mobilities.
+    Assemble Jacobian with frozen mobilities.
 
     Only includes:
     1. Accumulation derivatives (w.r.t. P, So, Sg)
@@ -764,14 +763,12 @@ def assemble_jacobian_quasi_newton(
                 mobility_grid=oil_mobility_grid,
                 geometric_factor=geometric_factor,
             )
-
             gas_dF_dP = compute_phase_flux_derivative(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
                 mobility_grid=gas_mobility_grid,
                 geometric_factor=geometric_factor,
             )
-
             water_dF_dP = compute_phase_flux_derivative(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
@@ -838,13 +835,13 @@ def assemble_jacobian(
     relative_perturbation: float = 1e-6,
 ) -> lil_matrix:
     """
-    Assemble full Newton Jacobian with ALL derivatives.
+    Assemble full Newton Jacobian with all derivatives.
 
     Includes:
     1. Accumulation derivatives (w.r.t. P, So, Sg)
     2. Flux pressure derivatives (transmissibility)
     3. Flux saturation derivatives at CURRENT cell (mobility + capillary)
-    4. Flux saturation derivatives at NEIGHBOR cells (mobility coupling)
+    4. Flux saturation derivatives at neighbour cells (mobility coupling)
     5. Well derivatives
 
     This is the most accurate formulation but requires careful damping.
@@ -858,8 +855,6 @@ def assemble_jacobian(
     jacobian = lil_matrix((total_unknowns, total_unknowns), dtype=dtype)
 
     dx, dy = cell_dimension
-
-    # Extract all grids to avoid repeated attribute access
     porosity_grid = rock_properties.porosity_grid
     oil_compressibility_grid = fluid_properties.oil_compressibility_grid
     gas_compressibility_grid = fluid_properties.gas_compressibility_grid
@@ -923,10 +918,7 @@ def assemble_jacobian(
         gas_compressibility = gas_compressibility_grid[i, j, k]
         water_compressibility = water_compressibility_grid[i, j, k]
 
-        # ================================================================
         # DIAGONAL BLOCK: ∂R/∂x at current cell
-        # ================================================================
-
         # Start with accumulation derivatives
         diagonal_block = assemble_accumulation_derivatives(
             porosity=porosity,
@@ -939,7 +931,6 @@ def assemble_jacobian(
             water_compressibility=water_compressibility,
             dtype=dtype,
         )
-
         # Compute mobility derivatives at current cell
         (dλo_dSo_cell, dλg_dSg_cell, dλw_dSw_cell) = compute_mobility_derivatives(
             cell_index=(i, j, k),
@@ -958,7 +949,6 @@ def assemble_jacobian(
             relative_perturbation=relative_perturbation,
             phase_appearance_tolerance=phase_appearance_tolerance,
         )
-
         # Compute capillary pressure derivatives at current cell
         dPcow_dSw_cell, dPcgo_dSg_cell = compute_capillary_pressure_derivatives(
             cell_index=(i, j, k),
@@ -1013,10 +1003,7 @@ def assemble_jacobian(
                 gas_mobility_grid = gas_mobility_grid_z
                 water_mobility_grid = water_mobility_grid_z
 
-            # ============================================================
             # PRESSURE DERIVATIVES (Transmissibility)
-            # ============================================================
-
             oil_transmissibility = compute_phase_flux_derivative(
                 cell_index=(i, j, k),
                 neighbour_index=(ni, nj, nk),
@@ -1041,10 +1028,7 @@ def assemble_jacobian(
             diagonal_block[1, 0] += time_step_size * gas_transmissibility
             diagonal_block[2, 0] += time_step_size * water_transmissibility
 
-            # ============================================================
             # SATURATION DERIVATIVES AT CURRENT CELL
-            # ============================================================
-
             # Get pressure and elevation differences
             pressure_difference = pressure_grid[ni, nj, nk] - pressure_grid[i, j, k]
             elevation_difference = elevation_grid[ni, nj, nk] - elevation_grid[i, j, k]
@@ -1096,9 +1080,9 @@ def assemble_jacobian(
                 water_mobility_cell, water_mobility_neighbour
             )
 
-            # --- ∂R_oil/∂So (current cell) ---
-            # Flux_o = T_o * pot_o = (λ_o_harmonic * geom) * pot_o
-            # ∂Flux_o/∂So_cell = geom * pot_o * ∂λ_harmonic_o/∂λ_cell * ∂λ_cell/∂So
+            #  ∂R_oil/∂So (current cell)
+            # F_o = T_o * pot_o = (λ_o_harmonic * geom) * pot_o
+            # ∂F_o/∂So_cell = geom * pot_o * ∂λ_harmonic_o/∂λ_cell * ∂λ_cell/∂So
             dFo_dSo = (
                 geometric_factor
                 * oil_phase_potential
@@ -1107,11 +1091,11 @@ def assemble_jacobian(
             )
             diagonal_block[0, 1] -= time_step_size * dFo_dSo
 
-            # --- ∂R_water/∂So (current cell) ---
+            # ∂R_water/∂So (current cell)
             # Water flux affected through:
             # 1. Capillary pressure: ∂pot_w/∂So = -∂Pcow/∂So = -∂Pcow/∂Sw * ∂Sw/∂So = -(-dPcow_dSw_cell)*(-1) = -dPcow_dSw_cell
             # 2. Harmonic mobility: ∂λ_harmonic_w/∂Sw * ∂Sw/∂So = -∂λ_harmonic_w/∂Sw
-            dFw_dSo_capillary = water_transmissibility * dPcow_dSw_cell
+            dFw_dSo_capillary = -water_transmissibility * dPcow_dSw_cell
             dFw_dSo_mobility = (
                 -geometric_factor
                 * water_phase_potential
@@ -1121,7 +1105,7 @@ def assemble_jacobian(
             dFw_dSo = dFw_dSo_capillary + dFw_dSo_mobility
             diagonal_block[2, 1] -= time_step_size * dFw_dSo
 
-            # --- ∂R_gas/∂Sg (current cell) ---
+            # ∂R_gas/∂Sg (current cell)
             # Gas flux affected through:
             # 1. Mobility derivative: ∂λ_harmonic_g/∂Sg
             # 2. Capillary pressure: ∂pot_g/∂Sg = ∂Pcgo/∂Sg = dPcgo_dSg_cell
@@ -1135,11 +1119,11 @@ def assemble_jacobian(
             dFg_dSg = dFg_dSg_mobility + dFg_dSg_capillary
             diagonal_block[1, 2] -= time_step_size * dFg_dSg
 
-            # --- ∂R_water/∂Sg (current cell) ---
+            # ∂R_water/∂Sg (current cell)
             # Water flux affected through:
             # 1. Capillary pressure: ∂pot_w/∂Sg = -∂Pcow/∂Sg = -∂Pcow/∂Sw * ∂Sw/∂Sg = -(-dPcow_dSw_cell)*(-1) = -dPcow_dSw_cell
             # 2. Harmonic mobility: ∂λ_harmonic_w/∂Sw * ∂Sw/∂Sg = -∂λ_harmonic_w/∂Sw
-            dFw_dSg_capillary = water_transmissibility * dPcow_dSw_cell
+            dFw_dSg_capillary = -water_transmissibility * dPcow_dSw_cell
             dFw_dSg_mobility = (
                 -geometric_factor
                 * water_phase_potential
@@ -1178,10 +1162,8 @@ def assemble_jacobian(
                     row_offset, column_offset
                 ]
 
-        # ================================================================
-        # OFF-DIAGONAL BLOCKS: ∂R_current_cell/∂x_neighbour_cell
-        # ================================================================
 
+        # OFF-DIAGONAL BLOCKS: ∂R_current_cell/∂x_neighbour_cell
         for di, dj, dk, direction in neighbour_offsets:
             ni = i + di
             nj = j + dj
@@ -1238,18 +1220,14 @@ def assemble_jacobian(
                 geometric_factor=geometric_factor,
             )
 
-            # ============================================================
             # PRESSURE DERIVATIVES (w.r.t. neighbour pressure)
-            # ============================================================
             off_diagonal_block[0, 0] = -time_step_size * oil_transmissibility
             off_diagonal_block[1, 0] = -time_step_size * gas_transmissibility
             off_diagonal_block[2, 0] = -time_step_size * water_transmissibility
 
-            # ============================================================
-            # SATURATION DERIVATIVES (w.r.t. neighbour saturations)
-            # ============================================================
 
-            # Compute mobility derivatives at NEIGHBOR cell
+            # SATURATION DERIVATIVES (w.r.t. neighbour saturations)
+            # Compute mobility derivatives at neighbour cell
             dλo_dSo_neighbour, dλg_dSg_neighbour, dλw_dSw_neighbour = (
                 compute_mobility_derivatives(
                     cell_index=(ni, nj, nk),
@@ -1269,8 +1247,7 @@ def assemble_jacobian(
                     phase_appearance_tolerance=phase_appearance_tolerance,
                 )
             )
-
-            # Compute capillary pressure derivatives at NEIGHBOR cell
+            # Compute capillary pressure derivatives at neighbour cell
             dPcow_dSw_neighbour, dPcgo_dSg_neighbour = (
                 compute_capillary_pressure_derivatives(
                     cell_index=(ni, nj, nk),
@@ -1328,8 +1305,8 @@ def assemble_jacobian(
                 )
             )
 
-            # --- ∂R_oil/∂So_neighbour (column 1) ---
-            # Flux_o depends on λ_o_neighbour through harmonic mean
+            # ∂R_oil/∂So_neighbour (column 1)
+            # F_o depends on λ_o_neighbour through harmonic mean
             dFo_dSo_neighbour = (
                 geometric_factor
                 * oil_phase_potential
@@ -1340,11 +1317,11 @@ def assemble_jacobian(
             )
             off_diagonal_block[0, 1] = -time_step_size * dFo_dSo_neighbour
 
-            # --- ∂R_water/∂So_neighbour (column 1) ---
+            # ∂R_water/∂So_neighbour (column 1)
             # Water flux affected by:
             # 1. Capillary at neighbour: ∂pot_w/∂So_neighbour = ∂Pcow_neighbour/∂Sw_neighbour * ∂Sw/∂So = dPcow_dSw_neighbour * (-1)
             # 2. Mobility at neighbour: ∂λ_w_neighbour/∂Sw_neighbour * ∂Sw/∂So = -dλw_dSw_neighbour
-            dFw_dSo_neighbour_capillary = water_transmissibility * dPcow_dSw_neighbour
+            dFw_dSo_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
             dFw_dSo_neighbour_mobility = (
                 -geometric_factor
                 * water_phase_potential
@@ -1356,7 +1333,7 @@ def assemble_jacobian(
             dFw_dSo_neighbour = dFw_dSo_neighbour_capillary + dFw_dSo_neighbour_mobility
             off_diagonal_block[2, 1] = -time_step_size * dFw_dSo_neighbour
 
-            # --- ∂R_gas/∂Sg_neighbour (column 2) ---
+            # ∂R_gas/∂Sg_neighbour (column 2)
             # Gas flux affected by:
             # 1. Mobility at neighbour
             # 2. Capillary pressure at neighbour
@@ -1372,9 +1349,9 @@ def assemble_jacobian(
             dFg_dSg_neighbour = dFg_dSg_neighbour_mobility + dFg_dSg_neighbour_capillary
             off_diagonal_block[1, 2] = -time_step_size * dFg_dSg_neighbour
 
-            # --- ∂R_water/∂Sg_neighbour (column 2) ---
+            # ∂R_water/∂Sg_neighbour (column 2)
             # Water flux affected through Sw_neighbour coupling
-            dFw_dSg_neighbour_capillary = water_transmissibility * dPcow_dSw_neighbour
+            dFw_dSg_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
             dFw_dSg_neighbour_mobility = (
                 -geometric_factor
                 * water_phase_potential
@@ -1386,7 +1363,7 @@ def assemble_jacobian(
             dFw_dSg_neighbour = dFw_dSg_neighbour_capillary + dFw_dSg_neighbour_mobility
             off_diagonal_block[2, 2] = -time_step_size * dFw_dSg_neighbour
 
-            # --- Cross-coupling terms (explicitly zero) ---
+            # Cross-coupling terms (explicitly zero)
             off_diagonal_block[1, 1] = 0.0  # ∂R_gas/∂So_neighbour
             off_diagonal_block[0, 2] = 0.0  # ∂R_oil/∂Sg_neighbour
 

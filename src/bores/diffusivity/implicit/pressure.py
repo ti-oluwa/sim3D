@@ -18,7 +18,7 @@ from bores.diffusivity.base import (
     solve_linear_system,
     to_1D_index_interior_only,
 )
-from bores.errors import SolverError
+from bores.errors import SolverError, PreconditionerError
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
@@ -104,6 +104,10 @@ def evolve_pressure_implicitly(
     total_compressibility_grid = (
         total_fluid_compressibility_grid * porosity_grid
     ) + rock_compressibility
+    # Clamp the compressibility within range
+    total_compressibility_grid = config.total_compressibility_range.clip(
+        total_compressibility_grid
+    )
 
     (
         water_relative_mobility_grid,
@@ -219,7 +223,7 @@ def evolve_pressure_implicitly(
             solver=config.iterative_solver,
             preconditioner=config.preconditioner,
         )
-    except SolverError as exc:
+    except (SolverError, PreconditionerError) as exc:
         logger.error(
             f"Pressure solve failed at time step {time_step}: {exc}", exc_info=True
         )

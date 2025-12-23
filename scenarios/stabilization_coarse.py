@@ -268,7 +268,7 @@ def _():
         )
 
         timer = bores.Timer(
-            initial_step_size=bores.Time(minutes=4.5),
+            initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=5.0),
             min_step_size=bores.Time(hours=2.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
@@ -278,18 +278,18 @@ def _():
             aggressive_backoff_factor=0.25,
         )
         config = bores.Config(
-            scheme="implicit",
+            scheme="impes",
             output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
             max_iterations=500,
-            iterative_solver="lgmres",
-            preconditioner="cpr",
+            iterative_solver="bicgstab",
+            preconditioner="ilu",
             log_interval=2,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
         return list(states)
-    return bores, main
+    return (main,)
 
 
 @app.cell
@@ -299,15 +299,15 @@ def _(main):
 
 
 @app.cell
-def _(bores, states):
+def _(states):
     from pathlib import Path
 
-    bores.dump_states(
-        states,
-        filepath=Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl",
-        exist_ok=True,
-        compression="lzma",
-    )
+    # bores.dump_states(
+    #     states,
+    #     filepath=Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl",
+    #     exist_ok=True,
+    #     compression="lzma",
+    # )
 
     # Save last stabilized state
     stabilized_state = states[-1]

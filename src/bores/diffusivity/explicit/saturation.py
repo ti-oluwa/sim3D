@@ -313,14 +313,14 @@ def evolve_saturation_explicitly(
         gas_volume = cell_pore_volume * gas_saturation
 
         msg = f"""
-        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}. "
-        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, "
-        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, "
-        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, "
-        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, "
-        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, "
-        Pore volume = {cell_pore_volume:.12f} ft³. "
+        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}:
+        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}.
+        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day,
+        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day,
+        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day,
+        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
+        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
+        Pore volume = {cell_pore_volume:.12f} ft³.
         Consider reducing time step size from {time_step_size} seconds."
         """
         return EvolutionResult(
@@ -1461,14 +1461,14 @@ def evolve_miscible_saturation_explicitly(
         total_outflow = total_water_outflow + total_oil_outflow + total_gas_outflow
 
         msg = f"""
-        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}: "
-        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}. "
-        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day, "
-        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day, "
-        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day, "
-        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³, "
-        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day, "
-        Pore volume = {cell_pore_volume:.12f} ft³. "
+        CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}:
+        Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}.
+        Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day,
+        Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day,
+        Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day,
+        Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
+        Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
+        Pore volume = {cell_pore_volume:.12f} ft³.
         Consider reducing time step size from {time_step_size} seconds."
         """
         return EvolutionResult(

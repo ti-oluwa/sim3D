@@ -12,7 +12,54 @@ from bores.types import (
     RelativeMobilityRange,
 )
 
-__all__ = ["Config"]
+__all__ = ["Config", "DampingController"]
+
+
+@attrs.define
+class DampingController:
+    """
+    Adaptive controller for Newton damping factor used in Fully Implicit scheme.
+    """
+
+    initial_damping: float = 1.0
+    """Initial damping factor value."""
+    min_damping: float = 0.01
+    """Minimum allowable damping factor."""
+    max_damping: float = 1.0
+    """Maximum allowable damping factor."""
+    increase_factor: float = 1.2
+    """Factor to increase damping on successful steps."""
+    decrease_factor: float = 0.5
+    """Factor to decrease damping on unsuccessful/stagnant steps."""
+
+    damping: float = attrs.field(init=False, default=1.0)
+    """Current damping factor."""
+
+    def __attrs_post_init__(self):
+        self.damping = self.initial_damping
+
+    def reset(self):
+        """Resets the damping factor to its initial value."""
+        self.damping = self.initial_damping
+
+    def decrease(self):
+        """Decreases the damping factor."""
+        self.damping = max(self.damping * self.decrease_factor, self.min_damping)
+        return self.damping
+
+    def increase(self):
+        """Increases the damping factor."""
+        self.damping = min(self.damping * self.increase_factor, self.max_damping)
+        return self.damping
+
+    def set(self, value: float):
+        """Sets the damping factor to a specific value within bounds."""
+        self.damping = min(max(value, self.min_damping), self.max_damping)
+        return self.damping
+
+    def get(self):
+        """Gets the current applicable damping factor."""
+        return self.damping
 
 
 @attrs.frozen
@@ -45,8 +92,8 @@ class Config:
     """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default=RelativeMobilityRange(
-            oil=Range(min=1e-9, max=1e6),
-            water=Range(min=1e-9, max=1e6),
+            oil=Range(min=1e-12, max=1e6),
+            water=Range(min=1e-12, max=1e6),
             gas=Range(min=1e-12, max=1e6),
         )
     )
@@ -55,7 +102,11 @@ class Config:
 
     Each phase has a `Range` object defining its minimum and maximum relative mobility.
     Adjust minimum or maximum values to constrain phase mobilities during simulation.
+
+    Minimum values should not be exactly zero for the best numerical stability.
     """
+    total_compressibility_range: Range = attrs.field(default=Range(min=1e-8, max=1e-2))
+    """Range to constrain total compressibility for the simulation. This is usually necessary for numerical stability."""
     capillary_strength_factor: float = attrs.field(
         default=1.0,
         validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
@@ -129,3 +180,16 @@ class Config:
     """Ratio to compute oil drainage residual from imbibition value during gas flooding."""
     residual_gas_drainage_ratio: float = 0.5
     """Ratio to compute gas drainage residual from imbibition value."""
+    damping_controller_factory: typing.Callable[[], DampingController] = (
+        DampingController
+    )
+    """Factory for creating the adaptive Newton damping factor controller in Fully Implicit scheme."""
+    max_jacobian_reuses: int = 3
+    """
+    Maximum number of time steps to reuse the cached Jacobian matrix in the Fully Implicit solver.
+
+    The fully implcit solver uses a quasi-Newton approach where the Jacobian matrix is reused
+    for multiple newton iterations to save computational cost, when certian criteria are met.
+    This parameter sets the maximum number of time steps the Jacobian can be reused before
+    it is recomputed.
+    """

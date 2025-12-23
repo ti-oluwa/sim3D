@@ -976,7 +976,7 @@ def compute_water_bubble_point_pressure(
         # Find where violations occur
         too_low = gas_solubility_in_water < min_solubility
         too_high = gas_solubility_in_water > max_solubility
-        
+
         error_parts = []
         if np.any(too_low):
             min_target = np.min(gas_solubility_in_water[too_low])
@@ -984,19 +984,19 @@ def compute_water_bubble_point_pressure(
             error_parts.append(
                 f" • Solubility too low: {min_target:.6f} SCF/STB < minimum allowed {min_allowed:.6f} SCF/STB"
             )
-        
+
         if np.any(too_high):
             max_target = np.max(gas_solubility_in_water[too_high])
             max_allowed = np.max(max_solubility[too_high])
             error_parts.append(
                 f" • Solubility too high: {max_target:.6f} SCF/STB > maximum allowed {max_allowed:.6f} SCF/STB"
             )
-        
+
         error_message = (
-            f"Gas solubility in water is outside valid range for '{gas}':\n" +
-            "\n".join(error_parts) +
-            f"\n  Conditions: T ∈ [{min_(temperature):.2f}, {max_(temperature):.2f}]°F, "
-            f"Salinity ∈ [{min_(salinity):.0f}, {max_(salinity):.0f}] ppm"
+            f"Gas solubility in water is outside valid range for '{gas}':\n"
+            + "\n".join(error_parts)
+            + f"\n  Conditions: T ∈ [{min_(temperature):.2f}, {max_(temperature):.2f}]°F, "
+            f"Salinity ∈ [{min_(salinity):.2f}, {max_(salinity):.2f}] ppm"
         )
         raise ComputationError(error_message)
 
@@ -1875,7 +1875,9 @@ def _gas_solubility_in_water_mccain_methane(
     :return: Gas solubility in water in SCF/STB.
     """
     if min_(pressure) < 0 or min_(temperature) < 0 or min_(salinity) < 0:
-        raise ValidationError("Pressure, temperature, and salinity must be non-negative.")
+        raise ValidationError(
+            "Pressure, temperature, and salinity must be non-negative."
+        )
 
     if min_(temperature) < 100 or max_(temperature) > 400:
         raise ValidationError(
@@ -2211,7 +2213,9 @@ def _compute_dRsw_dP_mccain(
     Returns dRsw/dP in scf/(STB*psi).
     """
     if min_(temperature) < 0 or min_(salinity) < 0:
-        raise ValidationError("Temperature and salinity cannot be negative for dRsw/dP.")
+        raise ValidationError(
+            "Temperature and salinity cannot be negative for dRsw/dP."
+        )
 
     derivative_pure_water = (
         0.0000164 + (0.000000134 * temperature) - (0.00000000185 * temperature**2)
@@ -2309,7 +2313,9 @@ def compute_water_compressibility(
         dBw_gas_free_dP_undersaturated = get_mask(dBw_gas_free_dP, undersaturated_mask)
 
         if np.any(gas_free_water_formation_volume_factor_undersaturated <= 0):
-            raise ValidationError("Calculated Bw for undersaturated water is non-positive.")
+            raise ValidationError(
+                "Calculated Bw for undersaturated water is non-positive."
+            )
 
         undersaturated_compressibility = (
             -(1.0 / gas_free_water_formation_volume_factor_undersaturated)
@@ -2764,7 +2770,9 @@ def compute_hydrocarbon_in_place(
     :return: Free hydrocarbon/water in place (OIP/WIP in STB, and GIP in SCF).
     """
     if hydrocarbon_type not in {"oil", "gas", "water"}:
-        raise ValidationError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
+        raise ValidationError(
+            "Hydrocarbon type must be either 'oil', 'gas', or 'water'."
+        )
     if min_(area) <= 0 or min_(thickness) <= 0:
         raise ValidationError("Area and thickness must be positive values.")
     if min_(porosity) < 0 or max_(porosity) > 1:

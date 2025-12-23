@@ -16,7 +16,7 @@ from bores.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
-from bores.errors import SimulationError, TimingError
+from bores.errors import SimulationError, TimingError, StopSimulation
 from bores.grids.base import (
     CapillaryPressureGrids,
     RateGrids,
@@ -26,11 +26,11 @@ from bores.grids.base import (
     build_uniform_grid,
     pad_grid,
 )
-from bores.grids.pvt import build_three_phase_relative_mobilities_grids
 from bores.grids.boundary_conditions import (
-    mirror_neighbour_cells,
     apply_boundary_conditions,
+    mirror_neighbour_cells,
 )
+from bores.grids.pvt import build_three_phase_relative_mobilities_grids
 from bores.grids.rock_fluid import build_rock_fluid_properties_grids
 from bores.grids.updates import update_pvt_grids, update_residual_saturation_grids
 from bores.models import (
@@ -193,13 +193,8 @@ def _run_implicit_step(
         f"Fully implicit evolution completed! "
         f"Converged: {solution.converged}, "
         f"Iterations: {solution.newton_iterations}, "
-        f"Residual: {solution.final_residual_norm:.2e}"
+        f"Residual: {solution.final_residual_norm:.4e}"
     )
-    if not solution.converged:
-        logger.warning(
-            f"Fully implicit solver did not converge at time step {time_step}. "
-            f"Final residual norm: {solution.final_residual_norm:.2e}"
-        )
 
     # Update fluid properties with new pressure and saturation
     logger.debug("Updating fluid properties with new pressure and saturation grids...")
@@ -365,47 +360,20 @@ def _run_impes_step(
     )
 
     # Clamp relative mobility grids to avoid numerical issues
-    # Make mask of cells where each phase is active
-    # Use mobility to choose flooding phase since no flux data
-    padded_residual_oil_saturation_water_grid = (
-        padded_rock_properties.residual_oil_saturation_water_grid
+    # NOTE: Important design decision! We would normally apply these clamps to active
+    # phases only, i.e where "S > Sirr + phase tolerance". This respects the physics but leads to numerical
+    # instability as phase mobility can become zero and hence transmissibilities, and hence diagonals in the
+    # the sparse matrix can be zeroed out making the matrix singular. Therefore, we clamp all to a very small
+    # non-zero value to ensure numerical stability.
+    padded_water_relative_mobility_grid = config.relative_mobility_range["water"].clip(
+        padded_water_relative_mobility_grid
     )
-    padded_residual_oil_saturation_gas_grid = (
-        padded_rock_properties.residual_oil_saturation_gas_grid
+    padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].clip(
+        padded_oil_relative_mobility_grid
     )
-    padded_irreducible_water_saturation_grid = (
-        padded_rock_properties.irreducible_water_saturation_grid
+    padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].clip(
+        padded_gas_relative_mobility_grid
     )
-    padded_residual_gas_saturation_grid = (
-        padded_rock_properties.residual_gas_saturation_grid
-    )
-    padded_oil_saturation_grid = padded_fluid_properties.oil_saturation_grid
-    padded_water_saturation_grid = padded_fluid_properties.water_saturation_grid
-    padded_gas_saturation_grid = padded_fluid_properties.gas_saturation_grid
-    residual_oil_saturation_grid = np.where(
-        padded_water_relative_mobility_grid > padded_gas_relative_mobility_grid + 1e-12,
-        padded_residual_oil_saturation_water_grid,
-        padded_residual_oil_saturation_gas_grid,
-    )
-    phase_appearance_tolerance = config.phase_appearance_tolerance
-    water_active = padded_water_saturation_grid > (
-        padded_irreducible_water_saturation_grid + phase_appearance_tolerance
-    )
-    oil_active = padded_oil_saturation_grid > (
-        residual_oil_saturation_grid + phase_appearance_tolerance
-    )
-    gas_active = padded_gas_saturation_grid > (
-        padded_residual_gas_saturation_grid + phase_appearance_tolerance
-    )
-    padded_water_relative_mobility_grid[water_active] = config.relative_mobility_range[
-        "water"
-    ].clip(padded_water_relative_mobility_grid[water_active])
-    padded_oil_relative_mobility_grid[oil_active] = config.relative_mobility_range[
-        "oil"
-    ].clip(padded_oil_relative_mobility_grid[oil_active])
-    padded_gas_relative_mobility_grid[gas_active] = config.relative_mobility_range[
-        "gas"
-    ].clip(padded_gas_relative_mobility_grid[gas_active])
     padded_relative_mobility_grids = RelativeMobilityGrids(
         water_relative_mobility=padded_water_relative_mobility_grid,
         oil_relative_mobility=padded_oil_relative_mobility_grid,
@@ -1043,7 +1011,7 @@ def run(
                     try:
                         timer.reject_step(
                             step_size=step_size,
-                            aggressive=timer.rejection_count > 10,
+                            aggressive=timer.rejection_count > 5,
                         )
                     except TimingError as exc:
                         raise SimulationError(
@@ -1214,6 +1182,9 @@ def run(
                     phase_appearance_tolerance=config.phase_appearance_tolerance,
                 )
 
+            except StopSimulation as exc:
+                logger.info(f"Stopping simulation on request: {exc}")
+                break
             except Exception as exc:
                 raise SimulationError(
                     f"Simulation failed while attempting time step {new_step} due to error: {exc}"

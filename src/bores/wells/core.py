@@ -399,7 +399,7 @@ def compute_oil_well_rate(
     :return: The well rate in bbl/day.
     """
     if well_index <= 0:
-        raise ValueError("Well index must be a positive value.")
+        raise ValidationError("Well index must be a positive value.")
 
     pressure_difference = bottom_hole_pressure - pressure
     if fluid_compressibility:
@@ -476,7 +476,7 @@ def compute_gas_well_rate(
 
     if use_pseudo_pressure:
         if pseudo_pressure_table is None:
-            raise ValueError(
+            raise ValidationError(
                 "`pseudo_pressure_table` must be provided when use_pseudo_pressure is True."
             )
 
@@ -641,7 +641,7 @@ def compute_required_bhp_for_gas_rate(
             required_bhp = float(
                 pseudo_pressure_table.inverse_interpolator(required_pseudo_pressure)
             )
-        except ValueError as exc:
+        except ValidationError as exc:
             min_pseudo_p = pseudo_pressure_table.pseudo_pressures[0]
             max_pseudo_p = pseudo_pressure_table.pseudo_pressures[-1]
             raise ComputationError(
@@ -704,7 +704,6 @@ class WellFluid:
                 "Pseudo-pressure table is only applicable for gas phase."
             )
 
-        @functools.lru_cache(maxsize=1024)
         def z_factor_func(pressure: float) -> float:
             return compute_gas_compressibility_factor(
                 pressure=pressure,
@@ -765,7 +764,7 @@ class InjectedFluid(WellFluid):
     def __attrs_post_init__(self) -> None:
         """Validate the fluid properties."""
         if self.phase not in (FluidPhase.GAS, FluidPhase.WATER):
-            raise ValueError("Only gases and water are supported for injection.")
+            raise ValidationError("Only gases and water are supported for injection.")
 
         if self.is_miscible:
             if self.phase != FluidPhase.GAS:

@@ -98,33 +98,20 @@ def build_rock_fluid_properties_grids(
     )
 
     if relative_mobility_range is not None:
-        # Make mask of cells where each phase is active
-        # Use mobility to choose flooding phase since no flux data
-        residual_oil_saturation_grid = np.where(
-            water_relative_mobility_grid > gas_relative_mobility_grid + 1e-12,
-            residual_oil_saturation_water_grid,
-            residual_oil_saturation_gas_grid,
-        )
-        water_active = water_saturation_grid > (
-            irreducible_water_saturation_grid + phase_appearance_tolerance
-        )
-        oil_active = oil_saturation_grid > (
-            residual_oil_saturation_grid + phase_appearance_tolerance
-        )
-        gas_active = gas_saturation_grid > (
-            residual_gas_saturation_grid + phase_appearance_tolerance
-        )
-
         # Clamp relative mobility grids to avoid numerical issues
-        # Note: Do this only where the phase is active
-        water_relative_mobility_grid[water_active] = relative_mobility_range[
-            "water"
-        ].clip(water_relative_mobility_grid[water_active])
-        oil_relative_mobility_grid[oil_active] = relative_mobility_range["oil"].clip(
-            oil_relative_mobility_grid[oil_active]
+        # NOTE: Important design decision! We would normally apply these clamps to active
+        # phases only, i.e where "S > Sirr + phase tolerance". This respects the physics but leads to numerical
+        # instability as phase mobility can become zero and hence transmissibilities, and hence diagonals in the
+        # the sparse matrix can be zeroed out making the matrix singular. Therefore, we clamp all to a very small
+        # non-zero value to ensure numerical stability.
+        water_relative_mobility_grid = relative_mobility_range["water"].clip(
+            water_relative_mobility_grid
         )
-        gas_relative_mobility_grid[gas_active] = relative_mobility_range["gas"].clip(
-            gas_relative_mobility_grid[gas_active]
+        oil_relative_mobility_grid = relative_mobility_range["oil"].clip(
+            oil_relative_mobility_grid
+        )
+        gas_relative_mobility_grid = relative_mobility_range["gas"].clip(
+            gas_relative_mobility_grid
         )
 
     if disable_capillary_effects:

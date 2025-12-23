@@ -467,7 +467,9 @@ def _get_preconditioner(
     A_csr: typing.Union[csr_array, csr_matrix],
     preconditioner: typing.Optional[Preconditioner],
 ) -> typing.Optional[LinearOperator]:
-    if isinstance(preconditioner, str):
+    if isinstance(preconditioner, (type(None), LinearOperator)):
+        return preconditioner
+    elif isinstance(preconditioner, str):
         if preconditioner in __preconditioner_factories:
             preconditioner_factory = __preconditioner_factories[preconditioner]
             M = preconditioner_factory(A_csr)
@@ -542,7 +544,11 @@ def solve_linear_system(
     :return: A tuple (x, M) where x is the solution vector and M is the preconditioner used,
     :raises RuntimeError: If both solvers fail to converge.
     """
-    M = _get_preconditioner(A_csr, preconditioner)
+    try:
+        M = _get_preconditioner(A_csr, preconditioner)
+    except Exception as exc:
+        raise PreconditionerError(f"Error building preconditioner: {exc}") from exc
+    
     b_norm = np.linalg.norm(b)
     # Too strict
     # epsilon = get_floating_point_info().eps
