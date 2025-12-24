@@ -16,6 +16,7 @@ from bores.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
+from bores.constants import c
 from bores.errors import SimulationError, TimingError, StopSimulation
 from bores.grids.base import (
     CapillaryPressureGrids,
@@ -44,6 +45,7 @@ from bores.states import ModelState
 from bores.timing import Timer
 from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
+from bores.utils import clip
 
 
 __all__ = ["run"]
@@ -51,9 +53,11 @@ __all__ = ["run"]
 logger = logging.getLogger(__name__)
 
 
-NEGATIVE_PRESSURE_ERROR_MSG = """
-Negative pressure encountered in the pressure grid at the following indices:
+UNPHYSICAL_PRESSURE_ERROR_MSG = """
+Unphysical pressure encountered in the pressure grid at the following indices:
+
 {indices}
+
 This indicates a likely issue with the simulation setup, numerical stability, or physical parameters.
 
 Potential causes include:
@@ -69,7 +73,6 @@ Suggested actions:
 - Check permeability, porosity, and compressibility values.
 - Cell dimensions and bulk volume should be appropriate for the physical scale of the reservoir.
 - Use smaller time steps if using explicit updates.
-- Clamp pressure updates to a minimum floor (e.g., 1.45 psi) to prevent blow-up.
 - Cross-check well source/sink terms for sign and magnitude correctness.
 
 Simulation aborted to avoid propagation of unphysical results.
@@ -184,16 +187,58 @@ def _run_implicit_step(
         )
 
     solution = result.value
-    padded_pressure_grid = solution.pressure_grid
-    padded_oil_saturation_grid = solution.oil_saturation_grid
-    padded_gas_saturation_grid = solution.gas_saturation_grid
-    padded_water_saturation_grid = solution.water_saturation_grid
-
     logger.debug(
         f"Fully implicit evolution completed! "
         f"Converged: {solution.converged}, "
         f"Iterations: {solution.newton_iterations}, "
         f"Residual: {solution.final_residual_norm:.4e}"
+    )
+    padded_pressure_grid = solution.pressure_grid
+    padded_oil_saturation_grid = solution.oil_saturation_grid
+    padded_gas_saturation_grid = solution.gas_saturation_grid
+    padded_water_saturation_grid = solution.water_saturation_grid
+
+    # Check for any out-of-range pressures
+    min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
+    max_allowable_pressure = c.MAX_VALID_PRESSURE + 1e-3
+    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
+        padded_pressure_grid > max_allowable_pressure
+    )
+    out_of_range_indices = np.argwhere(out_of_range_mask)
+    if out_of_range_indices.size > 0:
+        min_pressure = np.min(padded_pressure_grid)
+        max_pressure = np.max(padded_pressure_grid)
+        logger.warning(
+            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
+            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
+        )
+        message = ""
+        if min_pressure < min_allowable_pressure:
+            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
+        if max_pressure > max_allowable_pressure:
+            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
+
+        message += (
+            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
+            + f"\nAt Time Step {time_step}."
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            rock_properties=padded_rock_properties,
+            saturation_history=padded_saturation_history,
+            success=False,
+            message=message,
+        )
+
+    # Clamp pressures to valid range just for additional safety and to remove numerical noise
+    padded_pressure_grid = clip(
+        padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
     )
 
     # Update fluid properties with new pressure and saturation
@@ -302,16 +347,28 @@ def _run_impes_step(
     logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_result.value
 
-    if (negative_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
+    # Check for any out-of-range pressures
+    min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
+    max_allowable_pressure = c.MAX_VALID_PRESSURE + 1e-3
+    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
+        padded_pressure_grid > max_allowable_pressure
+    )
+    out_of_range_indices = np.argwhere(out_of_range_mask)
+    if out_of_range_indices.size > 0:
+        min_pressure = np.min(padded_pressure_grid)
+        max_pressure = np.max(padded_pressure_grid)
         logger.warning(
-            f"Negative pressure detected at {negative_indices.size} grid cells"
+            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
+            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
         )
-        logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
-        logger.warning(
-            f"First few negative pressure indices: {negative_indices.tolist()[:10]}"
-        )
-        message = (
-            NEGATIVE_PRESSURE_ERROR_MSG.format(indices=negative_indices.tolist())
+        message = ""
+        if min_pressure < min_allowable_pressure:
+            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
+        if max_pressure > max_allowable_pressure:
+            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
+
+        message += (
+            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
             + f"\nAt Time Step {time_step}."
         )
         return StepResult(
@@ -327,6 +384,11 @@ def _run_impes_step(
             success=False,
             message=message,
         )
+
+    # Clamp pressures to valid range just for additional safety and to remove numerical noise
+    padded_pressure_grid = clip(
+        padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
+    )
 
     # Update fluid properties with new pressure grid
     logger.debug("Updating fluid properties with new pressure grid...")
@@ -555,16 +617,28 @@ def _run_explicit_step(
     logger.debug("Pressure evolution completed!")
     padded_pressure_grid = pressure_solution.pressure_grid
 
-    if (negative_indices := np.argwhere(padded_pressure_grid < 0)).size > 0:
+    # Check for any out-of-range pressures
+    min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
+    max_allowable_pressure = c.MAX_VALID_PRESSURE + 1e-3
+    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
+        padded_pressure_grid > max_allowable_pressure
+    )
+    out_of_range_indices = np.argwhere(out_of_range_mask)
+    if out_of_range_indices.size > 0:
+        min_pressure = np.min(padded_pressure_grid)
+        max_pressure = np.max(padded_pressure_grid)
         logger.warning(
-            f"Negative pressure detected at {negative_indices.size} grid cells"
+            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
+            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
         )
-        logger.warning(f"Minimum pressure: {np.min(padded_pressure_grid):.8f} psi")
-        logger.warning(
-            f"First few negative pressure indices: {negative_indices.tolist()[:10]}"
-        )
-        message = (
-            NEGATIVE_PRESSURE_ERROR_MSG.format(indices=negative_indices.tolist())
+        message = ""
+        if min_pressure < min_allowable_pressure:
+            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
+        if max_pressure > max_allowable_pressure:
+            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
+
+        message += (
+            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
             + f"\nAt Time Step {time_step}."
         )
         return StepResult(
@@ -581,6 +655,11 @@ def _run_explicit_step(
             message=message,
             accept_kwargs=accept_kwargs,
         )
+
+    # Clamp pressures to valid range just for additional safety and to remove numerical noise
+    padded_pressure_grid = clip(
+        padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
+    )
 
     # For explicit schemes, we can re-use the current fluid properties
     # in the saturation evolution step.

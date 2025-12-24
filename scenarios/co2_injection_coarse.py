@@ -15,7 +15,6 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_64bit_precision()
-    bores.image_config(scale=3)
 
     DEPLETED_MODEL_STATE = (
         Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl.xz"

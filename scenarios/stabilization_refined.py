@@ -16,7 +16,6 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
-    bores.image_config(scale=3)
 
     def main():
         # Grid dimensions - typical field scale

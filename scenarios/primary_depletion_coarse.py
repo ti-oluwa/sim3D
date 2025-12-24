@@ -15,7 +15,6 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
-    bores.image_config(scale=3)
 
     STABILIZED_MODEL_STATE = (
         Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl.xz"
@@ -82,14 +81,14 @@ def _():
         wells = bores.wells_(injectors=None, producers=producers)
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=20),
-            max_step_size=bores.Time(days=1),
-            min_step_size=bores.Time(hours=2.0),
+            max_step_size=bores.Time(days=7),
+            min_step_size=bores.Time(minutes=20.0),
             simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
-            max_rejects=10,
+            max_rejects=20,
         )
         config = bores.Config(
             scheme="impes",

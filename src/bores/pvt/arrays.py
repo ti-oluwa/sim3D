@@ -954,7 +954,7 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    min_pressure = np.full_like(temperature, c.MIN_VALID_PRESSURE - 1e-3)
+    min_pressure = np.full_like(temperature, max(c.MIN_VALID_PRESSURE - 1e-3, 0.0))
     max_pressure = np.full_like(temperature, c.MAX_VALID_PRESSURE + 1e-3)
 
     min_solubility = compute_gas_solubility_in_water(
@@ -1009,7 +1009,7 @@ def compute_water_bubble_point_pressure(
     # Allocate result
     bubble_point_pressure = np.empty_like(temperature)
 
-    it = np.nditer(temperature, flags=["multi_index"])
+    it = np.nditer(temperature, flags=["multi_index"])  # type: ignore
     while not it.finished:
         idx = it.multi_index
         bubble_point_pressure[idx] = brentq(  # type: ignore

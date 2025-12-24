@@ -16,7 +16,6 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
-    bores.image_config(scale=3)
 
     def main():
         # Grid dimensions - typical field scale
@@ -269,9 +268,9 @@ def _():
 
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
-            max_step_size=bores.Time(days=5.0),
-            min_step_size=bores.Time(hours=2.0),
-            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
+            max_step_size=bores.Time(days=1.0),
+            min_step_size=bores.Time(hours=1.0),
+            simulation_time=bores.Time(days=30),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,

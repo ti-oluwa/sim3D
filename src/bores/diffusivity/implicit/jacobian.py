@@ -1226,146 +1226,146 @@ def assemble_jacobian(
             off_diagonal_block[2, 0] = -time_step_size * water_transmissibility
 
 
-            # SATURATION DERIVATIVES (w.r.t. neighbour saturations)
-            # Compute mobility derivatives at neighbour cell
-            dλo_dSo_neighbour, dλg_dSg_neighbour, dλw_dSw_neighbour = (
-                compute_mobility_derivatives(
-                    cell_index=(ni, nj, nk),
-                    oil_saturation_grid=oil_saturation_grid,
-                    water_saturation_grid=water_saturation_grid,
-                    gas_saturation_grid=gas_saturation_grid,
-                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                    residual_gas_saturation_grid=residual_gas_saturation_grid,
-                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                    oil_viscosity_grid=oil_viscosity_grid,
-                    water_viscosity_grid=water_viscosity_grid,
-                    gas_viscosity_grid=gas_viscosity_grid,
-                    relperm_table=relative_permeability_table,
-                    absolute_perturbation=absolute_perturbation,
-                    relative_perturbation=relative_perturbation,
-                    phase_appearance_tolerance=phase_appearance_tolerance,
-                )
-            )
-            # Compute capillary pressure derivatives at neighbour cell
-            dPcow_dSw_neighbour, dPcgo_dSg_neighbour = (
-                compute_capillary_pressure_derivatives(
-                    cell_index=(ni, nj, nk),
-                    oil_saturation_grid=oil_saturation_grid,
-                    water_saturation_grid=water_saturation_grid,
-                    gas_saturation_grid=gas_saturation_grid,
-                    residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
-                    residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
-                    residual_gas_saturation_grid=residual_gas_saturation_grid,
-                    irreducible_water_saturation_grid=irreducible_water_saturation_grid,
-                    capillary_pressure_table=capillary_pressure_table,
-                    absolute_perturbation=absolute_perturbation,
-                    relative_perturbation=relative_perturbation,
-                    phase_appearance_tolerance=phase_appearance_tolerance,
-                )
-            )
+            # # SATURATION DERIVATIVES (w.r.t. neighbour saturations)
+            # # Compute mobility derivatives at neighbour cell
+            # dλo_dSo_neighbour, dλg_dSg_neighbour, dλw_dSw_neighbour = (
+            #     compute_mobility_derivatives(
+            #         cell_index=(ni, nj, nk),
+            #         oil_saturation_grid=oil_saturation_grid,
+            #         water_saturation_grid=water_saturation_grid,
+            #         gas_saturation_grid=gas_saturation_grid,
+            #         residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            #         residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            #         residual_gas_saturation_grid=residual_gas_saturation_grid,
+            #         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            #         oil_viscosity_grid=oil_viscosity_grid,
+            #         water_viscosity_grid=water_viscosity_grid,
+            #         gas_viscosity_grid=gas_viscosity_grid,
+            #         relperm_table=relative_permeability_table,
+            #         absolute_perturbation=absolute_perturbation,
+            #         relative_perturbation=relative_perturbation,
+            #         phase_appearance_tolerance=phase_appearance_tolerance,
+            #     )
+            # )
+            # # Compute capillary pressure derivatives at neighbour cell
+            # dPcow_dSw_neighbour, dPcgo_dSg_neighbour = (
+            #     compute_capillary_pressure_derivatives(
+            #         cell_index=(ni, nj, nk),
+            #         oil_saturation_grid=oil_saturation_grid,
+            #         water_saturation_grid=water_saturation_grid,
+            #         gas_saturation_grid=gas_saturation_grid,
+            #         residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
+            #         residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
+            #         residual_gas_saturation_grid=residual_gas_saturation_grid,
+            #         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
+            #         capillary_pressure_table=capillary_pressure_table,
+            #         absolute_perturbation=absolute_perturbation,
+            #         relative_perturbation=relative_perturbation,
+            #         phase_appearance_tolerance=phase_appearance_tolerance,
+            #     )
+            # )
 
-            # Get mobilities for harmonic mean derivatives
-            oil_mobility_cell = oil_mobility_grid[i, j, k]
-            gas_mobility_cell = gas_mobility_grid[i, j, k]
-            water_mobility_cell = water_mobility_grid[i, j, k]
+            # # Get mobilities for harmonic mean derivatives
+            # oil_mobility_cell = oil_mobility_grid[i, j, k]
+            # gas_mobility_cell = gas_mobility_grid[i, j, k]
+            # water_mobility_cell = water_mobility_grid[i, j, k]
 
-            oil_mobility_neighbour = oil_mobility_grid[ni, nj, nk]
-            gas_mobility_neighbour = gas_mobility_grid[ni, nj, nk]
-            water_mobility_neighbour = water_mobility_grid[ni, nj, nk]
+            # oil_mobility_neighbour = oil_mobility_grid[ni, nj, nk]
+            # gas_mobility_neighbour = gas_mobility_grid[ni, nj, nk]
+            # water_mobility_neighbour = water_mobility_grid[ni, nj, nk]
 
-            # Get potentials
-            pressure_difference = pressure_grid[ni, nj, nk] - pressure_grid[i, j, k]
-            elevation_difference = elevation_grid[ni, nj, nk] - elevation_grid[i, j, k]
-            pcow_difference = pcow_grid[ni, nj, nk] - pcow_grid[i, j, k]
-            pcgo_difference = pcgo_grid[ni, nj, nk] - pcgo_grid[i, j, k]
+            # # Get potentials
+            # pressure_difference = pressure_grid[ni, nj, nk] - pressure_grid[i, j, k]
+            # elevation_difference = elevation_grid[ni, nj, nk] - elevation_grid[i, j, k]
+            # pcow_difference = pcow_grid[ni, nj, nk] - pcow_grid[i, j, k]
+            # pcgo_difference = pcgo_grid[ni, nj, nk] - pcgo_grid[i, j, k]
 
-            # Compute harmonic mean densities for gravity
-            harmonic_oil_density = compute_harmonic_mean(
-                oil_density_grid[i, j, k], oil_density_grid[ni, nj, nk]
-            )
-            harmonic_water_density = compute_harmonic_mean(
-                water_density_grid[i, j, k], water_density_grid[ni, nj, nk]
-            )
-            harmonic_gas_density = compute_harmonic_mean(
-                gas_density_grid[i, j, k], gas_density_grid[ni, nj, nk]
-            )
+            # # Compute harmonic mean densities for gravity
+            # harmonic_oil_density = compute_harmonic_mean(
+            #     oil_density_grid[i, j, k], oil_density_grid[ni, nj, nk]
+            # )
+            # harmonic_water_density = compute_harmonic_mean(
+            #     water_density_grid[i, j, k], water_density_grid[ni, nj, nk]
+            # )
+            # harmonic_gas_density = compute_harmonic_mean(
+            #     gas_density_grid[i, j, k], gas_density_grid[ni, nj, nk]
+            # )
 
-            # Compute phase potentials using helper function
-            oil_phase_potential, water_phase_potential, gas_phase_potential = (
-                compute_phase_potentials(
-                    pressure_difference=pressure_difference,
-                    elevation_difference=elevation_difference,
-                    pcow_difference=pcow_difference,
-                    pcgo_difference=pcgo_difference,
-                    harmonic_oil_density=harmonic_oil_density,
-                    harmonic_water_density=harmonic_water_density,
-                    harmonic_gas_density=harmonic_gas_density,
-                    gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
-                )
-            )
+            # # Compute phase potentials using helper function
+            # oil_phase_potential, water_phase_potential, gas_phase_potential = (
+            #     compute_phase_potentials(
+            #         pressure_difference=pressure_difference,
+            #         elevation_difference=elevation_difference,
+            #         pcow_difference=pcow_difference,
+            #         pcgo_difference=pcgo_difference,
+            #         harmonic_oil_density=harmonic_oil_density,
+            #         harmonic_water_density=harmonic_water_density,
+            #         harmonic_gas_density=harmonic_gas_density,
+            #         gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+            #     )
+            # )
 
-            # ∂R_oil/∂So_neighbour (column 1)
-            # F_o depends on λ_o_neighbour through harmonic mean
-            dFo_dSo_neighbour = (
-                geometric_factor
-                * oil_phase_potential
-                * compute_harmonic_mean_derivative_wrt_first(
-                    oil_mobility_neighbour, oil_mobility_cell
-                )
-                * dλo_dSo_neighbour
-            )
-            off_diagonal_block[0, 1] = -time_step_size * dFo_dSo_neighbour
+            # # ∂R_oil/∂So_neighbour (column 1)
+            # # F_o depends on λ_o_neighbour through harmonic mean
+            # dFo_dSo_neighbour = (
+            #     geometric_factor
+            #     * oil_phase_potential
+            #     * compute_harmonic_mean_derivative_wrt_first(
+            #         oil_mobility_neighbour, oil_mobility_cell
+            #     )
+            #     * dλo_dSo_neighbour
+            # )
+            # off_diagonal_block[0, 1] = -time_step_size * dFo_dSo_neighbour
 
-            # ∂R_water/∂So_neighbour (column 1)
-            # Water flux affected by:
-            # 1. Capillary at neighbour: ∂pot_w/∂So_neighbour = ∂Pcow_neighbour/∂Sw_neighbour * ∂Sw/∂So = dPcow_dSw_neighbour * (-1)
-            # 2. Mobility at neighbour: ∂λ_w_neighbour/∂Sw_neighbour * ∂Sw/∂So = -dλw_dSw_neighbour
-            dFw_dSo_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
-            dFw_dSo_neighbour_mobility = (
-                -geometric_factor
-                * water_phase_potential
-                * compute_harmonic_mean_derivative_wrt_first(
-                    water_mobility_neighbour, water_mobility_cell
-                )
-                * dλw_dSw_neighbour
-            )
-            dFw_dSo_neighbour = dFw_dSo_neighbour_capillary + dFw_dSo_neighbour_mobility
-            off_diagonal_block[2, 1] = -time_step_size * dFw_dSo_neighbour
+            # # ∂R_water/∂So_neighbour (column 1)
+            # # Water flux affected by:
+            # # 1. Capillary at neighbour: ∂pot_w/∂So_neighbour = ∂Pcow_neighbour/∂Sw_neighbour * ∂Sw/∂So = dPcow_dSw_neighbour * (-1)
+            # # 2. Mobility at neighbour: ∂λ_w_neighbour/∂Sw_neighbour * ∂Sw/∂So = -dλw_dSw_neighbour
+            # dFw_dSo_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
+            # dFw_dSo_neighbour_mobility = (
+            #     -geometric_factor
+            #     * water_phase_potential
+            #     * compute_harmonic_mean_derivative_wrt_first(
+            #         water_mobility_neighbour, water_mobility_cell
+            #     )
+            #     * dλw_dSw_neighbour
+            # )
+            # dFw_dSo_neighbour = dFw_dSo_neighbour_capillary + dFw_dSo_neighbour_mobility
+            # off_diagonal_block[2, 1] = -time_step_size * dFw_dSo_neighbour
 
-            # ∂R_gas/∂Sg_neighbour (column 2)
-            # Gas flux affected by:
-            # 1. Mobility at neighbour
-            # 2. Capillary pressure at neighbour
-            dFg_dSg_neighbour_mobility = (
-                geometric_factor
-                * gas_phase_potential
-                * compute_harmonic_mean_derivative_wrt_first(
-                    gas_mobility_neighbour, gas_mobility_cell
-                )
-                * dλg_dSg_neighbour
-            )
-            dFg_dSg_neighbour_capillary = gas_transmissibility * dPcgo_dSg_neighbour
-            dFg_dSg_neighbour = dFg_dSg_neighbour_mobility + dFg_dSg_neighbour_capillary
-            off_diagonal_block[1, 2] = -time_step_size * dFg_dSg_neighbour
+            # # ∂R_gas/∂Sg_neighbour (column 2)
+            # # Gas flux affected by:
+            # # 1. Mobility at neighbour
+            # # 2. Capillary pressure at neighbour
+            # dFg_dSg_neighbour_mobility = (
+            #     geometric_factor
+            #     * gas_phase_potential
+            #     * compute_harmonic_mean_derivative_wrt_first(
+            #         gas_mobility_neighbour, gas_mobility_cell
+            #     )
+            #     * dλg_dSg_neighbour
+            # )
+            # dFg_dSg_neighbour_capillary = gas_transmissibility * dPcgo_dSg_neighbour
+            # dFg_dSg_neighbour = dFg_dSg_neighbour_mobility + dFg_dSg_neighbour_capillary
+            # off_diagonal_block[1, 2] = -time_step_size * dFg_dSg_neighbour
 
-            # ∂R_water/∂Sg_neighbour (column 2)
-            # Water flux affected through Sw_neighbour coupling
-            dFw_dSg_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
-            dFw_dSg_neighbour_mobility = (
-                -geometric_factor
-                * water_phase_potential
-                * compute_harmonic_mean_derivative_wrt_first(
-                    water_mobility_neighbour, water_mobility_cell
-                )
-                * dλw_dSw_neighbour
-            )
-            dFw_dSg_neighbour = dFw_dSg_neighbour_capillary + dFw_dSg_neighbour_mobility
-            off_diagonal_block[2, 2] = -time_step_size * dFw_dSg_neighbour
+            # # ∂R_water/∂Sg_neighbour (column 2)
+            # # Water flux affected through Sw_neighbour coupling
+            # dFw_dSg_neighbour_capillary = -water_transmissibility * dPcow_dSw_neighbour
+            # dFw_dSg_neighbour_mobility = (
+            #     -geometric_factor
+            #     * water_phase_potential
+            #     * compute_harmonic_mean_derivative_wrt_first(
+            #         water_mobility_neighbour, water_mobility_cell
+            #     )
+            #     * dλw_dSw_neighbour
+            # )
+            # dFw_dSg_neighbour = dFw_dSg_neighbour_capillary + dFw_dSg_neighbour_mobility
+            # off_diagonal_block[2, 2] = -time_step_size * dFw_dSg_neighbour
 
-            # Cross-coupling terms (explicitly zero)
-            off_diagonal_block[1, 1] = 0.0  # ∂R_gas/∂So_neighbour
-            off_diagonal_block[0, 2] = 0.0  # ∂R_oil/∂Sg_neighbour
+            # # Cross-coupling terms (explicitly zero)
+            # off_diagonal_block[1, 1] = 0.0  # ∂R_gas/∂So_neighbour
+            # off_diagonal_block[0, 2] = 0.0  # ∂R_oil/∂Sg_neighbour
 
             # Assign off-diagonal block
             for row_offset in range(3):
