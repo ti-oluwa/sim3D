@@ -44,7 +44,7 @@ __all__ = [
 ]
 
 
-def _warn_producer_is_injecting(
+def _warn_production_rate_is_positive(
     production_rate: float,
     well_name: str,
     cell: ThreeDimensions,
@@ -56,13 +56,13 @@ def _warn_producer_is_injecting(
     instead of producing it. i.e., if the production rate is positive.
     """
     warnings.warn(
-        f"Warning: Production well '{well_name}' at cell {cell} has a positive rate of {production_rate:.2f} {rate_unit}, "
+        f"Warning: Production well '{well_name}' at cell {cell} has a positive rate of {production_rate:.4f} {rate_unit}, "
         f"indicating it is no longer producing fluid at {time:.3f} seconds. Production rates should be negative. Please check well configuration.",
         UserWarning,
     )
 
 
-def _warn_injector_is_producing(
+def _warn_injection_rate_is_negative(
     injection_rate: float,
     well_name: str,
     cell: ThreeDimensions,
@@ -74,8 +74,36 @@ def _warn_injector_is_producing(
     instead of injecting it. i.e., if the injection rate is negative.
     """
     warnings.warn(
-        f"Warning: Injection well '{well_name}' at cell {cell} has a negative rate of {injection_rate:.2f} {rate_unit}, "
+        f"Warning: Injection well '{well_name}' at cell {cell} has a negative rate of {injection_rate:.4f} {rate_unit}, "
         f"indicating it is no longer injecting fluid at {time:.3f} seconds. Injection rates should be postive. Please check well configuration.",
+        UserWarning,
+    )
+
+
+def _warn_production_pressure_is_high(
+    bhp: float,
+    well_name: str,
+    cell: ThreeDimensions,
+    cell_pressure: float,
+    time: float,
+):
+    warnings.warn(
+        f"Warning: Production well '{well_name}' at cell {cell} has a high BHP of {bhp:.4f}psi, cell pressure is {cell_pressure:.4f}psi, "
+        f"indicating it is no longer producing fluid at {time:.3f} seconds. Production pressure should be lower than reservoir pressure. Please check well configuration.",
+        UserWarning,
+    )
+
+
+def _warn_injection_pressure_is_low(
+    bhp: float,
+    well_name: str,
+    cell: ThreeDimensions,
+    cell_pressure: float,
+    time: float,
+):
+    warnings.warn(
+        f"Warning: Injection well '{well_name}' at cell {cell} has a low BHP of {bhp:.4f}psi, cell pressure is {cell_pressure:.4f}psi, "
+        f"indicating it is no longer injecting fluid at {time:.3f} seconds. Injection pressure should be higher than reservoir pressure. Please check well configuration.",
         UserWarning,
     )
 
@@ -193,7 +221,7 @@ def compute_mobility_grids(
     water_relative_mobility_grid: ThreeDimensionalGrid,
     oil_relative_mobility_grid: ThreeDimensionalGrid,
     gas_relative_mobility_grid: ThreeDimensionalGrid,
-    millidarcies_per_centipoise_to_ft2_per_psi_per_day: float,
+    md_per_cp_to_ft2_per_psi_per_day: float,
 ) -> typing.Tuple[
     typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
     typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
@@ -210,7 +238,7 @@ def compute_mobility_grids(
     :param water_relative_mobility_grid: Water relative mobility (1/cP)
     :param oil_relative_mobility_grid: Oil relative mobility (1/cP)
     :param gas_relative_mobility_grid: Gas relative mobility (1/cP)
-    :param millidarcies_per_centipoise_to_ft2_per_psi_per_day: Unit conversion constant
+    :param md_per_cp_to_ft2_per_psi_per_day: Unit conversion constant
     :return: Tuple of 3 direction tuples, each containing (water, oil, gas) mobility grids:
         (x_mobilities, y_mobilities, z_mobilities) where each is (water, oil, gas)
         All with units (ft²/psi·day)
@@ -219,51 +247,51 @@ def compute_mobility_grids(
     water_mobility_grid_x = (
         absolute_permeability_x
         * water_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     oil_mobility_grid_x = (
         absolute_permeability_x
         * oil_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     gas_mobility_grid_x = (
         absolute_permeability_x
         * gas_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
 
     # Y-direction mobilities
     water_mobility_grid_y = (
         absolute_permeability_y
         * water_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     oil_mobility_grid_y = (
         absolute_permeability_y
         * oil_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     gas_mobility_grid_y = (
         absolute_permeability_y
         * gas_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
 
     # Z-direction mobilities
     water_mobility_grid_z = (
         absolute_permeability_z
         * water_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     oil_mobility_grid_z = (
         absolute_permeability_z
         * oil_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
     gas_mobility_grid_z = (
         absolute_permeability_z
         * gas_relative_mobility_grid
-        * millidarcies_per_centipoise_to_ft2_per_psi_per_day
+        * md_per_cp_to_ft2_per_psi_per_day
     )
 
     # Group by direction: (water, oil, gas) for each direction
@@ -548,7 +576,7 @@ def solve_linear_system(
         M = _get_preconditioner(A_csr, preconditioner)
     except Exception as exc:
         raise PreconditionerError(f"Error building preconditioner: {exc}") from exc
-    
+
     b_norm = np.linalg.norm(b)
     # Too strict
     # epsilon = get_floating_point_info().eps
@@ -590,7 +618,7 @@ def solve_linear_system(
             "All iterative solvers and direct solver failed to solve the system."
         ) from exc
 
-    return x, M  # type: ignore[return-value]
+    return x, None  # type: ignore[return-value]
 
 
 """

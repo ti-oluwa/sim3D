@@ -10,8 +10,8 @@ from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
-    _warn_injector_is_producing,
-    _warn_producer_is_injecting,
+    _warn_injection_rate_is_negative,
+    _warn_production_rate_is_positive,
     compute_mobility_grids,
 )
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
@@ -69,9 +69,8 @@ def evolve_pressure_explicitly(
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
-    current_oil_pressure_grid = (
-        fluid_properties.pressure_grid
-    )  # This is P_oil or Pⁿ_{i,j}
+    # This is P_oil or Pⁿ_{i,j}
+    current_oil_pressure_grid = fluid_properties.pressure_grid
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
@@ -93,10 +92,8 @@ def evolve_pressure_explicitly(
         gas_saturation_grid=current_gas_saturation_grid,
         gas_compressibility_grid=gas_compressibility_grid,
     )
-    # Total compressibility (psi⁻¹) = (fluid compressibility * porosity) + rock compressibility
-    total_compressibility_grid = (
-        total_fluid_compressibility_grid * porosity_grid
-    ) + rock_compressibility
+    # Total compressibility (psi⁻¹) = fluid compressibility + rock compressibility
+    total_compressibility_grid = total_fluid_compressibility_grid + rock_compressibility
     # Clamp the compressibility within range
     total_compressibility_grid = config.total_compressibility_range.clip(
         total_compressibility_grid
@@ -119,7 +116,7 @@ def evolve_pressure_explicitly(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        millidarcies_per_centipoise_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
     )
 
     (
@@ -688,6 +685,7 @@ def compute_well_rate_grid(
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
+        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
 
         # Handle injection wells
         if (
@@ -696,7 +694,10 @@ def compute_well_rate_grid(
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
             injected_phase = injected_fluid.phase
-
+            phase_fvf = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
             # Get phase mobility
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
@@ -707,30 +708,24 @@ def compute_well_rate_grid(
                     "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
                         i, j, k
                     ],
-                    "gas_formation_volume_factor": fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ],
+                    "gas_formation_volume_factor": phase_fvf,
                     "gas_solubility_in_water": fluid_properties.gas_solubility_in_water_grid[
                         i, j, k
                     ],
                 }
 
             # Get fluid properties
-            fluid_compressibility = injected_fluid.get_compressibility(
+            phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 **compressibility_kwargs,
-            )
-            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
             )
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
-                interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                interval_thickness=interval_thickness,
                 permeability=permeability,
                 skin_factor=injection_well.skin_factor,
             )
@@ -742,14 +737,14 @@ def compute_well_rate_grid(
                 well_index=well_index,
                 phase_mobility=phase_mobility,
                 fluid=injected_fluid,
-                fluid_compressibility=fluid_compressibility,
+                fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=fluid_formation_volume_factor,
+                formation_volume_factor=phase_fvf,
             )
 
             # Check for backflow (negative injection)
-            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
-                _warn_injector_is_producing(
+            if cell_injection_rate < 0.0 and config.warn_well_anomalies:
+                _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
                     time=time_step * time_step_size,
@@ -783,28 +778,22 @@ def compute_well_rate_grid(
                 # Get phase-specific properties
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = gas_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = gas_compressibility_grid[i, j, k]
+                    phase_fvf = gas_formation_volume_factor_grid[i, j, k]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = water_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = water_compressibility_grid[i, j, k]
+                    phase_fvf = water_formation_volume_factor_grid[i, j, k]
                 else:  # Oil
                     phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = oil_compressibility_grid[i, j, k]
+                    phase_fvf = oil_formation_volume_factor_grid[i, j, k]
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
-                    interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                    interval_thickness=interval_thickness,
                     permeability=permeability,
                     skin_factor=production_well.skin_factor,
                 )
@@ -817,14 +806,14 @@ def compute_well_rate_grid(
                     well_index=well_index,
                     phase_mobility=phase_mobility,
                     fluid=produced_fluid,
-                    fluid_compressibility=fluid_compressibility,
+                    fluid_compressibility=phase_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=fluid_formation_volume_factor,
+                    formation_volume_factor=phase_fvf,
                 )
 
                 # Check for backflow (positive production = injection)
-                if production_rate > 0.0 and config.warn_rates_anomalies:
-                    _warn_producer_is_injecting(
+                if production_rate > 0.0 and config.warn_well_anomalies:
+                    _warn_production_rate_is_positive(
                         production_rate=production_rate,
                         well_name=production_well.name,
                         time=time_step * time_step_size,

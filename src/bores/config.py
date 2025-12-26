@@ -92,8 +92,8 @@ class Config:
     """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default=RelativeMobilityRange(
-            oil=Range(min=1e-12, max=1e6),
-            water=Range(min=1e-12, max=1e6),
+            oil=Range(min=1e-9, max=1e6),
+            water=Range(min=1e-9, max=1e6),
             gas=Range(min=1e-12, max=1e6),
         )
     )
@@ -105,7 +105,7 @@ class Config:
 
     Minimum values should not be exactly zero for the best numerical stability.
     """
-    total_compressibility_range: Range = attrs.field(default=Range(min=1e-8, max=1e-2))
+    total_compressibility_range: Range = attrs.field(default=Range(min=1e-24, max=1e-2))
     """Range to constrain total compressibility for the simulation. This is usually necessary for numerical stability."""
     capillary_strength_factor: float = attrs.field(
         default=1.0,
@@ -154,7 +154,7 @@ class Config:
     """
     constants: Constants = attrs.field(factory=Constants)
     """Physical and conversion constants used in the simulation."""
-    warn_rates_anomalies: bool = True
+    warn_well_anomalies: bool = True
     """Whether to warn about anomalous flow rates during the simulation."""
     log_interval: int = attrs.field(default=3, validator=attrs.validators.ge(1))
     """Interval (in time steps) at which to log simulation progress."""

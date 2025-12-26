@@ -17,7 +17,7 @@ def _():
     bores.use_32bit_precision()
 
     STABILIZED_MODEL_STATE = (
-        Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl.xz"
+        Path.cwd() / "scenarios/states/stabilized_coarse.pkl.xz"
     )
 
 
@@ -81,9 +81,9 @@ def _():
         wells = bores.wells_(injectors=None, producers=producers)
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=20),
-            max_step_size=bores.Time(days=7),
-            min_step_size=bores.Time(minutes=20.0),
-            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
+            max_step_size=bores.Time(days=5),
+            min_step_size=bores.Time(minutes=10.0),
+            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 3),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -106,7 +106,7 @@ def _():
 
 @app.cell
 def _(main):
-    states = main()
+    states = main() 
     return (states,)
 
 

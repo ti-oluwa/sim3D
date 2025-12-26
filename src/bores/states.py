@@ -502,7 +502,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         Retrieves the model state for a specific time step.
 
         :param step: The time step index to retrieve the state for.
-        :return: The ModelState corresponding to the specified time step.
+        :return: The `ModelState` corresponding to the specified time step.
         """
         if step < 0:
             step = self._state_count + step
@@ -990,7 +990,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Production is in ft³/day, convert to STB using FVF
             oil_production = state.production.oil
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
 
             step_production = 0.0
@@ -1051,7 +1051,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Production is in ft³/day, convert to SCF using FVF
             gas_production = state.production.gas
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
 
             step_production = 0.0
@@ -1112,7 +1112,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Production is in ft³/day, convert to STB using FVF
             water_production = state.production.water
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
@@ -1179,7 +1179,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Injection is in ft³/day, convert to STB using FVF
             oil_injection = state.injection.oil
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
             step_injection = 0.0
             if oil_injection is not None:
@@ -1238,7 +1238,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Injection is in ft³/day, convert to SCF using FVF
             gas_injection = state.injection.gas
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
             step_injection = 0.0
             if gas_injection is not None:
@@ -1297,7 +1297,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             # Injection is in ft³/day, convert to STB using FVF
             water_injection = state.injection.water
-            step_in_days = state.step_size / c.SECONDS_PER_DAY
+            step_in_days = state.step_size * c.DAYS_PER_SECOND
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
@@ -2016,8 +2016,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         logger.debug(
             f"Instantaneous production rates at time step {step}: "
-            f"oil={oil_rate:.2f} STB/d, gas={gas_rate:.2f} SCF/d, water={water_rate:.2f} STB/d, "
-            f"GOR={gas_oil_ratio:.2f}, WC={water_cut:.4f}"
+            f"oil={oil_rate:.2f} STB/day, gas={gas_rate:.2f} SCF/day, water={water_rate:.2f} STB/day, "
+            f"GOR={gas_oil_ratio:.2f}, WaterCut={water_cut:.4f}"
         )
         return InstantaneousRates(
             oil_rate=oil_rate,
@@ -2395,15 +2395,15 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 vertical_sweep_efficiency=0.0,
             )
 
-        nodel = initial_state.model
+        model = initial_state.model
         state = state.model
         grid_shape = state.grid_shape
 
-        initial_oil_saturation = nodel.fluid_properties.oil_saturation_grid
+        initial_oil_saturation = model.fluid_properties.oil_saturation_grid
         current_oil_saturation = state.fluid_properties.oil_saturation_grid
-        initial_water_saturation = nodel.fluid_properties.water_saturation_grid
+        initial_water_saturation = model.fluid_properties.water_saturation_grid
         current_water_saturation = state.fluid_properties.water_saturation_grid
-        initial_gas_saturation = nodel.fluid_properties.gas_saturation_grid
+        initial_gas_saturation = model.fluid_properties.gas_saturation_grid
         current_gas_saturation = state.fluid_properties.gas_saturation_grid
         solvent_concentration_grid = state.fluid_properties.solvent_concentration_grid
 
@@ -3449,7 +3449,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             f"qi={hyperbolic_initial_rate:.2f}, Di={hyperbolic_decline_rate_per_timestep:.6f}/timestep, "
             f"b={hyperbolic_b_factor:.4f}, R²={hyperbolic_r_squared:.4f}"
         )
-
         return DeclineCurveResult(
             decline_type="hyperbolic",
             initial_rate=float(last_actual_rate),

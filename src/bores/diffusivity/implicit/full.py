@@ -161,7 +161,7 @@ def evolve_fully_implicit(
             water_relative_mobility_grid=relative_mobility_grids.water_relative_mobility,
             oil_relative_mobility_grid=relative_mobility_grids.oil_relative_mobility,
             gas_relative_mobility_grid=relative_mobility_grids.gas_relative_mobility,
-            millidarcies_per_centipoise_to_ft2_per_psi_per_day=mD_per_cP_to_ft2_per_psi_per_day,
+            md_per_cp_to_ft2_per_psi_per_day=mD_per_cP_to_ft2_per_psi_per_day,
         )
         well_rate_grids = compute_well_rate_grids(
             cell_count_x=cell_count_x,

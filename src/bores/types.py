@@ -34,6 +34,8 @@ __all__ = [
     "Preconditioner",
     "IterativeSolver",
     "IterativeSolverFunc",
+    "Range",
+    "RelativeMobilityRange",
 ]
 
 T = typing.TypeVar("T")

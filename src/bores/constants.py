@@ -110,7 +110,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     "MOLECULAR_WEIGHT_N2": Constant(
         value=28.0134, description="Molecular weight of nitrogen", unit="g/mol"
     ),
-    "MOLECULAR_WEIGHT_METHANE": Constant(
+    "MOLECULAR_WEIGHT_CH4": Constant(
         value=16.04246, description="Molecular weight of methane", unit="g/mol"
     ),
     "MOLECULAR_WEIGHT_NACL": Constant(
@@ -118,8 +118,20 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Molecular weight of sodium chloride (NaCl)",
         unit="g/mol",
     ),
+    "MOLECULAR_WEIGHT_O2": Constant(
+        value=31.9988, description="Molecular weight of oxygen", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_ARGON": Constant(
+        value=39.948, description="Molecular weight of argon", unit="g/mol"
+    ),
     "MOLECULAR_WEIGHT_AIR": Constant(
         value=28.9644, description="Molecular weight of air", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_HELIUM": Constant(
+        value=4.002602, description="Molecular weight of helium", unit="g/mol"
+    ),
+    "MOLECULAR_WEIGHT_H2": Constant(
+        value=2.01588, description="Molecular weight of hydrogen", unit="g/mol"
     ),
     # Pressure Conversions
     "PSI_TO_PA": Constant(
@@ -468,6 +480,11 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     "MIN_TRANSMISSIBILITY_FACTOR": Constant(
         value=1e-12,
         description="Minimum transmissibility factor to prevent numerical issues with very low transmissibility",
+        unit="fraction",
+    ),
+    "GAS_SOLUBILITY_TOLERANCE": Constant(
+        value=1e-6,
+        description="Tolerance for gas solubility calculations",
         unit="fraction",
     ),
 }

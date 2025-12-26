@@ -9,6 +9,7 @@ import numpy as np
 
 from bores.boundary_conditions import BoundaryConditions, default_bc
 from bores.config import Config
+from bores.constants import c
 from bores.diffusivity import (
     evolve_fully_implicit,
     evolve_miscible_saturation_explicitly,
@@ -16,8 +17,7 @@ from bores.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
-from bores.constants import c
-from bores.errors import SimulationError, TimingError, StopSimulation
+from bores.errors import SimulationError, StopSimulation, TimingError
 from bores.grids.base import (
     CapillaryPressureGrids,
     RateGrids,
@@ -44,8 +44,8 @@ from bores.models import (
 from bores.states import ModelState
 from bores.timing import Timer
 from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
-from bores.wells import Wells
 from bores.utils import clip
+from bores.wells import Wells
 
 
 __all__ = ["run"]

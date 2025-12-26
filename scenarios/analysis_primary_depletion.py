@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.18.4"
 app = marimo.App(width="full")
 
 
@@ -18,11 +18,11 @@ def _():
         Path.cwd() / "scenarios/states/primary_depletion_coarse.pkl.xz"
     )
     states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
-    return itertools, np, bores, states
+    return bores, itertools, np, states
 
 
 @app.cell
-def _(itertools, np, bores, states):
+def _(bores, itertools, np, states):
     analyst = bores.ModelAnalyst(states)
 
     sweep_efficiency_history = analyst.sweep_efficiency_history(
@@ -31,7 +31,9 @@ def _(itertools, np, bores, states):
         displacing_phase="water",
     )
     production_rate_history = analyst.instantaneous_rates_history(
-        interval=1, from_step=1, rate_type="production"
+        interval=1,
+        from_step=1,
+        rate_type="production",
     )
 
     oil_saturation_history = []
@@ -58,9 +60,9 @@ def _(itertools, np, bores, states):
     water_cut_history = []
     gor_history = []
 
-    for state in itertools.islice(states, 0, None, 5):
+    for state in itertools.islice(states, 0, None, 1):
         model = state.model
-        time_step = state.time_step
+        time_step = state.step
         fluid_properties = model.fluid_properties
         avg_oil_sat = np.mean(fluid_properties.oil_saturation_grid)
         avg_water_sat = np.mean(fluid_properties.water_saturation_grid)
@@ -68,7 +70,9 @@ def _(itertools, np, bores, states):
         avg_pressure = np.mean(fluid_properties.pressure_grid)
         avg_viscosity = np.mean(fluid_properties.oil_effective_viscosity_grid)
         avg_density = np.mean(fluid_properties.oil_effective_density_grid)
-        avg_oil_rel_mobility = np.mean(state.relative_mobilities.oil_relative_mobility)
+        avg_oil_rel_mobility = np.mean(
+            state.relative_mobilities.oil_relative_mobility
+        )
 
         avg_pcow = np.mean(state.capillary_pressures.oil_water_capillary_pressure)
         avg_pcgo = np.mean(state.capillary_pressures.gas_oil_capillary_pressure)
@@ -128,7 +132,7 @@ def _(itertools, np, bores, states):
 
 
 @app.cell
-def _(avg_pressure_history, np, bores):
+def _(avg_pressure_history, bores, np):
     # Pressure
     pressure_fig = bores.make_series_plot(
         data={"Avg. Reservoir Pressure": np.array(avg_pressure_history)},
@@ -146,10 +150,10 @@ def _(avg_pressure_history, np, bores):
 
 @app.cell
 def _(
+    bores,
     gas_saturation_history,
     np,
     oil_saturation_history,
-    bores,
     water_saturation_history,
 ):
     # Saturation
@@ -172,10 +176,10 @@ def _(
 
 @app.cell
 def _(
+    bores,
     gas_oil_capillary_pressure_history,
     np,
     oil_water_capillary_pressure_history,
-    bores,
 ):
     # Capillary Pressure
     capillary_pressure_fig = bores.make_series_plot(
@@ -195,7 +199,7 @@ def _(
 
 
 @app.cell
-def _(krg_history, kro_history, krw_history, np, bores):
+def _(bores, krg_history, kro_history, krw_history, np):
     # Rel Perm
     relperm_fig = bores.make_series_plot(
         data={
@@ -216,10 +220,10 @@ def _(krg_history, kro_history, krw_history, np, bores):
 
 @app.cell
 def _(
+    bores,
     np,
     oil_effective_density_history,
     oil_effective_viscosity_history,
-    bores,
 ):
     # Oil Effective Density
     oil_effective_density_fig = bores.make_series_plot(
@@ -258,7 +262,7 @@ def _(
 
 
 @app.cell
-def _(np, oil_relative_mobility_history, bores):
+def _(bores, np, oil_relative_mobility_history):
     # Oil Relative Mobility
     oil_relative_mobility_fig = bores.make_series_plot(
         data={
@@ -276,7 +280,7 @@ def _(np, oil_relative_mobility_history, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     # Production & Injection
     oil_production_history = analyst.oil_production_history(
         interval=1, cumulative=False, from_step=1
@@ -297,7 +301,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     water_production_history = analyst.water_production_history(
         interval=1, cumulative=False, from_step=1
     )
@@ -317,7 +321,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     gas_production_history = analyst.free_gas_production_history(
         interval=1, cumulative=False, from_step=1
     )
@@ -337,7 +341,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     gas_injection_history = analyst.gas_injection_history(
         interval=1, cumulative=False, from_step=1
     )
@@ -358,7 +362,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     # Cumulative production & injection
     cumulative_oil_production_history = analyst.oil_production_history(
         interval=1, cumulative=True, from_step=1
@@ -383,7 +387,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     cumulative_water_production_history = analyst.water_production_history(
         interval=1, cumulative=True, from_step=1
     )
@@ -408,7 +412,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     cumulative_gas_production_history = analyst.free_gas_production_history(
         interval=1, cumulative=True, from_step=1
     )
@@ -433,7 +437,7 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(gor_history, np, bores, water_cut_history):
+def _(bores, gor_history, np, water_cut_history):
     water_cut_fig = bores.make_series_plot(
         data={
             "Water Cut (WOR)": np.array(water_cut_history),
@@ -465,7 +469,7 @@ def _(gor_history, np, bores, water_cut_history):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     cumulative_gas_injection_history = analyst.gas_injection_history(
         interval=1, cumulative=True, from_step=1
     )
@@ -488,11 +492,13 @@ def _(analyst, np, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     # Reserves
     oil_in_place_history = analyst.oil_in_place_history(interval=1, from_step=1)
     gas_in_place_history = analyst.gas_in_place_history(interval=1, from_step=1)
-    water_in_place_history = analyst.water_in_place_history(interval=1, from_step=1)
+    water_in_place_history = analyst.water_in_place_history(
+        interval=1, from_step=1
+    )
 
     oil_water_reserves_fig = bores.make_series_plot(
         data={
@@ -530,9 +536,9 @@ def _(analyst, np, bores):
 
 @app.cell
 def _(
+    bores,
     displacement_efficiency_history,
     np,
-    bores,
     volumetric_sweep_efficiency_history,
 ):
     # Recovery
@@ -569,7 +575,7 @@ def _(
 
 
 @app.cell
-def _(analyst, np, recovery_efficiency_history, bores):
+def _(analyst, bores, np, recovery_efficiency_history):
     recovery_efficiency_fig = bores.make_series_plot(
         data={
             "Recovery Efficiency": np.array(recovery_efficiency_history),
@@ -607,7 +613,7 @@ def _(analyst, np, recovery_efficiency_history, bores):
 
 
 @app.cell
-def _(analyst, np, bores):
+def _(analyst, bores, np):
     recommended_model, results = analyst.recommend_decline_model(phase="oil")
     print("Recommended Decline Model: ", recommended_model)
     decline_curve = results[recommended_model]
@@ -615,7 +621,7 @@ def _(analyst, np, bores):
         print(error)
     else:
         production_forecast = analyst.forecast_production(
-            decline_result=decline_curve, time_steps=500
+            decline_result=decline_curve, steps=500
         )
         production_forecast_fig = bores.make_series_plot(
             data={
@@ -647,7 +653,7 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="isosurface",
+        plot_type="scatter_3d",
         width=960,
         height=600,
         opacity=0.67,
@@ -661,13 +667,13 @@ def _(bores, states, viz):
         # x_slice=(10, 20),
         # z_slice=(0, 8),
         # isomin=1800,
-        cmin=1,
-        cmax=2.0,
+        # cmin=1,
+        # cmax=2.0,
     )
 
-    property = "oil-relative-mobility"
+    property = "oil-pressure"
     figures = []
-    timesteps = [0, 1461]
+    timesteps = [0, 14]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

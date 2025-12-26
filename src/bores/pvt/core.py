@@ -935,7 +935,7 @@ def compute_water_bubble_point_pressure(
     :param gas: Gas name ("co2", "methane", "n2")
     :return: Bubble point pressure (psi)
     """
-    gas = gas.lower()
+    gas = _get_gas_symbol(gas)
     if gas == "methane" and np.any(100 <= temperature <= 400):
         # Inverted McCain
         return compute_water_bubble_point_pressure_mccain(
@@ -944,20 +944,26 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    lower_bound_pressure = c.MIN_VALID_PRESSURE - 1e-3
-    upper_bound_pressure = c.MAX_VALID_PRESSURE + 1e-3
+    lower_bound_pressure = c.MIN_VALID_PRESSURE
+    upper_bound_pressure = c.MAX_VALID_PRESSURE
 
-    lower_bound_solubility = compute_gas_solubility_in_water(
-        pressure=lower_bound_pressure,
-        temperature=temperature,
-        salinity=salinity,
-        gas=gas,
+    lower_bound_solubility = (
+        compute_gas_solubility_in_water(
+            pressure=lower_bound_pressure,
+            temperature=temperature,
+            salinity=salinity,
+            gas=gas,
+        )
+        - c.GAS_SOLUBILITY_TOLERANCE
     )
-    upper_bound_solubility = compute_gas_solubility_in_water(
-        pressure=upper_bound_pressure,
-        temperature=temperature,
-        salinity=salinity,
-        gas=gas,
+    upper_bound_solubility = (
+        compute_gas_solubility_in_water(
+            pressure=upper_bound_pressure,
+            temperature=temperature,
+            salinity=salinity,
+            gas=gas,
+        )
+        + c.GAS_SOLUBILITY_TOLERANCE
     )
 
     if not (
@@ -984,7 +990,11 @@ def compute_water_bubble_point_pressure(
         )
 
     bubble_point_pressure = brentq(
-        residual, a=lower_bound_pressure, b=upper_bound_pressure, xtol=1e-6
+        residual,
+        a=lower_bound_pressure,
+        b=upper_bound_pressure,
+        xtol=1e-6,
+        full_output=False,
     )
     return bubble_point_pressure  # type: ignore[return-value]
 
@@ -1729,7 +1739,9 @@ def _gas_solubility_in_water_mccain_methane(
     :return: Gas solubility in water in SCF/STB.
     """
     if pressure < 0 or temperature < 0 or salinity < 0:
-        raise ValidationError("Pressure, temperature, and salinity must be non-negative.")
+        raise ValidationError(
+            "Pressure, temperature, and salinity must be non-negative."
+        )
 
     if not (100 <= temperature <= 400):
         raise ValidationError(
@@ -1843,9 +1855,37 @@ def _gas_solubility_in_water_duan_sun_co2(
 # H in mol/(m³·Pa), will be inverted to Pa·m³/mol
 HENRY_COEFFICIENTS = {
     "co2": (-58.0931, 90.5069, 0.027766),
-    "methane": (-68.8862, 101.4956, 0.021599),
+    "ch4": (-68.8862, 101.4956, 0.021599),
     "n2": (-71.0592, 120.1052, 0.02624),
+    "o2": (-64.848, 107.45, 0.0223),
+    "ar": (-50.0, 100.0, 0.0200),
+    "he": (-30.0, 80.0, 0.0150),
+    "h2": (-25.0, 70.0, 0.0120),
 }
+SETSCHENOW_CONSTANTS = {
+    "co2": 0.12,
+    "ch4": 0.11,
+    "n2": 0.13,
+    "o2": 0.13,
+    "ar": 0.10,
+    "he": 0.08,
+    "h2": 0.07,
+}
+
+__GAS_ALIASES = {
+    "methane": "ch4",
+    "carbondioxide": "co2",
+    "nitrogen": "n2",
+    "oxygen": "o2",
+    "argon": "ar",
+    "helium": "he",
+    "hydrogen": "h2",
+}
+
+
+def _get_gas_symbol(gas_name: str) -> str:
+    gas_name = gas_name.lower().replace(" ", "").replace("-", "")
+    return __GAS_ALIASES.get(gas_name, gas_name)
 
 
 def _gas_solubility_in_water_henry_law(
@@ -1910,8 +1950,7 @@ def _gas_solubility_in_water_henry_law(
     # Converts salinity from ppm (mg/kg) to mol/kg using molar mass in g/mol
     molarity = salinity / (c.MOLECULAR_WEIGHT_NACL * 1000)
 
-    setschenow_constants = {"co2": 0.12, "methane": 0.17, "n2": 0.13}
-    k_s = setschenow_constants[gas]
+    k_s = SETSCHENOW_CONSTANTS[gas]
     salinity_factor = np.exp(-k_s * molarity)
 
     gas_solubility = (
@@ -1935,8 +1974,8 @@ def compute_gas_solubility_in_water(
     :param gas: Type of gas ("methane", "CO2", or "N2"). Default is "methane".
     :return: Gas solubility in water in SCF/STB (standard cubic feet per stock tank barrel).
     """
-    gas = gas.lower()
-    if gas == "methane" and 100.0 <= temperature <= 400.0:
+    gas = _get_gas_symbol(gas)
+    if gas == "ch4" and 100.0 <= temperature <= 400.0:
         # For methane, we use McCain's correlation for gas solubility in water
         return _gas_solubility_in_water_mccain_methane(pressure, temperature, salinity)
 
@@ -1950,22 +1989,23 @@ def compute_gas_solubility_in_water(
             psi_to_bar=c.PSI_TO_BAR,
         )
 
-    elif gas in {"methane", "co2", "n2"}:
-        molar_masses = {
-            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-            "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
-            "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
-        }
-        return _gas_solubility_in_water_henry_law(
-            pressure=pressure,
-            temperature=temperature,
-            gas=gas,
-            molar_masses=molar_masses,
-            henry_coefficients=HENRY_COEFFICIENTS,
-            salinity=salinity,
-        )
-
-    raise NotImplementedError(f"No model for gas '{gas}'.")
+    molar_masses = {
+        "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+        "ch4": c.MOLECULAR_WEIGHT_CH4 / 1000,
+        "n2": c.MOLECULAR_WEIGHT_N2 / 1000,
+        "ar": c.MOLECULAR_WEIGHT_ARGON / 1000,
+        "o2": c.MOLECULAR_WEIGHT_O2 / 1000,
+        "he": c.MOLECULAR_WEIGHT_HELIUM / 1000,
+        "h2": c.MOLECULAR_WEIGHT_H2 / 1000,
+    }
+    return _gas_solubility_in_water_henry_law(
+        pressure=pressure,
+        temperature=temperature,
+        gas=gas,
+        molar_masses=molar_masses,
+        henry_coefficients=HENRY_COEFFICIENTS,
+        salinity=salinity,
+    )
 
 
 @numba.njit(cache=True)
@@ -2013,7 +2053,9 @@ def _compute_dRsw_dP_mccain(temperature: float, salinity: float) -> float:
     Returns dRsw/dP in scf/(STB*psi).
     """
     if temperature < 0 or salinity < 0:
-        raise ValidationError("Temperature and salinity cannot be negative for dRsw/dP.")
+        raise ValidationError(
+            "Temperature and salinity cannot be negative for dRsw/dP."
+        )
 
     derivative_pure_water = (
         0.0000164 + (0.000000134 * temperature) - (0.00000000185 * temperature**2)
@@ -2097,7 +2139,9 @@ def compute_water_compressibility(
     if pressure >= bubble_point_pressure:
         # Undersaturated Water (P >= Pwb)
         if np.any(gas_free_water_formation_volume_factor <= 0):
-            raise ValidationError("Calculated Bw for undersaturated water is non-positive.")
+            raise ValidationError(
+                "Calculated Bw for undersaturated water is non-positive."
+            )
         c_w = -(1.0 / gas_free_water_formation_volume_factor) * dBw_gas_free_dP
     else:
         # Saturated Water (P < Pwb)
@@ -2491,7 +2535,9 @@ def compute_hydrocarbon_in_place(
     :return: Free hydrocarbon/water in place (OIP/WIP in STB, and GIP in SCF).
     """
     if hydrocarbon_type not in {"oil", "gas", "water"}:
-        raise ValidationError("Hydrocarbon type must be either 'oil', 'gas', or 'water'.")
+        raise ValidationError(
+            "Hydrocarbon type must be either 'oil', 'gas', or 'water'."
+        )
     if area <= 0 or thickness <= 0:
         raise ValidationError("Area and thickness must be positive values.")
     if porosity < 0 or porosity > 1:

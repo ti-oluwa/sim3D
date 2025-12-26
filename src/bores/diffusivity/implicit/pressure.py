@@ -12,8 +12,8 @@ from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
-    _warn_injector_is_producing,
-    _warn_producer_is_injecting,
+    _warn_injection_pressure_is_low,
+    _warn_production_pressure_is_high,
     compute_mobility_grids,
     solve_linear_system,
     to_1D_index_interior_only,
@@ -50,14 +50,6 @@ def evolve_pressure_implicitly(
     """
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
     three-phase flow system in a 3D reservoir.
-
-    This treats well terms explicitly by computing flow rates directly (like the explicit method)
-    rather than linearizing them.
-
-    The well treatment is explicit in time but doesn't compromise overall stability because:
-    - Wells are localized (affect only specific cells)
-    - Inter-cell fluxes (which dominate) remain implicit
-    - Time step restrictions are primarily governed by saturation changes, not well rates
 
     :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet
     :param thickness_grid: 3D grid of cell thicknesses in feet
@@ -101,9 +93,7 @@ def evolve_pressure_implicitly(
         gas_saturation_grid=current_gas_saturation_grid,
         gas_compressibility_grid=gas_compressibility_grid,
     )
-    total_compressibility_grid = (
-        total_fluid_compressibility_grid * porosity_grid
-    ) + rock_compressibility
+    total_compressibility_grid = total_fluid_compressibility_grid + rock_compressibility
     # Clamp the compressibility within range
     total_compressibility_grid = config.total_compressibility_range.clip(
         total_compressibility_grid
@@ -126,7 +116,7 @@ def evolve_pressure_implicitly(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        millidarcies_per_centipoise_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
     )
 
     # Unpack mobility grids by direction
@@ -158,7 +148,6 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
         dtype=dtype,
     )
-
     # SECOND PASS: Add face transmissibilities and fluxes using njitted function
     add_face_transmissibilities_and_fluxes(
         A=A,
@@ -187,7 +176,6 @@ def evolve_pressure_implicitly(
         acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
         dtype=dtype,
     )
-
     # THIRD PASS: Compute well flow rates and add to RHS using extracted function
     add_well_contributions(
         A=A,
@@ -212,6 +200,7 @@ def evolve_pressure_implicitly(
         time_step=time_step,
         time_step_size=time_step_size,
         config=config,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
     )
 
     # Solve the linear system A·pⁿ⁺¹ = b
@@ -222,11 +211,10 @@ def evolve_pressure_implicitly(
             max_iterations=config.max_iterations,
             solver=config.iterative_solver,
             preconditioner=config.preconditioner,
+            fallback_to_direct=True,
         )
     except (SolverError, PreconditionerError) as exc:
-        logger.error(
-            f"Pressure solve failed at time step {time_step}: {exc}", exc_info=True
-        )
+        logger.error(f"Pressure solve failed at time step {time_step}: {exc}")
         return EvolutionResult(
             value=current_oil_pressure_grid,
             success=False,
@@ -234,7 +222,7 @@ def evolve_pressure_implicitly(
             message=str(exc),
         )
 
-    # Map solution back to 3D grid (preserves boundary values)
+    # Map solution back to 3D grid
     new_pressure_grid = map_1D_solution_to_grid(
         solution_1D=new_1D_pressure_grid,
         current_grid=current_oil_pressure_grid,
@@ -242,7 +230,6 @@ def evolve_pressure_implicitly(
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
     )
-    new_pressure_grid = typing.cast(ThreeDimensionalGrid, new_pressure_grid)
     return EvolutionResult(
         value=new_pressure_grid,
         success=True,
@@ -789,17 +776,12 @@ def add_well_contributions(
     time_step: int,
     time_step_size: float,
     config: Config,
+    md_per_cp_to_ft2_per_psi_per_day: float,
 ) -> typing.Tuple[lil_matrix, np.ndarray]:
     """
     Compute well flow rates and add contributions to the RHS vector b.
 
-    Well treatment is explicit in time. Flow rates are computed using current pressure and added
-    directly to the RHS without modifying the coefficient matrix A.
-
-    For each interior cell with wells:
-    - Computes injection rates for injection wells (positive flow into cell)
-    - Computes production rates for production wells (negative flow from cell)
-    - Adds net well flow rate to RHS: b[cell] += net_well_flow_rate
+    Well treatment is semi-implicit in time.
 
     :param A: Sparse coefficient matrix (lil_matrix format) - not modified, returned for consistency
     :param b: RHS vector to modify in place
@@ -823,6 +805,7 @@ def add_well_contributions(
     :param time_step: Current time step number
     :param time_step_size: Time step size (seconds)
     :param config: Simulation config
+    :param md_per_cp_to_ft2_per_psi_per_day: Conversion factor from mD·ft/cP to ft²/psi·day
     :return: Tuple of (A, b) with well contributions added to b (A unchanged, returned for consistency)
     """
     _to_1D_index = functools.partial(
@@ -833,7 +816,6 @@ def add_well_contributions(
     )
 
     # Compute well flow rates and add to RHS
-    # This is done explicitly (using current pressure) similar to explicit method
     for i, j, k in itertools.product(
         range(1, cell_count_x - 1),
         range(1, cell_count_y - 1),
@@ -845,9 +827,7 @@ def add_well_contributions(
         cell_oil_pressure = current_oil_pressure_grid[i, j, k]
 
         injection_well, production_well = wells[i, j, k]
-        # Net well flow rate into the cell (ft³/day)
-        # Positive = injection, Negative = production
-        net_well_flow_rate = 0.0
+        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
 
         permeability = (
             absolute_permeability.x[i, j, k],
@@ -860,7 +840,10 @@ def add_well_contributions(
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
             injected_phase = injected_fluid.phase
-
+            phase_fvf = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
             # Get phase mobility
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
@@ -871,63 +854,67 @@ def add_well_contributions(
                     "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
                         i, j, k
                     ],
-                    "gas_formation_volume_factor": fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ],
+                    "gas_formation_volume_factor": phase_fvf,
                     "gas_solubility_in_water": fluid_properties.gas_solubility_in_water_grid[
                         i, j, k
                     ],
                 }
 
+            # Skip if no mobility
+            if phase_mobility <= 0.0:
+                continue
+
             # Get fluid properties
-            fluid_compressibility = injected_fluid.get_compressibility(
+            phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 **compressibility_kwargs,
-            )
-            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
             )
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
-                interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                interval_thickness=interval_thickness,
                 permeability=permeability,
                 skin_factor=injection_well.skin_factor,
             )
-
-            # Compute injection rate (bbls/day for liquids, ft³/day for gas)
-            cell_injection_rate = injection_well.get_flow_rate(
+            effective_bhp = injection_well.get_bottom_hole_pressure(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
-                well_index=well_index,
                 phase_mobility=phase_mobility,
+                well_index=well_index,
                 fluid=injected_fluid,
-                fluid_compressibility=fluid_compressibility,
+                formation_volume_factor=phase_fvf,
                 use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=fluid_formation_volume_factor,
+                fluid_compressibility=phase_compressibility,
             )
 
-            # Check for backflow (negative injection)
-            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
-                _warn_injector_is_producing(
-                    injection_rate=cell_injection_rate,
+            # PI = mD·ft/cP * conversion = ft³/psi·day
+            phase_productivity_index = (
+                well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
+            )
+            # Check for backflow (cell pressure > BHP)
+            if cell_oil_pressure > effective_bhp and config.warn_well_anomalies:
+                _warn_injection_pressure_is_low(
+                    bhp=effective_bhp,
+                    cell_pressure=cell_oil_pressure,
                     well_name=injection_well.name,
                     time=time_step * time_step_size,
                     cell=(i, j, k),
-                    rate_unit="ft³/day"
-                    if injected_phase == FluidPhase.GAS
-                    else "bbls/day",
                 )
 
-            # Convert to ft³/day if not already
-            if injected_phase != FluidPhase.GAS:
-                cell_injection_rate *= c.BBL_TO_FT3
+            # Semi-implicit coupling: q = PI * (p_wf - p_cell)
+            # Rearranging: PI * p_cell = PI * p_wf - q
+            # In pressure equation: ... = ... + q
+            # So: A[i,i] += PI, b[i] += PI * p_wf
+            A[cell_1D_index, cell_1D_index] += phase_productivity_index
+            b[cell_1D_index] += phase_productivity_index * effective_bhp
 
-            net_well_flow_rate += cell_injection_rate
+            logger.debug(
+                f"Injection well {injection_well.name} at ({i},{j},{k}): "
+                f"BHP={effective_bhp:.4f}, PI={phase_productivity_index:.3e}"
+            )
 
         if production_well is not None and production_well.is_open:
             water_formation_volume_factor_grid = (
@@ -945,70 +932,64 @@ def add_well_contributions(
                 # Get phase-specific properties
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = gas_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = gas_compressibility_grid[i, j, k]
+                    phase_fvf = gas_formation_volume_factor_grid[i, j, k]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = water_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = water_compressibility_grid[i, j, k]
+                    phase_fvf = water_formation_volume_factor_grid[i, j, k]
                 else:  # Oil
                     phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = oil_compressibility_grid[i, j, k]
+                    phase_fvf = oil_formation_volume_factor_grid[i, j, k]
+
+                # Skip if no mobility
+                if phase_mobility <= 0.0:
+                    continue
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
-                    interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                    interval_thickness=interval_thickness,
                     permeability=permeability,
                     skin_factor=production_well.skin_factor,
                 )
-                # Compute production rate (bbls/day for liquids, ft³/day for gas)
-                # Note: Production rates are negative by convention
-                production_rate = production_well.get_flow_rate(
+                effective_bhp = production_well.get_bottom_hole_pressure(
                     pressure=cell_oil_pressure,
                     temperature=cell_temperature,
-                    well_index=well_index,
                     phase_mobility=phase_mobility,
+                    well_index=well_index,
                     fluid=produced_fluid,
-                    fluid_compressibility=fluid_compressibility,
+                    formation_volume_factor=phase_fvf,
                     use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=fluid_formation_volume_factor,
+                    fluid_compressibility=phase_compressibility,
                 )
 
                 # Check for backflow (positive production = injection)
-                if production_rate > 0.0 and config.warn_rates_anomalies:
-                    _warn_producer_is_injecting(
-                        production_rate=production_rate,
+                if cell_oil_pressure < effective_bhp and config.warn_well_anomalies:
+                    _warn_production_pressure_is_high(
+                        bhp=effective_bhp,
+                        cell_pressure=cell_oil_pressure,
                         well_name=production_well.name,
                         time=time_step * time_step_size,
                         cell=(i, j, k),
-                        rate_unit="ft³/day"
-                        if produced_phase == FluidPhase.GAS
-                        else "bbls/day",
                     )
 
-                # Convert to ft³/day if not already
-                if produced_phase != FluidPhase.GAS:
-                    production_rate *= c.BBL_TO_FT3
+                # Compute productivity index
+                phase_productivity_index = (
+                    well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
+                )
 
-                net_well_flow_rate += production_rate  # Production rates are negative
+                # Semi-implicit coupling (same form for production)
+                A[cell_1D_index, cell_1D_index] += phase_productivity_index
+                b[cell_1D_index] += phase_productivity_index * effective_bhp
 
-        # Add well flow rate contribution to RHS
-        # The well flow rate is in ft³/day (reservoir conditions)
-        # We add it directly to the RHS without any coefficient in the matrix
-        # This makes the well treatment explicit in time
-        # The contribution to the pressure equation RHS is simply the volumetric flow rate
-        # Units: ft³/day
-        b[cell_1D_index] += net_well_flow_rate
-
+                logger.debug(
+                    f"Production well {production_well.name} ({produced_phase.value}) "
+                    f"at ({i},{j},{k}): BHP={effective_bhp:.4f}, "
+                    f"PI={phase_productivity_index:.3e}"
+                )
     return A, b
 
 

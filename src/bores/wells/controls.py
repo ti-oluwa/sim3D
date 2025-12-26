@@ -40,11 +40,11 @@ class RateClamp(typing.Protocol):
     """
     Protocol for a flow rate clamp.
 
-    Determines when a computed flow rate should be clamped to zero
+    Determines when a computed flow rate or BHP should be clamped
     to prevent unphysical scenarios (e.g., production during injection).
     """
 
-    def __call__(
+    def clamp_flow_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """
@@ -57,6 +57,19 @@ class RateClamp(typing.Protocol):
         """
         ...
 
+    def clamp_bottom_hole_pressure(
+        self, bottom_hole_pressure: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        """
+        Determine if the bottom-hole pressure should be clamped.
+
+        :param bottom_hole_pressure: The computed bottom-hole pressure (psi).
+        :param pressure: The reservoir pressure at the well location (psi).
+        :param kwargs: Additional context for clamping decision.
+        :return: The clamped bottom-hole pressure if clamping condition is met, else None.
+        """
+        ...
+
 
 @typing.runtime_checkable
 class WellControl(typing.Protocol[WellFluidT_con]):
@@ -66,7 +79,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
     Defines the interface for computing flow rates under different control schemes.
     """
 
-    def __call__(
+    def get_flow_rate(
         self,
         pressure: float,
         temperature: float,
@@ -91,6 +104,40 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
         :return: The flow rate in (bbl/day or ft³/day). Positive for injection, negative for production.
+        """
+        ...
+
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluid,
+        formation_volume_factor: float,
+        is_active: bool = True,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """
+        Compute the effective bottom-hole pressure for this control at current conditions.
+
+        This is used for semi-implicit treatment in the pressure equation.
+
+        For BHP control: returns the specified BHP
+        For rate control: returns the BHP required to achieve target rate
+        For adaptive control: returns BHP based on current operating mode
+
+        :param pressure: Reservoir pressure at well location (psi)
+        :param temperature: Reservoir temperature (°F)
+        :param phase_mobility: Phase mobility (1/cP)
+        :param well_index: Well index (md*ft)
+        :param fluid: Fluid being produced/injected
+        :param formation_volume_factor: Formation volume factor
+        :param is_active: Whether well is active
+        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
+        :param fluid_compressibility: Fluid compressibility (1/psi)
+        :return: Effective bottom-hole pressure (psi)
         """
         ...
 
@@ -149,24 +196,34 @@ def _compute_avg_z_factor(
 
 
 def _apply_clamp(
-    rate: float,
-    clamp: typing.Optional["RateClamp"],
     pressure: float,
     control_name: str,
+    rate: typing.Optional[float] = None,
+    bhp: typing.Optional[float] = None,
+    clamp: typing.Optional["RateClamp"] = None,
 ) -> typing.Optional[float]:
     """
     Apply clamping condition if provided.
 
-    :return: Clamped rate if clamp condition is met, None if not clamped (caller should return original rate)
+    :return: Clamped rate/bhp if clamp condition is met, None if not clamped (caller should return original rate)
     """
     if clamp is not None:
-        clamped_rate = clamp(rate=rate, pressure=pressure)
-        if clamped_rate is not None:
-            logger.debug(
-                f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
-                f"({control_name}, pressure={pressure:.3f} psi)"
-            )
-            return clamped_rate
+        if rate is not None:
+            clamped_rate = clamp.clamp_flow_rate(rate, pressure)
+            if clamped_rate is not None:
+                logger.debug(
+                    f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
+                    f"({control_name}, pressure={pressure:.3f} psi)"
+                )
+                return clamped_rate
+        elif bhp is not None:
+            clamped_bhp = clamp.clamp_bottom_hole_pressure(bhp, pressure)
+            if clamped_bhp is not None:
+                logger.debug(
+                    f"Clamping BHP {bhp:.6f} to {clamped_bhp:.6f} "
+                    f"({control_name}, pressure={pressure:.3f} psi)"
+                )
+                return clamped_bhp
     return None
 
 
@@ -185,7 +242,7 @@ def _compute_required_bhp(
     Compute required BHP to achieve target rate.
 
     :return: Required bottom hole pressure (psi)
-    :raises ValueError: If computation is not possible (e.g., zero mobility)
+    :raises ValidationError: If computation is not possible (e.g., zero mobility)
     :raises ZeroDivisionError: If rate equation has numerical issues
     """
     if fluid.phase == FluidPhase.GAS:
@@ -231,12 +288,19 @@ class ProductionClamp:
     value: float = 0.0
     """Clamp value to return when condition is met."""
 
-    def __call__(
+    def clamp_flow_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """Clamp if rate is positive (injection during production)."""
         if rate > 0.0:
             return self.value
+        return None
+
+    def clamp_bottom_hole_pressure(
+        self, bottom_hole_pressure: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        if bottom_hole_pressure > pressure:
+            return pressure
         return None
 
 
@@ -247,12 +311,19 @@ class InjectionClamp:
     value: float = 0.0
     """Clamp value to return when condition is met."""
 
-    def __call__(
+    def clamp_flow_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """Clamp if rate is negative (production during injection)."""
         if rate < 0.0:
             return self.value
+        return None
+
+    def clamp_bottom_hole_pressure(
+        self, bottom_hole_pressure: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        if bottom_hole_pressure < pressure:
+            return pressure
         return None
 
 
@@ -270,7 +341,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
     clamp: typing.Optional[RateClamp] = None
     """Condition for clamping flow rates to zero. None means no clamping."""
 
-    def __call__(
+    def get_flow_rate(
         self,
         pressure: float,
         temperature: float,
@@ -341,7 +412,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
                 phase_mobility=phase_mobility,
                 fluid_compressibility=fluid_compressibility,
             )
-        
+
         logger.info(f"BHP Control: {rate:.6f} (BHP={bhp:.6f}, Pr={pressure:.6f})")
         # Apply clamp condition if any
         clamped = _apply_clamp(
@@ -351,6 +422,49 @@ class BHPControl(typing.Generic[WellFluidT_con]):
             control_name="BHP control",
         )
         return clamped if clamped is not None else rate
+
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluid,
+        formation_volume_factor: float,
+        is_active: bool = True,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """
+        Return the specified bottom-hole pressure for BHP control.
+
+        :param pressure: Reservoir pressure at well location (psi)
+        :param temperature: Reservoir temperature (°F)
+        :param phase_mobility: Phase mobility (1/cP)
+        :param well_index: Well index (md*ft)
+        :param fluid: Fluid being produced/injected
+        :param formation_volume_factor: Formation volume factor
+        :param is_active: Whether well is active
+        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
+        :param fluid_compressibility: Fluid compressibility (1/psi)
+        :return: Effective bottom-hole pressure (psi)
+        """
+        if _should_return_zero(
+            fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+        ):
+            # Return reservoir pressure (no driving force)
+            return pressure
+
+        bhp = self.bottom_hole_pressure
+        return (
+            _apply_clamp(
+                pressure=pressure,
+                control_name="BHP control",
+                clamp=self.clamp,
+                bhp=bhp,
+            )
+            or bhp
+        )
 
     def __str__(self) -> str:
         """String representation."""
@@ -381,14 +495,16 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
     def __attrs_post_init__(self) -> None:
         """Validate control parameters."""
         if self.target_rate == 0.0:
-            raise ValueError("Target rate cannot be zero. Use well.shut_in() instead.")
+            raise ValidationError(
+                "Target rate cannot be zero. Use `well.shut_in()` instead."
+            )
         if (
             self.minimum_bottom_hole_pressure is not None
             and self.minimum_bottom_hole_pressure <= 0.0
         ):
-            raise ValueError("Minimum bottom hole pressure must be positive.")
+            raise ValidationError("Minimum bottom hole pressure must be positive.")
 
-    def __call__(
+    def get_flow_rate(
         self,
         pressure: float,
         temperature: float,
@@ -415,12 +531,12 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         :return: Target flow rate if the required bottom hole pressure to produce/inject
             is above or equal to the minimum bottom hole pressure constraint (if any). Otherwise returns 0.0.
         """
-        if _should_return_zero(
-            fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+        if (
+            _should_return_zero(
+                fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+            )
+            or fluid.phase != self.target_phase
         ):
-            return 0.0
-
-        if fluid.phase != self.target_phase:
             return 0.0
 
         target_rate = (
@@ -473,6 +589,102 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
             control_name="constant rate control",
         )
         return clamped if clamped is not None else target_rate
+
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluid,
+        formation_volume_factor: float,
+        is_active: bool = True,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """
+        Compute BHP required to achieve target rate.
+
+        :param pressure: Reservoir pressure at well location (psi)
+        :param temperature: Reservoir temperature (°F)
+        :param phase_mobility: Phase mobility (1/cP)
+        :param well_index: Well index (md*ft)
+        :param fluid: Fluid being produced/injected
+        :param formation_volume_factor: Formation volume factor
+        :param is_active: Whether well is active
+        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
+        :param fluid_compressibility: Fluid compressibility (1/psi)
+        :return: Effective bottom-hole pressure (psi)
+        """
+        if (
+            _should_return_zero(
+                fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+            )
+            or fluid.phase != self.target_phase
+        ):
+            return pressure
+
+        target_rate_reservoir = self.target_rate * formation_volume_factor
+
+        # Compute required BHP for target rate
+        try:
+            required_bhp = _compute_required_bhp(
+                target_rate=target_rate_reservoir,
+                fluid=fluid,
+                well_index=well_index,
+                pressure=pressure,
+                temperature=temperature,
+                phase_mobility=phase_mobility,
+                use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=formation_volume_factor,
+                fluid_compressibility=fluid_compressibility,
+            )
+        except (ValueError, ZeroDivisionError) as exc:
+            logger.warning(
+                f"Cannot compute required BHP: {exc}. Using reservoir pressure."
+            )
+            return (
+                _apply_clamp(
+                    pressure=pressure,
+                    control_name="constant rate control",
+                    clamp=self.clamp,
+                    bhp=pressure,
+                )
+                or pressure
+            )
+
+        # Check BHP constraint
+        bhp = required_bhp
+        min_bhp = self.minimum_bottom_hole_pressure
+        if min_bhp is not None:
+            is_production = target_rate_reservoir < 0.0
+
+            if is_production:
+                # Production: BHP must be >= min_bhp
+                if required_bhp < min_bhp:
+                    logger.debug(
+                        f"Required BHP {required_bhp:.4f} < min {min_bhp:.4f}. "
+                        f"Using constraint BHP."
+                    )
+                    bhp = min_bhp
+            else:
+                # Injection: BHP must be <= max_bhp (min_bhp is actually max here)
+                if required_bhp > min_bhp:
+                    logger.debug(
+                        f"Required BHP {required_bhp:.4f} > max {min_bhp:.4f}. "
+                        f"Using constraint BHP."
+                    )
+                    bhp = min_bhp
+
+        return (
+            _apply_clamp(
+                pressure=pressure,
+                control_name="constant rate control",
+                clamp=self.clamp,
+                bhp=bhp,
+            )
+            or bhp
+        )
 
     def update(
         self,
@@ -527,13 +739,13 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
     def __attrs_post_init__(self) -> None:
         """Validate control parameters."""
         if self.target_rate == 0.0:
-            raise ValueError(
+            raise ValidationError(
                 "Target rate cannot be zero. Use `well.shut_in()` instead."
             )
         if self.minimum_bottom_hole_pressure <= 0.0:
-            raise ValueError("Minimum bottom hole pressure must be positive.")
+            raise ValidationError("Minimum bottom hole pressure must be positive.")
 
-    def __call__(
+    def get_flow_rate(
         self,
         pressure: float,
         temperature: float,
@@ -563,12 +775,12 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         :return: Flow rate in (bbl/day or ft³/day).
         """
         # Early return checks
-        if _should_return_zero(
-            fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+        if (
+            _should_return_zero(
+                fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+            )
+            or fluid.phase != self.target_phase
         ):
-            return 0.0
-
-        if fluid.phase != self.target_phase:
             return 0.0
 
         target_rate = (
@@ -670,6 +882,91 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         )
         return clamped if clamped is not None else rate
 
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluid,
+        formation_volume_factor: float,
+        is_active: bool = True,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """
+        Compute BHP based on current operating mode.
+
+        :param pressure: Reservoir pressure at well location (psi)
+        :param temperature: Reservoir temperature (°F)
+        :param phase_mobility: Phase mobility (1/cP)
+        :param well_index: Well index (md*ft)
+        :param fluid: Fluid being produced/injected
+        :param formation_volume_factor: Formation volume factor
+        :param is_active: Whether well is active
+        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
+        :param fluid_compressibility: Fluid compressibility (1/psi)
+        :return: Effective bottom-hole pressure (psi)
+        """
+        if (
+            _should_return_zero(
+                fluid=fluid, phase_mobility=phase_mobility, is_active=is_active
+            )
+            or fluid.phase != self.target_phase
+        ):
+            return pressure
+
+        target_rate_reservoir = self.target_rate * formation_volume_factor
+        min_bhp = self.minimum_bottom_hole_pressure
+
+        # Try to compute required BHP for target rate
+        try:
+            required_bhp = _compute_required_bhp(
+                target_rate=target_rate_reservoir,
+                fluid=fluid,
+                well_index=well_index,
+                pressure=pressure,
+                temperature=temperature,
+                phase_mobility=phase_mobility,
+                use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=formation_volume_factor,
+                fluid_compressibility=fluid_compressibility,
+            )
+        except (ValueError, ZeroDivisionError) as e:
+            logger.debug(f"Cannot achieve rate mode: {e}. Using BHP mode.")
+            return (
+                _apply_clamp(
+                    pressure=pressure,
+                    control_name="adaptive control - BHP mode",
+                    clamp=self.clamp,
+                    bhp=min_bhp,
+                )
+                or min_bhp
+            )
+
+        # Check if rate is achievable within BHP constraint
+        is_production = target_rate_reservoir < 0.0
+        if is_production:
+            can_achieve = required_bhp >= min_bhp
+        else:
+            can_achieve = required_bhp <= min_bhp
+
+        if can_achieve:
+            logger.debug(f"Adaptive control: rate mode (BHP={required_bhp:.4f})")
+            bhp = required_bhp
+        else:
+            logger.debug(f"Adaptive control: BHP mode (BHP={min_bhp:.4f})")
+            bhp = min_bhp
+        return (
+            _apply_clamp(
+                pressure=pressure,
+                control_name="adaptive control",
+                clamp=self.clamp,
+                bhp=bhp,
+            )
+            or bhp
+        )
+
     def update(
         self,
         target_rate: typing.Optional[float] = None,
@@ -712,7 +1009,7 @@ class MultiPhaseRateControl:
     water_control: WellControl
     """Water phase well control. Ensure that this is intended for water phase."""
 
-    def __call__(
+    def get_flow_rate(
         self,
         pressure: float,
         temperature: float,
@@ -744,7 +1041,7 @@ class MultiPhaseRateControl:
             return 0.0
 
         if fluid.phase == FluidPhase.OIL:
-            return self.oil_control(
+            return self.oil_control.get_flow_rate(
                 pressure=pressure,
                 temperature=temperature,
                 phase_mobility=phase_mobility,
@@ -756,7 +1053,7 @@ class MultiPhaseRateControl:
                 fluid_compressibility=fluid_compressibility,
             )
         elif fluid.phase == FluidPhase.GAS:
-            return self.gas_control(
+            return self.gas_control.get_flow_rate(
                 pressure=pressure,
                 temperature=temperature,
                 phase_mobility=phase_mobility,
@@ -768,7 +1065,7 @@ class MultiPhaseRateControl:
                 fluid_compressibility=fluid_compressibility,
             )
         elif fluid.phase == FluidPhase.WATER:
-            return self.water_control(
+            return self.water_control.get_flow_rate(
                 pressure=pressure,
                 temperature=temperature,
                 phase_mobility=phase_mobility,
@@ -781,6 +1078,57 @@ class MultiPhaseRateControl:
             )
         else:
             raise ValidationError(f"Unsupported fluid phase: {fluid.phase}")
+
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluid,
+        formation_volume_factor: float,
+        is_active: bool = True,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """Delegate to appropriate phase control."""
+        if fluid.phase == FluidPhase.OIL:
+            return self.oil_control.get_bottom_hole_pressure(
+                pressure,
+                temperature,
+                phase_mobility,
+                well_index,
+                fluid,
+                formation_volume_factor,
+                is_active,
+                use_pseudo_pressure,
+                fluid_compressibility,
+            )
+        elif fluid.phase == FluidPhase.GAS:
+            return self.gas_control.get_bottom_hole_pressure(
+                pressure,
+                temperature,
+                phase_mobility,
+                well_index,
+                fluid,
+                formation_volume_factor,
+                is_active,
+                use_pseudo_pressure,
+                fluid_compressibility,
+            )
+        elif fluid.phase == FluidPhase.WATER:
+            return self.water_control.get_bottom_hole_pressure(
+                pressure,
+                temperature,
+                phase_mobility,
+                well_index,
+                fluid,
+                formation_volume_factor,
+                is_active,
+                use_pseudo_pressure,
+                fluid_compressibility,
+            )
+        return pressure
 
     def update(
         self,

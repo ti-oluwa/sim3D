@@ -2,23 +2,26 @@ import logging
 import typing
 import warnings
 
-from CoolProp.CoolProp import PropsSI  # type: ignore[import]
+from CoolProp.CoolProp import PropsSI
 import numba
 import numpy as np
 from scipy.optimize import brentq
 
 from bores.constants import c
-from bores.errors import ValidationError, ComputationError
+from bores.errors import ComputationError, ValidationError
 from bores.pvt.core import (
+    HENRY_COEFFICIENTS,
+    SETSCHENOW_CONSTANTS,
     clip_pressure,
     clip_temperature,
-    fahrenheit_to_celsius,
-    fahrenheit_to_kelvin,
     compute_gas_solubility_in_water as compute_gas_solubility_in_water_scalar,
     compute_gas_to_oil_ratio_standing as compute_gas_to_oil_ratio_standing_scalar,
+    fahrenheit_to_celsius,
+    fahrenheit_to_kelvin,
+    _get_gas_symbol,
 )
 from bores.types import FloatOrArray, NDimension, NDimensionalGrid
-from bores.utils import apply_mask, clip, get_mask, min_, max_
+from bores.utils import apply_mask, clip, get_mask, max_, min_
 
 logger = logging.getLogger(__name__)
 
@@ -945,8 +948,8 @@ def compute_water_bubble_point_pressure(
     if np.isscalar(salinity):
         salinity = np.full_like(temperature, salinity)  # type: ignore[assignment]
 
-    gas = gas.lower()
-    if gas == "methane" and (min_(temperature) < 100 or max_(temperature) > 400):
+    gas = _get_gas_symbol(gas)
+    if gas == "ch4" and (min_(temperature) < 100 or max_(temperature) > 400):
         # Inverted McCain
         return compute_water_bubble_point_pressure_mccain(
             temperature=temperature,
@@ -954,8 +957,8 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    min_pressure = np.full_like(temperature, max(c.MIN_VALID_PRESSURE - 1e-3, 0.0))
-    max_pressure = np.full_like(temperature, c.MAX_VALID_PRESSURE + 1e-3)
+    min_pressure = np.full_like(temperature, c.MIN_VALID_PRESSURE)
+    max_pressure = np.full_like(temperature, c.MAX_VALID_PRESSURE)
 
     min_solubility = compute_gas_solubility_in_water(
         pressure=min_pressure,
@@ -970,13 +973,10 @@ def compute_water_bubble_point_pressure(
         gas=gas,
     )
 
-    if np.any(gas_solubility_in_water < min_solubility) or np.any(
-        gas_solubility_in_water > max_solubility
-    ):
-        # Find where violations occur
-        too_low = gas_solubility_in_water < min_solubility
-        too_high = gas_solubility_in_water > max_solubility
-
+    # Find where violations occur
+    too_low = gas_solubility_in_water < (min_solubility - c.GAS_SOLUBILITY_TOLERANCE)
+    too_high = gas_solubility_in_water > (max_solubility + c.GAS_SOLUBILITY_TOLERANCE)
+    if np.any(too_low) or np.any(too_high):
         error_parts = []
         if np.any(too_low):
             min_target = np.min(gas_solubility_in_water[too_low])
@@ -992,13 +992,13 @@ def compute_water_bubble_point_pressure(
                 f" • Solubility too high: {max_target:.6f} SCF/STB > maximum allowed {max_allowed:.6f} SCF/STB"
             )
 
-        error_message = (
+        error_msg = (
             f"Gas solubility in water is outside valid range for '{gas}':\n"
             + "\n".join(error_parts)
             + f"\n  Conditions: T ∈ [{min_(temperature):.2f}, {max_(temperature):.2f}]°F, "
             f"Salinity ∈ [{min_(salinity):.2f}, {max_(salinity):.2f}] ppm"
         )
-        raise ComputationError(error_message)
+        raise ComputationError(error_msg)
 
     # Use numerical solver for Duan/Henry
     # For gases like CO₂ and N₂ where no direct analytical formula exists to compute
@@ -1988,15 +1988,6 @@ def _gas_solubility_in_water_duan_sun_co2(
     return rsw  # type: ignore[return-value]
 
 
-# Henry's constants (Sander, 2020) — ln(H) = A + B/T + C*ln(T)
-# H in mol/(m³·Pa), will be inverted to Pa·m³/mol
-HENRY_COEFFICIENTS = {
-    "co2": (-58.0931, 90.5069, 0.027766),
-    "methane": (-68.8862, 101.4956, 0.021599),
-    "n2": (-71.0592, 120.1052, 0.02624),
-}
-
-
 def _gas_solubility_in_water_henry_law(
     pressure: NDimensionalGrid[NDimension],
     temperature: NDimensionalGrid[NDimension],
@@ -2059,8 +2050,7 @@ def _gas_solubility_in_water_henry_law(
     # Converts salinity from ppm (mg/kg) to mol/kg using molar mass in g/mol
     molarity = salinity / (c.MOLECULAR_WEIGHT_NACL * 1000)
 
-    setschenow_constants = {"co2": 0.12, "methane": 0.17, "n2": 0.13}
-    k_s = setschenow_constants[gas]
+    k_s = SETSCHENOW_CONSTANTS[gas]
     salinity_factor = np.exp(-k_s * molarity)
 
     gas_solubility = (
@@ -2084,10 +2074,10 @@ def compute_gas_solubility_in_water(
     :param gas: Type of gas ("methane", "CO2", or "N2"). Default is "methane".
     :return: Gas solubility in water in SCF/STB (standard cubic feet per stock tank barrel).
     """
-    gas = gas.lower()
+    gas = _get_gas_symbol(gas)
     result = np.empty_like(pressure)
 
-    if gas == "methane":
+    if gas == "ch4":
         # McCain correlation for 100°F <= T <= 400°F
         mccain_mask = (temperature >= 100.0) & (temperature <= 400.0)
         henry_mask = np.invert(mccain_mask)
@@ -2104,7 +2094,7 @@ def compute_gas_solubility_in_water(
         # Apply Henry's Law for out-of-range temperatures
         if np.any(henry_mask):
             molar_masses = {
-                "methane": c.MOLECULAR_WEIGHT_METHANE / 1000,  # Convert g/mol to kg/mol
+                "methane": c.MOLECULAR_WEIGHT_CH4 / 1000,  # Convert g/mol to kg/mol
             }
             henry_result = _gas_solubility_in_water_henry_law(
                 pressure=get_mask(pressure, henry_mask),
@@ -2147,10 +2137,16 @@ def compute_gas_solubility_in_water(
             )
             apply_mask(result, henry_mask, henry_result)
 
-    elif gas == "n2":
+    else:
         # Henry's Law for all temperatures (no specialized correlation)
         molar_masses = {
-            "n2": c.MOLECULAR_WEIGHT_N2 / 1000,  # Convert g/mol to kg/mol
+            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+            "ch4": c.MOLECULAR_WEIGHT_CH4 / 1000,
+            "n2": c.MOLECULAR_WEIGHT_N2 / 1000,
+            "ar": c.MOLECULAR_WEIGHT_ARGON / 1000,
+            "o2": c.MOLECULAR_WEIGHT_O2 / 1000,
+            "he": c.MOLECULAR_WEIGHT_HELIUM / 1000,
+            "h2": c.MOLECULAR_WEIGHT_H2 / 1000,
         }
         result = _gas_solubility_in_water_henry_law(
             pressure=pressure,
@@ -2160,9 +2156,6 @@ def compute_gas_solubility_in_water(
             henry_coefficients=HENRY_COEFFICIENTS,
             salinity=salinity,
         )
-
-    else:
-        raise NotImplementedError(f"No model for gas '{gas}'.")
     return result  # type: ignore[return-value]
 
 

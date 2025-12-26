@@ -15,7 +15,7 @@ def _():
     bores.image_config(scale=3)
 
     DEPLETED_MODEL_STATES = (
-        Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl.xz"
+        Path.cwd() / "scenarios/states/stabilization_coarse.pkl.xz"
     )
     states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
     return bores, itertools, np, states
@@ -358,7 +358,7 @@ def _(bores, states, viz):
         opacity=0.67,
         labels=labels,
         aspect_mode="data",
-        # z_scale=5,
+        z_scale=3,
         marker_size=4,
         show_wells=True,
         show_surface_marker=True,

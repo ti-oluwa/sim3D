@@ -224,7 +224,7 @@ def _():
         boundary_conditions = bores.BoundaryConditions(
             conditions={
                 "pressure": bores.GridBoundaryCondition(
-                    bottom=bores.ConstantBoundary(5600),  # Aquifer pressure
+                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
                 ),
             }
         )
@@ -288,7 +288,7 @@ def _():
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
         return list(states)
-    return (main,)
+    return bores, main
 
 
 @app.cell
@@ -298,20 +298,20 @@ def _(main):
 
 
 @app.cell
-def _(states):
+def _(bores, states):
     from pathlib import Path
 
-    # bores.dump_states(
-    #     states,
-    #     filepath=Path.cwd() / "scenarios/states/stabilization_coarse_1.pkl",
-    #     exist_ok=True,
-    #     compression="lzma",
-    # )
+    bores.dump_states(
+        states,
+        filepath=Path.cwd() / "scenarios/states/stabilization_coarse.pkl",
+        exist_ok=True,
+        compression="lzma",
+    )
 
     # Save last stabilized state
     stabilized_state = states[-1]
     stabilized_state.dump(
-        filepath=Path.cwd() / "scenarios/states/stabilized_coarse_1.pkl",
+        filepath=Path.cwd() / "scenarios/states/stabilized_coarse.pkl",
         compression="lzma",
         exist_ok=True,
     )

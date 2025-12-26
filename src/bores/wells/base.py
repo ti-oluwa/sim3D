@@ -172,7 +172,9 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
 
         if dimensions == 2:
             if len(permeability) != 2:
-                raise ValidationError("Permeability must be a 2D tuple for 2D locations")
+                raise ValidationError(
+                    "Permeability must be a 2D tuple for 2D locations"
+                )
             interval_thickness = typing.cast(TwoDimensions, interval_thickness)
             permeability = typing.cast(TwoDimensions, permeability)
             return compute_2D_effective_drainage_radius(
@@ -260,7 +262,43 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
         :return: The flow rate in (bbl/day or ft³/day).
         """
-        return self.control(
+        return self.control.get_flow_rate(
+            pressure=pressure,
+            temperature=temperature,
+            phase_mobility=phase_mobility,
+            well_index=well_index,
+            fluid=fluid,
+            is_active=self.is_open,
+            use_pseudo_pressure=use_pseudo_pressure,
+            fluid_compressibility=fluid_compressibility,
+            formation_volume_factor=formation_volume_factor,
+        )
+
+    def get_bottom_hole_pressure(
+        self,
+        pressure: float,
+        temperature: float,
+        phase_mobility: float,
+        well_index: float,
+        fluid: WellFluidT,
+        formation_volume_factor: float,
+        use_pseudo_pressure: bool = False,
+        fluid_compressibility: typing.Optional[float] = None,
+    ) -> float:
+        """
+        Compute the bottom-hole pressure for the well using the configured control strategy.
+
+        :param pressure: The reservoir pressure at the well location (psi).
+        :param temperature: The reservoir temperature at the well location (°F).
+        :param phase_mobility: The relative mobility of the fluid phase being produced or injected.
+        :param well_index: The well index (md*ft).
+        :param fluid: The fluid being produced or injected.
+        :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
+        :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
+        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :return: The bottom-hole pressure (psi).
+        """
+        return self.control.get_bottom_hole_pressure(
             pressure=pressure,
             temperature=temperature,
             phase_mobility=phase_mobility,

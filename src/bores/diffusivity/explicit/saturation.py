@@ -11,8 +11,8 @@ from bores.config import Config
 from bores.constants import c
 from bores.diffusivity.base import (
     EvolutionResult,
-    _warn_injector_is_producing,
-    _warn_producer_is_injecting,
+    _warn_injection_rate_is_negative,
+    _warn_production_rate_is_positive,
     compute_mobility_grids,
 )
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
@@ -160,7 +160,7 @@ def evolve_saturation_explicitly(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        millidarcies_per_centipoise_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
     )
 
     dtype = get_dtype()
@@ -866,6 +866,7 @@ def compute_well_rate_grids(
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
+        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
         oil_pressure = oil_pressure_grid[i, j, k]
 
         # Handle injection well
@@ -875,6 +876,10 @@ def compute_well_rate_grids(
             and (injected_fluid := injection_well.injected_fluid) is not None
         ):
             injected_phase = injected_fluid.phase
+            phase_fvf = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
                 compressibility_kwargs = {}
@@ -887,27 +892,21 @@ def compute_well_rate_grids(
                     "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
                         i, j, k
                     ],
-                    "gas_formation_volume_factor": fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ],
+                    "gas_formation_volume_factor": phase_fvf,
                     "gas_solubility_in_water": gas_solubility_in_water,
                 }
 
-            fluid_compressibility = injected_fluid.get_compressibility(
+            phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 **compressibility_kwargs,
-            )
-            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
             )
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
-                interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                interval_thickness=interval_thickness,
                 permeability=permeability,
                 skin_factor=injection_well.skin_factor,
             )
@@ -919,12 +918,12 @@ def compute_well_rate_grids(
                 well_index=well_index,
                 phase_mobility=phase_mobility,
                 fluid=injected_fluid,
-                fluid_compressibility=fluid_compressibility,
+                fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=fluid_formation_volume_factor,
+                formation_volume_factor=phase_fvf,
             )
-            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
-                _warn_injector_is_producing(
+            if cell_injection_rate < 0.0 and config.warn_well_anomalies:
+                _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
                     cell=(i, j, k),
@@ -962,28 +961,22 @@ def compute_well_rate_grids(
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = gas_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = gas_compressibility_grid[i, j, k]
+                    phase_fvf = gas_formation_volume_factor_grid[i, j, k]
                 elif produced_phase == FluidPhase.WATER:
                     phase_mobility = water_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = water_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = water_compressibility_grid[i, j, k]
+                    phase_fvf = water_formation_volume_factor_grid[i, j, k]
                 else:
                     phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_compressibility = oil_compressibility_grid[i, j, k]
+                    phase_fvf = oil_formation_volume_factor_grid[i, j, k]
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 well_index = production_well.get_well_index(
-                    interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                    interval_thickness=interval_thickness,
                     permeability=permeability,
                     skin_factor=production_well.skin_factor,
                 )
@@ -995,12 +988,12 @@ def compute_well_rate_grids(
                     well_index=well_index,
                     phase_mobility=phase_mobility,
                     fluid=produced_fluid,
-                    fluid_compressibility=fluid_compressibility,
+                    fluid_compressibility=phase_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=fluid_formation_volume_factor,
+                    formation_volume_factor=phase_fvf,
                 )
-                if production_rate > 0.0 and config.warn_rates_anomalies:
-                    _warn_producer_is_injecting(
+                if production_rate > 0.0 and config.warn_well_anomalies:
+                    _warn_production_rate_is_positive(
                         production_rate=production_rate,
                         well_name=production_well.name,
                         cell=(i, j, k),
@@ -1201,7 +1194,6 @@ def normalize_saturations(
                 so = max(0.0, oil_saturation_grid[i, j, k])
                 sg = max(0.0, gas_saturation_grid[i, j, k])
 
-                # Compute total
                 total = sw + so + sg
 
                 # Normalize if total > epsilon
@@ -1302,7 +1294,7 @@ def evolve_miscible_saturation_explicitly(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        millidarcies_per_centipoise_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
     )
 
     # Compute net flux contributions for all cells
@@ -2087,6 +2079,7 @@ def compute_miscible_well_rate_grids(
             absolute_permeability.y[i, j, k],
             absolute_permeability.z[i, j, k],
         )
+        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
 
         # Handle injection well
         if (
@@ -2096,6 +2089,10 @@ def compute_miscible_well_rate_grids(
         ):
             # If there is an injection well, add its flow rate to the cell
             injected_phase = injected_fluid.phase
+            phase_fvf = injected_fluid.get_formation_volume_factor(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+            )
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
                 compressibility_kwargs = {}
@@ -2108,27 +2105,21 @@ def compute_miscible_well_rate_grids(
                     "bubble_point_pressure": fluid_properties.oil_bubble_point_pressure_grid[
                         i, j, k
                     ],
-                    "gas_formation_volume_factor": fluid_properties.gas_formation_volume_factor_grid[
-                        i, j, k
-                    ],
+                    "gas_formation_volume_factor": phase_fvf,
                     "gas_solubility_in_water": gas_solubility_in_water,
                 }
 
-            fluid_compressibility = injected_fluid.get_compressibility(
+            phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 **compressibility_kwargs,
-            )
-            fluid_formation_volume_factor = injected_fluid.get_formation_volume_factor(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
             )
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
             well_index = injection_well.get_well_index(
-                interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                interval_thickness=interval_thickness,
                 permeability=permeability,
                 skin_factor=injection_well.skin_factor,
             )
@@ -2138,12 +2129,12 @@ def compute_miscible_well_rate_grids(
                 well_index=well_index,
                 phase_mobility=phase_mobility,
                 fluid=injected_fluid,
-                fluid_compressibility=fluid_compressibility,
+                fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=fluid_formation_volume_factor,
+                formation_volume_factor=phase_fvf,
             )
-            if cell_injection_rate < 0.0 and config.warn_rates_anomalies:
-                _warn_injector_is_producing(
+            if cell_injection_rate < 0.0 and config.warn_well_anomalies:
+                _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
                     well_name=injection_well.name,
                     cell=(i, j, k),
@@ -2208,7 +2199,7 @@ def compute_miscible_well_rate_grids(
                     ]
 
                 well_index = production_well.get_well_index(
-                    interval_thickness=(cell_size_x, cell_size_y, cell_thickness),
+                    interval_thickness=interval_thickness,
                     permeability=permeability,
                     skin_factor=production_well.skin_factor,
                 )
@@ -2224,8 +2215,8 @@ def compute_miscible_well_rate_grids(
                     formation_volume_factor=fluid_formation_volume_factor,
                 )
 
-                if production_rate > 0.0 and config.warn_rates_anomalies:
-                    _warn_producer_is_injecting(
+                if production_rate > 0.0 and config.warn_well_anomalies:
+                    _warn_production_rate_is_positive(
                         production_rate=production_rate,
                         well_name=production_well.name,
                         cell=(i, j, k),
