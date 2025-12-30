@@ -1,3 +1,4 @@
+from bores.pvt.tables import PVTTables
 import attrs
 import typing
 import numpy as np
@@ -31,142 +32,11 @@ from bores.wells import Wells
 from bores.grids.rock_fluid import build_effective_residual_saturation_grids
 
 
-def update_density_grids(
-    fluid_properties: FluidProperties[ThreeDimensions],
-    wells: Wells[ThreeDimensions],
-    miscibility_model: MiscibilityModel,
-) -> FluidProperties[ThreeDimensions]:
-    """
-    Updates phase density grids based on current pressure, temperature, and composition.
-
-    This is a simplified version of `update_pvt_grids` that only recalculates densities,
-    making it suitable for use in perturbation calculations where only densities are needed.
-
-    Updates:
-    - Gas density (ρg)
-    - Water density (ρw)
-    - Oil density (ρo)
-    - Oil effective density (ρo_eff) - includes miscibility effects if applicable
-
-    :param fluid_properties: Current fluid property grids
-    :param wells: Current wells configuration
-    :param miscibility_model: The miscibility model used in the simulation
-    :return: FluidProperties with updated density grids only
-    """
-    # GAS DENSITY
-    # Need z-factor to compute gas density
-    gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-    )
-    new_gas_density_grid = build_gas_density_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
-    )
-
-    # WATER DENSITY
-    # Need gas solubility and gas-free water FVF for water density
-    gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-        gas=fluid_properties.reservoir_gas,
-    )
-    gas_free_water_formation_volume_factor_grid = (
-        build_gas_free_water_formation_volume_factor_grid(
-            pressure_grid=fluid_properties.pressure_grid,
-            temperature_grid=fluid_properties.temperature_grid,
-        )
-    )
-    new_water_density_grid = build_water_density_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
-        gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
-    )
-
-    # OIL DENSITY
-    new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
-    )
-    gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
-        pressure_grid=new_oil_bubble_point_pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-    )
-    new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
-    )
-    new_oil_formation_volume_factor_grid = build_oil_formation_volume_factor_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
-        oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
-    )
-    new_oil_density_grid = build_live_oil_density_grid(
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
-        formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
-    )
-    new_oil_effective_density_grid = new_oil_density_grid
-
-    # Handle miscible injections if applicable
-    if miscibility_model != "immiscible":
-        for well in wells.injection_wells:
-            injected_fluid = well.injected_fluid
-            if injected_fluid and injected_fluid.is_miscible:
-                injected_fluid_viscosity_grid = np.vectorize(
-                    injected_fluid.get_viscosity, otypes=[get_dtype()]
-                )(
-                    pressure=fluid_properties.pressure_grid,
-                    temperature=fluid_properties.temperature_grid,
-                )
-                # Update effective oil density using Todd-Longstaff model
-                new_oil_effective_density_grid = build_oil_effective_density_grid(
-                    oil_density_grid=new_oil_density_grid,
-                    solvent_density_grid=injected_fluid_viscosity_grid,
-                    oil_viscosity_grid=fluid_properties.oil_effective_viscosity_grid,
-                    solvent_viscosity_grid=injected_fluid_viscosity_grid,
-                    solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
-                    base_omega=injected_fluid.todd_longstaff_omega,
-                    pressure_grid=fluid_properties.pressure_grid,
-                    minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
-                    transition_width=injected_fluid.miscibility_transition_width,
-                )
-
-    updated_fluid_properties = attrs.evolve(
-        fluid_properties,
-        oil_density_grid=new_oil_density_grid,
-        oil_effective_density_grid=new_oil_effective_density_grid,
-        water_density_grid=new_water_density_grid,
-        gas_density_grid=new_gas_density_grid,
-    )
-    return updated_fluid_properties
-
-
 def update_pvt_grids(
     fluid_properties: FluidProperties[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     miscibility_model: MiscibilityModel,
+    pvt_tables: typing.Optional[PVTTables] = None,
 ) -> FluidProperties[ThreeDimensions]:
     """
     Updates PVT fluid properties grids using the current pressure and temperature values.
@@ -234,151 +104,247 @@ def update_pvt_grids(
     :param fluid_properties: Current fluid property grids (pressure, temperature, salinity, densities, etc.)
     :param wells: Current wells configuration (used for fluid type information).
     :param miscibility_model: The miscibility model used in the simulation.
+    :param
     :return: Updated FluidProperties object with recalculated gas, water, and oil properties.
     """
-    # GAS PROPERTIES
-    gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-    )
-    new_gas_formation_volume_factor_grid = build_gas_formation_volume_factor_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
-    )
-    new_gas_compressibility_grid = build_gas_compressibility_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
-    )
-    new_gas_density_grid = build_gas_density_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
-    )
-    new_gas_viscosity_grid = build_gas_viscosity_grid(
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_density_grid=new_gas_density_grid,
-        gas_molecular_weight_grid=fluid_properties.gas_molecular_weight_grid,
-    )
-
-    # WATER PROPERTIES
-    gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-        gas=fluid_properties.reservoir_gas,
-    )
-    new_water_bubble_point_pressure_grid = build_water_bubble_point_pressure_grid(
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-    )
-    gas_free_water_formation_volume_factor_grid = (
-        build_gas_free_water_formation_volume_factor_grid(
-            pressure_grid=fluid_properties.pressure_grid,
-            temperature_grid=fluid_properties.temperature_grid,
+    pressure_grid = fluid_properties.pressure_grid
+    temperature_grid = fluid_properties.temperature_grid
+    if pvt_tables is None:
+        # GAS PROPERTIES
+        gas_compressibility_factor_grid = build_gas_compressibility_factor_grid(
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
         )
-    )
-    new_water_compressibility_grid = build_water_compressibility_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_water_bubble_point_pressure_grid,
-        gas_formation_volume_factor_grid=fluid_properties.gas_formation_volume_factor_grid,
-        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
-        gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
-    )
-    new_water_density_grid = build_water_density_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-        gas_solubility_in_water_grid=gas_solubility_in_water_grid,
-        gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
-    )
-    new_water_formation_volume_factor_grid = build_water_formation_volume_factor_grid(
-        water_density_grid=new_water_density_grid,  # Use new density here
-        salinity_grid=fluid_properties.water_salinity_grid,
-    )
-    new_water_viscosity_grid = build_water_viscosity_grid(
-        temperature_grid=fluid_properties.temperature_grid,
-        salinity_grid=fluid_properties.water_salinity_grid,
-        pressure_grid=fluid_properties.pressure_grid,
-    )
+        new_gas_formation_volume_factor_grid = build_gas_formation_volume_factor_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            gas_compressibility_factor_grid=gas_compressibility_factor_grid,
+        )
+        new_gas_compressibility_grid = build_gas_compressibility_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            gas_compressibility_factor_grid=gas_compressibility_factor_grid,
+        )
+        new_gas_density_grid = build_gas_density_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            gas_compressibility_factor_grid=gas_compressibility_factor_grid,
+        )
+        new_gas_viscosity_grid = build_gas_viscosity_grid(
+            temperature_grid=temperature_grid,
+            gas_density_grid=new_gas_density_grid,
+            gas_molecular_weight_grid=fluid_properties.gas_molecular_weight_grid,
+        )
+
+        # WATER PROPERTIES
+        gas_solubility_in_water_grid = build_gas_solubility_in_water_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            salinity_grid=fluid_properties.water_salinity_grid,
+            gas=fluid_properties.reservoir_gas,
+        )
+        new_water_bubble_point_pressure_grid = build_water_bubble_point_pressure_grid(
+            temperature_grid=temperature_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            salinity_grid=fluid_properties.water_salinity_grid,
+        )
+        gas_free_water_formation_volume_factor_grid = (
+            build_gas_free_water_formation_volume_factor_grid(
+                pressure_grid=pressure_grid,
+                temperature_grid=temperature_grid,
+            )
+        )
+        new_water_compressibility_grid = build_water_compressibility_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_water_bubble_point_pressure_grid,
+            gas_formation_volume_factor_grid=fluid_properties.gas_formation_volume_factor_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
+        )
+        new_water_density_grid = build_water_density_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            salinity_grid=fluid_properties.water_salinity_grid,
+            gas_solubility_in_water_grid=gas_solubility_in_water_grid,
+            gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
+        )
+        new_water_formation_volume_factor_grid = (
+            build_water_formation_volume_factor_grid(
+                water_density_grid=new_water_density_grid,  # Use new density here
+                salinity_grid=fluid_properties.water_salinity_grid,
+            )
+        )
+        new_water_viscosity_grid = build_water_viscosity_grid(
+            temperature_grid=temperature_grid,
+            salinity_grid=fluid_properties.water_salinity_grid,
+            pressure_grid=pressure_grid,
+        )
+    else:
+        # GAS PROPERTIES
+        gas_compressibility_factor_grid = pvt_tables.gas_compressibility_factor(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_gas_formation_volume_factor_grid = pvt_tables.gas_formation_volume_factor(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_gas_compressibility_grid = pvt_tables.gas_compressibility(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_gas_density_grid = pvt_tables.gas_density(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_gas_viscosity_grid = pvt_tables.gas_viscosity(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+
+        # WATER PROPERTIES
+        water_salinity_grid = fluid_properties.water_salinity_grid
+        gas_solubility_in_water_grid = pvt_tables.gas_solubility_in_water(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            salinity=water_salinity_grid,
+        )
+        new_water_bubble_point_pressure_grid = pvt_tables.water_bubble_point_pressure(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        gas_free_water_formation_volume_factor_grid = (
+            build_gas_free_water_formation_volume_factor_grid(
+                pressure_grid=pressure_grid,
+                temperature_grid=temperature_grid,
+            )
+        )
+        new_water_compressibility_grid = pvt_tables.water_compressibility(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_water_density_grid = pvt_tables.water_density(
+            pressure=pressure_grid, temperature=temperature_grid
+        )
+        new_water_formation_volume_factor_grid = (
+            pvt_tables.water_formation_volume_factor(
+                pressure=pressure_grid, temperature=temperature_grid
+            )
+        )
+        new_water_viscosity_grid = pvt_tables.water_viscosity(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+        )
 
     # OIL PROPERTIES (tricky due to bubble point)
     # Make sure to always compute the oil bubble point pressure grid
     # before the gas to oil ratio grid, as the latter depends on the former.
 
-    # Step 1: Compute NEW bubble point using CURRENT Rs
-    new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
-    )
+    if pvt_tables is None:
+        # Step 1: Compute NEW bubble point using CURRENT Rs
+        new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+            temperature_grid=temperature_grid,
+            solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
+        )
 
-    # Step 2: Compute Rs at NEW bubble point
-    gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
-        pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # Use same NEW bubble point here
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-    )
-    # Step 3: Compute NEW Rs at current pressure
-    new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,  # GOR at new bubble point here
-    )
-    # Step 4: Compute oil FVF (may use lagged compressibility - acceptable)
-    # Oil FVF does not depend necessarily on the new compressibility grid,
-    # so we can use the old one (compressibility changes are small, hence, it can be lagged).
-    # FVF is a function of pressure and phase behavior. Only when pressure changes,
-    # does FVF need to be recalculated.
-    new_oil_formation_volume_factor_grid = build_oil_formation_volume_factor_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
-        oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
-    )
-    # Step 5: Compute oil compressibility
-    new_oil_compressibility_grid = build_oil_compressibility_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
-        gas_formation_volume_factor_grid=new_gas_formation_volume_factor_grid,
-        oil_formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
-    )
-    # Step 6: Compute oil density and viscosity
-    new_oil_density_grid = build_live_oil_density_grid(
-        oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
-        gas_gravity_grid=fluid_properties.gas_gravity_grid,
-        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
-        formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
-    )
-    new_oil_effective_density_grid = new_oil_density_grid
-    new_oil_viscosity_grid = build_oil_viscosity_grid(
-        pressure_grid=fluid_properties.pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
-        oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
-        solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
-        gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
-    )
+        # Step 2: Compute Rs at NEW bubble point
+        gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
+            pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # Use same NEW bubble point here
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+        )
+        # Step 3: Compute NEW Rs at current pressure
+        new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+            gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,  # GOR at new bubble point here
+        )
+        # Step 4: Compute oil FVF (may use lagged compressibility - acceptable)
+        # Oil FVF does not depend necessarily on the new compressibility grid,
+        # so we can use the old one (compressibility changes are small, hence, it can be lagged).
+        # FVF is a function of pressure and phase behavior. Only when pressure changes,
+        # does FVF need to be recalculated.
+        new_oil_formation_volume_factor_grid = build_oil_formation_volume_factor_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+            oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
+            oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
+        )
+        # Step 5: Compute oil compressibility
+        new_oil_compressibility_grid = build_oil_compressibility_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+            oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
+            gas_formation_volume_factor_grid=new_gas_formation_volume_factor_grid,  # type: ignore
+            oil_formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
+        )
+        # Step 6: Compute oil density and viscosity
+        new_oil_density_grid = build_live_oil_density_grid(
+            oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
+            gas_gravity_grid=fluid_properties.gas_gravity_grid,
+            solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
+            formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
+        )
+        new_oil_effective_density_grid = new_oil_density_grid
+        new_oil_viscosity_grid = build_oil_viscosity_grid(
+            pressure_grid=pressure_grid,
+            temperature_grid=temperature_grid,
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,
+            oil_specific_gravity_grid=fluid_properties.oil_specific_gravity_grid,
+            solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
+            gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
+        )
+    else:
+        # Step 1: Compute NEW bubble point using CURRENT Rs
+        new_oil_bubble_point_pressure_grid = pvt_tables.oil_bubble_point_pressure(
+            temperature=temperature_grid,
+            solution_gor=fluid_properties.solution_gas_to_oil_ratio_grid,
+        )
+
+        # Step 2: Compute NEW Rs at current pressure
+        new_solution_gas_to_oil_ratio_grid = pvt_tables.solution_gas_to_oil_ratio(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            solution_gor=fluid_properties.solution_gas_to_oil_ratio_grid,
+        )
+        # Step 4: Compute oil FVF (may use lagged compressibility - acceptable)
+        # Oil FVF does not depend necessarily on the new compressibility grid,
+        # so we can use the old one (compressibility changes are small, hence, it can be lagged).
+        # FVF is a function of pressure and phase behavior. Only when pressure changes,
+        # does FVF need to be recalculated.
+        new_oil_formation_volume_factor_grid = pvt_tables.oil_formation_volume_factor(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            solution_gor=new_solution_gas_to_oil_ratio_grid,
+        )
+        # Step 5: Compute oil compressibility
+        new_oil_compressibility_grid = pvt_tables.oil_compressibility(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+        )
+        # Step 6: Compute oil density and viscosity
+        new_oil_density_grid = pvt_tables.oil_density(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+        )
+        new_oil_effective_density_grid = new_oil_density_grid
+        new_oil_viscosity_grid = pvt_tables.oil_viscosity(
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            solution_gor=new_solution_gas_to_oil_ratio_grid,
+        )
+
     new_oil_effective_viscosity_grid = new_oil_viscosity_grid
     # If there are miscible injections, update the effective oil viscosity and density grids
     if miscibility_model != "immiscible":
@@ -388,27 +354,27 @@ def update_pvt_grids(
                 injected_fluid_viscosity_grid = np.vectorize(
                     injected_fluid.get_viscosity, otypes=[get_dtype()]
                 )(
-                    pressure=fluid_properties.pressure_grid,
-                    temperature=fluid_properties.temperature_grid,
+                    pressure=pressure_grid,
+                    temperature=temperature_grid,
                 )
                 # Update effective oil viscosity grid using Todd-Longstaff model
                 new_oil_effective_viscosity_grid = build_oil_effective_viscosity_grid(
-                    oil_viscosity_grid=new_oil_effective_viscosity_grid,
+                    oil_viscosity_grid=new_oil_effective_viscosity_grid,  # type: ignore
                     solvent_viscosity_grid=injected_fluid_viscosity_grid,
                     solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
                     base_omega=injected_fluid.todd_longstaff_omega,
-                    pressure_grid=fluid_properties.pressure_grid,
+                    pressure_grid=pressure_grid,
                     minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
                     transition_width=injected_fluid.miscibility_transition_width,
                 )
                 new_oil_effective_density_grid = build_oil_effective_density_grid(
-                    oil_density_grid=new_oil_density_grid,
+                    oil_density_grid=new_oil_density_grid,  # type: ignore
                     solvent_density_grid=injected_fluid_viscosity_grid,
                     oil_viscosity_grid=new_oil_effective_viscosity_grid,
                     solvent_viscosity_grid=injected_fluid_viscosity_grid,
                     solvent_concentration_grid=fluid_properties.solvent_concentration_grid,
                     base_omega=injected_fluid.todd_longstaff_omega,
-                    pressure_grid=fluid_properties.pressure_grid,
+                    pressure_grid=pressure_grid,
                     minimum_miscibility_pressure=injected_fluid.minimum_miscibility_pressure,
                     transition_width=injected_fluid.miscibility_transition_width,
                 )

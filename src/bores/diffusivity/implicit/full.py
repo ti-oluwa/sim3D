@@ -461,6 +461,7 @@ def evolve_fully_implicit(
             fluid_properties=fluid_properties,
             wells=wells,
             miscibility_model=config.miscibility_model,
+            pvt_tables=config.pvt_tables,
         )
         # Rebuild rock-fluid property grids with updated saturations
         (

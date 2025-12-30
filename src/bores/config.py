@@ -11,6 +11,7 @@ from bores.types import (
     Range,
     RelativeMobilityRange,
 )
+from bores.pvt.tables import PVTTables
 
 __all__ = ["Config", "DampingController"]
 
@@ -193,3 +194,4 @@ class Config:
     This parameter sets the maximum number of time steps the Jacobian can be reused before
     it is recomputed.
     """
+    pvt_tables: typing.Optional[PVTTables] = None

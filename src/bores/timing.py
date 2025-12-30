@@ -1,10 +1,11 @@
-from bores.errors import TimingError, ValidationError
-from datetime import timedelta
-import typing
-import logging
 from collections import deque
+from datetime import timedelta
+import logging
+import typing
 
 import attrs
+
+from bores.errors import TimingError, ValidationError
 
 __all__ = ["Time", "Timer"]
 

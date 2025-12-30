@@ -7,8 +7,6 @@ import typing
 import attrs
 import numba
 import numpy as np
-from scipy.integrate import quad
-from scipy.interpolate import interp1d
 
 from bores.constants import c
 from bores.errors import ComputationError, ValidationError
@@ -26,6 +24,7 @@ from bores.pvt.core import (
     fahrenheit_to_rankine,
 )
 from bores.types import FluidPhase, Orientation, ThreeDimensions, TwoDimensions
+from bores.pvt.tables import GasPseudoPressureTable
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +32,6 @@ __all__ = [
     "compute_well_index",
     "compute_3D_effective_drainage_radius",
     "compute_2D_effective_drainage_radius",
-    "compute_gas_pseudo_pressure",
-    "GasPseudoPressureTable",
     "compute_oil_well_rate",
     "compute_gas_well_rate",
     "compute_required_bhp_for_oil_rate",
@@ -180,184 +177,6 @@ def compute_2D_effective_drainage_radius(
     else:
         raise ValidationError("Invalid well orientation")
     return effective_drainage_radius
-
-
-def compute_gas_pseudo_pressure(
-    pressure: float,
-    z_factor_func: typing.Callable[[float], float],
-    viscosity_func: typing.Callable[[float], float],
-    reference_pressure: float = 14.7,
-) -> float:
-    """
-    Compute the gas pseudo-pressure using Al-Hussainy real-gas potential.
-
-    The pseudo-pressure is defined as:
-        m(P) = ∫[P_ref to P] (2*P' / (μ(P') * Z(P'))) dP'
-
-    This formulation accounts for gas compressibility and non-Darcy effects,
-    allowing the use of standard liquid-like flow equations for gas.
-
-    Physical Interpretation:
-        - m(P) transforms the nonlinear gas diffusivity equation into a linear form
-        - At low pressure: m(P) ≈ P² (ideal gas limit)
-        - At high pressure: deviations due to Z-factor and viscosity changes
-
-    :param pressure: Current pressure (psi)
-    :param z_factor_func: Function returning Z-factor at given pressure Z(P)
-    :param viscosity_func: Function returning viscosity at given pressure μ(P) in cP
-    :param reference_pressure: Reference pressure for integration (psi), typically 14.7
-    :return: Pseudo-pressure m(P) in psi²/cP
-
-    References:
-        Al-Hussainy, R., Ramey, H.J., and Crawford, P.B. (1966).
-        "The Flow of Real Gases Through Porous Media."
-        JPT, May 1966, pp. 624-636.
-    """
-    if pressure <= 0:
-        raise ValidationError(f"Pressure must be positive, got {pressure}")
-    if reference_pressure <= 0:
-        raise ValidationError(
-            f"Reference pressure must be positive, got {reference_pressure}"
-        )
-
-    # If pressure equals reference, pseudo-pressure is zero by definition
-    if abs(pressure - reference_pressure) < 1e-6:
-        return 0.0
-
-    # Define the integrand: 2*P / (μ*Z)
-    def integrand(P: float) -> float:
-        """Integrand for pseudo-pressure calculation."""
-        # Add safety checks to prevent division by zero
-        Z = z_factor_func(P)
-        mu = viscosity_func(P)
-
-        if Z <= 0 or mu <= 0:
-            raise ValidationError(f"Invalid Z={Z} or μ={mu} at P={P}")
-
-        return 2.0 * P / (mu * Z)
-
-    # Perform numerical integration
-    # Use higher accuracy for gas (epsabs, epsrel)
-    try:
-        if pressure > reference_pressure:
-            result, error = quad(
-                integrand,
-                reference_pressure,
-                pressure,
-                epsabs=1e-8,  # Absolute error tolerance
-                epsrel=1e-6,  # Relative error tolerance
-                limit=100,  # Maximum number of subintervals
-            )
-            return float(result)
-        else:
-            # Integrate backwards and negate
-            result, error = quad(
-                integrand,
-                pressure,
-                reference_pressure,
-                epsabs=1e-8,
-                epsrel=1e-6,
-                limit=100,
-            )
-            return -float(result)
-    except Exception as exc:
-        raise ComputationError(
-            f"Failed to compute pseudo-pressure at P={pressure} psi: {exc}"
-        )
-
-
-class GasPseudoPressureTable:
-    """
-    Pre-computed gas pseudo-pressure table for fast lookup during simulation.
-    """
-
-    def __init__(
-        self,
-        z_factor_func: typing.Callable[[float], float],
-        viscosity_func: typing.Callable[[float], float],
-        pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
-        points: typing.Optional[int] = None,
-        reference_pressure: typing.Optional[float] = None,
-    ):
-        """
-        Build pseudo-pressure lookup table.
-
-        :param z_factor_func: Z-factor correlation Z(P)
-        :param viscosity_func: Gas viscosity correlation μ(P)
-        :param pressure_range: (P_min, P_max) for table. Defaults to the (c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE)
-            if not provided.
-        :param points: Number of points in table. typically 500-2000 for good accuracy. The higher the number, the more accurate the interpolation.
-            1000 points is a good balance between accuracy and memory usage.
-            2000 points may be used for very high accuracy at the cost of memory.
-            500 points may be used for low memory usage at the cost of accuracy.
-        :param reference_pressure: Reference pressure (psi)
-        """
-        self.reference_pressure = typing.cast(
-            float, reference_pressure or c.MIN_VALID_PRESSURE
-        )
-        self.z_factor_func = z_factor_func
-        self.viscosity_func = viscosity_func
-
-        # Create pressure grid (log-spaced for better resolution at low P)
-        min_pressure, max_pressure = pressure_range or (
-            c.MIN_VALID_PRESSURE,
-            c.MAX_VALID_PRESSURE,
-        )
-        points = typing.cast(int, points or c.GAS_PSEUDO_PRESSURE_POINTS)
-        self.pressures = np.logspace(
-            np.log10(min_pressure), np.log10(max_pressure), points
-        )
-
-        # Compute pseudo-pressure at each point
-        logger.debug(f"Building pseudo-pressure table with {points} points...")
-        self.pseudo_pressures = np.zeros(points)
-        for i, pressure in enumerate(self.pressures):
-            self.pseudo_pressures[i] = compute_gas_pseudo_pressure(
-                pressure=pressure,
-                z_factor_func=z_factor_func,
-                viscosity_func=viscosity_func,
-                reference_pressure=self.reference_pressure,
-            )
-        logger.debug("Pseudo-pressure table computation complete.")
-
-        # Build cubic spline interpolator's for fast lookup
-        self.interpolator = interp1d(
-            self.pressures,
-            self.pseudo_pressures,
-            kind="cubic",
-            bounds_error=True,
-            fill_value=(self.pseudo_pressures[0], self.pseudo_pressures[-1]),  # type: ignore
-        )
-        self.inverse_interpolator = interp1d(
-            self.pseudo_pressures,
-            self.pressures,
-            kind="cubic",
-            bounds_error=True,
-            fill_value=(self.pressures[0], self.pressures[-1]),  # type: ignore
-        )
-        logger.debug(
-            f"Pseudo-pressure table built: P ∈ [{min_pressure:.1f}, {max_pressure:.1f}] psi"
-        )
-
-    def __call__(self, pressure: float) -> float:
-        """
-        Fast lookup of pseudo-pressure via interpolation.
-
-        :param pressure: Pressure (psi)
-        :return: Pseudo-pressure m(P) (psi²/cP)
-        """
-        return float(self.interpolator(pressure))
-
-    def gradient(self, pressure: float) -> float:
-        """
-        Compute dm/dP = 2P/(μ*Z) for use in well models.
-
-        :param pressure: Pressure (psi)
-        :return: dm/dP (psi/cP)
-        """
-        Z = self.z_factor_func(pressure)
-        mu = self.viscosity_func(pressure)
-        return 2.0 * pressure / (mu * Z)
 
 
 @numba.njit(cache=True)

@@ -257,6 +257,7 @@ def _run_implicit_step(
         fluid_properties=padded_fluid_properties,
         wells=wells,
         miscibility_model=miscibility_model,
+        pvt_tables=config.pvt_tables,
     )
     # Update residual saturation grids based on new saturations
     padded_rock_properties, padded_saturation_history = (
@@ -403,6 +404,7 @@ def _run_impes_step(
         fluid_properties=padded_fluid_properties,
         wells=wells,
         miscibility_model=miscibility_model,
+        pvt_tables=config.pvt_tables,
     )
 
     # Recompute relative mobility grids with updated fluid properties
@@ -765,6 +767,7 @@ def _run_explicit_step(
         fluid_properties=padded_fluid_properties,
         wells=wells,
         miscibility_model=miscibility_model,
+        pvt_tables=config.pvt_tables,
     )
     # Update residual saturation grids based on new saturations
     padded_rock_properties, padded_saturation_history = (
@@ -904,6 +907,7 @@ def run(
             fluid_properties=padded_fluid_properties,
             wells=wells,
             miscibility_model=miscibility_model,
+            pvt_tables=config.pvt_tables,
         )
 
         # Unpad the fluid properties back to the original grid shape for model state snapshots
@@ -1009,6 +1013,95 @@ def run(
                     wells.evolve(state)
                     logger.debug("Wells updated.")
 
+                if new_step > 1:
+                    # Apply boundary conditions before pressure update for the new time step
+                    logger.debug(
+                        f"Applying boundary conditions for time step {new_step}..."
+                    )
+                    padded_fluid_properties, padded_rock_properties = (
+                        apply_boundary_conditions(
+                            fluid_properties=padded_fluid_properties,
+                            rock_properties=padded_rock_properties,
+                            boundary_conditions=boundary_conditions,
+                            cell_dimension=cell_dimension,
+                            grid_shape=grid_shape,
+                            thickness_grid=thickness_grid,
+                            time=timer.elapsed_time + step_size,
+                        )
+                    )
+                    logger.debug("Boundary conditions applied.")
+                    # If the pressure boundary condition is not no-flow, Then apply PVT update before pressure evolution
+                    # since most PVT properties depend on pressure. This is skipped for no-flow BCs to save computation.
+                    # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
+                    if no_flow_pressure_bc is False:
+                        logger.debug(
+                            "Updating PVT fluid properties due to boundary condition changes..."
+                        )
+                        padded_fluid_properties = update_pvt_grids(
+                            fluid_properties=padded_fluid_properties,
+                            wells=wells,
+                            miscibility_model=miscibility_model,
+                            pvt_tables=config.pvt_tables,
+                        )
+                        logger.debug("PVT fluid properties updated")
+
+                    # Build relative permeability, relative mobility, and capillary pressure grids
+                    logger.debug(
+                        f"Rebuilding rock-fluid property grids for time step {new_step}..."
+                    )
+                    padded_water_saturation_grid = (
+                        padded_fluid_properties.water_saturation_grid
+                    )
+                    padded_oil_saturation_grid = (
+                        padded_fluid_properties.oil_saturation_grid
+                    )
+                    padded_gas_saturation_grid = (
+                        padded_fluid_properties.gas_saturation_grid
+                    )
+                    padded_irreducible_water_saturation_grid = (
+                        padded_rock_properties.irreducible_water_saturation_grid
+                    )
+                    padded_residual_oil_saturation_water_grid = (
+                        padded_rock_properties.residual_oil_saturation_water_grid
+                    )
+                    padded_residual_oil_saturation_gas_grid = (
+                        padded_rock_properties.residual_oil_saturation_gas_grid
+                    )
+                    padded_residual_gas_saturation_grid = (
+                        padded_rock_properties.residual_gas_saturation_grid
+                    )
+                    padded_water_viscosity_grid = (
+                        padded_fluid_properties.water_viscosity_grid
+                    )
+                    padded_oil_viscosity_grid = (
+                        padded_fluid_properties.oil_effective_viscosity_grid
+                    )
+                    padded_gas_viscosity_grid = (
+                        padded_fluid_properties.gas_viscosity_grid
+                    )
+                    (
+                        padded_relperm_grids,
+                        padded_relative_mobility_grids,
+                        padded_capillary_pressure_grids,
+                    ) = build_rock_fluid_properties_grids(
+                        water_saturation_grid=padded_water_saturation_grid,
+                        oil_saturation_grid=padded_oil_saturation_grid,
+                        gas_saturation_grid=padded_gas_saturation_grid,
+                        irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
+                        residual_oil_saturation_water_grid=padded_residual_oil_saturation_water_grid,
+                        residual_oil_saturation_gas_grid=padded_residual_oil_saturation_gas_grid,
+                        residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
+                        water_viscosity_grid=padded_water_viscosity_grid,
+                        oil_viscosity_grid=padded_oil_viscosity_grid,
+                        gas_viscosity_grid=padded_gas_viscosity_grid,
+                        relative_permeability_table=relative_permeability_table,
+                        capillary_pressure_table=capillary_pressure_table,
+                        disable_capillary_effects=config.disable_capillary_effects,
+                        capillary_strength_factor=config.capillary_strength_factor,
+                        relative_mobility_range=config.relative_mobility_range,
+                        phase_appearance_tolerance=config.phase_appearance_tolerance,
+                    )
+
                 if scheme == "implicit":
                     result = _run_implicit_step(
                         time_step=new_step,
@@ -1071,12 +1164,10 @@ def run(
                     # Now we can accept the proposed time step size
                     # and we now agree that this is a new step
                     logger.debug(f"Time step {new_step} completed successfully.")
-                    actual_step_size = timer.accept_step(
-                        step_size=step_size, **result.accept_kwargs
-                    )
+                    timer.accept_step(step_size=step_size, **result.accept_kwargs)
                     log_progress(
                         step=timer.step,
-                        step_size=actual_step_size,
+                        step_size=step_size,
                         time_elapsed=timer.elapsed_time,
                         total_time=timer.simulation_time,
                         is_last_step=timer.is_last_step,
@@ -1173,93 +1264,6 @@ def run(
                     )
                     logger.debug("Yielding model state snapshot")
                     yield state
-
-                if timer.is_last_step:
-                    # Break the loop if we've reached the final time step
-                    # to avoid unnecessary computations
-                    break
-
-                next_step = timer.next_step
-                # Apply boundary conditions before pressure update for the next time step
-                logger.debug(
-                    f"Applying boundary conditions for time step {next_step}..."
-                )
-                padded_fluid_properties, padded_rock_properties = (
-                    apply_boundary_conditions(
-                        fluid_properties=padded_fluid_properties,
-                        rock_properties=padded_rock_properties,
-                        boundary_conditions=boundary_conditions,
-                        cell_dimension=cell_dimension,
-                        grid_shape=grid_shape,
-                        thickness_grid=thickness_grid,
-                        time=next_step * step_size,
-                    )
-                )
-                logger.debug("Boundary conditions applied.")
-                # If the pressure boundary condition is not no-flow, Then apply PVT update before pressure evolution
-                # since most PVT properties depend on pressure. This is skipped for no-flow BCs to save computation.
-                # because mirroring neighbour values for PVT properties is sufficient for no-flow BCs.
-                if no_flow_pressure_bc is False:
-                    logger.debug(
-                        "Updating PVT fluid properties due to boundary condition changes..."
-                    )
-                    padded_fluid_properties = update_pvt_grids(
-                        fluid_properties=padded_fluid_properties,
-                        wells=wells,
-                        miscibility_model=miscibility_model,
-                    )
-                    logger.debug("PVT fluid properties updated")
-
-                # Build relative permeability, relative mobility, and capillary pressure grids
-                logger.debug(
-                    f"Rebuilding rock-fluid property grids for time step {next_step}..."
-                )
-                padded_water_saturation_grid = (
-                    padded_fluid_properties.water_saturation_grid
-                )
-                padded_oil_saturation_grid = padded_fluid_properties.oil_saturation_grid
-                padded_gas_saturation_grid = padded_fluid_properties.gas_saturation_grid
-                padded_irreducible_water_saturation_grid = (
-                    padded_rock_properties.irreducible_water_saturation_grid
-                )
-                padded_residual_oil_saturation_water_grid = (
-                    padded_rock_properties.residual_oil_saturation_water_grid
-                )
-                padded_residual_oil_saturation_gas_grid = (
-                    padded_rock_properties.residual_oil_saturation_gas_grid
-                )
-                padded_residual_gas_saturation_grid = (
-                    padded_rock_properties.residual_gas_saturation_grid
-                )
-                padded_water_viscosity_grid = (
-                    padded_fluid_properties.water_viscosity_grid
-                )
-                padded_oil_viscosity_grid = (
-                    padded_fluid_properties.oil_effective_viscosity_grid
-                )
-                padded_gas_viscosity_grid = padded_fluid_properties.gas_viscosity_grid
-                (
-                    padded_relperm_grids,
-                    padded_relative_mobility_grids,
-                    padded_capillary_pressure_grids,
-                ) = build_rock_fluid_properties_grids(
-                    water_saturation_grid=padded_water_saturation_grid,
-                    oil_saturation_grid=padded_oil_saturation_grid,
-                    gas_saturation_grid=padded_gas_saturation_grid,
-                    irreducible_water_saturation_grid=padded_irreducible_water_saturation_grid,
-                    residual_oil_saturation_water_grid=padded_residual_oil_saturation_water_grid,
-                    residual_oil_saturation_gas_grid=padded_residual_oil_saturation_gas_grid,
-                    residual_gas_saturation_grid=padded_residual_gas_saturation_grid,
-                    water_viscosity_grid=padded_water_viscosity_grid,
-                    oil_viscosity_grid=padded_oil_viscosity_grid,
-                    gas_viscosity_grid=padded_gas_viscosity_grid,
-                    relative_permeability_table=relative_permeability_table,
-                    capillary_pressure_table=capillary_pressure_table,
-                    disable_capillary_effects=config.disable_capillary_effects,
-                    capillary_strength_factor=config.capillary_strength_factor,
-                    relative_mobility_range=config.relative_mobility_range,
-                    phase_appearance_tolerance=config.phase_appearance_tolerance,
-                )
 
             except StopSimulation as exc:
                 logger.info(f"Stopping simulation on request: {exc}")

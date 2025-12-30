@@ -132,7 +132,7 @@ def evolve_pressure_implicitly(
     A = lil_matrix((interior_cell_count, interior_cell_count), dtype=dtype)
     b = np.zeros(interior_cell_count, dtype=dtype)
 
-    # FIRST PASS: Initialize accumulation terms for all cells using njitted function
+    # FIRST PASS: Initialize accumulation terms for all cells
     add_accumulation_terms(
         A=A,
         b=b,
@@ -148,7 +148,7 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
         dtype=dtype,
     )
-    # SECOND PASS: Add face transmissibilities and fluxes using njitted function
+    # SECOND PASS: Add face transmissibilities and fluxes
     add_face_transmissibilities_and_fluxes(
         A=A,
         b=b,
@@ -911,11 +911,6 @@ def add_well_contributions(
             A[cell_1D_index, cell_1D_index] += phase_productivity_index
             b[cell_1D_index] += phase_productivity_index * effective_bhp
 
-            logger.debug(
-                f"Injection well {injection_well.name} at ({i},{j},{k}): "
-                f"BHP={effective_bhp:.4f}, PI={phase_productivity_index:.3e}"
-            )
-
         if production_well is not None and production_well.is_open:
             water_formation_volume_factor_grid = (
                 fluid_properties.water_formation_volume_factor_grid
@@ -984,12 +979,6 @@ def add_well_contributions(
                 # Semi-implicit coupling (same form for production)
                 A[cell_1D_index, cell_1D_index] += phase_productivity_index
                 b[cell_1D_index] += phase_productivity_index * effective_bhp
-
-                logger.debug(
-                    f"Production well {production_well.name} ({produced_phase.value}) "
-                    f"at ({i},{j},{k}): BHP={effective_bhp:.4f}, "
-                    f"PI={phase_productivity_index:.3e}"
-                )
     return A, b
 
 

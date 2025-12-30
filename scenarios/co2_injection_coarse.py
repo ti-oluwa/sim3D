@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.18.4"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -20,6 +20,7 @@ def _():
         Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl.xz"
     )
 
+
     def main():
         # Load last model state of primary depletion
         state = bores.ModelState.load(filepath=DEPLETED_MODEL_STATE)
@@ -34,7 +35,7 @@ def _():
         control = bores.AdaptiveBHPRateControl(
             target_rate=50000,
             target_phase="gas",
-            minimum_bottom_hole_pressure=1500,
+            bhp_limit=3000,
             clamp=injection_clamp,
         )
         gas_injector_1 = bores.injection_well(
@@ -67,19 +68,19 @@ def _():
             oil_control=bores.AdaptiveBHPRateControl(
                 target_rate=-150,
                 target_phase="oil",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=900,
                 clamp=production_clamp,
             ),
             gas_control=bores.AdaptiveBHPRateControl(
                 target_rate=-500,
                 target_phase="gas",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=900,
                 clamp=production_clamp,
             ),
             water_control=bores.AdaptiveBHPRateControl(
                 target_rate=-10,
                 target_phase="water",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=900,
                 clamp=production_clamp,
             ),
         )
@@ -113,7 +114,7 @@ def _():
         )
         producer.schedule_event(
             bores.WellEvent(
-                hook=bores.well_time_hook(time_step=100),
+                hook=bores.well_time_hook(time=bores.Time(days=100)),
                 action=bores.well_update_action(is_active=True),
             )
         )
@@ -123,30 +124,23 @@ def _():
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=30.0),
             max_step_size=bores.Time(days=2.0),
-            min_step_size=bores.Time(hours=6.0),
-            simulation_time=bores.Time(
-                days=(bores.c.DAYS_PER_YEAR * 5) + 100
-            ),  # 5 years
+            min_step_size=bores.Time(hours=1.0),
+            simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 5) + 100),
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
         )
         config = bores.Config(
-            scheme="impes",
+            scheme="implicit",
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
+            preconditioner=None,
         )
-        states = bores.run(
-            model=model,
-            timer=timer,
-            wells=wells,
-            config=config,
-        )
+        states = bores.run(model=model, timer=timer, wells=wells, config=config)
         return list(states)
-
-    return Path, main, bores
+    return Path, bores, main
 
 
 @app.cell
@@ -159,7 +153,7 @@ def _(main):
 def _(Path, bores, states):
     bores.dump_states(
         states,
-        filepath=Path.cwd() / "scenarios/states/co2_injection_coarse_2.pkl",
+        filepath=Path.cwd() / "scenarios/states/co2_injection_coarse.pkl",
         exist_ok=True,
         compression="lzma",
     )

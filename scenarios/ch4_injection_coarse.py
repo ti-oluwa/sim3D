@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.18.4"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -21,6 +21,7 @@ def _():
         Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl.xz"
     )
 
+
     def main():
         # Load last model state of primary depletion
         state = bores.ModelState.load(filepath=DEPLETED_MODEL_STATE)
@@ -35,7 +36,7 @@ def _():
         control = bores.AdaptiveBHPRateControl(
             target_rate=50000,
             target_phase="gas",
-            minimum_bottom_hole_pressure=1500,
+            bhp_limit=1500,
             clamp=injection_clamp,
         )
         gas_injector_1 = bores.injection_well(
@@ -68,19 +69,19 @@ def _():
             oil_control=bores.AdaptiveBHPRateControl(
                 target_rate=-150,
                 target_phase="oil",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
             gas_control=bores.AdaptiveBHPRateControl(
                 target_rate=-500,
                 target_phase="gas",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
             water_control=bores.AdaptiveBHPRateControl(
                 target_rate=-10,
                 target_phase="water",
-                minimum_bottom_hole_pressure=1200,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
         )
@@ -125,9 +126,7 @@ def _():
             initial_step_size=bores.Time(hours=30.0),
             max_step_size=bores.Time(days=2.0),
             min_step_size=bores.Time(hours=6.0),
-            simulation_time=bores.Time(
-                days=(bores.c.DAYS_PER_YEAR * 5) + 100
-            ),  # 5 years
+            simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 5) + 100),
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -146,8 +145,7 @@ def _():
             config=config,
         )
         return list(states)
-
-    return Path, main, bores
+    return Path, bores, main
 
 
 @app.cell

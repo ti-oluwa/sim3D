@@ -44,7 +44,7 @@ class RateClamp(typing.Protocol):
     to prevent unphysical scenarios (e.g., production during injection).
     """
 
-    def clamp_flow_rate(
+    def clamp_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """
@@ -57,7 +57,7 @@ class RateClamp(typing.Protocol):
         """
         ...
 
-    def clamp_bottom_hole_pressure(
+    def clamp_bhp(
         self, bottom_hole_pressure: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """
@@ -209,7 +209,7 @@ def _apply_clamp(
     """
     if clamp is not None:
         if rate is not None:
-            clamped_rate = clamp.clamp_flow_rate(rate, pressure)
+            clamped_rate = clamp.clamp_rate(rate, pressure)
             if clamped_rate is not None:
                 logger.debug(
                     f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
@@ -217,7 +217,7 @@ def _apply_clamp(
                 )
                 return clamped_rate
         elif bhp is not None:
-            clamped_bhp = clamp.clamp_bottom_hole_pressure(bhp, pressure)
+            clamped_bhp = clamp.clamp_bhp(bhp, pressure)
             if clamped_bhp is not None:
                 logger.debug(
                     f"Clamping BHP {bhp:.6f} to {clamped_bhp:.6f} "
@@ -288,7 +288,7 @@ class ProductionClamp:
     value: float = 0.0
     """Clamp value to return when condition is met."""
 
-    def clamp_flow_rate(
+    def clamp_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """Clamp if rate is positive (injection during production)."""
@@ -296,7 +296,7 @@ class ProductionClamp:
             return self.value
         return None
 
-    def clamp_bottom_hole_pressure(
+    def clamp_bhp(
         self, bottom_hole_pressure: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         if bottom_hole_pressure > pressure:
@@ -311,7 +311,7 @@ class InjectionClamp:
     value: float = 0.0
     """Clamp value to return when condition is met."""
 
-    def clamp_flow_rate(
+    def clamp_rate(
         self, rate: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         """Clamp if rate is negative (production during injection)."""
@@ -319,7 +319,7 @@ class InjectionClamp:
             return self.value
         return None
 
-    def clamp_bottom_hole_pressure(
+    def clamp_bhp(
         self, bottom_hole_pressure: float, pressure: float, **kwargs
     ) -> typing.Optional[float]:
         if bottom_hole_pressure < pressure:
@@ -336,7 +336,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
     wellbore using Darcy's law. This is the traditional well control method.
     """
 
-    bottom_hole_pressure: float = attrs.field(validator=attrs.validators.gt(0))
+    bhp: float = attrs.field(validator=attrs.validators.gt(0))
     """Well bottom-hole flowing pressure in psi."""
     clamp: typing.Optional[RateClamp] = None
     """Condition for clamping flow rates to zero. None means no clamping."""
@@ -375,7 +375,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         ):
             return 0.0
 
-        bhp = self.bottom_hole_pressure
+        bhp = self.bhp
 
         # Compute rate based on fluid phase
         if fluid.phase == FluidPhase.GAS:
@@ -455,7 +455,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
             # Return reservoir pressure (no driving force)
             return pressure
 
-        bhp = self.bottom_hole_pressure
+        bhp = self.bhp
         return (
             _apply_clamp(
                 pressure=pressure,
@@ -468,7 +468,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
 
     def __str__(self) -> str:
         """String representation."""
-        return f"BHP Control (BHP={self.bottom_hole_pressure:.6f} psi)"
+        return f"BHP Control (BHP={self.bhp:.6f} psi)"
 
 
 @attrs.frozen
@@ -484,9 +484,10 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
     """Target flow rate (STB/day or SCF/day). Positive for injection, negative for production."""
     target_phase: typing.Union[str, FluidPhase] = attrs.field(converter=FluidPhase)
     """Target fluid phase for the control."""
-    minimum_bottom_hole_pressure: typing.Optional[float] = None
+    bhp_limit: typing.Optional[float] = None
     """
-    Minimum bottom hole pressure constraint (psi).
+    Minimum allowable BHP for production wells, and maximum allowable BHP for injection wells.
+
     If specified, rate is limited to prevent BHP from dropping below this value.
     """
     clamp: typing.Optional[RateClamp] = None
@@ -498,10 +499,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
             raise ValidationError(
                 "Target rate cannot be zero. Use `well.shut_in()` instead."
             )
-        if (
-            self.minimum_bottom_hole_pressure is not None
-            and self.minimum_bottom_hole_pressure <= 0.0
-        ):
+        if self.bhp_limit is not None and self.bhp_limit <= 0.0:
             raise ValidationError("Minimum bottom hole pressure must be positive.")
 
     def get_flow_rate(
@@ -543,9 +541,9 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
             self.target_rate * formation_volume_factor
         )  # Convert to reservoir rate
         is_production = target_rate < 0.0  # Negative rate indicates production
-        min_bhp = self.minimum_bottom_hole_pressure
+        bhp_limit = self.bhp_limit
         # Check if achieving target rate would violate minimum bottom hole pressure constraint
-        if min_bhp is not None:
+        if bhp_limit is not None:
             try:
                 required_bhp = _compute_required_bhp(
                     target_rate=target_rate,
@@ -570,14 +568,14 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
                     f"Required BHP: {required_bhp:.6f} psi, Reservoir pressure: {pressure:.6f} psi, Fluid phase: {fluid.phase}"
                 )
                 if is_production:
-                    can_achieve_rate = required_bhp >= min_bhp
+                    can_achieve_rate = required_bhp >= bhp_limit
                 else:
-                    can_achieve_rate = required_bhp <= min_bhp
+                    can_achieve_rate = required_bhp <= bhp_limit
 
                 if can_achieve_rate is False:
                     logger.debug(
                         f"Cannot achieve target rate {target_rate:.6f} "
-                        f"without violating minimum bottom hole pressure {min_bhp:.3f} psi "
+                        f"without violating bottom hole pressure limit {bhp_limit:.3f} psi "
                         f"(required BHP: {required_bhp:.3f} psi, pressure: {pressure:.3f} psi)"
                     )
                     return 0.0
@@ -655,26 +653,26 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
 
         # Check BHP constraint
         bhp = required_bhp
-        min_bhp = self.minimum_bottom_hole_pressure
-        if min_bhp is not None:
+        bhp_limit = self.bhp_limit
+        if bhp_limit is not None:
             is_production = target_rate_reservoir < 0.0
 
             if is_production:
-                # Production: BHP must be >= min_bhp
-                if required_bhp < min_bhp:
+                # Production: BHP must be >= bhp_limit
+                if required_bhp < bhp_limit:
                     logger.debug(
-                        f"Required BHP {required_bhp:.4f} < min {min_bhp:.4f}. "
+                        f"Required BHP {required_bhp:.4f} < min {bhp_limit:.4f}. "
                         f"Using constraint BHP."
                     )
-                    bhp = min_bhp
+                    bhp = bhp_limit
             else:
-                # Injection: BHP must be <= max_bhp (min_bhp is actually max here)
-                if required_bhp > min_bhp:
+                # Injection: BHP must be <= max_bhp (bhp_limit is actually max here)
+                if required_bhp > bhp_limit:
                     logger.debug(
-                        f"Required BHP {required_bhp:.4f} > max {min_bhp:.4f}. "
+                        f"Required BHP {required_bhp:.4f} > max {bhp_limit:.4f}. "
                         f"Using constraint BHP."
                     )
-                    bhp = min_bhp
+                    bhp = bhp_limit
 
         return (
             _apply_clamp(
@@ -689,23 +687,21 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
     def update(
         self,
         target_rate: typing.Optional[float] = None,
-        minimum_bottom_hole_pressure: typing.Optional[float] = None,
+        bhp_limit: typing.Optional[float] = None,
         clamp: typing.Optional[RateClamp] = None,
     ) -> "ConstantRateControl[WellFluidT_con]":
         """
         Create a new `ConstantRateControl` with updated parameters.
 
         :param target_rate: New target flow rate. If None, retains existing.
-        :param minimum_bottom_hole_pressure: New minimum BHP. If None, retains existing.
+        :param bhp_limit: New minimum BHP. If None, retains existing.
         :param clamp: New clamp condition. If None, retains existing.
         :return: New `ConstantRateControl` instance with updated parameters.
         """
         return type(self)(
             target_rate=target_rate or self.target_rate,
             target_phase=self.target_phase,
-            minimum_bottom_hole_pressure=(
-                minimum_bottom_hole_pressure or self.minimum_bottom_hole_pressure
-            ),
+            bhp_limit=(bhp_limit or self.bhp_limit),
             clamp=clamp or self.clamp,
         )
 
@@ -728,9 +724,10 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
     """Target flow rate (STB/day or SCF/day). Positive for injection, negative for production."""
     target_phase: typing.Union[str, FluidPhase] = attrs.field(converter=FluidPhase)
     """Target fluid phase for the control."""
-    minimum_bottom_hole_pressure: float
+    bhp_limit: float
     """
-    Minimum bottom hole pressure (psi).
+    Minimum allowable BHP for production wells, and maximum allowable BHP for injection wells.
+
     Control switches from rate to BHP control when this limit is reached.
     """
     clamp: typing.Optional[RateClamp] = None
@@ -742,7 +739,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
             raise ValidationError(
                 "Target rate cannot be zero. Use `well.shut_in()` instead."
             )
-        if self.minimum_bottom_hole_pressure <= 0.0:
+        if self.bhp_limit <= 0.0:
             raise ValidationError("Minimum bottom hole pressure must be positive.")
 
     def get_flow_rate(
@@ -761,7 +758,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         Compute flow rate adaptively.
 
         Uses rate control if achievable within BHP constraint,
-        otherwise switches to BHP control at minimum_bottom_hole_pressure.
+        otherwise switches to BHP control at bhp_limit.
 
         :param pressure: Reservoir pressure at the well location (psi).
         :param temperature: Reservoir temperature at the well location (°F).
@@ -787,7 +784,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
             self.target_rate * formation_volume_factor
         )  # Convert to reservoir rate
         is_production = target_rate < 0.0  # Negative rate indicates production
-        min_bhp = self.minimum_bottom_hole_pressure
+        bhp_limit = self.bhp_limit
         # Compute required BHP to achieve target rate
         try:
             required_bhp = _compute_required_bhp(
@@ -812,9 +809,9 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 f"Required BHP: {required_bhp:.6f} psi, Reservoir pressure: {pressure:.6f} psi, Fluid phase: {fluid.phase}"
             )
             if is_production:
-                can_achieve_rate = required_bhp >= min_bhp
+                can_achieve_rate = required_bhp >= bhp_limit
             else:
-                can_achieve_rate = required_bhp <= min_bhp
+                can_achieve_rate = required_bhp <= bhp_limit
 
             if can_achieve_rate:
                 # Can achieve target rate without violating minimum bottom hole pressure
@@ -829,13 +826,13 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
 
                 logger.debug(
                     f"Using rate control at {target_rate:.6f} "
-                    f"(required BHP: {required_bhp:.3f} psi > minimum: {min_bhp:.3f} psi)"
+                    f"(required BHP: {required_bhp:.3f} psi > minimum: {bhp_limit:.3f} psi)"
                 )
                 return target_rate
 
         # Target rate would violate minimum bottom hole pressure, switch to BHP control
         logger.debug(
-            f"Switching to BHP control at {min_bhp:.3f} psi "
+            f"Switching to BHP control at {bhp_limit:.3f} psi "
             f"(target rate not achievable within pressure constraints)"
         )
 
@@ -851,13 +848,13 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 pressure=pressure,
                 temperature=temperature,
                 gas_gravity=fluid.specific_gravity,
-                bottom_hole_pressure=min_bhp,
+                bottom_hole_pressure=bhp_limit,
             )
             rate = compute_gas_well_rate(
                 well_index=well_index,
                 pressure=pressure,
                 temperature=temperature,
-                bottom_hole_pressure=min_bhp,
+                bottom_hole_pressure=bhp_limit,
                 phase_mobility=phase_mobility,
                 use_pseudo_pressure=use_pp,
                 pseudo_pressure_table=pp_table,
@@ -869,7 +866,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
             rate = compute_oil_well_rate(
                 well_index=well_index,
                 pressure=pressure,
-                bottom_hole_pressure=min_bhp,
+                bottom_hole_pressure=bhp_limit,
                 phase_mobility=phase_mobility,
                 fluid_compressibility=fluid_compressibility,
             )
@@ -917,7 +914,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
             return pressure
 
         target_rate_reservoir = self.target_rate * formation_volume_factor
-        min_bhp = self.minimum_bottom_hole_pressure
+        bhp_limit = self.bhp_limit
 
         # Try to compute required BHP for target rate
         try:
@@ -939,24 +936,24 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                     pressure=pressure,
                     control_name="adaptive control - BHP mode",
                     clamp=self.clamp,
-                    bhp=min_bhp,
+                    bhp=bhp_limit,
                 )
-                or min_bhp
+                or bhp_limit
             )
 
         # Check if rate is achievable within BHP constraint
         is_production = target_rate_reservoir < 0.0
         if is_production:
-            can_achieve = required_bhp >= min_bhp
+            can_achieve = required_bhp >= bhp_limit
         else:
-            can_achieve = required_bhp <= min_bhp
+            can_achieve = required_bhp <= bhp_limit
 
         if can_achieve:
             logger.debug(f"Adaptive control: rate mode (BHP={required_bhp:.4f})")
             bhp = required_bhp
         else:
-            logger.debug(f"Adaptive control: BHP mode (BHP={min_bhp:.4f})")
-            bhp = min_bhp
+            logger.debug(f"Adaptive control: BHP mode (BHP={bhp_limit:.4f})")
+            bhp = bhp_limit
         return (
             _apply_clamp(
                 pressure=pressure,
@@ -970,28 +967,26 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
     def update(
         self,
         target_rate: typing.Optional[float] = None,
-        minimum_bottom_hole_pressure: typing.Optional[float] = None,
+        bhp_limit: typing.Optional[float] = None,
         clamp: typing.Optional[RateClamp] = None,
     ) -> "AdaptiveBHPRateControl[WellFluidT_con]":
         """
         Create a new `AdaptiveBHPRateControl` with updated parameters.
 
         :param target_rate: New target flow rate. If None, retains existing.
-        :param minimum_bottom_hole_pressure: New minimum BHP. If None, retains existing.
+        :param bhp_limit: New minimum BHP. If None, retains existing.
         :param clamp: New clamp condition. If None, retains existing.
         :return: New `AdaptiveBHPRateControl` instance with updated parameters.
         """
         return type(self)(
             target_rate=target_rate or self.target_rate,
             target_phase=self.target_phase,
-            minimum_bottom_hole_pressure=(
-                minimum_bottom_hole_pressure or self.minimum_bottom_hole_pressure
-            ),
+            bhp_limit=(bhp_limit or self.bhp_limit),
             clamp=clamp or self.clamp,
         )
 
     def __str__(self) -> str:
-        return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.minimum_bottom_hole_pressure:.6f} psi)"
+        return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.bhp_limit:.6f} psi)"
 
 
 @attrs.frozen

@@ -384,7 +384,7 @@ class WellTimeHook:
         :param model_state: The current model state in the simulation.
         :return: A boolean indicating whether to apply the event.
         """
-        if self.time_step is not None and model_state.time_step == self.time_step:
+        if self.time_step is not None and model_state.step == self.time_step:
             return True
         if self.time is not None and model_state.time == self.time:
             return True

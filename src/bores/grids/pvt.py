@@ -1037,6 +1037,7 @@ def build_oil_effective_viscosity_grid(
     :return: Effective mixture viscosity grid (cP)
 
     Example:
+    
     ```python
     # Simple case: constant omega everywhere (no pressure effects)
     visc_grid = build_oil_effective_viscosity_grid(
@@ -1070,7 +1071,7 @@ def build_oil_effective_viscosity_grid(
         omega_grid = base_omega * transition_factor
     else:
         # Use constant omega everywhere
-        omega_grid = base_omega
+        omega_grid = np.full_like(oil_viscosity_grid, base_omega)
 
     # Compute effective viscosity using Todd-Longstaff model
     result = compute_todd_longstaff_effective_viscosity(
@@ -1157,7 +1158,7 @@ def build_oil_effective_density_grid(
         omega_grid = base_omega * transition_factor
     else:
         # Use constant omega everywhere
-        omega_grid = base_omega
+        omega_grid = np.full_like(oil_density_grid, base_omega)
 
     # Compute effective density using Todd-Longstaff model
     result = compute_todd_longstaff_effective_density(

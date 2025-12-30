@@ -2685,7 +2685,7 @@ def estimate_bubble_point_pressure_standing(
     bubble_point_pressure = np.empty_like(oil_api_gravity)
 
     # Loop over all cells
-    it = np.nditer(oil_api_gravity, flags=["multi_index"])
+    it = np.nditer(oil_api_gravity, flags=["multi_index"])  # type: ignore
     while not it.finished:
         idx = it.multi_index
 
@@ -2936,7 +2936,7 @@ def compute_todd_longstaff_effective_viscosity(
     oil_viscosity: NDimensionalGrid[NDimension],
     solvent_viscosity: NDimensionalGrid[NDimension],
     solvent_concentration: NDimensionalGrid[NDimension],
-    omega: FloatOrArray = 0.67,
+    omega: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
     Compute effective viscosity using Todd-Longstaff mixing model.
@@ -3058,8 +3058,8 @@ def compute_todd_longstaff_effective_density(
     solvent_density: NDimensionalGrid[NDimension],
     oil_viscosity: NDimensionalGrid[NDimension],
     solvent_viscosity: NDimensionalGrid[NDimension],
-    solvent_concentration: FloatOrArray = 1.0,
-    omega: FloatOrArray = 0.67,
+    solvent_concentration: NDimensionalGrid[NDimension],
+    omega: NDimensionalGrid[NDimension],
 ) -> NDimensionalGrid[NDimension]:
     """
     Compute effective density using Todd-Longstaff mixing model.
@@ -3156,7 +3156,9 @@ def compute_todd_longstaff_effective_density(
         raise ValidationError("Viscosities must be positive")
 
     C_s = solvent_concentration
-    C_o = 1.0 - C_s
+    C_o = 1.0 - solvent_concentration
+
+    input_dtype = C_s.dtype 
 
     # Handle edge cases
     if np.any(C_s >= 1.0):
@@ -3166,27 +3168,33 @@ def compute_todd_longstaff_effective_density(
 
     # Fully mixed density (volume-weighted, arithmetic mean)
     # This is the density if phases are perfectly mixed by volume
-    rho_mix = C_s * solvent_density + C_o * oil_density
+    rho_mix = (C_s * solvent_density) + (C_o * oil_density)
 
     # Compute phase flow fractions for segregated density
     # These represent how much each phase contributes to flow based on mobility
     # f_s = fraction of flow that is solvent
     # f_o = fraction of flow that is oil
     # Note: More mobile phase (lower viscosity) gets higher flow fraction
-    denominator = C_s * oil_viscosity + C_o * solvent_viscosity
+    denominator = ((C_s * oil_viscosity) + (C_o * solvent_viscosity))
 
     # Avoid division by zero (though should never happen with positive viscosities)
     if np.any(denominator < 1e-15):
         # If both viscosities are essentially zero, fall back to volume weighting
-        f_s = C_s
-        f_o = C_o
+        f_s = C_s.astype(input_dtype)
+        f_o = C_o.astype(input_dtype)
     else:
         f_s = (C_s * oil_viscosity) / denominator
         f_o = (C_o * solvent_viscosity) / denominator
 
+        f_s = f_s.astype(input_dtype)
+        f_o = f_o.astype(input_dtype)
+
     # Fully segregated density (flow-weighted)
     # This is the density if phases flow separately, weighted by their mobilities
-    rho_segregated = f_s * solvent_density + f_o * oil_density
+    # print(
+    #     f"Fs shape: {f_s.shape}, Fo shape: {f_o.shape}, Solvent conc shape: {solvent_concentration.shape}, Solvent density shape: {solvent_density.shape}, Oil density shape: {oil_density.shape}"
+    # )
+    rho_segregated = (f_s * solvent_density) + (f_o * oil_density)
 
     # Todd-Longstaff interpolation (weighted geometric mean)
     # Special cases:

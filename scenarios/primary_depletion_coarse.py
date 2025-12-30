@@ -32,19 +32,19 @@ def _():
             oil_control=bores.AdaptiveBHPRateControl(
                 target_rate=-100,
                 target_phase="oil",
-                minimum_bottom_hole_pressure=1500,
+                bhp_limit=1200,
                 clamp=clamp,
             ),
             gas_control=bores.AdaptiveBHPRateControl(
                 target_rate=-500,
                 target_phase="gas",
-                minimum_bottom_hole_pressure=1500,
+                bhp_limit=1200,
                 clamp=clamp,
             ),
             water_control=bores.AdaptiveBHPRateControl(
                 target_rate=-10,
                 target_phase="water",
-                minimum_bottom_hole_pressure=1500,
+                bhp_limit=1200,
                 clamp=clamp,
             ),
         )
@@ -83,7 +83,7 @@ def _():
             initial_step_size=bores.Time(hours=20),
             max_step_size=bores.Time(days=5),
             min_step_size=bores.Time(minutes=10.0),
-            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 3),  # 5 years
+            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
