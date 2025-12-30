@@ -210,7 +210,9 @@ def update_pvt_grids(
             salinity=water_salinity_grid,
         )
         new_water_bubble_point_pressure_grid = pvt_tables.water_bubble_point_pressure(
-            pressure=pressure_grid, temperature=temperature_grid
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            salinity=water_salinity_grid,
         )
         gas_free_water_formation_volume_factor_grid = (
             build_gas_free_water_formation_volume_factor_grid(
@@ -219,19 +221,26 @@ def update_pvt_grids(
             )
         )
         new_water_compressibility_grid = pvt_tables.water_compressibility(
-            pressure=pressure_grid, temperature=temperature_grid
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            salinity=water_salinity_grid,
         )
         new_water_density_grid = pvt_tables.water_density(
-            pressure=pressure_grid, temperature=temperature_grid
+            pressure=pressure_grid,
+            temperature=temperature_grid,
+            salinity=water_salinity_grid,
         )
         new_water_formation_volume_factor_grid = (
             pvt_tables.water_formation_volume_factor(
-                pressure=pressure_grid, temperature=temperature_grid
+                pressure=pressure_grid,
+                temperature=temperature_grid,
+                salinity=water_salinity_grid,
             )
         )
         new_water_viscosity_grid = pvt_tables.water_viscosity(
             pressure=pressure_grid,
             temperature=temperature_grid,
+            salinity=water_salinity_grid,
         )
 
     # OIL PROPERTIES (tricky due to bubble point)
