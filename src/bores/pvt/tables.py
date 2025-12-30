@@ -1000,6 +1000,7 @@ class PVTTables:
         )
 
     def update(self, **kwargs: typing.Any) -> Self:
+        """Get a new `PVTTables` instance with updated fields."""
         return attrs.evolve(self, **kwargs)
 
 
@@ -1015,12 +1016,16 @@ def build_pvt_tables(
     **kwargs: typing.Any,
 ) -> PVTTables:
     """
-    Factory function to create PVTTables instance.
+    Build PVT tables using empirical/analytical correlations and provided data.
 
     :param pressures: 1D array of pressures (psi)
     :param temperatures: 1D array of temperatures (°F)
-    :param kwargs: Additional PVTTables parameters
-    :return: PVTTables instance
+    :param bubble_point_pressures: 1D or 2D array of bubble point pressures (psi)
+    :param validate_tables: Whether to perform physical consistency checks
+    :param interpolation_method: Interpolation method: 'linear', 'cubic', or 'quintic'
+    :param warn_on_extrapolation: Whether to log warnings on extrapolation
+    :param kwargs: Additional property tables as 2D arrays
+    :return: `PVTTables` instance
     """
     return PVTTables(
         pressures=pressures, 
