@@ -239,8 +239,10 @@ class PVTTables:
     """
     PVT (Pressure-Volume-Temperature) tables for fluid properties.
 
-    Provides interpolation methods for various fluid properties as functions
-    of pressure, temperature, and optionally other parameters like salinity.
+    Holds tabulated data for oil, water, and gas properties as functions of
+    pressure, temperature, and optionally salinity.
+
+    Uses interpolation to provide fluid properties at arbitrary P-T(-S) conditions.
     """
 
     # Base grids for interpolation
@@ -1112,37 +1114,47 @@ class PVTTables:
 def build_pvt_tables(
     pressures: OneDimensionalGrid,
     temperatures: OneDimensionalGrid,
-    salinities: typing.Optional[OneDimensionalGrid] = None,
+    # Basic fluid properties
     oil_specific_gravity: typing.Optional[float] = None,
     gas_gravity: typing.Optional[float] = None,
-    reservoir_gas: typing.Optional[str] = None,
+    water_salinity: typing.Optional[float] = None,
+    # Array inputs
+    salinities: typing.Optional[OneDimensionalGrid] = None,
     solution_gas_to_oil_ratios: typing.Optional[OneDimensionalGrid] = None,
+    # Gas specification
+    reservoir_gas: typing.Optional[str] = None,
+    # Control flags
     build_oil_properties: bool = True,
     build_water_properties: bool = True,
     build_gas_properties: bool = True,
-    oil_viscosities: typing.Optional[TwoDimensionalGrid] = None,
-    oil_compressibilities: typing.Optional[TwoDimensionalGrid] = None,
-    oil_specific_gravities: typing.Optional[TwoDimensionalGrid] = None,
-    oil_api_gravities: typing.Optional[TwoDimensionalGrid] = None,
-    oil_densities: typing.Optional[TwoDimensionalGrid] = None,
-    oil_formation_volume_factors: typing.Optional[TwoDimensionalGrid] = None,
+    # Pre-computed 2D oil tables (n_pressures, n_temperatures)
+    oil_viscosity_table: typing.Optional[TwoDimensionalGrid] = None,
+    oil_compressibility_table: typing.Optional[TwoDimensionalGrid] = None,
+    oil_specific_gravity_table: typing.Optional[TwoDimensionalGrid] = None,
+    oil_api_gravity_table: typing.Optional[TwoDimensionalGrid] = None,
+    oil_density_table: typing.Optional[TwoDimensionalGrid] = None,
+    oil_formation_volume_factor_table: typing.Optional[TwoDimensionalGrid] = None,
+    solution_gas_to_oil_ratio_table: typing.Optional[TwoDimensionalGrid] = None,
+    # Bubble point pressures (1D or 2D)
     bubble_point_pressures: typing.Optional[
         typing.Union[OneDimensionalGrid, TwoDimensionalGrid]
     ] = None,
-    gas_solubilities_in_water: typing.Optional[ThreeDimensionalGrid] = None,
-    water_bubble_point_pressures: typing.Optional[ThreeDimensionalGrid] = None,
-    water_viscosities: typing.Optional[ThreeDimensionalGrid] = None,
-    water_compressibilities: typing.Optional[ThreeDimensionalGrid] = None,
-    water_densities: typing.Optional[ThreeDimensionalGrid] = None,
-    water_formation_volume_factors: typing.Optional[ThreeDimensionalGrid] = None,
-    gas_viscosities: typing.Optional[TwoDimensionalGrid] = None,
-    gas_compressibilities: typing.Optional[TwoDimensionalGrid] = None,
-    gas_gravities: typing.Optional[TwoDimensionalGrid] = None,
-    gas_molecular_weights: typing.Optional[TwoDimensionalGrid] = None,
-    gas_densities: typing.Optional[TwoDimensionalGrid] = None,
-    gas_formation_volume_factors: typing.Optional[TwoDimensionalGrid] = None,
-    gas_compressibility_factors: typing.Optional[TwoDimensionalGrid] = None,
-    solution_gas_to_oil_ratio_table: typing.Optional[TwoDimensionalGrid] = None,
+    # Pre-computed 2D gas tables (n_pressures, n_temperatures)
+    gas_viscosity_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_compressibility_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_gravity_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_molecular_weight_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_density_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_formation_volume_factor_table: typing.Optional[TwoDimensionalGrid] = None,
+    gas_compressibility_factor_table: typing.Optional[TwoDimensionalGrid] = None,
+    # Pre-computed 3D water tables (n_pressures, n_temperatures, n_salinities)
+    water_bubble_point_pressure_table: typing.Optional[ThreeDimensionalGrid] = None,
+    water_viscosity_table: typing.Optional[ThreeDimensionalGrid] = None,
+    water_compressibility_table: typing.Optional[ThreeDimensionalGrid] = None,
+    water_density_table: typing.Optional[ThreeDimensionalGrid] = None,
+    water_formation_volume_factor_table: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_solubility_in_water_table: typing.Optional[ThreeDimensionalGrid] = None,
+    # Table settings
     validate_tables: bool = True,
     interpolation_method: InterpolationMethod = "cubic",
     warn_on_extrapolation: bool = True,
@@ -1154,45 +1166,56 @@ def build_pvt_tables(
     for fluid properties. It uses the same correlations as `reservoir_model()` but pre-computes
     them on a grid for fast interpolation during simulation.
 
+    **IMPORTANT: Table Dimensions**
+    - Oil properties: 2D tables with shape (n_pressures, n_temperatures)
+    - Gas properties: 2D tables with shape (n_pressures, n_temperatures)
+    - Water properties: 3D tables with shape (n_pressures, n_temperatures, n_salinities)
+    - Bubble point: 1D shape (n_temperatures) OR 2D shape (n_solution_gor, n_temperatures)
+
+    **Water Properties are 3D**
+    Water properties depend on salinity, so all water tables are 3D (P, T, S).
+    If `salinities` is not provided, a default single salinity value will be used,
+    resulting in a 3D table with shape (n_p, n_t, 1).
+
     :param pressures: 1D array of pressures (psi), e.g. np.linspace(500, 5000, 50)
     :param temperatures: 1D array of temperatures (°F), e.g. np.linspace(100, 250, 30)
 
     :param oil_specific_gravity: Oil specific gravity (dimensionless), e.g. 0.85
     :param gas_gravity: Gas specific gravity (dimensionless), e.g. 0.65
-    :param water_salinity: Water salinity (ppm NaCl), e.g. 35000. Used for single-value water properties.
-    :param salinities: 1D array of salinities (ppm) for 3D gas solubility table
-    :param reservoir_gas: Gas type (e.g. "CO2", "Methane"), defaults to c.RESERVOIR_GAS_NAME
+    :param water_salinity: Single salinity value (ppm NaCl), e.g. 35000.
+        Used if `salinities` array is not provided.
+    :param salinities: 1D array of salinities (ppm) for 3D water property tables.
+        If None, uses [water_salinity] as single-value array.
     :param solution_gas_to_oil_ratios: 1D array of Rs values (SCF/STB) for 2D bubble point table
+    :param reservoir_gas: Gas type (e.g. "CO2", "Methane"), defaults to `constants.RESERVOIR_GAS_NAME`
 
-    :param build_oil_properties: If True, compute oil property tables
-    :param build_water_properties: If True, compute water property tables
-    :param build_gas_properties: If True, compute gas property tables
-    :param build_3d_gas_solubility: If True, build 3D Rsw(P,T,S) table (requires `salinities`)
+    :param build_oil_properties: If True, compute oil property tables (2D)
+    :param build_water_properties: If True, compute water property tables (3D)
+    :param build_gas_properties: If True, compute gas property tables (2D)
 
-    :param oil_viscosities: Optional pre-computed oil viscosity table (n_p, n_t)
-    :param oil_compressibilities: Optional pre-computed oil compressibility table (n_p, n_t)
-    :param oil_specific_gravities: Optional pre-computed oil SG table (n_p, n_t) - usually constant
-    :param oil_api_gravities: Optional pre-computed API gravity table (n_p, n_t) - usually constant
-    :param oil_densities: Optional pre-computed oil density table (n_p, n_t)
-    :param oil_formation_volume_factors: Optional pre-computed Bo table (n_p, n_t)
-    :param bubble_point_pressures: Optional pre-computed Pb table - 1D (n_t) or 2D (n_rs, n_t)
-    :param solution_gas_to_oil_ratio_table: Optional pre-computed Rs table (n_p, n_t)
+    :param oil_viscosity_table: Optional pre-computed oil viscosity (n_p, n_t)
+    :param oil_compressibility_table: Optional pre-computed oil compressibility (n_p, n_t)
+    :param oil_specific_gravity_table: Optional pre-computed oil SG (n_p, n_t)
+    :param oil_api_gravity_table: Optional pre-computed API gravity (n_p, n_t)
+    :param oil_density_table: Optional pre-computed oil density (n_p, n_t)
+    :param oil_formation_volume_factor_table: Optional pre-computed Bo (n_p, n_t)
+    :param solution_gas_to_oil_ratio_table: Optional pre-computed Rs (n_p, n_t)
+    :param bubble_point_pressures: Optional Pb - 1D (n_t) or 2D (n_rs, n_t)
 
-    :param water_bubble_point_pressures: Optional pre-computed water Pb table (n_p, n_t)
-    :param water_viscosities: Optional pre-computed water viscosity table (n_p, n_t)
-    :param water_compressibilities: Optional pre-computed water compressibility table (n_p, n_t)
-    :param water_densities: Optional pre-computed water density table (n_p, n_t)
-    :param water_formation_volume_factors: Optional pre-computed Bw table (n_p, n_t)
-    :param salinities: Optional pre-computed salinity table (n_p, n_t) - usually constant
+    :param gas_viscosity_table: Optional pre-computed gas viscosity (n_p, n_t)
+    :param gas_compressibility_table: Optional pre-computed gas compressibility (n_p, n_t)
+    :param gas_gravity_table: Optional pre-computed gas gravity (n_p, n_t)
+    :param gas_molecular_weight_table: Optional pre-computed MW (n_p, n_t)
+    :param gas_density_table: Optional pre-computed gas density (n_p, n_t)
+    :param gas_formation_volume_factor_table: Optional pre-computed Bg (n_p, n_t)
+    :param gas_compressibility_factor_table: Optional pre-computed Z-factor (n_p, n_t)
 
-    :param gas_viscosities: Optional pre-computed gas viscosity table (n_p, n_t)
-    :param gas_compressibilities: Optional pre-computed gas compressibility table (n_p, n_t)
-    :param gas_gravities: Optional pre-computed gas gravity table (n_p, n_t) - usually constant
-    :param gas_molecular_weights: Optional pre-computed MW table (n_p, n_t) - usually constant
-    :param gas_densities: Optional pre-computed gas density table (n_p, n_t)
-    :param gas_formation_volume_factors: Optional pre-computed Bg table (n_p, n_t)
-    :param gas_compressibility_factors: Optional pre-computed Z-factor table (n_p, n_t)
-    :param gas_solubilities_in_water: Optional pre-computed 3D Rsw table (n_p, n_t, n_s)
+    :param water_viscosity_table: Optional pre-computed water viscosity (n_p, n_t, n_s)
+    :param water_compressibility_table: Optional pre-computed water compressibility (n_p, n_t, n_s)
+    :param water_density_table: Optional pre-computed water density (n_p, n_t, n_s)
+    :param water_formation_volume_factor_table: Optional pre-computed Bw (n_p, n_t, n_s)
+    :param water_bubble_point_pressure_table: Optional pre-computed water Pb (n_p, n_t, n_s)
+    :param gas_solubility_in_water_table: Optional pre-computed Rsw (n_p, n_t, n_s)
 
     :param validate_tables: If True, perform physical consistency checks
     :param interpolation_method: 'linear', 'cubic', or 'quintic'
@@ -1200,32 +1223,28 @@ def build_pvt_tables(
 
     :return: PVTTables instance with all computed/provided properties
 
-    :raises ValueError: If required inputs are missing for requested property tables
-    :raises ValidationError: If computed tables contain non-physical values
-
     Example:
-
     ```python
     # Build comprehensive tables for black oil system
     pressures = np.linspace(500, 5000, 50)
     temperatures = np.linspace(100, 250, 30)
+    salinities = np.array([0, 35000, 70000, 100000])  # Multiple salinities
 
     tables = build_pvt_tables(
         pressures=pressures,
         temperatures=temperatures,
+        salinities=salinities,  # Will create 3D water tables
         oil_specific_gravity=0.85,
         gas_gravity=0.65,
-        water_salinity=35000,
         reservoir_gas="Methane",
         interpolation_method="cubic",
     )
 
     # Query properties during simulation
     mu_o = tables.oil_viscosity(pressure=2500, temperature=180)
-    bo = tables.oil_formation_volume_factor(pressure=2500, temperature=180)
+    mu_w = tables.water_viscosity(pressure=2500, temperature=180, salinity=35000)
     ```
     """
-    # Validate pressure and temperature arrays
     if pressures.ndim != 1:
         raise ValueError("`pressures` must be 1-dimensional")
     if temperatures.ndim != 1:
@@ -1241,8 +1260,21 @@ def build_pvt_tables(
     # Set defaults
     reservoir_gas = reservoir_gas or c.RESERVOIR_GAS_NAME
     reservoir_gas = typing.cast(str, reservoir_gas)
+    water_salinity_value = water_salinity if water_salinity is not None else 35000.0
 
-    # Check requirements for oil properties
+    # Handle salinity array
+    if salinities is None:
+        # Use single salinity value
+        salinities = np.array([water_salinity_value])
+    else:
+        if salinities.ndim != 1:
+            raise ValueError("`salinities` must be 1-dimensional")
+        if not np.all(np.diff(salinities) > 0):
+            raise ValueError("`salinities` must be strictly increasing")
+
+    n_s = len(salinities)
+
+    # Check requirements
     if build_oil_properties:
         if oil_specific_gravity is None:
             raise ValueError(
@@ -1251,162 +1283,175 @@ def build_pvt_tables(
         if gas_gravity is None:
             raise ValueError("`gas_gravity` required when `build_oil_properties=True`")
 
-    # Create meshgrid for 2D tables: pressure_grid[i,j] = pressures[i]
-    # This creates all (P, T) combinations for vectorized computation
+    # CREATE MESHGRIDS
+    # 2D meshgrid for oil and gas properties: (n_p, n_t)
     pressure_grid_2d, temperature_grid_2d = np.meshgrid(
         pressures, temperatures, indexing="ij"
     )
 
-    # Create meshgrid for 3D tables if needed
+    # 3D meshgrid for water properties: (n_p, n_t, n_s)
     pressure_grid_3d, temperature_grid_3d, salinity_grid_3d = np.meshgrid(
-        pressures,
-        temperatures,
-        np.atleast_1d(salinities) if salinities is not None else np.array([35000.0]),
-        indexing="ij",
+        pressures, temperatures, salinities, indexing="ij"
     )
 
-    # BUILD GAS PROPERTIES (if requested)
+    # BUILD GAS PROPERTIES (2D TABLES)
     if build_gas_properties:
-        # Gas gravity (usually constant, but allow spatial variation)
-        if gas_gravities is None:
+        # Gas gravity (usually constant)
+        if gas_gravity_table is None:
             if gas_gravity is None:
                 computed_gas_gravity = compute_gas_gravity(gas=reservoir_gas)
             else:
                 computed_gas_gravity = gas_gravity
 
-            gas_gravities = np.full((n_p, n_t), computed_gas_gravity)
+            gas_gravity_table = np.full((n_p, n_t), computed_gas_gravity)
 
-        # Gas molecular weight (derived from gravity)
-        if gas_molecular_weights is None:
-            gas_molecular_weights = build_gas_molecular_weight_grid(
-                gas_gravity_grid=gas_gravities
+        # Gas molecular weight
+        if gas_molecular_weight_table is None:
+            gas_molecular_weight_table = build_gas_molecular_weight_grid(
+                gas_gravity_grid=gas_gravity_table
             )
 
-        # Gas Z-factor (compressibility factor)
-        if gas_compressibility_factors is None:
-            gas_compressibility_factors = build_gas_compressibility_factor_grid(
+        # Gas Z-factor
+        if gas_compressibility_factor_table is None:
+            gas_compressibility_factor_table = build_gas_compressibility_factor_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
-                gas_gravity_grid=gas_gravities,
+                gas_gravity_grid=gas_gravity_table,
             )
 
         # Gas formation volume factor
-        if gas_formation_volume_factors is None:
-            gas_formation_volume_factors = build_gas_formation_volume_factor_grid(
+        if gas_formation_volume_factor_table is None:
+            gas_formation_volume_factor_table = build_gas_formation_volume_factor_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
-                gas_compressibility_factor_grid=gas_compressibility_factors,
+                gas_compressibility_factor_grid=gas_compressibility_factor_table,
             )
 
         # Gas compressibility
-        if gas_compressibilities is None:
-            gas_compressibilities = build_gas_compressibility_grid(
+        if gas_compressibility_table is None:
+            gas_compressibility_table = build_gas_compressibility_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
-                gas_gravity_grid=gas_gravities,
-                gas_compressibility_factor_grid=gas_compressibility_factors,
+                gas_gravity_grid=gas_gravity_table,
+                gas_compressibility_factor_grid=gas_compressibility_factor_table,
             )
 
         # Gas density
-        if gas_densities is None:
-            gas_densities = build_gas_density_grid(
+        if gas_density_table is None:
+            gas_density_table = build_gas_density_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
-                gas_gravity_grid=gas_gravities,
-                gas_compressibility_factor_grid=gas_compressibility_factors,
+                gas_gravity_grid=gas_gravity_table,
+                gas_compressibility_factor_grid=gas_compressibility_factor_table,
             )
 
         # Gas viscosity
-        if gas_viscosities is None:
-            gas_viscosities = build_gas_viscosity_grid(
+        if gas_viscosity_table is None:
+            gas_viscosity_table = build_gas_viscosity_grid(
                 temperature_grid=temperature_grid_2d,
-                gas_density_grid=gas_densities,
-                gas_molecular_weight_grid=gas_molecular_weights,
+                gas_density_grid=gas_density_table,
+                gas_molecular_weight_grid=gas_molecular_weight_table,
             )
 
-    # BUILD WATER PROPERTIES (if requested)
+    # BUILD WATER PROPERTIES (3D TABLES)
     if build_water_properties:
-        # Water viscosity
-        if water_viscosities is None:
-            water_viscosities = build_water_viscosity_grid(
+        # Water viscosity: μw(P, T, S)
+        if water_viscosity_table is None:
+            water_viscosity_table = build_water_viscosity_grid(
                 temperature_grid=temperature_grid_3d,
                 salinity_grid=salinity_grid_3d,
                 pressure_grid=pressure_grid_3d,
             )
 
-        # Gas solubility in water (2D by default, 3D if requested)
-        # Build 3D table: Rsw(P, T, S)
-        if gas_solubilities_in_water is None:
-            gas_solubilities_in_water = build_gas_solubility_in_water_grid(
+        # Gas solubility in water: Rsw(P, T, S)
+        if gas_solubility_in_water_table is None:
+            gas_solubility_in_water_table = build_gas_solubility_in_water_grid(
                 pressure_grid=pressure_grid_3d,
                 temperature_grid=temperature_grid_3d,
                 salinity_grid=salinity_grid_3d,
                 gas=reservoir_gas,
             )
 
-        # Water bubble point pressure
-        if water_bubble_point_pressures is None:
-            water_bubble_point_pressures = build_water_bubble_point_pressure_grid(
+        # Water bubble point pressure: Pb,w(P, T, S)
+        if water_bubble_point_pressure_table is None:
+            water_bubble_point_pressure_table = build_water_bubble_point_pressure_grid(
                 temperature_grid=temperature_grid_3d,
-                gas_solubility_in_water_grid=gas_solubilities_in_water,
+                gas_solubility_in_water_grid=gas_solubility_in_water_table,
                 salinity_grid=salinity_grid_3d,
                 gas=reservoir_gas,
             )
 
-        # Gas-free water FVF (needed for compressibility)
+        # Gas-free water FVF (needed for compressibility and density)
         gas_free_water_fvf_grid = build_gas_free_water_formation_volume_factor_grid(
             pressure_grid=pressure_grid_3d,
-            temperature_grid=temperature_grid_2d,
+            temperature_grid=temperature_grid_3d,
         )
 
-        # Water compressibility
-        if water_compressibilities is None:
-            water_compressibilities = build_water_compressibility_grid(
+        # Need gas FVF for water compressibility calculation
+        # Broadcast 2D gas FVF to 3D if gas properties were built
+        if build_gas_properties and gas_formation_volume_factor_table is not None:
+            # Broadcast (n_p, n_t) to (n_p, n_t, n_s)
+            gas_fvf_3d = np.broadcast_to(
+                gas_formation_volume_factor_table[:, :, np.newaxis], (n_p, n_t, n_s)
+            ).copy()
+        else:
+            # Use default gas FVF
+            gas_fvf_3d = np.ones((n_p, n_t, n_s))
+
+        # Need gas gravity for water density calculation
+        if build_gas_properties and gas_gravity_table is not None:
+            # Broadcast (n_p, n_t) to (n_p, n_t, n_s)
+            gas_gravity_3d = np.broadcast_to(
+                gas_gravity_table[:, :, np.newaxis], (n_p, n_t, n_s)
+            ).copy()
+        else:
+            # Use default gas gravity
+            gas_gravity_3d = np.full((n_p, n_t, n_s), 0.65)
+
+        # Water compressibility: Cw(P, T, S)
+        if water_compressibility_table is None:
+            water_compressibility_table = build_water_compressibility_grid(
                 pressure_grid=pressure_grid_3d,
                 temperature_grid=temperature_grid_3d,
-                bubble_point_pressure_grid=water_bubble_point_pressures,
-                gas_formation_volume_factor_grid=gas_formation_volume_factors,
-                gas_solubility_in_water_grid=gas_solubilities_in_water,
+                bubble_point_pressure_grid=water_bubble_point_pressure_table,
+                gas_formation_volume_factor_grid=gas_fvf_3d,
+                gas_solubility_in_water_grid=gas_solubility_in_water_table,
                 gas_free_water_formation_volume_factor_grid=gas_free_water_fvf_grid,
             )
 
-        # Water density
-        if water_densities is None:
-            water_densities = build_water_density_grid(
-                pressure_grid=pressure_grid_2d,
-                temperature_grid=temperature_grid_2d,
-                gas_gravity_grid=gas_gravities
-                if build_gas_properties
-                else np.full((n_p, n_t), 0.65),
-                salinity_grid=water_salinities,
-                gas_solubility_in_water_grid=(
-                    gas_solubility_in_water_2d
-                    if not build_3d_gas_solubility
-                    else gas_solubilities_in_water[:, :, 0]
-                ),
+        # Water density: ρw(P, T, S)
+        if water_density_table is None:
+            water_density_table = build_water_density_grid(
+                pressure_grid=pressure_grid_3d,
+                temperature_grid=temperature_grid_3d,
+                gas_gravity_grid=gas_gravity_3d,
+                salinity_grid=salinity_grid_3d,
+                gas_solubility_in_water_grid=gas_solubility_in_water_table,
                 gas_free_water_formation_volume_factor_grid=gas_free_water_fvf_grid,
             )
 
-        # Water formation volume factor
-        if water_formation_volume_factors is None:
-            water_formation_volume_factors = build_water_formation_volume_factor_grid(
-                water_density_grid=water_densities,
-                salinity_grid=salinities,
+        # Water formation volume factor: Bw(P, T, S)
+        if water_formation_volume_factor_table is None:
+            water_formation_volume_factor_table = (
+                build_water_formation_volume_factor_grid(
+                    water_density_grid=water_density_table,
+                    salinity_grid=salinity_grid_3d,
+                )
             )
 
-    # BUILD OIL PROPERTIES (if requested)
+    # BUILD OIL PROPERTIES (2D TABLES)
     if build_oil_properties:
         # Oil specific gravity (usually constant)
-        if oil_specific_gravities is None:
-            oil_specific_gravities = np.full((n_p, n_t), oil_specific_gravity)
+        if oil_specific_gravity_table is None:
+            oil_specific_gravity_table = np.full((n_p, n_t), oil_specific_gravity)
 
         # Oil API gravity
-        if oil_api_gravities is None:
-            oil_api_gravities = build_oil_api_gravity_grid(
-                oil_specific_gravity_grid=oil_specific_gravities
+        if oil_api_gravity_table is None:
+            oil_api_gravity_table = build_oil_api_gravity_grid(
+                oil_specific_gravity_grid=oil_specific_gravity_table
             )
 
-        # Determine bubble point pressure structure (1D or 2D)
+        # BUBBLE POINT PRESSURE (1D or 2D)
         if bubble_point_pressures is None:
             if solution_gas_to_oil_ratios is not None:
                 # Build 2D bubble point table: Pb(Rs, T)
@@ -1414,7 +1459,6 @@ def build_pvt_tables(
                 bubble_point_pressures = np.zeros((n_rs, n_t))
 
                 for i, rs_value in enumerate(solution_gas_to_oil_ratios):
-                    # For each Rs value, compute Pb at each temperature
                     rs_grid = np.full(n_t, rs_value)
                     bubble_point_pressures[i, :] = build_oil_bubble_point_pressure_grid(
                         gas_gravity_grid=np.full(n_t, gas_gravity),
@@ -1425,19 +1469,10 @@ def build_pvt_tables(
                         solution_gas_to_oil_ratio_grid=rs_grid,
                     )
             else:
-                # Build 1D bubble point table: Pb(T) at reference conditions
-                # Use a reference pressure to estimate initial Rs
-                reference_pressure = pressures[len(pressures) // 2]  # Middle pressure
+                # Build 1D bubble point table: Pb(T)
+                # Use typical Rs = 500 SCF/STB as reference
+                estimated_rs_grid = np.full(n_t, 500.0)
 
-                # Estimate Rs at reference conditions
-                estimated_rs_grid = np.zeros(n_t)
-                for j, temp in enumerate(temperatures):
-                    # Use Standing correlation to estimate Rs
-                    # This is a circular dependency, so we use an iterative approach
-                    # For simplicity, assume Rs ≈ 500 SCF/STB initially
-                    estimated_rs_grid[j] = 500.0
-
-                # Compute Pb(T) using estimated Rs
                 bubble_point_pressures = build_oil_bubble_point_pressure_grid(
                     gas_gravity_grid=np.full(n_t, gas_gravity),
                     oil_api_gravity_grid=build_oil_api_gravity_grid(
@@ -1447,53 +1482,60 @@ def build_pvt_tables(
                     solution_gas_to_oil_ratio_grid=estimated_rs_grid,
                 )
 
-        # Create bubble point grid for 2D computations
-        # For 1D Pb(T), broadcast to (n_p, n_t)
+        # Create 2D bubble point grid for property calculations
         if bubble_point_pressures.ndim == 1:
+            # 1D: Broadcast Pb(T) to (n_p, n_t)
             bubble_point_pressure_grid_2d = np.broadcast_to(
                 bubble_point_pressures[np.newaxis, :], (n_p, n_t)
             ).copy()
         else:
-            # For 2D Pb(Rs, T), we need to interpolate to pressure grid
-            # This is complex - for now, use middle Rs value
+            # 2D: Use middle Rs value for property calculations
+            if solution_gas_to_oil_ratios is None:
+                raise ValueError(
+                    "2D `bubble_point_pressures` requires `solution_gas_to_oil_ratios` array"
+                )
+
             warnings.warn(
                 "2D bubble point pressure table provided. Using middle Rs value "
-                "for property calculations. Consider providing full Rs(P,T) table."
+                "for property calculations on the 2D grid."
             )
             mid_rs_idx = len(solution_gas_to_oil_ratios) // 2
             bubble_point_pressure_grid_2d = np.broadcast_to(
                 bubble_point_pressures[mid_rs_idx, :][np.newaxis, :], (n_p, n_t)
             ).copy()
 
-        # Solution GOR table: Rs(P, T)
+        # SOLUTION GOR TABLE: Rs(P, T)
         if solution_gas_to_oil_ratio_table is None:
             solution_gas_to_oil_ratio_table = build_solution_gas_to_oil_ratio_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
                 gas_gravity_grid=np.full((n_p, n_t), gas_gravity),
-                oil_api_gravity_grid=oil_api_gravities,
+                oil_api_gravity_grid=oil_api_gravity_table,
             )
 
-        # Oil formation volume factor: Bo(P, T)
-        if oil_formation_volume_factors is None:
-            oil_formation_volume_factors = build_oil_formation_volume_factor_grid(
+        # OIL FORMATION VOLUME FACTOR: Bo(P, T)
+        # Need initial compressibility estimate for Bo calculation
+        if oil_compressibility_table is None:
+            # Use typical oil compressibility as temporary value
+            oil_compressibility_temp = np.full((n_p, n_t), 1e-5)
+        else:
+            oil_compressibility_temp = oil_compressibility_table
+
+        if oil_formation_volume_factor_table is None:
+            oil_formation_volume_factor_table = build_oil_formation_volume_factor_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
-                oil_specific_gravity_grid=oil_specific_gravities,
+                oil_specific_gravity_grid=oil_specific_gravity_table,
                 gas_gravity_grid=np.full((n_p, n_t), gas_gravity),
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
-                oil_compressibility_grid=(
-                    oil_compressibilities
-                    if oil_compressibilities is not None
-                    else np.full((n_p, n_t), 1e-5)  # Temporary value
-                ),
+                oil_compressibility_grid=oil_compressibility_temp,
             )
 
-        # Oil compressibility: Co(P, T)
-        if oil_compressibilities is None:
-            # Compute Rs at bubble point for each T
+        # OIL COMPRESSIBILITY: Co(P, T)
+        if oil_compressibility_table is None:
+            # Compute Rs at bubble point for each temperature
             rs_at_bp_grid = np.zeros((n_p, n_t))
             for j in range(n_t):
                 pb_at_t = bubble_point_pressure_grid_2d[0, j]
@@ -1502,36 +1544,38 @@ def build_pvt_tables(
                     temperature_grid=np.full(n_p, temperature_grid_2d[0, j]),
                     bubble_point_pressure_grid=np.full(n_p, pb_at_t),
                     gas_gravity_grid=np.full(n_p, gas_gravity),
-                    oil_api_gravity_grid=oil_api_gravities[:, j],
+                    oil_api_gravity_grid=oil_api_gravity_table[:, j],
                 )
 
-            oil_compressibilities = build_oil_compressibility_grid(
+            # Need gas FVF for compressibility calculation
+            if build_gas_properties and gas_formation_volume_factor_table is not None:
+                gas_fvf_for_co = gas_formation_volume_factor_table
+            else:
+                gas_fvf_for_co = np.ones((n_p, n_t))
+
+            oil_compressibility_table = build_oil_compressibility_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
-                oil_api_gravity_grid=oil_api_gravities,
+                oil_api_gravity_grid=oil_api_gravity_table,
                 gas_gravity_grid=np.full((n_p, n_t), gas_gravity),
                 gor_at_bubble_point_pressure_grid=rs_at_bp_grid,
-                gas_formation_volume_factor_grid=(
-                    gas_formation_volume_factors
-                    if build_gas_properties
-                    else np.ones((n_p, n_t))
-                ),
-                oil_formation_volume_factor_grid=oil_formation_volume_factors,
+                gas_formation_volume_factor_grid=gas_fvf_for_co,
+                oil_formation_volume_factor_grid=oil_formation_volume_factor_table,
             )
 
-        # Oil density: ρo(P, T)
-        if oil_densities is None:
-            oil_densities = build_live_oil_density_grid(
-                oil_api_gravity_grid=oil_api_gravities,
+        # OIL DENSITY: ρo(P, T)
+        if oil_density_table is None:
+            oil_density_table = build_live_oil_density_grid(
+                oil_api_gravity_grid=oil_api_gravity_table,
                 gas_gravity_grid=np.full((n_p, n_t), gas_gravity),
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
-                formation_volume_factor_grid=oil_formation_volume_factors,
+                formation_volume_factor_grid=oil_formation_volume_factor_table,
             )
 
-        # Oil viscosity: μo(P, T)
-        if oil_viscosities is None:
-            # Compute Rs at bubble point (already computed above if Co was computed)
+        # OIL VISCOSITY: μo(P, T)
+        if oil_viscosity_table is None:
+            # Need Rs at bubble point (computed above if Co was None)
             if "rs_at_bp_grid" not in locals():
                 rs_at_bp_grid = np.zeros((n_p, n_t))
                 for j in range(n_t):
@@ -1541,44 +1585,50 @@ def build_pvt_tables(
                         temperature_grid=np.full(n_p, temperature_grid_2d[0, j]),
                         bubble_point_pressure_grid=np.full(n_p, pb_at_t),
                         gas_gravity_grid=np.full(n_p, gas_gravity),
-                        oil_api_gravity_grid=oil_api_gravities[:, j],
+                        oil_api_gravity_grid=oil_api_gravity_table[:, j],
                     )
 
-            oil_viscosities = build_oil_viscosity_grid(
+            oil_viscosity_table = build_oil_viscosity_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
-                oil_specific_gravity_grid=oil_specific_gravities,
+                oil_specific_gravity_grid=oil_specific_gravity_table,
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
-                gor_at_bubble_point_pressure_grid=rs_at_bp_grid,
+                gor_at_bubble_point_pressure_grid=rs_at_bp_grid,  # type: ignore
             )
 
     return PVTTables(
+        # Base grids
         pressures=pressures,
         temperatures=temperatures,
         salinities=salinities,
+        solution_gas_oil_ratios=solution_gas_to_oil_ratios,
         bubble_point_pressures=bubble_point_pressures,
-        oil_viscosities=oil_viscosities,
-        oil_compressibilities=oil_compressibilities,
-        oil_specific_gravities=oil_specific_gravities,
-        oil_api_gravities=oil_api_gravities,
-        oil_densities=oil_densities,
-        oil_formation_volume_factors=oil_formation_volume_factors,
-        solution_gas_to_oil_ratios=solution_gas_to_oil_ratio_table,
-        water_bubble_point_pressures=water_bubble_point_pressures,
-        water_viscosities=water_viscosities,
-        water_compressibilities=water_compressibilities,
-        water_densities=water_densities,
-        water_formation_volume_factors=water_formation_volume_factors,
-        gas_viscosities=gas_viscosities,
-        gas_compressibilities=gas_compressibilities,
-        gas_gravities=gas_gravities,
-        gas_molecular_weights=gas_molecular_weights,
-        gas_densities=gas_densities,
-        gas_formation_volume_factors=gas_formation_volume_factors,
-        gas_compressibility_factors=gas_compressibility_factors,
-        gas_solubilities_in_water=gas_solubilities_in_water,
+        # Table options
         interpolation_method=interpolation_method,
         validate_tables=validate_tables,
         warn_on_extrapolation=warn_on_extrapolation,
+        # Oil properties (2D)
+        oil_viscosity_table=oil_viscosity_table,
+        oil_compressibility_table=oil_compressibility_table,
+        oil_specific_gravity_table=oil_specific_gravity_table,
+        oil_api_gravity_table=oil_api_gravity_table,
+        oil_density_table=oil_density_table,
+        oil_formation_volume_factor_table=oil_formation_volume_factor_table,
+        solution_gas_to_oil_ratio_table=solution_gas_to_oil_ratio_table,
+        # Water properties (3D)
+        water_bubble_point_pressure_table=water_bubble_point_pressure_table,
+        water_viscosity_table=water_viscosity_table,
+        water_compressibility_table=water_compressibility_table,
+        water_density_table=water_density_table,
+        water_formation_volume_factor_table=water_formation_volume_factor_table,
+        gas_solubility_in_water_table=gas_solubility_in_water_table,
+        # Gas properties (2D)
+        gas_viscosity_table=gas_viscosity_table,
+        gas_compressibility_table=gas_compressibility_table,
+        gas_gravity_table=gas_gravity_table,
+        gas_molecular_weight_table=gas_molecular_weight_table,
+        gas_density_table=gas_density_table,
+        gas_formation_volume_factor_table=gas_formation_volume_factor_table,
+        gas_compressibility_factor_table=gas_compressibility_factor_table,
     )
