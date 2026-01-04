@@ -28,6 +28,7 @@ dependencies = [
     # Fallback to standard PyPI for macOS or non-x86 architectures
     "numpy>=2.0.0; sys_platform == 'darwin' or platform_machine != 'x86_64'",
     "scipy>=1.13.0; sys_platform == 'darwin' or platform_machine != 'x86_64'",
+    "cachetools>=6.2.4",
 ]
 
 [project.optional-dependencies]

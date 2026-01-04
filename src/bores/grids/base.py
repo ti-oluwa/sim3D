@@ -18,6 +18,7 @@ from bores.types import (
 )
 
 __all__ = [
+    "array",
     "uniform_grid",
     "layered_grid",
     "build_uniform_grid",
@@ -36,6 +37,18 @@ __all__ = [
     "RelativeMobilityGrids",
     "CapillaryPressureGrids",
 ]
+
+
+def array(obj: typing.Any, **kwargs: typing.Any):
+    """
+    Wrapper around np.array to enforce global dtype.
+
+    :param obj: Object to convert to numpy array
+    :param kwargs: Additional keyword arguments for `np.array`
+    :return: return value of `np.array`
+    """
+    kwargs.setdefault("dtype", get_dtype())
+    return np.array(obj, **kwargs)
 
 
 def build_uniform_grid(

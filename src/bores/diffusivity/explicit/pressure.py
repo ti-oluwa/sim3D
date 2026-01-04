@@ -740,6 +740,7 @@ def compute_well_rate_grid(
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
+                pvt_tables=config.pvt_tables,
             )
 
             # Check for backflow (negative injection)
@@ -809,6 +810,7 @@ def compute_well_rate_grid(
                     fluid_compressibility=phase_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=phase_fvf,
+                    pvt_tables=config.pvt_tables,
                 )
 
                 # Check for backflow (positive production = injection)

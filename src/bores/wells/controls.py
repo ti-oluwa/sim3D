@@ -9,6 +9,7 @@ import numba
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.pvt.core import compute_gas_compressibility_factor
+from bores.pvt.tables import PVTTables
 from bores.types import FluidPhase
 from bores.wells.core import (
     WellFluid,
@@ -90,6 +91,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute the flow rate based on the control method.
@@ -103,6 +105,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells.
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The flow rate in (bbl/day or ft³/day). Positive for injection, negative for production.
         """
         ...
@@ -118,6 +121,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute the effective bottom-hole pressure for this control at current conditions.
@@ -137,6 +141,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         :param is_active: Whether well is active
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
         :param fluid_compressibility: Fluid compressibility (1/psi)
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Effective bottom-hole pressure (psi)
         """
         ...
@@ -156,6 +161,7 @@ def _setup_gas_pseudo_pressure(
     pressure: float,
     temperature: float,
     use_pseudo_pressure: bool,
+    pvt_tables: typing.Optional[PVTTables] = None,
 ) -> typing.Tuple[bool, typing.Optional[typing.Any]]:
     """
     Setup pseudo-pressure table for gas wells if needed.
@@ -166,7 +172,9 @@ def _setup_gas_pseudo_pressure(
         return False, None
 
     pseudo_pressure_table = fluid.get_pseudo_pressure_table(
-        temperature=temperature, points=c.GAS_PSEUDO_PRESSURE_POINTS
+        temperature=temperature,
+        points=c.GAS_PSEUDO_PRESSURE_POINTS,
+        pvt_tables=pvt_tables,
     )
     return True, pseudo_pressure_table
 
@@ -237,6 +245,7 @@ def _compute_required_bhp(
     use_pseudo_pressure: bool,
     formation_volume_factor: float,
     fluid_compressibility: typing.Optional[float],
+    pvt_tables: typing.Optional[PVTTables] = None,
 ) -> float:
     """
     Compute required BHP to achieve target rate.
@@ -252,6 +261,7 @@ def _compute_required_bhp(
             pressure=pressure,
             temperature=temperature,
             use_pseudo_pressure=use_pseudo_pressure,
+            pvt_tables=pvt_tables,
         )
 
         # Compute Z-factor using reservoir pressure as initial estimate
@@ -352,6 +362,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute flow rate using BHP control (Darcy's law).
@@ -367,6 +378,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells.
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Flow rate in (bbl/day or ft³/day).
         """
         # Early return checks
@@ -385,6 +397,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
                 pressure=pressure,
                 temperature=temperature,
                 use_pseudo_pressure=use_pseudo_pressure,
+                pvt_tables=pvt_tables,
             )
             avg_z = _compute_avg_z_factor(
                 pressure=pressure,
@@ -434,6 +447,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Return the specified bottom-hole pressure for BHP control.
@@ -447,6 +461,7 @@ class BHPControl(typing.Generic[WellFluidT_con]):
         :param is_active: Whether well is active
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
         :param fluid_compressibility: Fluid compressibility (1/psi)
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Effective bottom-hole pressure (psi)
         """
         if _should_return_zero(
@@ -513,6 +528,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Return constant target rate, subject to BHP constraint.
@@ -526,6 +542,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells.
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Target flow rate if the required bottom hole pressure to produce/inject
             is above or equal to the minimum bottom hole pressure constraint (if any). Otherwise returns 0.0.
         """
@@ -555,6 +572,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
                     use_pseudo_pressure=use_pseudo_pressure,
                     fluid_compressibility=fluid_compressibility,
                     formation_volume_factor=formation_volume_factor,
+                    pvt_tables=pvt_tables,
                 )
 
             except (ValueError, ZeroDivisionError) as exc:
@@ -599,6 +617,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute BHP required to achieve target rate.
@@ -612,6 +631,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
         :param is_active: Whether well is active
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
         :param fluid_compressibility: Fluid compressibility (1/psi)
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Effective bottom-hole pressure (psi)
         """
         if (
@@ -636,6 +656,7 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=formation_volume_factor,
                 fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         except (ValueError, ZeroDivisionError) as exc:
             logger.warning(
@@ -753,6 +774,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute flow rate adaptively.
@@ -769,6 +791,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells.
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Flow rate in (bbl/day or ft³/day).
         """
         # Early return checks
@@ -797,6 +820,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=fluid_compressibility,
                 formation_volume_factor=formation_volume_factor,
+                pvt_tables=pvt_tables,
             )
         except (ValueError, ZeroDivisionError) as exc:
             logger.warning(
@@ -843,6 +867,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 pressure=pressure,
                 temperature=temperature,
                 use_pseudo_pressure=use_pseudo_pressure,
+                pvt_tables=pvt_tables,
             )
             avg_z = _compute_avg_z_factor(
                 pressure=pressure,
@@ -890,6 +915,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute BHP based on current operating mode.
@@ -903,6 +929,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         :param is_active: Whether well is active
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas
         :param fluid_compressibility: Fluid compressibility (1/psi)
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Effective bottom-hole pressure (psi)
         """
         if (
@@ -928,6 +955,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=formation_volume_factor,
                 fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         except (ValueError, ZeroDivisionError) as e:
             logger.debug(f"Cannot achieve rate mode: {e}. Using BHP mode.")
@@ -1015,6 +1043,7 @@ class MultiPhaseRateControl:
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute flow rate based on fluid phase.
@@ -1028,6 +1057,7 @@ class MultiPhaseRateControl:
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells.
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Flow rate in (bbl/day or ft³/day).
         """
         if _should_return_zero(
@@ -1046,6 +1076,7 @@ class MultiPhaseRateControl:
                 is_active=is_active,
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         elif fluid.phase == FluidPhase.GAS:
             return self.gas_control.get_flow_rate(
@@ -1058,6 +1089,7 @@ class MultiPhaseRateControl:
                 is_active=is_active,
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         elif fluid.phase == FluidPhase.WATER:
             return self.water_control.get_flow_rate(
@@ -1070,6 +1102,7 @@ class MultiPhaseRateControl:
                 is_active=is_active,
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         else:
             raise ValidationError(f"Unsupported fluid phase: {fluid.phase}")
@@ -1085,43 +1118,47 @@ class MultiPhaseRateControl:
         is_active: bool = True,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """Delegate to appropriate phase control."""
         if fluid.phase == FluidPhase.OIL:
             return self.oil_control.get_bottom_hole_pressure(
-                pressure,
-                temperature,
-                phase_mobility,
-                well_index,
-                fluid,
-                formation_volume_factor,
-                is_active,
-                use_pseudo_pressure,
-                fluid_compressibility,
+                pressure=pressure,
+                temperature=temperature,
+                phase_mobility=phase_mobility,
+                well_index=well_index,
+                fluid=fluid,
+                formation_volume_factor=formation_volume_factor,
+                is_active=is_active,
+                use_pseudo_pressure=use_pseudo_pressure,
+                fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         elif fluid.phase == FluidPhase.GAS:
             return self.gas_control.get_bottom_hole_pressure(
-                pressure,
-                temperature,
-                phase_mobility,
-                well_index,
-                fluid,
-                formation_volume_factor,
-                is_active,
-                use_pseudo_pressure,
-                fluid_compressibility,
+                pressure=pressure,
+                temperature=temperature,
+                phase_mobility=phase_mobility,
+                well_index=well_index,
+                fluid=fluid,
+                formation_volume_factor=formation_volume_factor,
+                is_active=is_active,
+                use_pseudo_pressure=use_pseudo_pressure,
+                fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         elif fluid.phase == FluidPhase.WATER:
             return self.water_control.get_bottom_hole_pressure(
-                pressure,
-                temperature,
-                phase_mobility,
-                well_index,
-                fluid,
-                formation_volume_factor,
-                is_active,
-                use_pseudo_pressure,
-                fluid_compressibility,
+                pressure=pressure,
+                temperature=temperature,
+                phase_mobility=phase_mobility,
+                well_index=well_index,
+                fluid=fluid,
+                formation_volume_factor=formation_volume_factor,
+                is_active=is_active,
+                use_pseudo_pressure=use_pseudo_pressure,
+                fluid_compressibility=fluid_compressibility,
+                pvt_tables=pvt_tables,
             )
         return pressure
 

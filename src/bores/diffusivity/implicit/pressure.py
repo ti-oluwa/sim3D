@@ -888,6 +888,7 @@ def add_well_contributions(
                 formation_volume_factor=phase_fvf,
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=phase_compressibility,
+                pvt_tables=config.pvt_tables,
             )
 
             # PI = mD·ft/cP * conversion = ft³/psi·day
@@ -959,6 +960,7 @@ def add_well_contributions(
                     formation_volume_factor=phase_fvf,
                     use_pseudo_pressure=use_pseudo_pressure,
                     fluid_compressibility=phase_compressibility,
+                    pvt_tables=config.pvt_tables,
                 )
 
                 # Check for backflow (positive production = injection)

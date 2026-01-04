@@ -921,6 +921,7 @@ def compute_well_rate_grids(
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
+                pvt_tables=config.pvt_tables,
             )
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
@@ -991,6 +992,7 @@ def compute_well_rate_grids(
                     fluid_compressibility=phase_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=phase_fvf,
+                    pvt_tables=config.pvt_tables,
                 )
                 if production_rate > 0.0 and config.warn_well_anomalies:
                     _warn_production_rate_is_positive(

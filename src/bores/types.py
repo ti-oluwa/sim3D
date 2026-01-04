@@ -60,7 +60,7 @@ OneDimension: TypeAlias = typing.Tuple[int]
 
 Numeric = typing.Union[int, float, np.floating, np.integer]
 NDimensionalGrid = np.ndarray[NDimension, np.dtype[np.floating]]
-FloatOrArray = typing.TypeVar("FloatOrArray", float, np.typing.NDArray[np.floating])
+FloatOrArray = typing.Union[float, np.typing.NDArray[np.floating]]
 
 
 ThreeDimensionalGrid = NDimensionalGrid[ThreeDimensions]
@@ -319,3 +319,6 @@ class SupportsSetItem(typing.Generic[K_con, V_con], typing.Protocol):
     def __setitem__(self, key: K_con, value: V_con, /) -> None:
         """Sets the item at the specified key to the given value."""
         ...
+
+
+GasZFactorMethod = typing.Literal["auto", "papay", "hall-yarborough", "dak"]

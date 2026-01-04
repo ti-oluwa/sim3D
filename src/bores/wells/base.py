@@ -27,6 +27,8 @@ from bores.wells.core import (
     compute_effective_permeability_for_well,
     compute_well_index,
 )
+from bores.pvt.tables import PVTTables
+
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +250,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         formation_volume_factor: float,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute the flow rate for the well using the configured control strategy.
@@ -260,6 +263,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The flow rate in (bbl/day or ft³/day).
         """
         return self.control.get_flow_rate(
@@ -272,6 +276,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
             formation_volume_factor=formation_volume_factor,
+            pvt_tables=pvt_tables,
         )
 
     def get_bottom_hole_pressure(
@@ -284,6 +289,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         formation_volume_factor: float,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute the bottom-hole pressure for the well using the configured control strategy.
@@ -296,6 +302,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
         :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The bottom-hole pressure (psi).
         """
         return self.control.get_bottom_hole_pressure(
@@ -308,6 +315,7 @@ class Well(typing.Generic[WellLocation, WellFluidT]):
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
             formation_volume_factor=formation_volume_factor,
+            pvt_tables=pvt_tables,
         )
 
     def shut_in(self) -> None:
@@ -585,6 +593,7 @@ class InjectionWell(Well[WellLocation, InjectedFluid]):
         formation_volume_factor: float,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
     ) -> float:
         """
         Compute the flow rate for the injection well using the configured control strategy.
@@ -597,6 +606,7 @@ class InjectionWell(Well[WellLocation, InjectedFluid]):
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹). For slightly compressible fluids, this can be used to adjust the flow rate calculation.
         :param formation_volume_factor: The formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The flow rate (bbl/day or ft³/day)
         """
         return super().get_flow_rate(
@@ -608,6 +618,7 @@ class InjectionWell(Well[WellLocation, InjectedFluid]):
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
             formation_volume_factor=formation_volume_factor,
+            pvt_tables=pvt_tables,
         )
 
 

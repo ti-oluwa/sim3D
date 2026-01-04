@@ -135,7 +135,7 @@ class Config:
     Lowering this value increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
     """
-    explicit_saturation_cfl_threshold: float = 0.5
+    explicit_saturation_cfl_threshold: float = 0.6
     """
     Maximum allowable saturation CFL number for the 'explicit' evolution scheme to ensure numerical stability.
 
@@ -195,3 +195,6 @@ class Config:
     it is recomputed.
     """
     pvt_tables: typing.Optional[PVTTables] = None
+    """PVT tables for fluid property lookups during the simulation."""
+    gas_pseudo_pressure_interpolation_method: typing.Literal["linear", "cubic"] = "cubic"
+    """Interpolation method for gas pseudo-pressure tables ('linear' or 'cubic')."""

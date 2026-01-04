@@ -24,7 +24,11 @@ from bores.pvt.core import (
     fahrenheit_to_rankine,
 )
 from bores.types import FluidPhase, Orientation, ThreeDimensions, TwoDimensions
-from bores.pvt.tables import GasPseudoPressureTable
+from bores.pvt.tables import (
+    GasPseudoPressureTable,
+    PVTTables,
+    build_gas_pseudo_pressure_table,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -488,6 +492,27 @@ def compute_required_bhp_for_gas_rate(
     return float(required_bhp)
 
 
+def _build_table_interpolator(
+    pvt_tables: PVTTables, property_name: str, temperature: float
+):
+    """Build a 1D interpolator for a given property at fixed temperature."""
+
+    def _interpolator(pressure: float) -> float:
+        # Clamp pressure to table bounds
+        p_clamped = np.clip(pressure, pvt_tables.pressures[0], pvt_tables.pressures[-1])
+        result = pvt_tables.pt_interpolate(
+            name=property_name, pressure=p_clamped, temperature=temperature
+        )
+        # Ensure positive values
+        if result is None:
+            raise ComputationError(
+                f"Result cannot be None ensure PVT table contains {property_name!r} interpolator. Use `table.exists({property_name!r})`"
+            )
+        return typing.cast(float, result)
+
+    return _interpolator
+
+
 @attrs.frozen
 class WellFluid:
     """Base class for fluid properties in wells."""
@@ -501,53 +526,159 @@ class WellFluid:
     molecular_weight: float = attrs.field(validator=attrs.validators.ge(0))
     """Molecular weight of the fluid in (g/mol)."""
 
-    @functools.cache
+    def _build_pseudo_pressure_cache_key(
+        self,
+        temperature: float,
+        reference_pressure: typing.Optional[float] = None,
+        pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
+        points: typing.Optional[int] = None,
+        pvt_tables: typing.Optional[PVTTables] = None,
+        interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
+    ) -> typing.Tuple[typing.Any, ...]:
+        """
+        Build a hashable cache key for pseudo-pressure table lookup.
+
+        The key uniquely identifies a pseudo-pressure table based on all parameters
+        that affect the Z-factor and viscosity functions.
+
+        :return: Hashable tuple that can be used as cache key
+        """
+        # PVT tables hash: if tables provided, use a hash of their configuration
+        # Otherwise, use None to indicate correlation-based calculation
+        if pvt_tables is not None:
+            # Hash based on table metadata (not the full data arrays)
+            pvt_hash = (
+                tuple(pvt_tables.pressures.tolist()),  # Pressure grid
+                tuple(pvt_tables.temperatures.tolist()),  # Temperature grid
+                pvt_tables.exists("gas_compressibility_factor"),  # Z table exists?
+                pvt_tables.exists("gas_viscosity"),  # μ table exists?
+            )
+        else:
+            pvt_hash = None
+
+        # Build cache key
+        cache_key = (
+            self.name,  # Fluid identifier (e.g., "CH4", "CO2")
+            self.phase.value,  # Phase enum value
+            round(
+                self.specific_gravity, 6
+            ),  # Gas gravity (rounded to avoid float precision issues)
+            round(self.molecular_weight, 6),  # Molecular weight (rounded)
+            round(temperature, 2),  # Temperature (rounded to 0.01 °F precision)
+            round(reference_pressure, 2)
+            if reference_pressure is not None
+            else None,  # Reference pressure
+            tuple(round(p, 2) for p in pressure_range)
+            if pressure_range is not None
+            else None,  # Pressure range
+            points,  # Number of points
+            interpolation_method,  # Interpolation method
+            pvt_hash,  # PVT table configuration (or None)
+        )
+        return cache_key
+
     def get_pseudo_pressure_table(
         self,
         temperature: float,
         reference_pressure: typing.Optional[float] = None,
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
-    ) -> "GasPseudoPressureTable":
+        pvt_tables: typing.Optional[PVTTables] = None,
+        interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
+        use_cache: bool = True,
+    ) -> GasPseudoPressureTable:
         """
-        Gas pseudo-pressure table for this fluid.
+        Get gas pseudo-pressure table for this fluid.
 
-        :param temperature: The temperature at which to evaluate the pseudo-pressure table (°F).
-        :param reference_pressure: The reference pressure for the pseudo-pressure table (psi).
-        :param pressure_range: The pressure range for the pseudo-pressure table (psi).
-        :param points: The number of points in the pseudo-pressure table.
-        :return: A `GasPseudoPressureTable` instance for the fluid.
+        Uses global caching to avoid recomputing tables for identical fluid properties.
+        Multiple `WellFluid` instances with the same properties will share cached tables.
+
+        :param temperature: Temperature (°F)
+        :param reference_pressure: Reference pressure (psi), default 14.7
+        :param pressure_range: (min, max) pressure range (psi), default (14.7, 5000)
+        :param points: Number of points, default 100
+        :param pvt_tables: Optional PVT tables for Z and μ interpolation
+        :param interpolation_method: "linear" or "cubic"
+        :param use_cache: If True, use global cache. If False, always compute new table.
+        :return: `GasPseudoPressureTable` instance
+
+        Example:
+        ```python
+        # These two fluids will share the same cached table:
+        methane1 = WellFluid(name="CH4-1", phase=FluidPhase.GAS,
+                             specific_gravity=0.65, molecular_weight=16.04)
+        methane2 = WellFluid(name="CH4-2", phase=FluidPhase.GAS,
+                             specific_gravity=0.65, molecular_weight=16.04)
+
+        table1 = methane1.get_pseudo_pressure_table(temperature=150)
+        table2 = methane2.get_pseudo_pressure_table(temperature=150)
+        # table1 is table2  # True! Same cached instance
+        ```
         """
         if self.phase != FluidPhase.GAS:
             raise ValidationError(
                 "Pseudo-pressure table is only applicable for gas phase."
             )
 
-        def z_factor_func(pressure: float) -> float:
-            return compute_gas_compressibility_factor(
-                pressure=pressure,
-                temperature=temperature,
-                gas_gravity=self.specific_gravity,
-            )
+        z_factor_func = None  # type: ignore
+        viscosity_func = None  # type: ignore
 
-        def viscosity_func(pressure: float) -> float:
-            return compute_gas_viscosity(
-                temperature=temperature,
-                gas_density=compute_gas_density(
+        if pvt_tables is not None:
+            if pvt_tables.exists("gas_compressibility_factor"):
+                z_factor_func = _build_table_interpolator(
+                    pvt_tables=pvt_tables,
+                    property_name="gas_compressibility_factor",
+                    temperature=temperature,
+                )
+            if pvt_tables.exists("gas_viscosity"):
+                viscosity_func = _build_table_interpolator(
+                    pvt_tables=pvt_tables,
+                    property_name="gas_viscosity",
+                    temperature=temperature,
+                )
+
+        if z_factor_func is None:
+
+            def z_factor_func(pressure: float) -> float:
+                return compute_gas_compressibility_factor(
                     pressure=pressure,
                     temperature=temperature,
                     gas_gravity=self.specific_gravity,
-                    gas_compressibility_factor=z_factor_func(pressure),
-                ),
-                gas_molecular_weight=self.molecular_weight,
+                )
+
+        if viscosity_func is None:
+
+            def viscosity_func(pressure: float) -> float:
+                return compute_gas_viscosity(
+                    temperature=temperature,
+                    gas_density=compute_gas_density(
+                        pressure=pressure,
+                        temperature=temperature,
+                        gas_gravity=self.specific_gravity,
+                        gas_compressibility_factor=z_factor_func(pressure),
+                    ),
+                    gas_molecular_weight=self.molecular_weight,
+                )
+
+        cache_key = None
+        if use_cache:
+            cache_key = self._build_pseudo_pressure_cache_key(
+                temperature=temperature,
+                reference_pressure=reference_pressure,
+                pressure_range=pressure_range,
+                points=points,
+                pvt_tables=pvt_tables,
+                interpolation_method=interpolation_method,
             )
 
-        return GasPseudoPressureTable(
+        return build_gas_pseudo_pressure_table(
             z_factor_func=z_factor_func,
             viscosity_func=viscosity_func,
             reference_pressure=reference_pressure,
             pressure_range=pressure_range,
             points=points,
+            interpolation_method=interpolation_method,
+            cache_key=cache_key,
         )
 
 

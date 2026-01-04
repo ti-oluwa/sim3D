@@ -29,7 +29,7 @@ def _():
 
         # Thickness distribution - typical reservoir layers
         # Thicker in the middle, thinner at top/bottom
-        thickness_values = np.array(
+        thickness_values = bores.array(
             [30.0, 20.0, 25.0, 30.0, 25.0, 30.0, 20.0, 25.0, 30.0, 25.0]
         )  # feet
         thickness_grid = bores.layered_grid(
@@ -85,7 +85,7 @@ def _():
         )
 
         # Porosity - decreasing with depth (compaction trend)
-        porosity_values = np.array(
+        porosity_values = bores.array(
             [0.04, 0.07, 0.09, 0.1, 0.08, 0.12, 0.14, 0.16, 0.11, 0.08]
         )  # fraction
         porosity_grid = bores.layered_grid(
@@ -148,7 +148,7 @@ def _():
         # Permeability distribution
         # Higher permeability in middle layers (better reservoir quality)
         # Anisotropy ratio kv/kh ~ 0.1 (typical for layered sandstone)
-        x_perm_values = np.array([12, 25, 40, 18, 55, 70, 90, 35, 48, 22])  # mD
+        x_perm_values = bores.array([12, 25, 40, 18, 55, 70, 90, 35, 48, 22])  # mD
         x_permeability_grid = bores.layered_grid(
             grid_shape=grid_shape,
             layer_values=x_perm_values,
@@ -266,6 +266,20 @@ def _():
             dip_azimuth=dip_azimuth,
         )
 
+        pvt_table_data = bores.build_pvt_table_data(
+            pressures=bores.array(
+                [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
+            ),
+            temperatures=bores.array([120, 140, 160, 180, 200, 220]),
+            oil_specific_gravity=0.845,
+            gas_gravity=0.65,
+            reservoir_gas="methane",
+            salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
+        )
+        pvt_tables = bores.PVTTables(
+            table_data=pvt_table_data,
+            interpolation_method="cubic",
+        )
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=1.0),
@@ -285,9 +299,11 @@ def _():
             iterative_solver="bicgstab",
             preconditioner="ilu",
             log_interval=2,
+            pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
         return list(states)
+
     return bores, main
 
 

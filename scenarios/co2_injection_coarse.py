@@ -131,12 +131,25 @@ def _():
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
         )
+        pvt_table_data = bores.build_pvt_table_data(
+            pressures=bores.array([500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]),
+            temperatures=bores.array([120, 140, 160, 180, 200, 220]),
+            salinities=bores.array([30000, 32000, 33500, 35000]),  # ppm
+            oil_specific_gravity=0.845,
+            gas_gravity=0.65,
+            reservoir_gas="methane",
+        )
+        pvt_tables = bores.PVTTables(
+            table_data=pvt_table_data,
+            interpolation_method="linear",
+        )
         config = bores.Config(
-            scheme="implicit",
+            scheme="impes",
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
             preconditioner=None,
+            pvt_tables=pvt_tables
         )
         states = bores.run(model=model, timer=timer, wells=wells, config=config)
         return list(states)

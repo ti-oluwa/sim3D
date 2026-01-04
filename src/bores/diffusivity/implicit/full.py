@@ -667,6 +667,7 @@ def compute_well_rate_grids(
                 fluid_compressibility=fluid_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=fluid_formation_volume_factor,
+                pvt_tables=config.pvt_tables,
             )
             if injected_phase != FluidPhase.GAS:
                 cell_injection_rate *= c.BBL_TO_FT3
@@ -740,6 +741,7 @@ def compute_well_rate_grids(
                     fluid_compressibility=fluid_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=fluid_formation_volume_factor,
+                    pvt_tables=config.pvt_tables,
                 )
                 if produced_phase != FluidPhase.GAS:
                     production_rate *= c.BBL_TO_FT3
