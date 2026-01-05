@@ -1837,14 +1837,14 @@ def compute_gas_pseudocritical_properties(
         raise ValidationError("Gas specific gravity must be greater than zero.")
 
     total_acid_gas_fraction = h2s_mole_fraction + co2_mole_fraction  # type: ignore
-    if np.any(total_acid_gas_fraction > 0.40):
+    if max_(total_acid_gas_fraction) > 0.40:
         raise ValidationError(
-            f"Total acid gas fraction ({max_(total_acid_gas_fraction):.2%}) exceeds 40% limit "
+            f"Total acid gas fraction ({max_(total_acid_gas_fraction)}) exceeds 40% limit "
             "for Wichert-Aziz correction."
         )
-    if np.any(h2s_mole_fraction > 0.25):
+    if max_(h2s_mole_fraction) > 0.25:
         raise ValidationError(
-            f"H₂S mole fraction ({max_(h2s_mole_fraction):.2%}) exceeds 25% limit "
+            f"H₂S mole fraction ({max_(h2s_mole_fraction)}) exceeds 25% limit "
             "for Wichert-Aziz correction."
         )
 

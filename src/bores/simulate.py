@@ -1176,7 +1176,7 @@ def run(
                 else:
                     # REJECT AND ADJUST THE TIME STEP SIZE AND RETRY
                     logger.warning(
-                        f"Time step {new_step} failed. Retrying with smaller time step."
+                        f"Time step {new_step} failed. Retrying with smaller step size."
                     )
                     try:
                         timer.reject_step(
@@ -1185,7 +1185,7 @@ def run(
                         )
                     except TimingError as exc:
                         raise SimulationError(
-                            f"Simulation failed at time step {new_step} and cannot reduce time step further. {exc}."
+                            f"Simulation failed at time step {new_step} and cannot reduce step size further. {exc}."
                             f"\n{result.message}"
                         ) from exc
                     continue  # Retry the time step with a smaller size

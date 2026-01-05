@@ -23,3 +23,4 @@ from .utils import *  # noqa
 from .timing import *  # noqa
 from .config import *  # noqa
 from .pvt.tables import *  # noqa
+from .analyses import *  # noqa

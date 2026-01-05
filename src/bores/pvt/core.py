@@ -1728,16 +1728,16 @@ def compute_gas_pseudocritical_properties(
         raise ValidationError("Gas specific gravity must be greater than zero.")
 
     total_acid_gas_fraction = h2s_mole_fraction + co2_mole_fraction
-    # if total_acid_gas_fraction > 0.40:
-    #     raise ValidationError(
-    #         f"Total acid gas fraction ({total_acid_gas_fraction:.2f}%) exceeds 40% limit "
-    #         "for Wichert-Aziz correction."
-    #     )
-    # if h2s_mole_fraction > 0.25:
-    #     raise ValidationError(
-    #         f"H₂S mole fraction ({h2s_mole_fraction:.2f}%) exceeds 25% limit "
-    #         "for Wichert-Aziz correction."
-    #     )
+    if total_acid_gas_fraction > 0.40:
+        raise ValidationError(
+            f"Total acid gas fraction ({total_acid_gas_fraction}) exceeds 40% limit "
+            "for Wichert-Aziz correction."
+        )
+    if h2s_mole_fraction > 0.25:
+        raise ValidationError(
+            f"H₂S mole fraction ({h2s_mole_fraction}) exceeds 25% limit "
+            "for Wichert-Aziz correction."
+        )
 
     # Sutton's pseudocritical properties (psia and Rankine)
     pseudocritical_pressure = 756.8 - 131.0 * gas_gravity - 3.6 * gas_gravity**2

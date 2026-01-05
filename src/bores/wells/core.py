@@ -1,6 +1,5 @@
 """Core well calculations and utilities."""
 
-import functools
 import logging
 import typing
 
