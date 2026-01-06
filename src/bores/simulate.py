@@ -969,9 +969,9 @@ def run(
         state = ModelState(
             step=0,
             step_size=timer.step_size,
+            time=timer.elapsed_time,
             model=model,
             wells=wells,
-            config=config,
             relative_mobilities=relative_mobility_grids,
             relative_permeabilities=relperm_grids,
             capillary_pressures=capillary_pressure_grids,
@@ -1253,9 +1253,9 @@ def run(
                     state = ModelState(
                         step=timer.step,
                         step_size=timer.step_size,
+                        time=timer.elapsed_time,
                         model=model_snapshot,
                         wells=wells_snapshot,
-                        config=config,
                         relative_mobilities=relative_mobility_grids,
                         relative_permeabilities=relperm_grids,
                         capillary_pressures=capillary_pressure_grids,

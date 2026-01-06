@@ -8,14 +8,21 @@ app = marimo.App(width="full", app_title="bores")
 def _():
     import logging
     import typing
-
+    from pathlib import Path
     import numpy as np
     import bores
+
 
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
+
+    store = bores.NPZStore(
+        filepath=Path.cwd() / "scenarios/states/stabilization_coarse.npz",
+        metadata_dir=Path.cwd() / "scenarios/states/stabilization_coarse_metadata/",
+    )
+
 
     def main():
         # Grid dimensions - typical field scale
@@ -58,7 +65,8 @@ def _():
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
         oil_bubble_point_pressure_grid = bores.layered_grid(
             grid_shape=grid_shape,
-            layer_values=layer_pressures - 400.0,  # 400 psi below formation pressure
+            layer_values=layer_pressures
+            - 400.0,  # 400 psi below formation pressure
             orientation=bores.Orientation.Z,
         )
 
@@ -112,7 +120,8 @@ def _():
             bores.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
-                oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
+                oil_water_contact=owc_depth
+                - reservoir_top_depth,  # 150 ft below top
                 connate_water_saturation_grid=connate_water_saturation_grid,
                 residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
                 residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
@@ -271,10 +280,10 @@ def _():
                 [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
             ),
             temperatures=bores.array([120, 140, 160, 180, 200, 220]),
+            salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
             oil_specific_gravity=0.845,
             gas_gravity=0.65,
             reservoir_gas="methane",
-            salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
         )
         pvt_tables = bores.PVTTables(
             table_data=pvt_table_data,
@@ -302,35 +311,24 @@ def _():
             pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
-        return list(states)
-
-    return bores, main
+        return bores.StateStream(states, store=store, checkpoint_interval=10, checkpoint_dir=Path.cwd()/"checkpoints")
+    return main, store
 
 
 @app.cell
 def _(main):
-    states = main()
-    return (states,)
+    stream = main()
+
+    with stream:
+        states = list(stream)
+    return
 
 
 @app.cell
-def _(bores, states):
-    from pathlib import Path
+def _(store):
+    for state in store.load(validate=False):
+        print(state.model.fluid_properties.oil_saturation_grid[:])
 
-    bores.dump_states(
-        states,
-        filepath=Path.cwd() / "scenarios/states/stabilization_coarse.pkl",
-        exist_ok=True,
-        compression="lzma",
-    )
-
-    # Save last stabilized state
-    stabilized_state = states[-1]
-    stabilized_state.dump(
-        filepath=Path.cwd() / "scenarios/states/stabilized_coarse.pkl",
-        compression="lzma",
-        exist_ok=True,
-    )
     return
 
 
