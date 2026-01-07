@@ -15,11 +15,14 @@ def _():
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
+    stabilized_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/stabilized.zarr",
+        metadata_dir=Path.cwd() / "scenarios/states/stabilized_metadata/",
+    )
 
-    STABILIZED_MODEL_STATE = Path.cwd() / "scenarios/states/stabilized_coarse.pkl.xz"
 
     def main():
-        state = bores.ModelState.load(filepath=STABILIZED_MODEL_STATE)
+        state = list(stabilized_store.load(validate=False))[0]
         model = state.model
         del state
 
@@ -88,7 +91,9 @@ def _():
             max_rejects=20,
         )
         pvt_table_data = bores.build_pvt_table_data(
-            pressures=bores.array([500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]),
+            pressures=bores.array(
+                [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
+            ),
             temperatures=bores.array([120, 140, 160, 180, 200, 220]),
             salinities=bores.array([30000, 32000, 33500, 35000]),  # ppm
             oil_specific_gravity=0.845,
@@ -110,32 +115,43 @@ def _():
             pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=wells, config=config)
-        return list(states)
+        return states
     return Path, bores, main
 
 
 @app.cell
-def _(main):
-    states = main()
-    return (states,)
+def _(Path, bores):
+    depletion_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/primary_depletion.zarr",
+        metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
+    )
+    return (depletion_store,)
 
 
 @app.cell
-def _(Path, bores, states):
-    bores.dump_states(
-        states,
-        filepath=Path.cwd() / "scenarios/states/primary_depletion_coarse.pkl",
-        exist_ok=True,
-        compression="lzma",
+def _(Path, bores, depletion_store, main):
+    stream = bores.StateStream(
+        main(),
+        store=depletion_store,
+        checkpoint_interval=20,
+        checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
     )
 
+    last_state = None
+    with stream:
+        for state in stream:
+            last_state = state
+    return (last_state,)
+
+
+@app.cell
+def _(Path, bores, last_state):
     # Dump last state for use in EOR in next stages
-    depleted_state = states[-1]
-    depleted_state.dump(
-        filepath=Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl",
-        compression="lzma",
-        exist_ok=True,
+    depleted_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/primary_depleted.zarr",
+        metadata_dir=Path.cwd() / "scenarios/states/primary_depleted_metadata/",
     )
+    depleted_store.dump([last_state], validate=False)
     return
 
 

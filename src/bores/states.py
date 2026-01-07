@@ -1,4 +1,7 @@
+"""Model state representation and storage backends."""
+
 from abc import ABC, abstractmethod
+import functools
 import logging
 from os import PathLike
 from pathlib import Path
@@ -11,7 +14,7 @@ import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 from zarr.storage import StoreLike
 
-from bores.errors import ValidationError
+from bores.errors import StorageError, ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
     RateGrids,
@@ -25,20 +28,13 @@ from bores.models import (
     RockProperties,
     SaturationHistory,
 )
+from bores.timing import StepMetricsDict, TimerState
 from bores.types import NDimension, T
 from bores.utils import Lazy, LazyField, load_pickle, save_as_pickle
 from bores.wells.base import Wells
 
 
 logger = logging.getLogger(__name__)
-
-
-class StateMetadata(typing.TypedDict):
-    """Time-invariant metadata stored once per simulation."""
-
-    rock_fluid_properties: typing.Any
-    boundary_conditions: typing.Any
-    wells: typing.Any
 
 
 __all__ = [
@@ -80,6 +76,7 @@ class ModelState(typing.Generic[NDimension]):
         relative_permeabilities: _Lazy[RelPermGrids[NDimension]],
         relative_mobilities: _Lazy[RelativeMobilityGrids[NDimension]],
         capillary_pressures: _Lazy[CapillaryPressureGrids[NDimension]],
+        timer_state: typing.Optional[TimerState] = None,
     ) -> None:
         """
         Initialize the model state.
@@ -93,7 +90,8 @@ class ModelState(typing.Generic[NDimension]):
         :param production: Fluids production rates at this state in ft³/day
         :param relative_permeabilities: Relative permeabilities at this state
         :param relative_mobilities: Relative mobilities at this state
-        :param capillary_pressures: Capillary pressures at this stat
+        :param capillary_pressures: Capillary pressures at this state
+        :param timer_state: Optional timer state at this model state
         """
         self.step = step
         self.step_size = step_size
@@ -111,6 +109,30 @@ class ModelState(typing.Generic[NDimension]):
         self.capillary_pressures = typing.cast(
             CapillaryPressureGrids[NDimension], capillary_pressures
         )
+        self.timer_state = timer_state
+
+    def asdict(self) -> typing.Dict[str, typing.Any]:
+        """
+        Get a dictionary representation of the model state.
+        """
+        return {
+            "step": self.step,
+            "step_size": self.step_size,
+            "time": self.time,
+            "model": self.model,
+            "wells": self.wells,
+            "injection": self.injection,
+            "production": self.production,
+            "relative_permeabilities": self.relative_permeabilities,
+            "relative_mobilities": self.relative_mobilities,
+            "capillary_pressures": self.capillary_pressures,
+            "timer_state": self.timer_state,
+        }
+
+    @functools.cache
+    def wells_exists(self) -> bool:
+        """Check if there are any wells in this state."""
+        return self.wells.exists()
 
 
 class StateStore(ABC):
@@ -179,29 +201,29 @@ def _validate_filepath(
     :param is_directory: If True, validates that the path is suitable for a directory
         (no extension or matches expected extension for directory-based stores)
     :return: Validated Path object
-    :raises ValueError: If filepath is invalid or has wrong extension
+    :raises StorageError: If filepath is invalid or has wrong extension
     """
     path = Path(filepath)
 
     # Check for empty path
     if not str(path).strip():
-        raise ValueError("Filepath cannot be empty")
+        raise StorageError("Filepath cannot be empty")
 
-    # Check for invalid characters (basic validation)
+    # Check for invalid characters
     if "\x00" in str(path):
-        raise ValueError("Filepath contains null characters")
+        raise StorageError("Filepath contains null characters")
 
     # For directory-based stores
     if is_directory:
         # If an extension is expected, ensure it matches (e.g., '.zarr')
         if expected_extension and path.suffix:
-            if path.suffix != expected_extension:
-                raise ValueError(
+            if expected_extension not in path.suffixes:
+                raise StorageError(
                     f"Directory-based store expected extension '{expected_extension}', "
-                    f"got '{path.suffix}'. Use '{path.with_suffix(expected_extension)}' instead."
+                    f"got '{''.join(path.suffixes)}'. Use '{path.with_suffix(expected_extension)}' instead."
                 )
         # Warn if the path looks like a file (has an unexpected extension)
-        elif path.suffix and path.suffix not in (".zarr",):
+        elif path.suffix and ".zarr" not in path.suffixes:
             logger.warning(
                 f"Path '{path}' has extension '{path.suffix}' but will be treated as a directory. "
                 f"Consider using a name without extension or '.zarr' for clarity."
@@ -214,13 +236,21 @@ def _validate_filepath(
             # Auto-add extension if missing
             path = path.with_suffix(expected_extension)
             logger.debug(f"Added extension: {path}")
-        elif path.suffix != expected_extension:
-            raise ValueError(
-                f"Expected file extension '{expected_extension}', got '{path.suffix}'. "
+        elif expected_extension not in path.suffixes:
+            raise StorageError(
+                f"Expected file extension '{expected_extension}', got '{''.join(path.suffixes)}'. "
                 f"Use '{path.with_suffix(expected_extension)}' instead."
             )
 
     return path
+
+
+class StateMetadata(typing.TypedDict):
+    """Time-invariant metadata stored once per simulation."""
+
+    rock_fluid_properties: typing.Any
+    boundary_conditions: typing.Any
+    wells: typing.Any
 
 
 @state_store("pickle")
@@ -228,7 +258,7 @@ class PickleStore(StateStore):
     """
     Pickle-based storage.
 
-    Python-native, simple, easy to use.
+    Python-native, simple, easy to use store.
     """
 
     def __init__(
@@ -244,7 +274,7 @@ class PickleStore(StateStore):
         :param compression: Compression method - "gzip" (fast, good compression),
             "lzma" (slower, better compression), or None
         :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
-        :raises ValueError: If filepath is invalid or has wrong extension
+        :raises StorageError: If filepath is invalid or has wrong extension
         """
         self.filepath = _validate_filepath(filepath, expected_extension=".pkl")
         self.compression = compression
@@ -312,7 +342,7 @@ class ZarrStore(StateStore):
         store: StoreLike,
         metadata_dir: PathLike,
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
-        compression_level: int = 3,
+        compression_level: int = 8,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
     ):
         """
@@ -323,7 +353,7 @@ class ZarrStore(StateStore):
         :param compressor: Compression algorithm - 'zstd', 'lz4', 'blosclz'. blosc with zstd is fastest for scientific data
         :param compression_level: Compression level (1-9)
         :param chunks: Chunk size for the Zarr arrays
-        :raises ValueError: If filepath is invalid or has incompatible extension
+        :raises StorageError: If filepath is invalid or has incompatible extension
         """
         self.store = store
         self.chunks = chunks
@@ -377,7 +407,7 @@ class ZarrStore(StateStore):
         """
         metadata_dir = self.metadata_dir
         if not metadata_dir.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Metadata directory not found: {metadata_dir}. "
                 "This Zarr store may be incomplete or corrupted."
             )
@@ -387,7 +417,7 @@ class ZarrStore(StateStore):
         wells_path = metadata_dir / "wells.pkl.gz"
 
         if not rf_path.exists() or not bc_path.exists() or not wells_path.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Required metadata files not found in {metadata_dir}. "
                 "Expected: rock_fluid_properties.pkl, boundary_conditions.pkl, wells.pkl"
             )
@@ -397,17 +427,13 @@ class ZarrStore(StateStore):
             rock_fluid_properties = Lazy.defer(lambda: load_pickle(filepath=rf_path))
             boundary_conditions = Lazy.defer(lambda: load_pickle(filepath=bc_path))
             wells = Lazy.defer(lambda: load_pickle(filepath=wells_path))
-            logger.debug(
-                "Created lazy loaders for metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Created lazy loaders for state metadata")
         else:
             # Load immediately
             rock_fluid_properties = load_pickle(filepath=rf_path)
             boundary_conditions = load_pickle(filepath=bc_path)
             wells = load_pickle(filepath=wells_path)
-            logger.debug(
-                "Loaded pickled metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Loaded state metadata")
 
         return StateMetadata(
             rock_fluid_properties=rock_fluid_properties,
@@ -419,7 +445,7 @@ class ZarrStore(StateStore):
         self, shape: typing.Tuple[int, ...]
     ) -> typing.Optional[typing.Tuple[int, ...]]:
         """
-        Auto-determine optimal chunk size if not provided.
+        Determine optimal chunk size if not provided.
 
         :param shape: Shape of the array to chunk
         :return: Optimal chunk shape or None for auto-chunking
@@ -427,7 +453,7 @@ class ZarrStore(StateStore):
         if self.chunks:
             return self.chunks
 
-        # Rule of thumb: chunks of ~1-10 MB for good performance
+        # As a rule of thumb, use chunks of ~1-10 MB for good performance
         # For 3D grids, use smaller chunks for better I/O
         if len(shape) == 3:
             return (
@@ -485,12 +511,15 @@ class ZarrStore(StateStore):
         root = zarr.open_group(store=self.store, mode=mode, zarr_version=3)  # type: ignore
 
         num_steps = 0
+        dumped_metadata = False
         for state in states:
             if validate:
                 state = validate_state(state=state)
+
             # Save pickled metadata once on first step
-            if state.step == 0:
+            if not dumped_metadata:
                 self._dump_metadata(state=state)
+                dumped_metadata = True
 
             step_name = f"step_{state.step:06d}"
             step_group = root.require_group(step_name)
@@ -500,6 +529,11 @@ class ZarrStore(StateStore):
             step_group.attrs["step_size"] = state.step_size
             step_group.attrs["time"] = state.time
             step_group.attrs["grid_shape"] = state.model.grid_shape
+
+            # Store timer state if present
+            if state.timer_state is not None:
+                timer_group = step_group.require_group("timer_state")
+                self._dump_timer_state(group=timer_group, timer_state=state.timer_state)
 
             self._dump_model(group=step_group.require_group("model"), model=state.model)
             self._dump_rates(
@@ -654,6 +688,53 @@ class ZarrStore(StateStore):
             if isinstance(value, np.ndarray):
                 self._create_dataset(group=group, name=field.name, data=value)
 
+    def _dump_timer_state(self, group: zarr.Group, timer_state: TimerState):
+        """
+        Dump timer state to Zarr group.
+
+        :param group: Zarr group to dump into
+        :param timer_state: TimerState dict to dump
+        """
+        # Store all scalar/simple fields as attributes
+        for key, value in timer_state.items():
+            if key == "recent_metrics":
+                # Store list of StepMetricsDict
+                metrics_list = typing.cast(
+                    typing.List[typing.Dict[str, typing.Any]], value
+                )
+                metrics_group = group.require_group("recent_metrics")
+                for idx, metric in enumerate(metrics_list):
+                    metric_group = metrics_group.require_group(f"metric_{idx}")
+                    for metric_key, metric_value in metric.items():
+                        if metric_value is not None:
+                            # Convert to native Python types for JSON compatibility
+                            if isinstance(metric_value, (np.integer, np.floating)):
+                                metric_value = metric_value.item()
+                            elif isinstance(metric_value, np.bool_):
+                                metric_value = bool(metric_value)
+                            metric_group.attrs[metric_key] = metric_value
+            elif key == "failed_step_sizes":
+                # Store as array
+                failed_sizes = typing.cast(typing.List[float], value)
+                if failed_sizes:
+                    self._create_dataset(
+                        group=group,
+                        name="failed_step_sizes",
+                        data=np.array(failed_sizes),
+                    )
+            else:
+                # Store scalar values as attributes (skip None values)
+                if value is not None:
+                    # Convert to native Python types for JSON compatibility
+                    if isinstance(value, (np.integer, np.floating)):
+                        value = value.item()
+                    elif isinstance(value, np.bool_):
+                        value = bool(value)
+                    # Cast to ensure JSON-compatible type
+                    group.attrs[key] = typing.cast(
+                        typing.Union[str, int, float, bool], value
+                    )
+
     def load(
         self, lazy: bool = True, validate: bool = True, **kwargs: typing.Any
     ) -> typing.Generator[ModelState, None, None]:
@@ -677,6 +758,12 @@ class ZarrStore(StateStore):
             step = typing.cast(int, step_group.attrs["step"])
             step_size = typing.cast(float, step_group.attrs["step_size"])
             time = typing.cast(float, step_group.attrs["time"])
+
+            # Load timer state if present
+            timer_state: typing.Optional[TimerState] = None
+            if "timer_state" in step_group:  # type: ignore
+                timer_group = typing.cast(zarr.Group, step_group["timer_state"])  # type: ignore
+                timer_state = self._load_timer_state(group=timer_group)
 
             if lazy:
                 model = Lazy.defer(
@@ -742,6 +829,7 @@ class ZarrStore(StateStore):
                 relative_permeabilities=relperm,
                 relative_mobilities=relative_mobilities,
                 capillary_pressures=capillary_pressures,
+                timer_state=timer_state,
             )
 
             if validate:
@@ -750,18 +838,18 @@ class ZarrStore(StateStore):
 
     def _load_model(self, group: zarr.Group, metadata: StateMetadata) -> ReservoirModel:
         """
-        Load model from Zarr group. Always uses Zarr's lazy arrays.
+        Load model from Zarr group.
 
         :param group: Zarr group containing model data
         :param metadata: Pre-loaded StateMetadata containing time-invariant data
-        :return: Reconstructed `ReservoirModel` instance with lazy Zarr arrays
+        :return: Reconstructed `ReservoirModel` instance.
         """
         # Load fluid properties
         fluid_group = group["fluid_properties"]  # type: ignore
         fluid_arrays = {}
         for key in fluid_group.array_keys():  # type: ignore
             array = fluid_group[key]  # type: ignore
-            fluid_arrays[key] = array  # type: ignore
+            fluid_arrays[key] = array[:]  # type: ignore
 
         # Add any scalar attributes
         for attr_name in fluid_group.attrs.keys():
@@ -776,13 +864,13 @@ class ZarrStore(StateStore):
 
         for key in rock_properties_group.array_keys():  # type: ignore
             array = rock_properties_group[key]  # type: ignore
-            rock_data[key] = array  # type: ignore
+            rock_data[key] = array[:]  # type: ignore
 
         # Load absolute permeability
         perm_group = rock_properties_group["absolute_permeability"]  # type: ignore
-        x = perm_group["x"]  # type: ignore
-        y = perm_group["y"]  # type: ignore
-        z = perm_group["z"]  # type: ignore
+        x = perm_group["x"][:]  # type: ignore
+        y = perm_group["y"][:]  # type: ignore
+        z = perm_group["z"][:]  # type: ignore
         rock_data["absolute_permeability"] = RockPermeability(x=x, y=y, z=z)  # type: ignore
 
         rock_properties = RockProperties(**rock_data)
@@ -792,18 +880,20 @@ class ZarrStore(StateStore):
         saturation_history = SaturationHistory(
             max_water_saturation_grid=saturation_history_group[  # type: ignore
                 "max_water_saturation_grid"
+            ][:],
+            max_gas_saturation_grid=saturation_history_group["max_gas_saturation_grid"][  # type: ignore
+                :
             ],
-            max_gas_saturation_grid=saturation_history_group["max_gas_saturation_grid"],  # type: ignore
             water_imbibition_flag_grid=saturation_history_group[  # type: ignore
                 "water_imbibition_flag_grid"
-            ],
+            ][:],
             gas_imbibition_flag_grid=saturation_history_group[  # type: ignore
                 "gas_imbibition_flag_grid"
-            ],
+            ][:],
         )
 
         # Load other model attributes
-        thickness_grid = group["thickness_grid"]  # type: ignore
+        thickness_grid = group["thickness_grid"][:]  # type: ignore
         grid_shape = tuple(group.attrs["grid_shape"])  # type: ignore
         cell_dimension = tuple(group.attrs["cell_dimension"])  # type: ignore
         dip_angle = typing.cast(float, group.attrs["dip_angle"])
@@ -824,59 +914,102 @@ class ZarrStore(StateStore):
 
     def _load_rates(self, group: zarr.Group) -> RateGrids:
         """
-        Load rates from Zarr group. Always uses Zarr's lazy arrays.
+        Load rates from Zarr group.
 
         :param group: Zarr group containing rate data
-        :return: Reconstructed `RateGrids` instance with lazy Zarr arrays
+        :return: Reconstructed `RateGrids` instance.
         """
         data = {}
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
-            data[key] = array  # type: ignore
+            data[key] = array[:]  # type: ignore
 
         return RateGrids(**data)
 
     def _load_relperm(self, group: zarr.Group) -> RelPermGrids:
         """
-        Load relative permeabilities from Zarr group. Always uses Zarr's lazy arrays.
+        Load relative permeabilities from Zarr group.
 
         :param group: Zarr group containing relative permeability data
-        :return: Reconstructed `RelPermGrids` instance with lazy Zarr arrays
+        :return: Reconstructed `RelPermGrids` instance.
         """
         data = {}
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
-            data[key] = array  # type: ignore
+            data[key] = array[:]  # type: ignore
 
         return RelPermGrids(**data)
 
     def _load_relative_mobilities(self, group: zarr.Group) -> RelativeMobilityGrids:
         """
-        Load relative mobilities from Zarr group. Always uses Zarr's lazy arrays.
+        Load relative mobilities from Zarr group.
 
         :param group: Zarr group containing mobility data
-        :return: Reconstructed `RelativeMobilityGrids` instance with lazy Zarr arrays
+        :return: Reconstructed `RelativeMobilityGrids` instance.
         """
         data = {}
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
-            data[key] = array  # type: ignore
+            data[key] = array[:]  # type: ignore
 
         return RelativeMobilityGrids(**data)
 
     def _load_capillary_pressures(self, group: zarr.Group) -> CapillaryPressureGrids:
         """
-        Load capillary pressures from Zarr group. Always uses Zarr's lazy arrays.
+        Load capillary pressures from Zarr group.
 
         :param group: Zarr group containing capillary pressure data
-        :return: Reconstructed `CapillaryPressureGrids` instance with lazy Zarr arrays
+        :return: Reconstructed `CapillaryPressureGrids` instance.
         """
         data = {}
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
-            data[key] = array  # type: ignore
-
+            data[key] = array[:]  # type: ignore
         return CapillaryPressureGrids(**data)
+
+    def _load_timer_state(self, group: zarr.Group) -> TimerState:
+        """
+        Load timer state from Zarr group.
+
+        :param group: Zarr group containing timer state
+        :return: TimerState dict
+        """
+        timer_state: typing.Dict[str, typing.Any] = {}
+
+        # Load scalar attributes
+        for key in group.attrs.keys():
+            timer_state[key] = group.attrs[key]
+
+        # Load recent_metrics if present
+        if "recent_metrics" in group.group_keys():
+            metrics_group = typing.cast(zarr.Group, group["recent_metrics"])  # type: ignore
+            recent_metrics: typing.List[StepMetricsDict] = []
+            for metric_key in sorted(metrics_group.group_keys()):  # type: ignore
+                metric_group = typing.cast(zarr.Group, metrics_group[metric_key])  # type: ignore
+                metric = StepMetricsDict(
+                    step_number=typing.cast(int, metric_group.attrs["step_number"]),
+                    step_size=typing.cast(float, metric_group.attrs["step_size"]),
+                    cfl=typing.cast(float, metric_group.attrs["cfl"])
+                    if metric_group.attrs.get("cfl") is not None
+                    else None,
+                    newton_iters=typing.cast(int, metric_group.attrs["newton_iters"])
+                    if metric_group.attrs.get("newton_iters") is not None
+                    else None,
+                    success=typing.cast(bool, metric_group.attrs["success"]),
+                )
+                recent_metrics.append(metric)
+            timer_state["recent_metrics"] = recent_metrics
+        else:
+            timer_state["recent_metrics"] = []
+
+        # Load failed_step_sizes if present
+        if "failed_step_sizes" in group.array_keys():
+            failed_array = group["failed_step_sizes"]  # type: ignore
+            timer_state["failed_step_sizes"] = failed_array[:].tolist()  # type: ignore
+        else:
+            timer_state["failed_step_sizes"] = []
+
+        return typing.cast(TimerState, timer_state)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(store={self.store}, compressor={self.compressor.cname})"
@@ -896,7 +1029,7 @@ class HDF5Store(StateStore):
         filepath: PathLike,
         metadata_dir: typing.Optional[PathLike] = None,
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
-        compression_opts: int = 4,
+        compression_opts: int = 8,
     ):
         """
         Initialize the store
@@ -905,7 +1038,7 @@ class HDF5Store(StateStore):
         :param metadata_dir: Directory path to store pickled metadata.
         :param compression: Compression algorithm - 'gzip', 'lzf', or 'szip'
         :param compression_opts: Compression level (1-9 for gzip)
-        :raises ValueError: If filepath is invalid or has wrong extension
+        :raises StorageError: If filepath is invalid or has wrong extension
         """
         self.filepath = _validate_filepath(filepath, expected_extension=".h5")
         self.compression = compression
@@ -959,7 +1092,7 @@ class HDF5Store(StateStore):
         """
         metadata_dir = self.metadata_dir
         if not metadata_dir.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Metadata directory not found: {metadata_dir}. "
                 "This HDF5 store may be incomplete or corrupted."
             )
@@ -969,7 +1102,7 @@ class HDF5Store(StateStore):
         wells_path = metadata_dir / "wells.pkl.gz"
 
         if not rf_path.exists() or not bc_path.exists() or not wells_path.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Required metadata files not found in {metadata_dir}. "
                 "Expected: rock_fluid_properties.pkl, boundary_conditions.pkl, wells.pkl"
             )
@@ -979,22 +1112,37 @@ class HDF5Store(StateStore):
             rock_fluid_properties = Lazy.defer(lambda: load_pickle(filepath=rf_path))
             boundary_conditions = Lazy.defer(lambda: load_pickle(filepath=bc_path))
             wells = Lazy.defer(lambda: load_pickle(filepath=wells_path))
-            logger.debug(
-                "Created lazy loaders for metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Created lazy loaders for state metadata")
         else:
             # Load immediately
             rock_fluid_properties = load_pickle(filepath=rf_path)
             boundary_conditions = load_pickle(filepath=bc_path)
             wells = load_pickle(filepath=wells_path)
-            logger.debug(
-                "Loaded pickled metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Loaded state metadata")
 
         return StateMetadata(
             rock_fluid_properties=rock_fluid_properties,
             boundary_conditions=boundary_conditions,
             wells=wells,
+        )
+
+    def _create_dataset(self, group: h5py.Group, name: str, data: np.ndarray):
+        """
+        Create a compressed dataset. Deletes the dataset if it already exists to recreate a new one.
+
+        :param group: HDF5 group to create dataset in
+        :param name: Name of the dataset
+        :param data: NumPy array data to store
+        :return: Created HDF5 dataset
+        """
+        if group.get(name) is not None:
+            del group[name]
+        return group.create_dataset(
+            name=name,
+            data=data,
+            compression=self.compression,
+            compression_opts=self.compression_opts,
+            chunks=True,
         )
 
     def dump(
@@ -1015,12 +1163,15 @@ class HDF5Store(StateStore):
 
         with h5py.File(name=str(self.filepath), mode=mode) as f:
             num_steps = 0
+            dumped_metadata = False
             for state in states:
                 if validate:
                     state = validate_state(state=state)
+
                 # Save pickled metadata once on first step
-                if state.step == 0:
+                if not dumped_metadata:
                     self._dump_metadata(state=state)
+                    dumped_metadata = True
 
                 step_name = f"step_{state.step:06d}"
                 step_group = f.require_group(name=step_name)
@@ -1030,6 +1181,13 @@ class HDF5Store(StateStore):
                 step_group.attrs["step_size"] = state.step_size
                 step_group.attrs["time"] = state.time
                 step_group.attrs["grid_shape"] = state.model.grid_shape
+
+                # Store timer state if present
+                if state.timer_state is not None:
+                    timer_group = step_group.require_group("timer_state")
+                    self._dump_timer_state(
+                        group=timer_group, timer_state=state.timer_state
+                    )
 
                 self._dump_model(
                     group=step_group.require_group(name="model"), model=state.model
@@ -1060,23 +1218,6 @@ class HDF5Store(StateStore):
             # Store global metadata
             f.attrs["num_steps"] = num_steps
             logger.debug(f"Completed dump of {num_steps} states to {self.filepath}")
-
-    def _create_dataset(self, group: h5py.Group, name: str, data: np.ndarray):
-        """
-        Helper to create compressed dataset.
-
-        :param group: HDF5 group to create dataset in
-        :param name: Name of the dataset
-        :param data: NumPy array data to store
-        :return: Created HDF5 dataset
-        """
-        return group.create_dataset(
-            name=name,
-            data=data,
-            compression=self.compression,
-            compression_opts=self.compression_opts,
-            chunks=True,
-        )
 
     def _dump_model(self, group: h5py.Group, model: ReservoirModel):
         """
@@ -1199,13 +1340,58 @@ class HDF5Store(StateStore):
             if isinstance(value, np.ndarray):
                 self._create_dataset(group=group, name=field.name, data=value)
 
+    def _dump_timer_state(self, group: h5py.Group, timer_state: TimerState):
+        """
+        Dump timer state to HDF5 group.
+
+        :param group: HDF5 group to dump into
+        :param timer_state: TimerState dict to dump
+        """
+        # Store all scalar/simple fields as attributes
+        for key, value in timer_state.items():
+            if key == "recent_metrics":
+                # Store list of StepMetricsDict
+                metrics_list = typing.cast(
+                    typing.List[typing.Dict[str, typing.Any]], value
+                )
+                metrics_group = group.require_group("recent_metrics")
+                for idx, metric in enumerate(metrics_list):
+                    metric_group = metrics_group.require_group(f"metric_{idx}")
+                    for metric_key, metric_value in metric.items():
+                        if metric_value is not None:
+                            # Convert to native Python types for compatibility
+                            if isinstance(metric_value, (np.integer, np.floating)):
+                                metric_value = metric_value.item()
+                            elif isinstance(metric_value, np.bool_):
+                                metric_value = bool(metric_value)
+                            metric_group.attrs[metric_key] = metric_value
+            elif key == "failed_step_sizes":
+                # Store as dataset
+                failed_sizes = typing.cast(typing.List[float], value)
+                if failed_sizes:
+                    self._create_dataset(
+                        group=group,
+                        name="failed_step_sizes",
+                        data=np.array(failed_sizes),
+                    )
+            else:
+                # Store scalar values as attributes (skip None values)
+                if value is not None:
+                    # Convert to native Python types for compatibility
+                    if isinstance(value, (np.integer, np.floating)):
+                        value = value.item()
+                    elif isinstance(value, np.bool_):
+                        value = bool(value)
+                    group.attrs[key] = value
+
     def load(
         self, lazy: bool = False, validate: bool = True, **kwargs: typing.Any
     ) -> typing.Generator[ModelState, None, None]:
         """
         Load states from HDF5 format.
 
-        :param lazy: If True, wrap factory functions in Lazy.defer() for deferred loading
+        :param lazy: If True, defer loading of state properties until access.
+            Wrap factory functions in Lazy.defer() for deferred loading
         :param validate: If True, validate each state after loading
         :return: Generator yielding ModelState instances
         """
@@ -1218,6 +1404,12 @@ class HDF5Store(StateStore):
                 step = typing.cast(int, step_group.attrs["step"])
                 step_size = typing.cast(float, step_group.attrs["step_size"])
                 time = typing.cast(float, step_group.attrs["time"])
+
+                # Load timer state if present
+                timer_state: typing.Optional[TimerState] = None
+                if "timer_state" in step_group:  # type: ignore
+                    timer_group = typing.cast(h5py.Group, step_group["timer_state"])  # type: ignore
+                    timer_state = self._load_timer_state(group=timer_group)
 
                 if lazy:
                     model = Lazy.defer(
@@ -1286,6 +1478,7 @@ class HDF5Store(StateStore):
                     relative_permeabilities=relperm,
                     relative_mobilities=relative_mobilities,
                     capillary_pressures=capillary_pressures,
+                    timer_state=timer_state,
                 )
 
                 if validate:
@@ -1338,7 +1531,7 @@ class HDF5Store(StateStore):
             ][:],
             max_gas_saturation_grid=saturation_history_group["max_gas_saturation_grid"][  # type: ignore[index]
                 :
-            ],
+            ][:],
             water_imbibition_flag_grid=saturation_history_group[  # type: ignore[index]
                 "water_imbibition_flag_grid"
             ][:],
@@ -1426,6 +1619,50 @@ class HDF5Store(StateStore):
 
         return CapillaryPressureGrids(**data)
 
+    def _load_timer_state(self, group: h5py.Group) -> TimerState:
+        """
+        Load timer state from HDF5 group.
+
+        :param group: HDF5 group containing timer state
+        :return: TimerState dict
+        """
+        timer_state: typing.Dict[str, typing.Any] = {}
+
+        # Load scalar attributes
+        for key in group.attrs.keys():
+            timer_state[key] = group.attrs[key]
+
+        # Load `recent_metrics` if present
+        if "recent_metrics" in group:
+            metrics_group = group["recent_metrics"]  # type: ignore
+            recent_metrics: typing.List[StepMetricsDict] = []
+            for metric_key in sorted(metrics_group.keys()):  # type: ignore
+                metric_group = metrics_group[metric_key]  # type: ignore
+                metric = StepMetricsDict(
+                    step_number=typing.cast(int, metric_group.attrs["step_number"]),
+                    step_size=typing.cast(float, metric_group.attrs["step_size"]),
+                    cfl=typing.cast(float, metric_group.attrs["cfl"])
+                    if metric_group.attrs.get("cfl") is not None
+                    else None,
+                    newton_iters=typing.cast(int, metric_group.attrs["newton_iters"])
+                    if metric_group.attrs.get("newton_iters") is not None
+                    else None,
+                    success=typing.cast(bool, metric_group.attrs["success"]),
+                )
+                recent_metrics.append(metric)
+            timer_state["recent_metrics"] = recent_metrics
+        else:
+            timer_state["recent_metrics"] = []
+
+        # Load `failed_step_sizes` if present
+        if "failed_step_sizes" in group:
+            failed_dataset = group["failed_step_sizes"]  # type: ignore
+            timer_state["failed_step_sizes"] = failed_dataset[:].tolist()  # type: ignore
+        else:
+            timer_state["failed_step_sizes"] = []
+
+        return typing.cast(TimerState, timer_state)
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(filepath={self.filepath}, "
@@ -1449,7 +1686,7 @@ class NPZStore(StateStore):
         Initialize the store
 
         :param filepath: Path to the NPZ file
-        :raises ValueError: If filepath is invalid or has wrong extension
+        :raises StorageError: If filepath is invalid or has wrong extension
         """
         self.filepath = _validate_filepath(filepath, expected_extension=".npz")
         self.metadata_dir = Path(
@@ -1499,7 +1736,7 @@ class NPZStore(StateStore):
         """
         metadata_dir = self.metadata_dir
         if not metadata_dir.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Metadata directory not found: {metadata_dir}. "
                 "This NPZ store may be incomplete or corrupted."
             )
@@ -1509,7 +1746,7 @@ class NPZStore(StateStore):
         wells_path = metadata_dir / "wells.pkl.gz"
 
         if not rf_path.exists() or not bc_path.exists() or not wells_path.exists():
-            raise FileNotFoundError(
+            raise StorageError(
                 f"Required metadata files not found in {metadata_dir}. "
                 "Expected: rock_fluid_properties.pkl, boundary_conditions.pkl, wells.pkl"
             )
@@ -1519,23 +1756,169 @@ class NPZStore(StateStore):
             rock_fluid_properties = Lazy.defer(lambda: load_pickle(filepath=rf_path))
             boundary_conditions = Lazy.defer(lambda: load_pickle(filepath=bc_path))
             wells = Lazy.defer(lambda: load_pickle(filepath=wells_path))
-            logger.debug(
-                "Created lazy loaders for metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Created lazy loaders for state metadata")
         else:
             # Load immediately
             rock_fluid_properties = load_pickle(filepath=rf_path)
             boundary_conditions = load_pickle(filepath=bc_path)
             wells = load_pickle(filepath=wells_path)
-            logger.debug(
-                "Loaded pickled metadata: `RockFluidProperties`, `BoundaryConditions`, `Wells`"
-            )
+            logger.debug("Loaded state metadata")
 
         return StateMetadata(
             rock_fluid_properties=rock_fluid_properties,
             boundary_conditions=boundary_conditions,
             wells=wells,
         )
+
+    def _dump_timer_state(
+        self, save_dict: dict, prefix: str, timer_state: TimerState
+    ) -> None:
+        """
+        Store timer state in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add timer state arrays to
+        :param prefix: Prefix for array keys
+        :param timer_state: Timer state to store
+        """
+        # Store all scalar/simple fields
+        for key, value in timer_state.items():
+            if key == "recent_metrics":
+                # Store list of StepMetricsDict as flattened arrays
+                metrics_list = typing.cast(typing.List[StepMetricsDict], value)
+                save_dict[f"{prefix}timer_recent_metrics_count"] = np.array(
+                    [len(metrics_list)]
+                )
+                if metrics_list:
+                    step_numbers = [m["step_number"] for m in metrics_list]
+                    step_sizes = [m["step_size"] for m in metrics_list]
+                    cfls = [
+                        m["cfl"] if m["cfl"] is not None else -1.0 for m in metrics_list
+                    ]
+                    newton_iters = [
+                        m["newton_iters"] if m["newton_iters"] is not None else -1
+                        for m in metrics_list
+                    ]
+                    successes = [m["success"] for m in metrics_list]
+
+                    save_dict[f"{prefix}timer_recent_step_numbers"] = np.array(
+                        step_numbers
+                    )
+                    save_dict[f"{prefix}timer_recent_step_sizes"] = np.array(step_sizes)
+                    save_dict[f"{prefix}timer_recent_cfls"] = np.array(cfls)
+                    save_dict[f"{prefix}timer_recent_newton_iters"] = np.array(
+                        newton_iters
+                    )
+                    save_dict[f"{prefix}timer_recent_successes"] = np.array(successes)
+            elif key == "failed_step_sizes":
+                # Store as array (empty array if no failures)
+                failed_sizes = typing.cast(typing.List[float], value)
+                save_dict[f"{prefix}timer_failed_step_sizes"] = np.array(
+                    failed_sizes if failed_sizes else []
+                )
+            else:
+                # Store scalar values
+                if value is not None:
+                    save_dict[f"{prefix}timer_{key}"] = np.array([value])
+
+    def _dump_model(self, save_dict: dict, prefix: str, model: ReservoirModel) -> None:
+        """
+        Store model properties in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add model arrays to
+        :param prefix: Prefix for array keys
+        :param model: ReservoirModel instance to store
+        """
+        # Store model metadata
+        save_dict[f"{prefix}grid_shape"] = np.array(model.grid_shape)
+        save_dict[f"{prefix}cell_dimension"] = np.array(model.cell_dimension)
+        save_dict[f"{prefix}dip_angle"] = np.array([model.dip_angle])
+        save_dict[f"{prefix}dip_azimuth"] = np.array([model.dip_azimuth])
+        save_dict[f"{prefix}thickness_grid"] = model.thickness_grid
+
+        # Store fluid properties
+        fluid = model.fluid_properties
+        for field in attrs.fields(fluid.__class__):
+            value = getattr(fluid, field.name)
+            if isinstance(value, np.ndarray):
+                save_dict[f"{prefix}fluid_{field.name}"] = value
+
+        # Store rock properties
+        rock = model.rock_properties
+        save_dict[f"{prefix}rock_compressibility"] = np.array([rock.compressibility])
+        save_dict[f"{prefix}rock_perm_x"] = rock.absolute_permeability.x
+        save_dict[f"{prefix}rock_perm_y"] = rock.absolute_permeability.y
+        save_dict[f"{prefix}rock_perm_z"] = rock.absolute_permeability.z
+
+        for field in attrs.fields(rock.__class__):
+            if field.name not in ("compressibility", "absolute_permeability"):
+                value = getattr(rock, field.name)
+                if isinstance(value, np.ndarray):
+                    save_dict[f"{prefix}rock_{field.name}"] = value
+
+        # Store saturation history
+        sat_hist = model.saturation_history
+        save_dict[f"{prefix}sat_max_water"] = sat_hist.max_water_saturation_grid
+        save_dict[f"{prefix}sat_max_gas"] = sat_hist.max_gas_saturation_grid
+        save_dict[f"{prefix}sat_water_imb"] = sat_hist.water_imbibition_flag_grid
+        save_dict[f"{prefix}sat_gas_imb"] = sat_hist.gas_imbibition_flag_grid
+
+    def _dump_rates(self, save_dict: dict, prefix: str, rates: RateGrids) -> None:
+        """
+        Store injection/production rates in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add rate arrays to
+        :param prefix: Prefix for array keys (e.g., 'step_000001_injection_')
+        :param rates: RateGrids instance to store
+        """
+        for field in attrs.fields(rates.__class__):
+            value = getattr(rates, field.name)
+            if isinstance(value, np.ndarray):
+                save_dict[f"{prefix}{field.name}"] = value
+
+    def _dump_relperm(
+        self, save_dict: dict, prefix: str, relperm: RelPermGrids
+    ) -> None:
+        """
+        Store relative permeabilities in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add relperm arrays to
+        :param prefix: Prefix for array keys
+        :param relperm: RelPermGrids instance to store
+        """
+        for field in attrs.fields(relperm.__class__):
+            value = getattr(relperm, field.name)
+            if isinstance(value, np.ndarray):
+                save_dict[f"{prefix}{field.name}"] = value
+
+    def _dump_relative_mobilities(
+        self, save_dict: dict, prefix: str, relative_mobilities: RelativeMobilityGrids
+    ) -> None:
+        """
+        Store relative mobilities in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add mobility arrays to
+        :param prefix: Prefix for array keys
+        :param relative_mobilities: RelativeMobilityGrids instance to store
+        """
+        for field in attrs.fields(relative_mobilities.__class__):
+            value = getattr(relative_mobilities, field.name)
+            if isinstance(value, np.ndarray):
+                save_dict[f"{prefix}{field.name}"] = value
+
+    def _dump_capillary_pressures(
+        self, save_dict: dict, prefix: str, capillary_pressures: CapillaryPressureGrids
+    ) -> None:
+        """
+        Store capillary pressures in NPZ save dictionary.
+
+        :param save_dict: Dictionary to add capillary pressure arrays to
+        :param prefix: Prefix for array keys
+        :param capillary_pressures: CapillaryPressureGrids instance to store
+        """
+        for field in attrs.fields(capillary_pressures.__class__):
+            value = getattr(capillary_pressures, field.name)
+            if isinstance(value, np.ndarray):
+                save_dict[f"{prefix}{field.name}"] = value
 
     def dump(
         self,
@@ -1552,7 +1935,7 @@ class NPZStore(StateStore):
         :param validate: If True, validate each state before dumping
         """
         if not exist_ok and self.filepath.exists():
-            raise FileExistsError(f"File {self.filepath} already exists")
+            raise StorageError(f"File {self.filepath} already exists")
 
         if validate:
             states_list = [validate_state(state=state) for state in states]
@@ -1584,74 +1967,43 @@ class NPZStore(StateStore):
         for state in states_list:
             prefix = f"step_{state.step:06d}_"
 
-            # Store metadata
+            # Store step metadata
             save_dict[f"{prefix}step"] = np.array([state.step])
             save_dict[f"{prefix}step_size"] = np.array([state.step_size])
             save_dict[f"{prefix}time"] = np.array([state.time])
-            save_dict[f"{prefix}grid_shape"] = np.array(state.model.grid_shape)
-            save_dict[f"{prefix}cell_dimension"] = np.array(state.model.cell_dimension)
-            save_dict[f"{prefix}dip_angle"] = np.array([state.model.dip_angle])
-            save_dict[f"{prefix}dip_azimuth"] = np.array([state.model.dip_azimuth])
 
-            # Store all fluid property grids
-            fluid = state.model.fluid_properties
-            for field in attrs.fields(fluid.__class__):
-                value = getattr(fluid, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}fluid_{field.name}"] = value
+            # Store timer state if present
+            if state.timer_state is not None:
+                self._dump_timer_state(
+                    save_dict=save_dict, prefix=prefix, timer_state=state.timer_state
+                )
 
-            # Store all rock property grids
-            rock = state.model.rock_properties
-            save_dict[f"{prefix}rock_compressibility"] = np.array(
-                [rock.compressibility]
+            self._dump_model(save_dict=save_dict, prefix=prefix, model=state.model)
+            self._dump_rates(
+                save_dict=save_dict,
+                prefix=f"{prefix}injection_",
+                rates=state.injection,
             )
-            save_dict[f"{prefix}rock_perm_x"] = rock.absolute_permeability.x
-            save_dict[f"{prefix}rock_perm_y"] = rock.absolute_permeability.y
-            save_dict[f"{prefix}rock_perm_z"] = rock.absolute_permeability.z
-
-            for field in attrs.fields(rock.__class__):
-                if field.name not in ("compressibility", "absolute_permeability"):
-                    value = getattr(rock, field.name)
-                    if isinstance(value, np.ndarray):
-                        save_dict[f"{prefix}rock_{field.name}"] = value
-
-            # Store thickness and saturation history
-            save_dict[f"{prefix}thickness_grid"] = state.model.thickness_grid
-            sat_hist = state.model.saturation_history
-            save_dict[f"{prefix}sat_max_water"] = sat_hist.max_water_saturation_grid
-            save_dict[f"{prefix}sat_max_gas"] = sat_hist.max_gas_saturation_grid
-            save_dict[f"{prefix}sat_water_imb"] = sat_hist.water_imbibition_flag_grid
-            save_dict[f"{prefix}sat_gas_imb"] = sat_hist.gas_imbibition_flag_grid
-
-            # Store rates
-            for field in attrs.fields(state.injection.__class__):
-                value = getattr(state.injection, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}injection_{field.name}"] = value
-
-            for field in attrs.fields(state.production.__class__):
-                value = getattr(state.production, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}production_{field.name}"] = value
-
-            # Store relative permeabilities
-            for field in attrs.fields(state.relative_permeabilities.__class__):
-                value = getattr(state.relative_permeabilities, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}relperm_{field.name}"] = value
-
-            # Store relative mobilities
-            for field in attrs.fields(state.relative_mobilities.__class__):
-                value = getattr(state.relative_mobilities, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}mobility_{field.name}"] = value
-
-            # Store capillary pressures
-            for field in attrs.fields(state.capillary_pressures.__class__):
-                value = getattr(state.capillary_pressures, field.name)
-                if isinstance(value, np.ndarray):
-                    save_dict[f"{prefix}capillary_{field.name}"] = value
-
+            self._dump_rates(
+                save_dict=save_dict,
+                prefix=f"{prefix}production_",
+                rates=state.production,
+            )
+            self._dump_relperm(
+                save_dict=save_dict,
+                prefix=f"{prefix}relperm_",
+                relperm=state.relative_permeabilities,
+            )
+            self._dump_relative_mobilities(
+                save_dict=save_dict,
+                prefix=f"{prefix}mobility_",
+                relative_mobilities=state.relative_mobilities,
+            )
+            self._dump_capillary_pressures(
+                save_dict=save_dict,
+                prefix=f"{prefix}capillary_",
+                capillary_pressures=state.capillary_pressures,
+            )
             logger.debug(f"Prepared state at step {state.step}")
 
         np.savez_compressed(file=str(self.filepath), **save_dict)
@@ -1663,7 +2015,8 @@ class NPZStore(StateStore):
         """
         Load states from NPZ format.
 
-        :param lazy: If True, wrap factory functions in Lazy.defer() for deferred loading
+        :param lazy: If True, defer loading of state properties until access.
+            Wrap factory functions in Lazy.defer() for deferred loading
         :param validate: If True, validate each state after loading
         :return: Generator yielding ModelState instances
         """
@@ -1684,114 +2037,56 @@ class NPZStore(StateStore):
             step_size = float(data[f"{prefix}step_size"][0])
             time = float(data[f"{prefix}time"][0])
 
-            def load_model(pfx: str = prefix) -> ReservoirModel:
-                grid_shape = tuple(data[f"{pfx}grid_shape"])  # type: ignore
-                cell_dimension = tuple(data[f"{pfx}cell_dimension"])  # type: ignore
-                dip_angle = float(data[f"{pfx}dip_angle"][0])
-                dip_azimuth = float(data[f"{pfx}dip_azimuth"][0])
-
-                fluid_arrays = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}fluid_"):
-                        field_name = key.replace(f"{pfx}fluid_", "")
-                        fluid_arrays[field_name] = data[key]
-                fluid_properties = FluidProperties(**fluid_arrays)
-
-                rock_compressibility = float(data[f"{pfx}rock_compressibility"][0])
-                perm_x = data[f"{pfx}rock_perm_x"]
-                perm_y = data[f"{pfx}rock_perm_y"]
-                perm_z = data[f"{pfx}rock_perm_z"]
-                absolute_permeability = RockPermeability(x=perm_x, y=perm_y, z=perm_z)  # type: ignore
-
-                rock_data = {
-                    "compressibility": rock_compressibility,
-                    "absolute_permeability": absolute_permeability,
-                }
-                for key in data.keys():
-                    if (
-                        key.startswith(f"{pfx}rock_")
-                        and not key.startswith(f"{pfx}rock_perm")
-                        and not key.endswith("compressibility")
-                    ):
-                        field_name = key.replace(f"{pfx}rock_", "")
-                        rock_data[field_name] = data[key]
-                rock_properties = RockProperties(**rock_data)  # type: ignore
-
-                saturation_history = SaturationHistory(
-                    max_water_saturation_grid=data[f"{pfx}sat_max_water"],  # type: ignore
-                    max_gas_saturation_grid=data[f"{pfx}sat_max_gas"],  # type: ignore
-                    water_imbibition_flag_grid=data[f"{pfx}sat_water_imb"],  # type: ignore
-                    gas_imbibition_flag_grid=data[f"{pfx}sat_gas_imb"],  # type: ignore
-                )
-
-                thickness_grid = data[f"{pfx}thickness_grid"]
-                return ReservoirModel(
-                    grid_shape=grid_shape,  # type: ignore
-                    cell_dimension=cell_dimension,  # type: ignore
-                    thickness_grid=thickness_grid,  # type: ignore
-                    fluid_properties=fluid_properties,
-                    rock_properties=rock_properties,
-                    rock_fluid_properties=metadata["rock_fluid_properties"],
-                    saturation_history=saturation_history,
-                    boundary_conditions=metadata["boundary_conditions"],
-                    dip_angle=dip_angle,
-                    dip_azimuth=dip_azimuth,
-                )
-
-            def load_injection(pfx: str = prefix) -> RateGrids:
-                injection_data = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}injection_"):
-                        field_name = key.replace(f"{pfx}injection_", "")
-                        injection_data[field_name] = data[key]
-                return RateGrids(**injection_data)
-
-            def load_production(pfx: str = prefix) -> RateGrids:
-                production_data = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}production_"):
-                        field_name = key.replace(f"{pfx}production_", "")
-                        production_data[field_name] = data[key]
-                return RateGrids(**production_data)
-
-            def load_relperm(pfx: str = prefix) -> RelPermGrids:
-                relperm_data = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}relperm_"):
-                        field_name = key.replace(f"{pfx}relperm_", "")
-                        relperm_data[field_name] = data[key]
-                return RelPermGrids(**relperm_data)
-
-            def load_relative_mobilities(pfx: str = prefix) -> RelativeMobilityGrids:
-                mobility_data = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}mobility_"):
-                        field_name = key.replace(f"{pfx}mobility_", "")
-                        mobility_data[field_name] = data[key]
-                return RelativeMobilityGrids(**mobility_data)
-
-            def load_capillary_pressures(pfx: str = prefix) -> CapillaryPressureGrids:
-                capillary_data = {}
-                for key in data.keys():
-                    if key.startswith(f"{pfx}capillary_"):
-                        field_name = key.replace(f"{pfx}capillary_", "")
-                        capillary_data[field_name] = data[key]
-                return CapillaryPressureGrids(**capillary_data)
+            # Load timer state if present
+            timer_state: typing.Optional[TimerState] = None
+            if (
+                f"{prefix}timer_initial_step_size" in data
+                or f"{prefix}timer_elapsed_time" in data
+            ):
+                timer_state = self._load_timer_state(data=data, prefix=prefix)
 
             if lazy:
-                model = Lazy.defer(load_model)
-                injection = Lazy.defer(load_injection)
-                production = Lazy.defer(load_production)
-                relperm = Lazy.defer(load_relperm)
-                relative_mobilities = Lazy.defer(load_relative_mobilities)
-                capillary_pressures = Lazy.defer(load_capillary_pressures)
+                model = Lazy.defer(
+                    lambda pfx=prefix: self._load_model(
+                        data=data, prefix=pfx, metadata=metadata
+                    )
+                )
+                injection = Lazy.defer(
+                    lambda pfx=prefix: self._load_rates(
+                        data=data, prefix=f"{pfx}injection_"
+                    )
+                )
+                production = Lazy.defer(
+                    lambda pfx=prefix: self._load_rates(
+                        data=data, prefix=f"{pfx}production_"
+                    )
+                )
+                relperm = Lazy.defer(
+                    lambda pfx=prefix: self._load_relperm(
+                        data=data, prefix=f"{pfx}relperm_"
+                    )
+                )
+                relative_mobilities = Lazy.defer(
+                    lambda pfx=prefix: self._load_relative_mobilities(
+                        data=data, prefix=f"{pfx}mobility_"
+                    )
+                )
+                capillary_pressures = Lazy.defer(
+                    lambda pfx=prefix: self._load_capillary_pressures(
+                        data=data, prefix=f"{pfx}capillary_"
+                    )
+                )
             else:
-                model = load_model()
-                injection = load_injection()
-                production = load_production()
-                relperm = load_relperm()
-                relative_mobilities = load_relative_mobilities()
-                capillary_pressures = load_capillary_pressures()
+                model = self._load_model(data=data, prefix=prefix, metadata=metadata)
+                injection = self._load_rates(data=data, prefix=f"{prefix}injection_")
+                production = self._load_rates(data=data, prefix=f"{prefix}production_")
+                relperm = self._load_relperm(data=data, prefix=f"{prefix}relperm_")
+                relative_mobilities = self._load_relative_mobilities(
+                    data=data, prefix=f"{prefix}mobility_"
+                )
+                capillary_pressures = self._load_capillary_pressures(
+                    data=data, prefix=f"{prefix}capillary_"
+                )
 
             state = ModelState(
                 step=step,
@@ -1804,11 +2099,215 @@ class NPZStore(StateStore):
                 relative_permeabilities=relperm,
                 relative_mobilities=relative_mobilities,
                 capillary_pressures=capillary_pressures,
+                timer_state=timer_state,
             )
 
             if validate:
                 state = validate_state(state=state)
             yield state
+
+    def _load_model(
+        self, data: typing.Any, prefix: str, metadata: StateMetadata
+    ) -> ReservoirModel:
+        """
+        Load model from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :param metadata: State metadata containing rock_fluid_properties, etc.
+        :return: Reconstructed ReservoirModel
+        """
+        grid_shape = tuple(data[f"{prefix}grid_shape"])  # type: ignore
+        cell_dimension = tuple(data[f"{prefix}cell_dimension"])  # type: ignore
+        dip_angle = float(data[f"{prefix}dip_angle"][0])
+        dip_azimuth = float(data[f"{prefix}dip_azimuth"][0])
+        thickness_grid = data[f"{prefix}thickness_grid"]
+
+        # Load fluid properties
+        fluid_arrays = {}
+        for key in data.keys():
+            if key.startswith(f"{prefix}fluid_"):
+                field_name = key.replace(f"{prefix}fluid_", "")
+                fluid_arrays[field_name] = data[key]
+        fluid_properties = FluidProperties(**fluid_arrays)
+
+        # Load rock properties
+        rock_compressibility = float(data[f"{prefix}rock_compressibility"][0])
+        perm_x = data[f"{prefix}rock_perm_x"]
+        perm_y = data[f"{prefix}rock_perm_y"]
+        perm_z = data[f"{prefix}rock_perm_z"]
+        absolute_permeability = RockPermeability(x=perm_x, y=perm_y, z=perm_z)  # type: ignore
+
+        rock_data = {
+            "compressibility": rock_compressibility,
+            "absolute_permeability": absolute_permeability,
+        }
+        for key in data.keys():
+            if (
+                key.startswith(f"{prefix}rock_")
+                and not key.startswith(f"{prefix}rock_perm")
+                and not key.endswith("compressibility")
+            ):
+                field_name = key.replace(f"{prefix}rock_", "")
+                rock_data[field_name] = data[key]
+        rock_properties = RockProperties(**rock_data)  # type: ignore
+
+        # Load saturation history
+        saturation_history = SaturationHistory(
+            max_water_saturation_grid=data[f"{prefix}sat_max_water"],  # type: ignore
+            max_gas_saturation_grid=data[f"{prefix}sat_max_gas"],  # type: ignore
+            water_imbibition_flag_grid=data[f"{prefix}sat_water_imb"],  # type: ignore
+            gas_imbibition_flag_grid=data[f"{prefix}sat_gas_imb"],  # type: ignore
+        )
+
+        return ReservoirModel(
+            grid_shape=grid_shape,  # type: ignore
+            cell_dimension=cell_dimension,  # type: ignore
+            thickness_grid=thickness_grid,  # type: ignore
+            fluid_properties=fluid_properties,
+            rock_properties=rock_properties,
+            rock_fluid_properties=metadata["rock_fluid_properties"],
+            saturation_history=saturation_history,
+            boundary_conditions=metadata["boundary_conditions"],
+            dip_angle=dip_angle,
+            dip_azimuth=dip_azimuth,
+        )
+
+    def _load_rates(self, data: typing.Any, prefix: str) -> RateGrids:
+        """
+        Load rates from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :return: Reconstructed RateGrids
+        """
+        rate_data = {}
+        for key in data.keys():
+            if key.startswith(prefix):
+                field_name = key.replace(prefix, "")
+                rate_data[field_name] = data[key]
+        return RateGrids(**rate_data)
+
+    def _load_relperm(self, data: typing.Any, prefix: str) -> RelPermGrids:
+        """
+        Load relative permeabilities from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :return: Reconstructed RelPermGrids
+        """
+        relperm_data = {}
+        for key in data.keys():
+            if key.startswith(prefix):
+                field_name = key.replace(prefix, "")
+                relperm_data[field_name] = data[key]
+        return RelPermGrids(**relperm_data)
+
+    def _load_relative_mobilities(
+        self, data: typing.Any, prefix: str
+    ) -> RelativeMobilityGrids:
+        """
+        Load relative mobilities from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :return: Reconstructed RelativeMobilityGrids
+        """
+        mobility_data = {}
+        for key in data.keys():
+            if key.startswith(prefix):
+                field_name = key.replace(prefix, "")
+                mobility_data[field_name] = data[key]
+        return RelativeMobilityGrids(**mobility_data)
+
+    def _load_capillary_pressures(
+        self, data: typing.Any, prefix: str
+    ) -> CapillaryPressureGrids:
+        """
+        Load capillary pressures from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :return: Reconstructed CapillaryPressureGrids
+        """
+        capillary_data = {}
+        for key in data.keys():
+            if key.startswith(prefix):
+                field_name = key.replace(prefix, "")
+                capillary_data[field_name] = data[key]
+        return CapillaryPressureGrids(**capillary_data)
+
+    def _load_timer_state(self, data: typing.Any, prefix: str) -> TimerState:
+        """
+        Load timer state from NPZ data.
+
+        :param data: NPZ file data object
+        :param prefix: Prefix for array keys
+        :return: Reconstructed timer state
+        """
+        timer_state: typing.Dict[str, typing.Any] = {}
+
+        # Load all scalar attributes
+        for key in data.keys():
+            if (
+                key.startswith(f"{prefix}timer_")
+                and not key.startswith(f"{prefix}timer_recent_")
+                and not key.startswith(f"{prefix}timer_failed_")
+            ):
+                field_name = key.replace(f"{prefix}timer_", "")
+                value = data[key][0]
+                # Convert numpy types to Python types
+                if isinstance(value, np.integer):
+                    timer_state[field_name] = int(value)
+                elif isinstance(value, np.floating):
+                    timer_state[field_name] = float(value)
+                elif isinstance(value, np.bool_):
+                    timer_state[field_name] = bool(value)
+                else:
+                    timer_state[field_name] = value
+
+        # Reconstruct recent_metrics
+        metrics_count_key = f"{prefix}timer_recent_metrics_count"
+        if metrics_count_key in data:
+            metrics_count = int(data[metrics_count_key][0])
+            if metrics_count > 0:
+                step_numbers = data[f"{prefix}timer_recent_step_numbers"]
+                step_sizes = data[f"{prefix}timer_recent_step_sizes"]
+                cfls = data[f"{prefix}timer_recent_cfls"]
+                newton_iters = data[f"{prefix}timer_recent_newton_iters"]
+                successes = data[f"{prefix}timer_recent_successes"]
+
+                recent_metrics = []
+                for i in range(metrics_count):
+                    metric = StepMetricsDict(
+                        step_number=int(step_numbers[i]),
+                        step_size=float(step_sizes[i]),
+                        cfl=float(cfls[i]) if cfls[i] >= 0 else None,
+                        newton_iters=int(newton_iters[i])
+                        if newton_iters[i] >= 0
+                        else None,
+                        success=bool(successes[i]),
+                    )
+                    recent_metrics.append(metric)
+                timer_state["recent_metrics"] = recent_metrics
+            else:
+                timer_state["recent_metrics"] = []
+        else:
+            timer_state["recent_metrics"] = []
+
+        # Load failed_step_sizes
+        failed_key = f"{prefix}timer_failed_step_sizes"
+        if failed_key in data:
+            failed_step_sizes_array = data[failed_key]
+            timer_state["failed_step_sizes"] = (
+                failed_step_sizes_array.tolist()
+                if len(failed_step_sizes_array) > 0
+                else []
+            )
+        else:
+            timer_state["failed_step_sizes"] = []
+
+        return typing.cast(TimerState, timer_state)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(filepath={self.filepath})"

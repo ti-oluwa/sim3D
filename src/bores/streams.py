@@ -1,17 +1,16 @@
 """
-Streaming state persistence for memory-efficient simulation workflows.
-
-This module provides the `StateStream` class, which enables streaming `ModelState`
-instances to disk as they're generated, minimizing memory footprint for long simulations.
+Stream model state with optional persistence for memory-efficient simulation workflows.
 """
 
 import logging
-import typing
 from pathlib import Path
+import typing
+from os import PathLike
 
 import psutil
 from typing_extensions import Self
 
+from bores.errors import StreamError
 from bores.states import ModelState, PickleStore, StateStore
 from bores.types import NDimension
 
@@ -39,7 +38,7 @@ class StateStream(typing.Generic[NDimension]):
     Wraps a state generator/iterator and optionally persists states to disk as they're yielded,
     immediately freeing memory. Supports batching for I/O efficiency.
 
-    Benefits:
+    Usage Benefits:
         - Low memory overhead (states persisted immediately after yield)
         - Batch persistence for I/O efficiency
         - Optional validation before save
@@ -89,12 +88,13 @@ class StateStream(typing.Generic[NDimension]):
         batch_size: int = 10,
         validate: bool = True,
         auto_save: bool = True,
+        auto_replay: bool = False,
         lazy_load: bool = True,
         save_predicate: typing.Optional[
             typing.Callable[[ModelState[NDimension]], bool]
         ] = None,
         checkpoint_interval: typing.Optional[int] = None,
-        checkpoint_dir: typing.Optional[Path] = None,
+        checkpoint_dir: typing.Optional[PathLike] = None,
         max_memory_mb: typing.Optional[float] = None,
     ) -> None:
         """
@@ -105,6 +105,8 @@ class StateStream(typing.Generic[NDimension]):
         :param batch_size: Number of states to accumulate before flushing to disk (default: 10)
         :param validate: Validate states before persisting (default: True)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
+        :param auto_replay: If True, automatically replay from store when iterating after consumption.
+            If False, raises `StreamError` instead (default: False, explicit replay required)
         :param lazy_load: When replaying from store, use lazy loading if supported (default: True)
         :param save_predicate: Optional function to filter which states to save.
             If provided, only states where save_predicate(state) returns True are saved.
@@ -112,18 +114,42 @@ class StateStream(typing.Generic[NDimension]):
         :param checkpoint_interval: Optional interval for checkpointing. If provided,
             creates a checkpoint every N states for crash recovery. Example: 100
         :param checkpoint_dir: Directory to save checkpoints. Required if `checkpoint_interval` is set.
-        :param max_memory_mb: Optional memory limit in MB. If current process memory
-            exceeds this limit, batch is flushed immediately. Example: 1000.0
+        :param max_memory_mb: Optional soft memory limit in MB. If current process memory
+            exceeds this limit, batch is flushed immediately. Note: This is checked only
+            when deciding whether to flush, so actual memory usage may exceed this limit
+            between checks. Example: 1000.0
         """
         self.states = states
         self.store = store
         self.batch_size = batch_size
         self.validate = validate
         self.auto_save = auto_save
+        self.auto_replay = auto_replay
         self.lazy_load = lazy_load
         self.save_predicate = save_predicate
         self.checkpoint_interval = checkpoint_interval
         self.max_memory_mb = max_memory_mb
+
+        # Warn if store-dependent features are configured without a store
+        if self.store is None:
+            if self.validate:
+                logger.warning(
+                    "Validation is enabled but no store provided. States will be validated "
+                    "but not persisted."
+                )
+            if self.auto_save:
+                logger.debug(
+                    "auto_save=True but no store provided. This setting has no effect."
+                )
+            if self.save_predicate is not None:
+                logger.warning(
+                    "save_predicate provided but no store configured. Predicate will be ignored."
+                )
+            if self.max_memory_mb is not None:
+                logger.warning(
+                    "max_memory_mb provided but no store configured. Memory-based flushing "
+                    "will not occur without persistence."
+                )
 
         self._batch: typing.List[ModelState[NDimension]] = []
         self._num_yielded: int = 0
@@ -131,11 +157,14 @@ class StateStream(typing.Generic[NDimension]):
         self._num_checkpoints: int = 0
         self._started: bool = False
         self._consumed: bool = False
-        self._checkpoint_dir: typing.Optional[Path] = checkpoint_dir
+        self._checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None else None
+        )
 
-        if self.checkpoint_interval is not None and self.store is not None:
-            if not self._checkpoint_dir:
-                raise ValueError(
+        # Validate checkpoint configuration
+        if self.checkpoint_interval is not None:
+            if self._checkpoint_dir is None:
+                raise StreamError(
                     "`checkpoint_dir` must be provided when `checkpoint_interval` is set"
                 )
             self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -154,30 +183,39 @@ class StateStream(typing.Generic[NDimension]):
             4. Net effect: Only `batch_size` states stay in memory at once
 
         Note: If the underlying iterable is a generator, it can only be consumed once.
-        After the first iteration, use `replay()` to load states from the store, or
-        re-create the stream with a fresh iterable.
+        After the first iteration:
+            - If `auto_replay=True` and a store exists, automatically replays from store
+            - If `auto_replay=False`, raises `StreamError` (use `replay()` explicitly)
+            - If no store exists, raises `StreamError` (create fresh stream)
 
         :return: Iterator over `ModelState` instances
-        :raises RuntimeError: If trying to iterate again after the iterable has been exhausted
+        :raises `StreamError`: If trying to iterate again after exhaustion (when auto_replay=False or no store)
         """
         # Check if we've already consumed the iterable
         if self._consumed:
-            if self.store is not None:
-                logger.warning(
-                    "Stream already consumed. Using `replay()` to load states from store. "
-                    "For better control, call `replay()` explicitly."
+            if self.auto_replay and self.store is not None:
+                logger.debug(
+                    "Stream already consumed. Auto-replaying from store. "
+                    "Set auto_replay=False to disable this behavior."
                 )
                 yield from self.replay()
                 return
-            else:
-                raise RuntimeError(
+            elif self.store is not None:
+                raise StreamError(
                     "Cannot iterate again: the underlying iterable has been exhausted. "
-                    "Either provide a fresh iterable or use `replay()` to load from store."
+                    "Use `replay()` to load from store or set auto_replay=True."
+                )
+            else:
+                raise StreamError(
+                    "Cannot iterate again: the underlying iterable has been exhausted. "
+                    "Either provide a fresh iterable or use a store with replay capability."
                 )
 
         if self.store is None:
             logger.info("No store provided, streaming without persistence")
-            yield from self.states
+            for state in self.states:
+                self._num_yielded += 1
+                yield state
             self._consumed = True
             return
 
@@ -246,10 +284,100 @@ class StateStream(typing.Generic[NDimension]):
         if exc_type is None:
             logger.info(
                 f"Stream complete: {self._num_saved} states saved, "
-                f"{self._num_checkpoints} checkpoints created"
+                f"{self._num_checkpoints} checkpoints created."
             )
         else:
             logger.error(f"Stream interrupted at {self._num_saved} states: {exc_val}")
+
+    def collect(self, *steps: int) -> typing.List[ModelState[NDimension]]:
+        """
+        Collect states from the stream into a list.
+
+        Note: This loads all states (or filtered states) into memory at once, which defeats
+        the memory-efficient purpose of streaming. Use sparingly for small datasets or when
+        you specifically need all states in memory for processing.
+
+        :param steps: Optional step numbers to filter. If provided, only states with
+            matching step numbers are collected. Example: collect(0, 10, 20)
+        :return: List of collected ModelState instances
+
+        Example:
+        ```python
+        # Collect all states (memory-intensive!)
+        all_states = stream.collect()
+
+        # Collect specific steps only
+        initial_and_final = stream.collect(0, 100, 200)
+
+        # Better alternative for large datasets - iterate instead:
+        for state in stream:
+            if state.step in {0, 100, 200}:
+                process(state)
+        ```
+        """
+        if steps:
+            logger.debug(f"Collecting states from stream (filtering steps: {steps})")
+            # Convert to set for O(1) lookup and track remaining steps
+            remaining_steps = set(steps)
+        else:
+            logger.warning(
+                "Collecting entire stream into memory. This may consume significant memory "
+                "for large simulations. Consider iterating instead if memory is a concern."
+            )
+            remaining_steps = None
+
+        states = []
+        for state in self:
+            if remaining_steps is not None:
+                if state.step in remaining_steps:
+                    states.append(state)
+                    remaining_steps.remove(state.step)
+                    # Early exit if we've collected all requested steps
+                    if not remaining_steps:
+                        logger.debug(
+                            f"Collected all {len(steps)} requested steps, stopping early"
+                        )
+                        break
+            else:
+                states.append(state)
+
+        logger.debug(f"Collected {len(states)} states into memory")
+        return states
+
+    def consume(self) -> None:
+        """
+        Consume the entire stream without yielding states to the caller.
+
+        This method iterates through all states, triggering any configured side effects
+        (persistence, checkpointing, validation) without returning states. Useful when
+        you only want the side effects (saving to store, creating checkpoints) without
+        processing individual states.
+
+        The stream's internal mechanisms (__iter__, batching, flushing, checkpointing)
+        still occur normally - only the yielding to caller is skipped.
+
+        Example:
+        ```python
+        # Just save all states to disk without processing them
+        stream = StateStream(states=simulation(), store=store)
+        stream.consume()  # States saved, nothing returned
+
+        # Create checkpoints without holding states in memory
+        stream = StateStream(
+            states=simulation(),
+            checkpoint_interval=100,
+            checkpoint_dir=Path("checkpoints")
+        )
+        stream.consume()  # Checkpoints created, stream exhausted
+        ```
+
+        Note: After calling consume(), the stream is exhausted. Use replay() or set
+        auto_replay=True to iterate again.
+        """
+        logger.debug("Consuming stream (no yield to caller)")
+        for _ in self:
+            pass  # Iterate through, triggering side effects but not yielding
+        logger.debug(f"Stream consumed: {self._num_yielded} states processed")
 
     def replay(self) -> typing.Iterator[ModelState[NDimension]]:
         """
@@ -260,12 +388,16 @@ class StateStream(typing.Generic[NDimension]):
             - Resuming from checkpoint
             - Debugging specific timesteps
 
+        Note: Replaying continues to increment `num_yielded` counter. If you replay
+        100 states after initially streaming 100 states, `num_yielded` will be 200.
+        This tracks total states yielded across all operations.
+
         :return: Iterator over loaded ModelState instances
-        :raises ValueError: If no store provided
-        :raises FileNotFoundError: If store file doesn't exist
+        :raises `StreamError`: If no store provided
+        :raises `StorageError`: If store file doesn't exist or is corrupted
         """
         if self.store is None:
-            raise ValueError("Cannot replay: no store provided")
+            raise StreamError("Cannot replay: no store provided")
 
         logger.debug(f"Replaying states from {self.store}")
 
@@ -282,10 +414,10 @@ class StateStream(typing.Generic[NDimension]):
         Writes all states in the current batch to the store and clears the buffer.
         Logs progress and handles any validation errors.
 
-        :raises RuntimeError: If no store provided
+        :raises `StreamError`: If no store provided
         """
         if self.store is None:
-            raise RuntimeError("Cannot flush: no store provided")
+            raise StreamError("Cannot flush: no store provided")
 
         if not self._batch:
             logger.debug("Flush called but batch is empty")
@@ -309,6 +441,19 @@ class StateStream(typing.Generic[NDimension]):
             raise
         finally:
             self._batch.clear()
+
+    def get_pending_batch(self) -> typing.List[ModelState[NDimension]]:
+        """
+        Get a copy of states in the current batch (not yet flushed to store).
+
+        Useful for:
+            - Inspecting what will be saved on next flush
+            - Recovering states if an error occurs before flush
+            - Debugging batch accumulation behavior
+
+        :return: Copy of the current batch buffer (safe to modify without affecting stream)
+        """
+        return self._batch.copy()
 
     def _should_save(self, state: ModelState[NDimension]) -> bool:
         """
@@ -341,8 +486,7 @@ class StateStream(typing.Generic[NDimension]):
                     f"Memory limit reached ({current_memory_mb:.1f} MB > "
                     f"{self.max_memory_mb:.1f} MB), flushing batch early"
                 )
-                return True
-
+                return True     
         return False
 
     def _should_checkpoint(self, state: ModelState[NDimension]) -> bool:
@@ -365,7 +509,7 @@ class StateStream(typing.Generic[NDimension]):
 
         :param state: State to checkpoint
         """
-        if self._checkpoint_dir is None or self.store is None:
+        if self._checkpoint_dir is None:
             return
 
         checkpoint_path = self._checkpoint_dir / f"checkpoint_{state.step:06d}.pkl"
@@ -388,11 +532,11 @@ class StateStream(typing.Generic[NDimension]):
 
         :param step: Step number of checkpoint to load
         :return: Loaded ModelState from checkpoint
-        :raises `ValueError`: If checkpointing not configured
+        :raises `StreamError`: If checkpointing not configured
         :raises `FileNotFoundError`: If checkpoint doesn't exist
         """
         if self._checkpoint_dir is None:
-            raise ValueError("Checkpointing not configured (no checkpoint_interval)")
+            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
 
         checkpoint_files = self._checkpoint_dir.glob(f"checkpoint_{step:06d}.pkl*")
         checkpoint_path = next(checkpoint_files, None)
@@ -402,9 +546,9 @@ class StateStream(typing.Generic[NDimension]):
         checkpoint_store = PickleStore(filepath=checkpoint_path)
         state = next(checkpoint_store.load(validate=False), None)
         if state is None:
-            raise ValueError(f"Checkpoint file is empty: {checkpoint_path}")
+            raise StreamError(f"Checkpoint file is empty: {checkpoint_path}")
 
-        logger.info(f"Loaded checkpoint from step {step}")
+        logger.debug(f"Loaded checkpoint from step {step}")
         return state
 
     def checkpoints(self) -> typing.Generator[ModelState[NDimension], None, None]:
@@ -412,14 +556,14 @@ class StateStream(typing.Generic[NDimension]):
         Load all available checkpoints in order.
 
         :return: Generator yielding ModelState instances from checkpoints
-        :raises `ValueError`: If checkpointing not configured
+        :raises `StreamError`: If checkpointing not configured
         """
         if self._checkpoint_dir is None:
-            raise ValueError("Checkpointing not configured (no checkpoint_interval)")
+            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
 
         checkpoint_files = sorted(
             self._checkpoint_dir.glob("checkpoint_*.pkl*"),
-            key=lambda p: int(p.stem.split("_")[1]),
+            key=lambda p: int(p.stem.split("_")[1].split(".")[0]),
         )
         for checkpoint_path in checkpoint_files:
             checkpoint_store = PickleStore(filepath=checkpoint_path)
@@ -434,10 +578,10 @@ class StateStream(typing.Generic[NDimension]):
         List all available checkpoint step numbers.
 
         :return: Sorted list of checkpoint step numbers
-        :raises `ValueError`: If checkpointing not configured
+        :raises `StreamError`: If checkpointing not configured
         """
         if self._checkpoint_dir is None:
-            raise ValueError("Checkpointing not configured (no checkpoint_interval)")
+            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
 
         if not self._checkpoint_dir.exists():
             return []
@@ -445,7 +589,7 @@ class StateStream(typing.Generic[NDimension]):
         checkpoints = []
         for path in self._checkpoint_dir.glob("checkpoint_*.pkl*"):
             try:
-                step = int(path.stem.split("_")[1])
+                step = int(path.stem.split("_")[1].split(".")[0])
                 checkpoints.append(step)
             except (ValueError, IndexError):
                 logger.warning(f"Invalid checkpoint filename: {path.name}")

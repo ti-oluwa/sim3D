@@ -157,7 +157,7 @@ class Config:
     """Physical and conversion constants used in the simulation."""
     warn_well_anomalies: bool = True
     """Whether to warn about anomalous flow rates during the simulation."""
-    log_interval: int = attrs.field(default=3, validator=attrs.validators.ge(1))
+    log_interval: int = attrs.field(default=5, validator=attrs.validators.ge(0))
     """Interval (in time steps) at which to log simulation progress."""
     preconditioner: typing.Optional[Preconditioner] = "ilu"
     """Preconditioner to use for iterative solvers."""

@@ -357,6 +357,24 @@ class Lazy(typing.Generic[T]):
             object.__setattr__(self, "_cached", True)
         return typing.cast(T, self._value)
 
+    def __getattr__(self, item: str) -> typing.Any:
+        if item in {"_factory", "_cached", "_value"}:
+            return object.__getattribute__(self, item)
+        value = self.get()
+        return getattr(value, item)
+
+    def __call__(self, *args, **kwargs) -> typing.Any:
+        value = self.get()
+        return value(*args, **kwargs)  # type: ignore
+
+    def __getitem__(self, item: typing.Any) -> typing.Any:
+        value = self.get()
+        return value[item]  # type: ignore
+
+    def __setitem__(self, key: typing.Any, value: typing.Any) -> None:
+        val = self.get()
+        val[key] = value  # type: ignore
+
     def is_evaluated(self) -> bool:
         """Check if the lazy value has been evaluated."""
         return self._cached
@@ -393,4 +411,3 @@ class LazyField(typing.Generic[T]):
         else:
             lazy_obj = Lazy.of(value)
         instance.__dict__[self.name] = lazy_obj
-        

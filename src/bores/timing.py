@@ -1,13 +1,16 @@
+"""Simulation time management with smart and adaptive time stepping."""
+
 from collections import deque
 from datetime import timedelta
 import logging
 import typing
 
 import attrs
+from typing_extensions import Self
 
 from bores.errors import TimingError, ValidationError
 
-__all__ = ["Time", "Timer"]
+__all__ = ["Time", "Timer", "TimerState", "StepMetricsDict"]
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,47 @@ def Time(
     return delta.total_seconds()
 
 
+class StepMetricsDict(typing.TypedDict):
+    """Dictionary representation of step metrics."""
+
+    step_number: int
+    step_size: float
+    cfl: typing.Optional[float]
+    newton_iters: typing.Optional[int]
+    success: bool
+
+
+class TimerState(typing.TypedDict):
+    """Complete state of a timer instance for serialization."""
+
+    # Configuration parameters
+    initial_step_size: float
+    max_step_size: float
+    min_step_size: float
+    simulation_time: float
+    max_cfl_number: float
+    cfl_safety_margin: float
+    ramp_up_factor: typing.Optional[float]
+    max_growth_per_step: float
+    step_size_smoothing: float
+    growth_cooldown_steps: int
+    failure_memory_window: int
+    metrics_history_size: int
+    use_constant_step_size: bool
+    # Current state
+    elapsed_time: float
+    step: int
+    step_size: float
+    next_step_size: float
+    ema_step_size: float
+    last_step_failed: bool
+    rejection_count: int
+    steps_since_last_failure: int
+    # History
+    recent_metrics: typing.List[StepMetricsDict]
+    failed_step_sizes: typing.List[float]
+
+
 @attrs.frozen(slots=True)
 class StepMetrics:
     """Metrics for a single time step."""
@@ -56,7 +100,7 @@ class StepMetrics:
 @attrs.define
 class Timer:
     """
-    Simulation time manager for adaptive time stepping with enhanced intelligence.
+    Simulation time manager for smart and adaptive time stepping.
     """
 
     initial_step_size: float
@@ -412,3 +456,157 @@ class Timer:
             f"at elapsed time {self.elapsed_time}. Next size: {self.next_step_size:.6f}"
         )
         return self.next_step_size
+
+    def dump_state(self) -> TimerState:
+        """
+        Serialize the current timer state to a dictionary.
+
+        Returns all the internal state needed to reconstruct this timer's
+        exact state at this point in time. Useful for checkpointing, saving
+        simulation progress, or debugging.
+
+        :return: `TimerState` dictionary containing all timer state variables
+
+        Example:
+        ```python
+        timer = Timer(initial_step_size=0.1, simulation_time=1000.0)
+        # ... run simulation for a while ...
+
+        # Save timer state
+        timer_state = timer.dump_state()
+        save_to_file(timer_state, "timer_state.json")
+
+        # Later: restore timer
+        timer_state = load_from_file("timer_state.json")
+        timer = Timer.load_state(timer_state)
+        ```
+        """
+        return {
+            # Configuration parameters
+            "initial_step_size": self.initial_step_size,
+            "max_step_size": self.max_step_size,
+            "min_step_size": self.min_step_size,
+            "simulation_time": self.simulation_time,
+            "max_cfl_number": self.max_cfl_number,
+            "cfl_safety_margin": self.cfl_safety_margin,
+            "ramp_up_factor": self.ramp_up_factor,
+            "max_growth_per_step": self.max_growth_per_step,
+            "step_size_smoothing": self.step_size_smoothing,
+            "growth_cooldown_steps": self.growth_cooldown_steps,
+            "failure_memory_window": self.failure_memory_window,
+            "metrics_history_size": self.metrics_history_size,
+            "use_constant_step_size": self.use_constant_step_size,
+            # Current state
+            "elapsed_time": self.elapsed_time,
+            "step": self.step,
+            "step_size": self.step_size,
+            "next_step_size": self.next_step_size,
+            "ema_step_size": self.ema_step_size,
+            "last_step_failed": self.last_step_failed,
+            "rejection_count": self.rejection_count,
+            "steps_since_last_failure": self.steps_since_last_failure,
+            # History (convert deques to lists for serialization)
+            "recent_metrics": [
+                typing.cast(StepMetricsDict, attrs.asdict(m))
+                for m in self.recent_metrics
+            ],
+            "failed_step_sizes": list(self.failed_step_sizes),
+        }
+
+    @classmethod
+    def load_state(cls, state: TimerState) -> Self:
+        """
+        Reconstruct a timer from a previously saved state dictionary.
+
+        Creates a new timer instance and restores all internal state from
+        the provided dictionary. This is the inverse of `dump_state()`.
+
+        :param state: `TimerState` dictionary containing timer state (from `dump_state()`)
+        :return: A new timer instance with the restored state
+        :raises `ValidationError`: If state dictionary is invalid or incomplete
+
+        Example:
+        ```python
+        # Save timer state during simulation
+        timer_state = timer.dump_state()
+
+        # Later: restore and continue
+        timer = Timer.load_state(timer_state)
+        for state in run(model, timer, wells):
+            process(state)
+        ```
+        """
+        # Validate required keys
+        required_keys = {
+            "initial_step_size",
+            "max_step_size",
+            "min_step_size",
+            "simulation_time",
+            "elapsed_time",
+            "step",
+            "step_size",
+        }
+        missing_keys = required_keys - set(state.keys())
+        if missing_keys:
+            raise ValidationError(f"Timer state missing required keys: {missing_keys}")
+
+        # Extract configuration parameters
+        config_params = {
+            "initial_step_size": state["initial_step_size"],
+            "max_step_size": state["max_step_size"],
+            "min_step_size": state["min_step_size"],
+            "simulation_time": state["simulation_time"],
+            "max_cfl_number": state.get("max_cfl_number", 1.0),
+            "cfl_safety_margin": state.get("cfl_safety_margin", 0.9),
+            "ramp_up_factor": state.get("ramp_up_factor"),
+            "max_growth_per_step": state.get("max_growth_per_step", 1.5),
+            "step_size_smoothing": state.get("step_size_smoothing", 0.7),
+            "growth_cooldown_steps": state.get("growth_cooldown_steps", 5),
+            "failure_memory_window": state.get("failure_memory_window", 10),
+            "metrics_history_size": state.get("metrics_history_size", 20),
+            "use_constant_step_size": state.get("use_constant_step_size", False),
+        }
+
+        # Create new instance
+        timer = cls(**config_params)
+
+        # Restore runtime state (use object.__setattr__ since timer may be frozen)
+        object.__setattr__(timer, "elapsed_time", state["elapsed_time"])
+        object.__setattr__(timer, "step", state["step"])
+        object.__setattr__(timer, "step_size", state["step_size"])
+        object.__setattr__(
+            timer, "next_step_size", state.get("next_step_size", state["step_size"])
+        )
+        object.__setattr__(
+            timer, "ema_step_size", state.get("ema_step_size", state["step_size"])
+        )
+        object.__setattr__(
+            timer, "last_step_failed", state.get("last_step_failed", False)
+        )
+        object.__setattr__(timer, "rejection_count", state.get("rejection_count", 0))
+        object.__setattr__(
+            timer,
+            "steps_since_last_failure",
+            state.get("steps_since_last_failure", 0),
+        )
+
+        # Restore history (reconstruct deques)
+        recent_metrics_data = state.get("recent_metrics", [])
+        recent_metrics = deque(
+            [StepMetrics(**m) for m in recent_metrics_data],
+            maxlen=timer.metrics_history_size,
+        )
+        object.__setattr__(timer, "recent_metrics", recent_metrics)
+
+        failed_step_sizes_data = state.get("failed_step_sizes", [])
+        failed_step_sizes = deque(
+            failed_step_sizes_data, maxlen=timer.failure_memory_window
+        )
+        object.__setattr__(timer, "failed_step_sizes", failed_step_sizes)
+
+        logger.info(
+            f"Timer state loaded: step {timer.step}, "
+            f"elapsed time {timer.elapsed_time:.2f}s, "
+            f"step size {timer.step_size:.6f}s"
+        )
+        return timer

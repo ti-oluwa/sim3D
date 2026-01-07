@@ -838,7 +838,7 @@ def run(
     if wells is None:
         wells = Wells()
 
-    logger.info("Starting reservoir simulation workflow...")
+    logger.info("Starting simulation workflow...")
 
     cell_dimension = model.cell_dimension
     boundary_conditions = model.boundary_conditions
@@ -911,9 +911,7 @@ def run(
         )
 
         # Unpad the fluid properties back to the original grid shape for model state snapshots
-        model = attrs.evolve(
-            model, fluid_properties=padded_fluid_properties.unpad(pad_width=1)
-        )
+        model = model.evolve(fluid_properties=padded_fluid_properties.unpad(pad_width=1))
         padded_water_saturation_grid = padded_fluid_properties.water_saturation_grid
         padded_oil_saturation_grid = padded_fluid_properties.oil_saturation_grid
         padded_gas_saturation_grid = padded_fluid_properties.gas_saturation_grid
@@ -967,7 +965,7 @@ def run(
         water_production_grid = zeros_grid.copy()
         gas_production_grid = zeros_grid.copy()
         state = ModelState(
-            step=0,
+            step=timer.step,
             step_size=timer.step_size,
             time=timer.elapsed_time,
             model=model,
@@ -985,16 +983,16 @@ def run(
                 water=water_production_grid,
                 gas=gas_production_grid,
             ),
+            timer_state=timer.dump_state(),
         )
 
-        # Yield the Initial model state
+        # Yield the initial model state
         logger.debug("Yielding initial model state")
         yield state
 
         no_flow_pressure_bc = isinstance(
             boundary_conditions["pressure"], type(default_bc)
         )
-
         while not timer.done():
             # WE FIRST PROPOSE THE TIME STEP SIZE FOR THE NEXT STEP
             # `timer.step` is still the last accepted step
@@ -1165,14 +1163,15 @@ def run(
                     # and we now agree that this is a new step
                     logger.debug(f"Time step {new_step} completed successfully.")
                     timer.accept_step(step_size=step_size, **result.accept_kwargs)
-                    log_progress(
-                        step=timer.step,
-                        step_size=step_size,
-                        time_elapsed=timer.elapsed_time,
-                        total_time=timer.simulation_time,
-                        is_last_step=timer.is_last_step,
-                        interval=config.log_interval,
-                    )
+                    if config.log_interval:
+                        log_progress(
+                            step=timer.step,
+                            step_size=step_size,
+                            time_elapsed=timer.elapsed_time,
+                            total_time=timer.simulation_time,
+                            is_last_step=timer.is_last_step,
+                            interval=config.log_interval,
+                        )
                 else:
                     # REJECT AND ADJUST THE TIME STEP SIZE AND RETRY
                     logger.warning(
@@ -1237,8 +1236,7 @@ def run(
                     # Capture the current state of the wells
                     wells_snapshot = copy.deepcopy(wells)
                     # Capture the current model with updated fluid properties
-                    model_snapshot = attrs.evolve(
-                        model,
+                    model_snapshot = model.evolve(
                         fluid_properties=padded_fluid_properties.unpad(pad_width=1),
                         rock_properties=padded_rock_properties.unpad(pad_width=1),
                         saturation_history=padded_saturation_history.unpad(pad_width=1),
@@ -1261,6 +1259,7 @@ def run(
                         capillary_pressures=capillary_pressure_grids,
                         injection=injection_rates,
                         production=production_rates,
+                        timer_state=timer.dump_state(),
                     )
                     logger.debug("Yielding model state snapshot")
                     yield state

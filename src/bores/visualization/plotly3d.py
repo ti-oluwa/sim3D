@@ -10,7 +10,6 @@ import itertools
 import logging
 import typing
 
-from attrs import asdict
 import numpy as np
 import plotly.graph_objects as go
 from typing_extensions import TypedDict, Unpack
@@ -3627,7 +3626,7 @@ class DataVisualizer:
         :raises AttributeError: If property is not found in reservoir model properties
         :raises TypeError: If property is not a numpy array
         """
-        state = asdict(model_state, recurse=False)
+        state = model_state.asdict()
         name_parts = name.split(".")
         data = None
         if len(name_parts) == 1:
@@ -3650,10 +3649,10 @@ class DataVisualizer:
             raise AttributeError(
                 f"Property '{name}' not found on model state or property value is invalid."
             )
-        elif isinstance(data, (list, tuple)):
+        elif not isinstance(data, np.ndarray):
             data = np.array(data, dtype=np.float64)
 
-        if not isinstance(data, np.ndarray) or data.ndim != 3:
+        if data.ndim != 3:
             raise TypeError(f"Property '{name}' is not a 3 dimensional array.")
         return typing.cast(ThreeDimensionalGrid, data)
 
@@ -3880,7 +3879,7 @@ class DataVisualizer:
                 logger.warning(
                     "show_wells=True ignored: wells can only be shown with ModelState data"
                 )
-            elif source.exists():  # type: ignore
+            elif source.wells_exists():  # type: ignore
                 # Extract z_scale for well rendering (default to 1.0 if not specified)
                 z_scale = kwargs.get("z_scale", 1.0)
 

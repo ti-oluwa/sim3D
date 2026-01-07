@@ -14,10 +14,12 @@ def _():
 
     bores.image_config(scale=3)
 
-    DEPLETED_MODEL_STATES = (
-        Path.cwd() / "scenarios/states/stabilization_coarse.pkl.xz"
+    store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/stabilization_coarse.zarr",
+        metadata_dir=Path.cwd()
+        / "scenarios/states/stabilization_coarse_metadata/",
     )
-    states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
+    states = list(store.load(validate=False))
     return bores, itertools, np, states
 
 

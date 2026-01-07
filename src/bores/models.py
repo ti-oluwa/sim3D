@@ -7,18 +7,21 @@ import numpy as np
 from typing_extensions import Self
 
 from bores.boundary_conditions import BoundaryConditions
+from bores.errors import ValidationError
 from bores.grids.base import (
     PadMixin,
     apply_structural_dip,
     build_depth_grid,
     build_elevation_grid,
 )
+from bores.types import T
 from bores.types import (
     CapillaryPressureTable,
     NDimension,
     NDimensionalGrid,
     RelativePermeabilityTable,
 )
+from bores.utils import Lazy, LazyField
 
 
 __all__ = [
@@ -302,40 +305,82 @@ class SaturationHistory(PadMixin[NDimension]):
         return attrs.fields(type(self))
 
 
-@attrs.frozen(slots=True)
+_Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
+
+
 class ReservoirModel(typing.Generic[NDimension]):
     """Models a reservoir in N-dimensional space for simulation."""
 
-    grid_shape: NDimension
-    """Shape of the reservoir grid (num_cells_x, num_cells_y, num_cells_z)."""
-    cell_dimension: typing.Tuple[float, float]
-    """Size of each cell in the grid (cell_size_x, cell_size_y) in ft."""
-    thickness_grid: NDimensionalGrid[NDimension]
-    """N-dimensional numpy array representing the thickness of each cell in the reservoir (ft)."""
-    fluid_properties: FluidProperties[NDimension]
+    fluid_properties = LazyField[FluidProperties[NDimension]]()
     """Fluid properties of the reservoir model."""
-    rock_properties: RockProperties[NDimension]
+    rock_properties = LazyField[RockProperties[NDimension]]()
     """Rock properties of the reservoir model."""
-    rock_fluid_properties: RockFluidProperties
+    rock_fluid_properties = LazyField[RockFluidProperties]()
     """Rock-fluid properties of the reservoir model."""
-    saturation_history: SaturationHistory[NDimension]
+    saturation_history = LazyField[SaturationHistory[NDimension]]()
     """Tracks historical maximum saturations and displacement regimes in the reservoir."""
-    boundary_conditions: BoundaryConditions = attrs.field(factory=BoundaryConditions)
+    boundary_conditions = LazyField[BoundaryConditions]()
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
-    dip_angle: float = attrs.field(
-        default=0.0,
-        validator=attrs.validators.and_(
-            attrs.validators.ge(0.0), attrs.validators.le(90.0)
-        ),
-    )
-    """Dip angle of the reservoir in degrees (0 = horizontal, 90 = vertical)."""
-    dip_azimuth: float = attrs.field(
-        default=0.0,
-        validator=attrs.validators.and_(
-            attrs.validators.ge(0.0), attrs.validators.lt(360.0)
-        ),
-    )
-    """Dip azimuth of the reservoir in degrees (0 = North, 90 = East, 180 = South, 270 = West)."""
+
+    def __init__(
+        self,
+        grid_shape: NDimension,
+        cell_dimension: typing.Tuple[float, float],
+        thickness_grid: NDimensionalGrid[NDimension],
+        fluid_properties: _Lazy[FluidProperties[NDimension]],
+        rock_properties: _Lazy[RockProperties[NDimension]],
+        rock_fluid_properties: _Lazy[RockFluidProperties],
+        saturation_history: _Lazy[SaturationHistory[NDimension]],
+        boundary_conditions: typing.Optional[
+            _Lazy[BoundaryConditions[NDimension]]
+        ] = None,
+        dip_angle: float = 0.0,
+        dip_azimuth: float = 0.0,
+    ) -> None:
+        """
+        Initialize the reservoir model.
+
+        :param grid_shape: Shape of the reservoir grid (num_cells_x, num_cells_y, num_cells_z)
+        :param cell_dimension: Size of each cell in the grid (cell_size_x, cell_size_y) in ft
+        :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft)
+        :param fluid_properties: Fluid properties or lazy loader for fluid properties
+        :param rock_properties: Rock properties or lazy loader for rock properties
+        :param rock_fluid_properties: Rock-fluid properties or lazy loader
+        :param saturation_history: Saturation history or lazy loader
+        :param boundary_conditions: Boundary conditions or lazy loader for boundary conditions
+        :param dip_angle: Dip angle of the reservoir in degrees (0 = horizontal, 90 = vertical)
+        :param dip_azimuth: Dip azimuth of the reservoir in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+        """
+        if not (0.0 <= dip_angle <= 90.0):
+            raise ValidationError(
+                f"dip_angle must be between 0.0 and 90.0, got {dip_angle}"
+            )
+        if not (0.0 <= dip_azimuth < 360.0):
+            raise ValidationError(
+                f"dip_azimuth must be between 0.0 and 360.0, got {dip_azimuth}"
+            )
+
+        self.grid_shape = grid_shape
+        self.cell_dimension = cell_dimension
+        self.thickness_grid = thickness_grid
+        self.fluid_properties = typing.cast(
+            FluidProperties[NDimension], fluid_properties
+        )
+        self.rock_properties = typing.cast(RockProperties[NDimension], rock_properties)
+        self.rock_fluid_properties = typing.cast(
+            RockFluidProperties, rock_fluid_properties
+        )
+        self.saturation_history = typing.cast(
+            SaturationHistory[NDimension], saturation_history
+        )
+        self.boundary_conditions = typing.cast(
+            BoundaryConditions,
+            boundary_conditions
+            if boundary_conditions is not None
+            else BoundaryConditions(),
+        )
+        self.dip_angle = dip_angle
+        self.dip_azimuth = dip_azimuth
 
     @property
     def dimensions(self) -> int:
@@ -350,6 +395,27 @@ class ReservoirModel(typing.Generic[NDimension]):
             * np.prod(self.cell_dimension)
             * self.thickness_grid.sum()
         )
+
+    def evolve(self, **kwargs: typing.Any) -> Self:
+        """
+        Create a new `ReservoirModel` instance with updated attributes.
+
+        :param kwargs: Attributes to update in the new reservoir model.
+        :return: New `ReservoirModel` instance with updated attributes.
+        """
+        attrs = {
+            "grid_shape": self.grid_shape,
+            "cell_dimension": self.cell_dimension,
+            "thickness_grid": self.thickness_grid,
+            "fluid_properties": self.fluid_properties,
+            "rock_properties": self.rock_properties,
+            "rock_fluid_properties": self.rock_fluid_properties,
+            "saturation_history": self.saturation_history,
+            "boundary_conditions": self.boundary_conditions,
+            "dip_angle": self.dip_angle,
+            "dip_azimuth": self.dip_azimuth,
+        }
+        return type(self)(**{**attrs, **kwargs})
 
     def get_elevation_grid(
         self, apply_dip: bool = False

@@ -1,3 +1,6 @@
+"""BORES-specific error classes."""
+
+
 class BORESError(Exception):
     """Base class for all BORES-related errors."""
 
@@ -42,5 +45,17 @@ class TimingError(SimulationError):
 
 class StopSimulation(Exception):
     """Raised to signal that the simulation should stop gracefully."""
+
+    pass
+
+
+class StorageError(BORESError):
+    """Raised when there is an error related to data storage operations."""
+
+    pass
+
+
+class StreamError(BORESError):
+    """Raised when there is an error related to streaming operations."""
 
     pass

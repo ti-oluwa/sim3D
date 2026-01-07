@@ -18,14 +18,8 @@ def _():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
-    store = bores.NPZStore(
-        filepath=Path.cwd() / "scenarios/states/stabilization_coarse.npz",
-        metadata_dir=Path.cwd() / "scenarios/states/stabilization_coarse_metadata/",
-    )
-
 
     def main():
-        # Grid dimensions - typical field scale
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
         grid_shape = typing.cast(
             bores.ThreeDimensions,
@@ -311,24 +305,46 @@ def _():
             pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
-        return bores.StateStream(states, store=store, checkpoint_interval=10, checkpoint_dir=Path.cwd()/"checkpoints")
-    return main, store
+        return states
+    return Path, bores, main
 
 
 @app.cell
-def _(main):
-    stream = main()
+def _(Path, bores):
+    stabilization_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/stabilization.zarr",
+        metadata_dir=Path.cwd()
+        / "scenarios/states/stabilization_metadata",
+    )
+    return (stabilization_store,)
 
+
+@app.cell
+def _(Path, bores, main, stabilization_store):
+    stream = bores.StateStream(
+        main(),
+        store=stabilization_store,
+        checkpoint_interval=10,
+        checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
+        auto_replay=True,
+    )
+
+    last_state = None
     with stream:
-        states = list(stream)
-    return
+        for state in stream:
+            last_state = state
+        
+    return (last_state,)
 
 
 @app.cell
-def _(store):
-    for state in store.load(validate=False):
-        print(state.model.fluid_properties.oil_saturation_grid[:])
-
+def _(Path, bores, last_state):
+    stabilized_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/stabilized.zarr",
+        metadata_dir=Path.cwd()
+        / "scenarios/states/stabilized_metadata",
+    )
+    stabilized_store.dump([last_state])
     return
 
 
