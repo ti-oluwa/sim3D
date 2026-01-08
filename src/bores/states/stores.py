@@ -1,7 +1,6 @@
-"""Model state representation and storage backends."""
+"""State storage classes for reservoir simulation states."""
 
 from abc import ABC, abstractmethod
-import functools
 import logging
 from os import PathLike
 from pathlib import Path
@@ -29,17 +28,14 @@ from bores.models import (
     SaturationHistory,
 )
 from bores.timing import StepMetricsDict, TimerState
-from bores.types import NDimension, T
-from bores.utils import Lazy, LazyField, load_pickle, save_as_pickle
-from bores.wells.base import Wells
-
+from bores.utils import Lazy, load_pickle, save_as_pickle
+from bores._precision import get_dtype
+from bores.states.base import ModelState, validate_state
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = [
-    "ModelState",
-    "validate_state",
     "new_store",
     "state_store",
     "ZarrStore",
@@ -47,92 +43,6 @@ __all__ = [
     "HDF5Store",
     "NPZStore",
 ]
-
-_Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
-
-
-class ModelState(typing.Generic[NDimension]):
-    """
-    The state of the reservoir model at a specific time step during a simulation.
-    """
-
-    model = LazyField[ReservoirModel[NDimension]]()
-    wells = LazyField[Wells[NDimension]]()
-    injection = LazyField[RateGrids[NDimension]]()
-    production = LazyField[RateGrids[NDimension]]()
-    relative_permeabilities = LazyField[RelPermGrids[NDimension]]()
-    relative_mobilities = LazyField[RelativeMobilityGrids[NDimension]]()
-    capillary_pressures = LazyField[CapillaryPressureGrids[NDimension]]()
-
-    def __init__(
-        self,
-        step: int,
-        step_size: float,
-        time: float,
-        model: _Lazy[ReservoirModel[NDimension]],
-        wells: _Lazy[Wells[NDimension]],
-        injection: _Lazy[RateGrids[NDimension]],
-        production: _Lazy[RateGrids[NDimension]],
-        relative_permeabilities: _Lazy[RelPermGrids[NDimension]],
-        relative_mobilities: _Lazy[RelativeMobilityGrids[NDimension]],
-        capillary_pressures: _Lazy[CapillaryPressureGrids[NDimension]],
-        timer_state: typing.Optional[TimerState] = None,
-    ) -> None:
-        """
-        Initialize the model state.
-
-        :param step: The time step index
-        :param step_size: The time step size in seconds
-        :param time: The simulation time in seconds
-        :param model: The reservoir model at this state
-        :param wells: The wells configuration at this state
-        :param injection: Fluids injection rates at this state in ft³/day
-        :param production: Fluids production rates at this state in ft³/day
-        :param relative_permeabilities: Relative permeabilities at this state
-        :param relative_mobilities: Relative mobilities at this state
-        :param capillary_pressures: Capillary pressures at this state
-        :param timer_state: Optional timer state at this model state
-        """
-        self.step = step
-        self.step_size = step_size
-        self.time = time
-        self.model = typing.cast(ReservoirModel[NDimension], model)
-        self.wells = typing.cast(Wells[NDimension], wells)
-        self.injection = typing.cast(RateGrids[NDimension], injection)
-        self.production = typing.cast(RateGrids[NDimension], production)
-        self.relative_permeabilities = typing.cast(
-            RelPermGrids[NDimension], relative_permeabilities
-        )
-        self.relative_mobilities = typing.cast(
-            RelativeMobilityGrids[NDimension], relative_mobilities
-        )
-        self.capillary_pressures = typing.cast(
-            CapillaryPressureGrids[NDimension], capillary_pressures
-        )
-        self.timer_state = timer_state
-
-    def asdict(self) -> typing.Dict[str, typing.Any]:
-        """
-        Get a dictionary representation of the model state.
-        """
-        return {
-            "step": self.step,
-            "step_size": self.step_size,
-            "time": self.time,
-            "model": self.model,
-            "wells": self.wells,
-            "injection": self.injection,
-            "production": self.production,
-            "relative_permeabilities": self.relative_permeabilities,
-            "relative_mobilities": self.relative_mobilities,
-            "capillary_pressures": self.capillary_pressures,
-            "timer_state": self.timer_state,
-        }
-
-    @functools.cache
-    def wells_exists(self) -> bool:
-        """Check if there are any wells in this state."""
-        return self.wells.exists()
 
 
 class StateStore(ABC):
@@ -307,20 +217,33 @@ class PickleStore(StateStore):
         )
 
     def load(
-        self, validate: bool = True, **kwargs: typing.Any
+        self,
+        validate: bool = True,
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+        **kwargs: typing.Any,
     ) -> typing.Generator[ModelState, None, None]:
-        """Load states from pickle file."""
+        """
+        Load states from pickle file.
+
+        :param validate: If True, validate each state after loading
+        :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
+                     Only applied when validate=True.
+        :return: Generator yielding ModelState instances
+        """
+        if validate and dtype is None:
+            dtype = get_dtype()
+
         states = load_pickle(self.filepath)
         if isinstance(states, dict):
             for state in states.values():
                 if validate:
-                    yield validate_state(state)
+                    yield validate_state(state, dtype=dtype)
                 else:
                     yield state
         else:
             for state in states:
                 if validate:
-                    yield validate_state(state)
+                    yield validate_state(state, dtype=dtype)
                 else:
                     yield state
 
@@ -736,7 +659,11 @@ class ZarrStore(StateStore):
                     )
 
     def load(
-        self, lazy: bool = True, validate: bool = True, **kwargs: typing.Any
+        self,
+        lazy: bool = True,
+        validate: bool = True,
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+        **kwargs: typing.Any,
     ) -> typing.Generator[ModelState, None, None]:
         """
         Load states from Zarr format.
@@ -744,12 +671,17 @@ class ZarrStore(StateStore):
         :param lazy: If True, loads arrays only when accessed (memory efficient).
                      If False, loads all data immediately.
         :param validate: If True, validate each state after loading
+        :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
+                     Only applied when validate=True.
         :return: Generator yielding `ModelState` instances
         """
         root = zarr.open_group(store=self.store, mode="r", zarr_version=3)
 
         # Load metadata once (time-invariant)
         metadata = self._load_metadata(lazy=lazy)
+
+        if validate and dtype is None:
+            dtype = get_dtype()
 
         for key in sorted(root.keys()):
             step_group = root[key]
@@ -833,7 +765,7 @@ class ZarrStore(StateStore):
             )
 
             if validate:
-                state = validate_state(state=state)
+                state = validate_state(state=state, dtype=dtype)
             yield state
 
     def _load_model(self, group: zarr.Group, metadata: StateMetadata) -> ReservoirModel:
@@ -1385,7 +1317,11 @@ class HDF5Store(StateStore):
                     group.attrs[key] = value
 
     def load(
-        self, lazy: bool = False, validate: bool = True, **kwargs: typing.Any
+        self,
+        lazy: bool = False,
+        validate: bool = True,
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+        **kwargs: typing.Any,
     ) -> typing.Generator[ModelState, None, None]:
         """
         Load states from HDF5 format.
@@ -1393,8 +1329,13 @@ class HDF5Store(StateStore):
         :param lazy: If True, defer loading of state properties until access.
             Wrap factory functions in Lazy.defer() for deferred loading
         :param validate: If True, validate each state after loading
+        :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
+                     Only applied when validate=True.
         :return: Generator yielding ModelState instances
         """
+        if validate and dtype is None:
+            dtype = get_dtype()
+
         metadata = self._load_metadata(lazy=lazy)
 
         with h5py.File(name=str(self.filepath), mode="r") as f:
@@ -1482,7 +1423,7 @@ class HDF5Store(StateStore):
                 )
 
                 if validate:
-                    state = validate_state(state=state)
+                    state = validate_state(state=state, dtype=dtype)
                 yield state
 
     def _load_model(self, group: h5py.Group, metadata: StateMetadata) -> ReservoirModel:
@@ -2010,7 +1951,11 @@ class NPZStore(StateStore):
         logger.debug(f"Completed dump of {len(states_list)} states to {self.filepath}")
 
     def load(
-        self, lazy: bool = False, validate: bool = True, **kwargs: typing.Any
+        self,
+        lazy: bool = False,
+        validate: bool = True,
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+        **kwargs: typing.Any,
     ) -> typing.Generator[ModelState, None, None]:
         """
         Load states from NPZ format.
@@ -2018,8 +1963,14 @@ class NPZStore(StateStore):
         :param lazy: If True, defer loading of state properties until access.
             Wrap factory functions in Lazy.defer() for deferred loading
         :param validate: If True, validate each state after loading
+        :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
+                     Only applied when validate=True.
         :return: Generator yielding ModelState instances
         """
+        # Determine dtype for validation
+        if validate and dtype is None:
+            dtype = get_dtype()
+
         metadata = self._load_metadata(lazy=lazy)
 
         data = np.load(file=str(self.filepath))
@@ -2103,7 +2054,7 @@ class NPZStore(StateStore):
             )
 
             if validate:
-                state = validate_state(state=state)
+                state = validate_state(state=state, dtype=dtype)
             yield state
 
     def _load_model(
@@ -2340,86 +2291,3 @@ def new_store(
 
     store_class = _STATE_STORES[backend]
     return store_class(*args, **kwargs)
-
-
-def validate_state(state: ModelState) -> ModelState:
-    # Check that all grids have matching shapes
-    model = state.model
-    model_shape = model.grid_shape
-    fluid_properties = model.fluid_properties
-    rock_properties = model.rock_properties
-    injection = state.injection
-    production = state.production
-    relative_mobilities = state.relative_mobilities
-    relative_permeabilities = state.relative_permeabilities
-    capillary_pressures = state.capillary_pressures
-    thickness_grid = model.thickness_grid
-    if thickness_grid.shape != model_shape:
-        raise ValidationError(
-            f"Thickness grid has shape {thickness_grid.shape}, expected {model_shape}."
-        )
-
-    for field in attrs.fields(fluid_properties.__class__):
-        grid = getattr(fluid_properties, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Fluid property grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(rock_properties.__class__):
-        grid = getattr(rock_properties, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Rock property grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(injection.__class__):
-        grid = getattr(injection, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Injection rate grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(production.__class__):
-        grid = getattr(production, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Production rate grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(relative_mobilities.__class__):
-        grid = getattr(relative_mobilities, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Relative mobility grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(relative_permeabilities.__class__):
-        grid = getattr(relative_permeabilities, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Relative permeability grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    for field in attrs.fields(capillary_pressures.__class__):
-        grid = getattr(capillary_pressures, field.name)
-        if not isinstance(grid, np.ndarray):
-            continue
-        if grid.shape != model_shape:
-            raise ValidationError(
-                f"Capillary pressure grid {field.name} has shape {grid.shape}, "
-                f"expected {model_shape}."
-            )
-    return state

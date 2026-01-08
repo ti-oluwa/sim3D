@@ -326,9 +326,9 @@ def evolve_saturation_explicitly(
         return EvolutionResult(
             success=False,
             value=ExplicitSaturationSolution(
-                water_saturation_grid=updated_water_saturation_grid,
-                oil_saturation_grid=updated_oil_saturation_grid,
-                gas_saturation_grid=updated_gas_saturation_grid,
+                water_saturation_grid=updated_water_saturation_grid.astype(dtype),
+                oil_saturation_grid=updated_oil_saturation_grid.astype(dtype),
+                gas_saturation_grid=updated_gas_saturation_grid.astype(dtype),
                 max_cfl_encountered=max_cfl_encountered,
                 cfl_threshold=cfl_threshold,
             ),
@@ -382,9 +382,9 @@ def evolve_saturation_explicitly(
     )
     return EvolutionResult(
         value=ExplicitSaturationSolution(
-            water_saturation_grid=updated_water_saturation_grid,
-            oil_saturation_grid=updated_oil_saturation_grid,
-            gas_saturation_grid=updated_gas_saturation_grid,
+            water_saturation_grid=updated_water_saturation_grid.astype(dtype),
+            oil_saturation_grid=updated_oil_saturation_grid.astype(dtype),
+            gas_saturation_grid=updated_gas_saturation_grid.astype(dtype),
             max_cfl_encountered=max_cfl_encountered,
             cfl_threshold=cfl_threshold,
         ),
@@ -1468,10 +1468,10 @@ def evolve_miscible_saturation_explicitly(
         return EvolutionResult(
             success=False,
             value=ExplicitSaturationSolution(
-                water_saturation_grid=updated_water_saturation_grid,
-                oil_saturation_grid=updated_oil_saturation_grid,
-                gas_saturation_grid=updated_gas_saturation_grid,
-                solvent_concentration_grid=updated_solvent_concentration_grid,
+                water_saturation_grid=updated_water_saturation_grid.astype(dtype),
+                oil_saturation_grid=updated_oil_saturation_grid.astype(dtype),
+                gas_saturation_grid=updated_gas_saturation_grid.astype(dtype),
+                solvent_concentration_grid=updated_solvent_concentration_grid.astype(dtype),
                 max_cfl_encountered=max_cfl_encountered,
                 cfl_threshold=cfl_threshold,
             ),
@@ -1525,10 +1525,10 @@ def evolve_miscible_saturation_explicitly(
     max_cfl_encountered = cfl_violation_info[4]
     return EvolutionResult(
         value=ExplicitSaturationSolution(
-            water_saturation_grid=updated_water_saturation_grid,
-            oil_saturation_grid=updated_oil_saturation_grid,
-            gas_saturation_grid=updated_gas_saturation_grid,
-            solvent_concentration_grid=updated_solvent_concentration_grid,
+            water_saturation_grid=updated_water_saturation_grid.astype(dtype),
+            oil_saturation_grid=updated_oil_saturation_grid.astype(dtype),
+            gas_saturation_grid=updated_gas_saturation_grid.astype(dtype),
+            solvent_concentration_grid=updated_solvent_concentration_grid.astype(dtype),
             max_cfl_encountered=max_cfl_encountered,
             cfl_threshold=cfl_threshold,
         ),

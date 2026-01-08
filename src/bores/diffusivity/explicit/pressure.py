@@ -125,6 +125,8 @@ def evolve_pressure_explicitly(
         (water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z),
     ) = mobility_grids
 
+    dtype = get_dtype()
+
     # Compute CFL number for this time step
     pressure_cfl = compute_pressure_cfl_number(
         time_step_size_in_days=time_step_size_in_days,
@@ -149,14 +151,12 @@ def evolve_pressure_explicitly(
             success=False,
             scheme="explicit",
             value=ExplicitPressureSolution(
-                pressure_grid=current_oil_pressure_grid,
+                pressure_grid=current_oil_pressure_grid.astype(dtype),
                 max_cfl_encountered=pressure_cfl,
                 cfl_threshold=max_pressure_cfl,
             ),
             message=f"Pressure evolution failed with CFL={pressure_cfl:.4f}.",
         )
-
-    dtype = get_dtype()
 
     # Compute net flux contributions from neighbors
     net_flux_grid = compute_net_flux_contributions(
@@ -230,7 +230,7 @@ def evolve_pressure_explicitly(
         success=True,
         scheme="explicit",
         value=ExplicitPressureSolution(
-            pressure_grid=updated_oil_pressure_grid,
+            pressure_grid=updated_oil_pressure_grid.astype(dtype),
             max_cfl_encountered=pressure_cfl,
             cfl_threshold=max_pressure_cfl,
         ),

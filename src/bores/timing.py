@@ -476,7 +476,7 @@ class Timer:
         timer_state = timer.dump_state()
         save_to_file(timer_state, "timer_state.json")
 
-        # Later: restore timer
+        # Later, restore timer
         timer_state = load_from_file("timer_state.json")
         timer = Timer.load_state(timer_state)
         ```
@@ -505,7 +505,7 @@ class Timer:
             "last_step_failed": self.last_step_failed,
             "rejection_count": self.rejection_count,
             "steps_since_last_failure": self.steps_since_last_failure,
-            # History (convert deques to lists for serialization)
+            # History
             "recent_metrics": [
                 typing.cast(StepMetricsDict, attrs.asdict(m))
                 for m in self.recent_metrics
@@ -516,7 +516,7 @@ class Timer:
     @classmethod
     def load_state(cls, state: TimerState) -> Self:
         """
-        Reconstruct a timer from a previously saved state dictionary.
+        Reconstruct a timer from a previously saved timer state.
 
         Creates a new timer instance and restores all internal state from
         the provided dictionary. This is the inverse of `dump_state()`.
@@ -530,7 +530,7 @@ class Timer:
         # Save timer state during simulation
         timer_state = timer.dump_state()
 
-        # Later: restore and continue
+        # Later, restore and continue
         timer = Timer.load_state(timer_state)
         for state in run(model, timer, wells):
             process(state)
@@ -566,9 +566,7 @@ class Timer:
             "metrics_history_size": state.get("metrics_history_size", 20),
             "use_constant_step_size": state.get("use_constant_step_size", False),
         }
-
-        # Create new instance
-        timer = cls(**config_params)
+        timer = cls(**config_params)  # type: ignore
 
         # Restore runtime state (use object.__setattr__ since timer may be frozen)
         object.__setattr__(timer, "elapsed_time", state["elapsed_time"])
@@ -590,7 +588,7 @@ class Timer:
             state.get("steps_since_last_failure", 0),
         )
 
-        # Restore history (reconstruct deques)
+        # Restore history
         recent_metrics_data = state.get("recent_metrics", [])
         recent_metrics = deque(
             [StepMetrics(**m) for m in recent_metrics_data],

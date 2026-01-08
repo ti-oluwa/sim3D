@@ -14,10 +14,11 @@ def _():
 
     bores.image_config(scale=3)
 
-    DEPLETED_MODEL_STATES = (
-        Path.cwd() / "scenarios/states/co2_injection_coarse.pkl.xz"
+    injection_store = bores.HDF5Store(
+        filepath=Path.cwd() / "scenarios/states/ch4_injection.h5",
+        metadata_dir=Path.cwd() / "scenarios/states/ch4_injection_metadata/",
     )
-    states = list(bores.load_states(filepath=DEPLETED_MODEL_STATES))
+    states = list(injection_store.load(validate=False))
     return bores, itertools, np, states
 
 

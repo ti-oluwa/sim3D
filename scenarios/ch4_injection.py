@@ -15,16 +15,17 @@ def _():
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
-    bores.use_64bit_precision()
+    bores.use_32bit_precision()
 
-    DEPLETED_MODEL_STATE = (
-        Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl.xz"
+    depleted_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/primary_depleted.zarr",
+        metadata_dir=Path.cwd() / "scenarios/states/primary_depleted_metadata/",
     )
 
 
     def main():
         # Load last model state of primary depletion
-        state = bores.ModelState.load(filepath=DEPLETED_MODEL_STATE)
+        state = list(depleted_store.load(validate=True))[0]
         model = state.model
         del state
 
@@ -138,30 +139,32 @@ def _():
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
         )
-        states = bores.run(
-            model=model,
-            timer=timer,
-            wells=wells,
-            config=config,
-        )
-        return list(states)
+        states = bores.run(model=model, timer=timer, wells=wells, config=config)
+        return states
     return Path, bores, main
 
 
 @app.cell
-def _(main):
-    states = main()
-    return (states,)
+def _(Path, bores):
+    injection_store = bores.HDF5Store(
+        filepath=Path.cwd() / "scenarios/states/co2_injection.h5",
+        metadata_dir=Path.cwd() / "scenarios/states/co2_injection_metadata/",
+    )
+    return (injection_store,)
 
 
 @app.cell
-def _(Path, bores, states):
-    bores.dump_states(
-        states,
-        filepath=Path.cwd() / "scenarios/states/ch4_injection_coarse_2.pkl",
-        exist_ok=True,
-        compression="lzma",
+def _(Path, bores, injection_store, main):
+    stream = bores.StateStream(
+        main(),
+        store=injection_store,
+        checkpoint_interval=100,
+        checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
+        batch_size=30,
     )
+
+    with stream:
+        stream.consume()
     return
 
 

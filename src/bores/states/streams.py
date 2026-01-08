@@ -11,7 +11,8 @@ import psutil
 from typing_extensions import Self
 
 from bores.errors import StreamError
-from bores.states import ModelState, PickleStore, StateStore
+from bores.states import ModelState
+from bores.states.stores import StateStore, PickleStore
 from bores.types import NDimension
 
 

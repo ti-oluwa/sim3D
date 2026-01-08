@@ -1059,6 +1059,7 @@ def build_oil_effective_viscosity_grid(
     )
     ```
     """
+    input_type = oil_viscosity_grid.dtype
     # Compute pressure-dependent omega if pressure grid provided
     if pressure_grid is not None and minimum_miscibility_pressure is not None:
         # Compute transition factor grid
@@ -1068,7 +1069,7 @@ def build_oil_effective_viscosity_grid(
             transition_width=transition_width,
         )
         # Scale by base omega to get effective omega grid
-        omega_grid = base_omega * transition_factor
+        omega_grid = (base_omega * transition_factor).astype(input_type)
     else:
         # Use constant omega everywhere
         omega_grid = np.full_like(oil_viscosity_grid, base_omega)
@@ -1146,6 +1147,7 @@ def build_oil_effective_density_grid(
     )
     ```
     """
+    input_type = oil_density_grid.dtype
     # Compute pressure-dependent omega if pressure grid provided
     if pressure_grid is not None and minimum_miscibility_pressure is not None:
         # Compute transition factor grid
@@ -1155,7 +1157,7 @@ def build_oil_effective_density_grid(
             transition_width=transition_width,
         )
         # Scale by base omega to get effective omega grid
-        omega_grid = base_omega * transition_factor
+        omega_grid = (base_omega * transition_factor).astype(input_type)
     else:
         # Use constant omega everywhere
         omega_grid = np.full_like(oil_density_grid, base_omega)

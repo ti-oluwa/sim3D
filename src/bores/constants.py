@@ -468,7 +468,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="psi",
     ),
     "GAS_PSEUDO_PRESSURE_POINTS": Constant(
-        value=1000,
+        value=100,
         description="Number of points to compute when generating gas pseudo-pressure table internally",
         unit="points",
     ),

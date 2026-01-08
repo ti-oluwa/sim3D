@@ -736,7 +736,7 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
     """
     Adaptive control that switches between rate and BHP control.
 
-    Operates at constant rate until minimum BHP is reached, then switches
+    Operates at constant rate until BHP limit is reached, then switches
     to BHP control. This prevents excessive pressure drawdown while maintaining
     target production/injection when feasible.
     """

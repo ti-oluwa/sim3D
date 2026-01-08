@@ -3785,11 +3785,11 @@ class DataVisualizer:
                     "property parameter is required when source is a ModelState"
                 )
             metadata = self.registry[property]
-            data = self._get_property_data(source, metadata.name)
+            data = self._get_property_data(source, metadata.name)  # type: ignore
 
             # Get original cell dimensions and depth grid from model
-            cell_dimension = source.model.cell_dimension
-            depth_grid = source.model.get_depth_grid(apply_dip=True)
+            cell_dimension = source.model.cell_dimension  # type: ignore
+            depth_grid = source.model.get_depth_grid(apply_dip=True)  # type: ignore
         else:
             # Working with raw ThreeDimensionalGrid
             data = source
@@ -3813,7 +3813,7 @@ class DataVisualizer:
         # Apply slicing if any slice parameters are provided
         coordinate_offsets = None
         if any(s is not None for s in [x_slice, y_slice, z_slice]):
-            data, normalized_slices = self.apply_slice(data, x_slice, y_slice, z_slice)
+            data, normalized_slices = self.apply_slice(data, x_slice, y_slice, z_slice)  # type: ignore
             x_slice_obj, y_slice_obj, z_slice_obj = normalized_slices
 
             # Update title to indicate slicing
@@ -3864,14 +3864,14 @@ class DataVisualizer:
         if renderer.supports_physical_dimensions:
             fig = renderer.render(
                 fig,
-                data,
+                data,  # type: ignore
                 metadata,
                 cell_dimension=kwargs.pop("cell_dimension", cell_dimension),
                 depth_grid=kwargs.pop("depth_grid", depth_grid),
                 **kwargs,
             )
         else:
-            fig = renderer.render(fig, data, metadata, **kwargs)
+            fig = renderer.render(fig, data, metadata, **kwargs)  # type: ignore
 
         # Add well visualization if requested (only for ModelState data)
         if show_wells:

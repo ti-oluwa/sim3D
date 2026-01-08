@@ -929,7 +929,7 @@ def compute_gas_compressibility_factor_hall_yarborough(
     Z = np.where(active_mask, A * Pr / y_safe, 1.0)
 
     # Clamp to physical range
-    return clip(Z, 0.2, 3.0)
+    return clip(Z, 0.2, 3.0).astype(pressure.dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1209,7 +1209,6 @@ def compute_gas_compressibility_factor(
 
     # Validate and apply fallbacks where needed
     invalid_mask = (Z < 0.2) | (Z > 3.0)
-
     if np.any(invalid_mask):
         # Try Hall-Yarborough as first fallback
         Z_hy = compute_gas_compressibility_factor_hall_yarborough(
@@ -3365,7 +3364,7 @@ def compute_miscibility_transition_factor(
 
     # Transition factor varies from 0 (immiscible) to 1 (miscible)
     transition_factor = 0.5 * (1.0 + np.tanh(normalized))
-    return transition_factor  # type: ignore[return-value]
+    return transition_factor.astype(pressure.dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3512,11 +3511,12 @@ def compute_todd_longstaff_effective_viscosity(
     C_s = solvent_concentration
     C_o = 1.0 - C_s
 
+    input_dtype = oil_viscosity.dtype
     # Handle edge cases
     if np.any(C_s >= 1.0):
-        return solvent_viscosity
+        return solvent_viscosity.astype(input_dtype)
     if np.any(C_s <= 0.0):
-        return oil_viscosity
+        return oil_viscosity.astype(input_dtype)
 
     # Fully mixed viscosity (arithmetic/linear mean)
     # Represents ideal miscibility - single homogeneous phase
@@ -3533,7 +3533,7 @@ def compute_todd_longstaff_effective_viscosity(
     #   ω = 1: μ_eff = μ_mix (fully mixed, arithmetic mean)
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
-    return mu_effective  # type: ignore[return-value]
+    return mu_effective.astype(input_dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3589,9 +3589,7 @@ def compute_todd_longstaff_effective_density(
     :param solvent_concentration: Solvent concentration (fraction 0-1)
     :param omega: Todd-Longstaff mixing parameter (0-1), default 0.67
     :return: Effective mixture density (same units as input densities)
-
-    Raises:
-        ValidationError: If concentrations or omega are outside [0,1], or inputs ≤ 0
+    :raises ValidationError: If concentrations or omega are outside [0,1], or inputs ≤ 0
 
     Example:
     ```python
@@ -3646,9 +3644,9 @@ def compute_todd_longstaff_effective_density(
 
     # Handle edge cases
     if np.any(C_s >= 1.0):
-        return solvent_density
+        return solvent_density.astype(input_dtype)
     if np.any(C_s <= 0.0):
-        return oil_density
+        return oil_density.astype(input_dtype)
 
     # Fully mixed density (volume-weighted, arithmetic mean)
     # This is the density if phases are perfectly mixed by volume
@@ -3685,4 +3683,4 @@ def compute_todd_longstaff_effective_density(
     #   ω = 0: ρ_eff = ρ_segregated (flow-weighted, immiscible)
     #   ω = 1: ρ_eff = ρ_mix (volume-weighted, fully mixed)
     rho_effective = (rho_mix**omega) * (rho_segregated ** (1.0 - omega))
-    return rho_effective  # type: ignore[return-value]
+    return rho_effective.astype(input_dtype)  # type: ignore[return-value]

@@ -216,7 +216,7 @@ def evolve_pressure_implicitly(
     except (SolverError, PreconditionerError) as exc:
         logger.error(f"Pressure solve failed at time step {time_step}: {exc}")
         return EvolutionResult(
-            value=current_oil_pressure_grid,
+            value=current_oil_pressure_grid.astype(dtype),
             success=False,
             scheme="implicit",
             message=str(exc),
@@ -231,7 +231,7 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
     )
     return EvolutionResult(
-        value=new_pressure_grid,
+        value=new_pressure_grid.astype(dtype),
         success=True,
         scheme="implicit",
         message=f"Implicit pressure evolution for time step {time_step} successful.",

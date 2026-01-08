@@ -24,4 +24,3 @@ from .timing import *  # noqa
 from .config import *  # noqa
 from .pvt.tables import *  # noqa
 from .analyses import *  # noqa
-from .streams import * # noqa

@@ -14,16 +14,17 @@ def _():
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
-    bores.use_64bit_precision()
+    bores.use_32bit_precision()
 
-    DEPLETED_MODEL_STATE = (
-        Path.cwd() / "scenarios/states/primary_depleted_coarse.pkl.xz"
+    depleted_store = bores.ZarrStore(
+        store=Path.cwd() / "scenarios/states/primary_depleted.zarr",
+        metadata_dir=Path.cwd() / "scenarios/states/primary_depleted_metadata/",
     )
 
 
     def main():
         # Load last model state of primary depletion
-        state = bores.ModelState.load(filepath=DEPLETED_MODEL_STATE)
+        state = list(depleted_store.load(validate=True))[0]
         model = state.model
         del state
 
@@ -33,9 +34,9 @@ def _():
         # Gas injection wells, 5-spot pattern
         injection_clamp = bores.InjectionClamp()
         control = bores.AdaptiveBHPRateControl(
-            target_rate=50000,
+            target_rate=1_000_000,
             target_phase="gas",
-            bhp_limit=3000,
+            bhp_limit=3500,
             clamp=injection_clamp,
         )
         gas_injector_1 = bores.injection_well(
@@ -68,19 +69,19 @@ def _():
             oil_control=bores.AdaptiveBHPRateControl(
                 target_rate=-150,
                 target_phase="oil",
-                bhp_limit=900,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
             gas_control=bores.AdaptiveBHPRateControl(
                 target_rate=-500,
                 target_phase="gas",
-                bhp_limit=900,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
             water_control=bores.AdaptiveBHPRateControl(
                 target_rate=-10,
                 target_phase="water",
-                bhp_limit=900,
+                bhp_limit=1200,
                 clamp=production_clamp,
             ),
         )
@@ -123,7 +124,7 @@ def _():
         wells = bores.wells_(injectors=injectors, producers=producers)
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=30.0),
-            max_step_size=bores.Time(days=2.0),
+            max_step_size=bores.Time(days=5.0),
             min_step_size=bores.Time(hours=1.0),
             simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 5) + 100),
             max_cfl_number=0.9,
@@ -132,7 +133,9 @@ def _():
             aggressive_backoff_factor=0.25,
         )
         pvt_table_data = bores.build_pvt_table_data(
-            pressures=bores.array([500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]),
+            pressures=bores.array(
+                [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 6000]
+            ),
             temperatures=bores.array([120, 140, 160, 180, 200, 220]),
             salinities=bores.array([30000, 32000, 33500, 35000]),  # ppm
             oil_specific_gravity=0.845,
@@ -141,35 +144,43 @@ def _():
         )
         pvt_tables = bores.PVTTables(
             table_data=pvt_table_data,
-            interpolation_method="linear",
+            interpolation_method="cubic",
         )
         config = bores.Config(
             scheme="impes",
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
-            preconditioner=None,
-            pvt_tables=pvt_tables
+            iterative_solver="bicgstab",
+            preconditioner="ilu",
+            pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=wells, config=config)
-        return list(states)
+        return states
     return Path, bores, main
 
 
 @app.cell
-def _(main):
-    states = main()
-    return (states,)
+def _(Path, bores):
+    injection_store = bores.HDF5Store(
+        filepath=Path.cwd() / "scenarios/states/co2_injection.h5",
+        metadata_dir=Path.cwd() / "scenarios/states/co2_injection_metadata/",
+    )
+    return (injection_store,)
 
 
 @app.cell
-def _(Path, bores, states):
-    bores.dump_states(
-        states,
-        filepath=Path.cwd() / "scenarios/states/co2_injection_coarse.pkl",
-        exist_ok=True,
-        compression="lzma",
+def _(Path, bores, injection_store, main):
+    stream = bores.StateStream(
+        main(),
+        store=injection_store,
+        checkpoint_interval=500,
+        checkpoint_dir=Path.cwd() / "scenarios/states/co2_injection/checkpoints",
+        batch_size=30,
     )
+
+    with stream:
+        stream.consume()
     return
 
 
