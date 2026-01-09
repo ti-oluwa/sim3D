@@ -151,7 +151,7 @@ def evolve_pressure_explicitly(
             success=False,
             scheme="explicit",
             value=ExplicitPressureSolution(
-                pressure_grid=current_oil_pressure_grid.astype(dtype),
+                pressure_grid=current_oil_pressure_grid.astype(dtype, copy=False),
                 max_cfl_encountered=pressure_cfl,
                 cfl_threshold=max_pressure_cfl,
             ),
@@ -230,7 +230,7 @@ def evolve_pressure_explicitly(
         success=True,
         scheme="explicit",
         value=ExplicitPressureSolution(
-            pressure_grid=updated_oil_pressure_grid.astype(dtype),
+            pressure_grid=updated_oil_pressure_grid.astype(dtype, copy=False),
             max_cfl_encountered=pressure_cfl,
             cfl_threshold=max_pressure_cfl,
         ),

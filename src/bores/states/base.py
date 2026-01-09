@@ -130,7 +130,7 @@ def _validate_and_coerce_array(
             f"{field_name} has shape {grid.shape}, expected {model_shape}."
         )
     if dtype_target is not None and np.issubdtype(grid.dtype, np.floating):
-        return grid.astype(dtype_target)
+        return grid.astype(dtype_target, copy=False)
     return grid
 
 

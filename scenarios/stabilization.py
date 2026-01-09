@@ -23,7 +23,7 @@ def _():
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
         grid_shape = typing.cast(
             bores.ThreeDimensions,
-            (20, 20, 10),  # 30x30 cells, 10 layers
+            (40, 40, 10),  # 30x30 cells, 10 layers
         )
         dip_angle = 5.0
         dip_azimuth = 90.0
@@ -316,16 +316,16 @@ def _(Path, bores):
         metadata_dir=Path.cwd()
         / "scenarios/states/stabilization_metadata",
     )
-    return (stabilization_store,)
+    return
 
 
 @app.cell
-def _(Path, bores, main, stabilization_store):
+def _(bores, main):
     stream = bores.StateStream(
         main(),
-        store=stabilization_store,
-        checkpoint_interval=10,
-        checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
+        # store=stabilization_store,
+        # checkpoint_interval=10,
+        # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
         auto_replay=True,
     )
 
@@ -333,7 +333,7 @@ def _(Path, bores, main, stabilization_store):
     with stream:
         for state in stream:
             last_state = state
-        
+
     return (last_state,)
 
 

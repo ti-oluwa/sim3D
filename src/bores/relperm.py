@@ -364,7 +364,7 @@ def eclipse_rule(
     else:
         f_g = 0.0
 
-    return kro_w * f_w + kro_g * f_g
+    return (kro_w * f_w) + (kro_g * f_g)
 
 
 @numba.njit(cache=True)
@@ -481,8 +481,8 @@ class TwoPhaseRelPermTable:
     def wetting_phase_interpolator(self) -> Interpolator:
         """Return the interpolator for wetting phase relative permeability."""
         return interp1d(
-            self.wetting_phase_saturation,
-            self.wetting_phase_relative_permeability,
+            x=self.wetting_phase_saturation,
+            y=self.wetting_phase_relative_permeability,
             bounds_error=False,
             fill_value=(
                 self.wetting_phase_relative_permeability[0],  # type: ignore
@@ -494,8 +494,8 @@ class TwoPhaseRelPermTable:
     def non_wetting_phase_interpolator(self) -> Interpolator:
         """Return the interpolator for non-wetting phase relative permeability."""
         return interp1d(
-            self.wetting_phase_saturation,
-            self.non_wetting_phase_relative_permeability,
+            x=self.wetting_phase_saturation,
+            y=self.non_wetting_phase_relative_permeability,
             bounds_error=False,
             fill_value=(
                 self.non_wetting_phase_relative_permeability[0],  # type: ignore

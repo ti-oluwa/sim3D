@@ -1,28 +1,161 @@
 """
-Fracture definition system for 3D reservoir models.
+Fracture definition API for 3D reservoir models.
 """
 
-import copy
-import itertools
 import logging
 import typing
 
+import numba
 import attrs
 import numpy as np
 
 from bores.constants import c
+from bores.errors import ValidationError
 from bores.models import ReservoirModel
-from bores.types import NDimension, ThreeDimensions
+from bores.types import ThreeDimensions
 
 __all__ = [
     "Fracture",
+    "FractureGeometry",
     "apply_fracture",
     "apply_fractures",
     "validate_fracture",
     "FractureDefaults",
+    "vertical_sealing_fault",
+    "normal_fault_with_throw",
+    "reverse_fault_with_throw",
+    "inclined_sealing_fault",
+    "damage_zone_fault",
+    "conductive_fracture_network",
+    "fault_with_throw_and_damage_zone",
 ]
 
 logger = logging.getLogger(__name__)
+
+
+@numba.njit(parallel=True)
+def _mask_orientation_x(
+    mask: np.ndarray,
+    cell_min: int,
+    cell_max: int,
+    slope: float,
+    intercept: float,
+    z_min: int,
+    z_max: int,
+):
+    nx, ny, _ = mask.shape
+    for i in numba.prange(cell_min, cell_max + 1):  # type: ignore[misc]
+        if 0 <= i < nx:
+            if abs(slope) < 1e-6:
+                for j in range(ny):
+                    for k in range(z_min, z_max + 1):
+                        mask[i, j, k] = True
+            else:
+                for j in range(ny):
+                    z_fracture = int(intercept + slope * j)
+                    if z_min <= z_fracture <= z_max:
+                        mask[i, j, z_fracture] = True
+
+
+@numba.njit(parallel=True)
+def _mask_orientation_y(
+    mask: np.ndarray,
+    cell_min: int,
+    cell_max: int,
+    slope: float,
+    intercept: float,
+    z_min: int,
+    z_max: int,
+):
+    nx, ny, _ = mask.shape
+    for j in numba.prange(cell_min, cell_max + 1):  # type: ignore[misc]
+        if 0 <= j < ny:
+            if abs(slope) < 1e-6:
+                for i in range(nx):
+                    for k in range(z_min, z_max + 1):
+                        mask[i, j, k] = True
+            else:
+                for i in range(nx):
+                    z_fracture = int(intercept + slope * i)
+                    if z_min <= z_fracture <= z_max:
+                        mask[i, j, z_fracture] = True
+
+
+@numba.njit(parallel=True)
+def _mask_orientation_z(
+    mask: np.ndarray,
+    cell_min: int,
+    cell_max: int,
+    slope: float,
+    intercept: float,
+    x_min: int,
+    x_max: int,
+    y_min: int,
+    y_max: int,
+):
+    _, _, nz = mask.shape
+    for k in numba.prange(cell_min, cell_max + 1):  # type: ignore[misc]
+        if 0 <= k < nz:
+            if abs(slope) < 1e-6:
+                for i in range(x_min, x_max + 1):
+                    for j in range(y_min, y_max + 1):
+                        mask[i, j, k] = True
+            else:
+                for i in range(x_min, x_max + 1):
+                    y_fracture = int(intercept + slope * i)
+                    if y_min <= y_fracture <= y_max:
+                        mask[i, y_fracture, k] = True
+
+
+@numba.njit(parallel=True)
+def _scale_permeability_x_boundary(
+    perm_x: np.ndarray, mask: np.ndarray, scale: float
+) -> None:
+    """Scale x-direction permeability at fracture boundaries."""
+    nx, ny, nz = perm_x.shape
+    for i in numba.prange(nx - 1):  # type: ignore[misc]
+        for j in range(ny):
+            for k in range(nz):
+                # Scale if either current or next cell is in fracture
+                if mask[i, j, k] or mask[i + 1, j, k]:
+                    if mask[i, j, k]:
+                        perm_x[i, j, k] *= scale
+                    if mask[i + 1, j, k]:
+                        perm_x[i + 1, j, k] *= scale
+
+
+@numba.njit(parallel=True)
+def _scale_permeability_y_boundary(
+    perm_y: np.ndarray, mask: np.ndarray, scale: float
+) -> None:
+    """Scale y-direction permeability at fracture boundaries."""
+    nx, ny, nz = perm_y.shape
+    for i in numba.prange(nx):  # type: ignore[misc]
+        for j in range(ny - 1):
+            for k in range(nz):
+                # Scale if either current or next cell is in fracture
+                if mask[i, j, k] or mask[i, j + 1, k]:
+                    if mask[i, j, k]:
+                        perm_y[i, j, k] *= scale
+                    if mask[i, j + 1, k]:
+                        perm_y[i, j + 1, k] *= scale
+
+
+@numba.njit(parallel=True)
+def _scale_permeability_z_boundary(
+    perm_z: np.ndarray, mask: np.ndarray, scale: float
+) -> None:
+    """Scale z-direction permeability at fracture boundaries."""
+    nx, ny, nz = perm_z.shape
+    for i in numba.prange(nx):  # type: ignore[misc]
+        for j in range(ny):
+            for k in range(nz - 1):
+                # Scale if either current or next cell is in fracture
+                if mask[i, j, k] or mask[i, j, k + 1]:
+                    if mask[i, j, k]:
+                        perm_z[i, j, k] *= scale
+                    if mask[i, j, k + 1]:
+                        perm_z[i, j, k + 1] *= scale
 
 
 FloatDefault = typing.Union[float, np.floating[typing.Any]]
@@ -249,7 +382,7 @@ class FractureDefaults:
             valid_data = valid_data[valid_data > 0]
 
         if len(valid_data) == 0:
-            raise ValueError(f"No valid data available for {property_type}")
+            raise ValidationError(f"No valid data available for {property_type}")
 
         # Compute based on method
         if method == "mean":
@@ -271,6 +404,198 @@ class FractureDefaults:
         return float(np.mean(valid_data))
 
 
+@attrs.frozen(slots=True)
+class FractureGeometry:
+    """
+    Fracture geometry specification.
+
+    Fracture Orientation:
+    - "x": Fracture plane perpendicular to x-axis (strikes in y-direction)
+    - "y": Fracture plane perpendicular to y-axis (strikes in x-direction)
+    - "z": Fracture plane perpendicular to z-axis (horizontal fracture/bedding slip)
+
+    Coordinate Specification:
+    The fracture is defined by specifying ranges in each dimension:
+
+    For x-oriented fracture:
+        - x_range: Location of fracture plane (can be single cell or damage zone)
+        - y_range: Optional lateral extent (None = full extent)
+        - z_range: Optional vertical extent (None = full extent)
+
+    For y-oriented fracture:
+        - y_range: Location of fracture plane (can be single cell or damage zone)
+        - x_range: Optional lateral extent (None = full extent)
+        - z_range: Optional vertical extent (None = full extent)
+
+    For z-oriented fracture (horizontal):
+        - z_range: Location of fracture plane (can be single layer or zone)
+        - x_range: Optional lateral extent (None = full extent)
+        - y_range: Optional lateral extent (None = full extent)
+
+    Examples:
+
+    1. Simple vertical fault at x=25:
+    ```
+       FractureGeometry(orientation="x", x_range=(25, 25))
+    ```
+
+    2. Wide damage zone from x=20 to x=30, only in upper reservoir:
+    ```
+       FractureGeometry(orientation="x", x_range=(20, 30), z_range=(0, 15))
+    ```
+
+    3. Horizontal bedding plane slip at z=10:
+    ```
+       FractureGeometry(orientation="z", z_range=(10, 10))
+    ```
+
+    4. Y-oriented fault with limited lateral extent:
+    ```
+       FractureGeometry(orientation="y", y_range=(15, 15), x_range=(10, 40), z_range=(5, 25))
+    ```
+
+    """
+
+    orientation: typing.Literal["x", "y", "z"]
+    """
+    Fracture plane orientation:
+    - "x": Perpendicular to x-axis (fracture plane in y-z plane)
+    - "y": Perpendicular to y-axis (fracture plane in x-z plane)
+    - "z": Perpendicular to z-axis (horizontal fracture plane in x-y plane)
+    """
+
+    x_range: typing.Optional[typing.Tuple[int, int]] = None
+    """
+    Range of x-indices affected by fracture (inclusive).
+    - For x-oriented fractures: Location of fracture plane
+    - For y/z-oriented fractures: Optional lateral extent
+    - None means full x-extent of grid
+    """
+
+    y_range: typing.Optional[typing.Tuple[int, int]] = None
+    """
+    Range of y-indices affected by fracture (inclusive).
+    - For y-oriented fractures: Location of fracture plane
+    - For x/z-oriented fractures: Optional lateral extent
+    - None means full y-extent of grid
+    """
+
+    z_range: typing.Optional[typing.Tuple[int, int]] = None
+    """
+    Range of z-indices affected by fracture (inclusive).
+    - For z-oriented fractures: Location of fracture plane
+    - For x/y-oriented fractures: Optional vertical extent
+    - None means full z-extent of grid
+    """
+
+    displacement_range: typing.Optional[typing.Tuple[int, int]] = None
+    """
+    Optional explicit range of cells to displace (in fracture orientation direction).
+    
+    If specified, Only cells within this range are displaced, independent of
+    the fracture plane location. This provides fine-grained control over which
+    cells experience throw.
+    
+    Bahaviour:
+    - None (default): Displace all cells on the positive side of the fracture plane
+    - (min, max): Only cells with indices in [min, max] are displaced
+    
+    Examples:
+    
+    For x-oriented fracture at x=20:
+        - displacement_range=(25, 50): Only cells with x ∈ [25, 50] are displaced
+        - displacement_range=(10, 19): Only cells with x ∈ [10, 19] are displaced (reverse side)
+        - Useful for: "Displace only a specific block, not everything beyond fault"
+    
+    For y-oriented fracture:
+        - displacement_range=(10, 25): Only cells with y ∈ [10, 25] are displaced
+    
+    For z-oriented fracture:
+        - displacement_range=(5, 15): Only cells with z ∈ [5, 15] are displaced
+    
+    Notable Cases:
+    - If displacement_range doesn't overlap with fracture plane range, displacement
+      still occurs (allows modelling of detached/blind segments)
+    - Can be used to displace fracture zone + adjacent cells:
+      displacement_range = (x_range[0], x_range[1] + 10)
+    """
+
+    geometric_throw: int = 0
+    """
+    Vertical displacement (throw) in number of cells.
+    
+    - Positive values: Displaced block moves DOWN (normal fault)
+    - Negative values: Displaced block moves UP (reverse fault)
+    - Zero (default): No vertical displacement (sealing fault only)
+    
+    The cells to be displaced are determined by displacement_range.
+    If displacement_range is None, all cells on the positive side of the
+    fracture plane are displaced.
+    """
+
+    slope: float = 0.0
+    """
+    Slope of inclined fracture plane (for non-vertical/non-horizontal fractures).
+    
+    For x-oriented fractures: z = intercept + slope * y
+    For y-oriented fractures: z = intercept + slope * x
+    For z-oriented fractures: y = intercept + slope * x (or x = intercept + slope * y)
+    
+    A slope of 0.0 creates a planar fracture (vertical for x/y, horizontal for z).
+    """
+
+    intercept: float = 0.0
+    """
+    Intercept of the fracture plane equation.
+    Interpretation depends on orientation and slope.
+    """
+
+    def __attrs_post_init__(self) -> None:
+        """Validate geometry configuration."""
+        # Check that primary range is specified
+        if self.orientation == "x" and self.x_range is None:
+            raise ValidationError(
+                "For x-oriented fractures, `x_range` must be specified"
+            )
+        if self.orientation == "y" and self.y_range is None:
+            raise ValidationError(
+                "For y-oriented fractures, `y_range` must be specified"
+            )
+        if self.orientation == "z" and self.z_range is None:
+            raise ValidationError(
+                "For z-oriented fractures, `z_range` must be specified"
+            )
+
+        # Validate ranges are properly ordered
+        for range_name, range_val in [
+            ("x_range", self.x_range),
+            ("y_range", self.y_range),
+            ("z_range", self.z_range),
+            ("displacement_range", self.displacement_range),
+        ]:
+            if range_val is not None:
+                if range_val[0] > range_val[1]:
+                    raise ValidationError(
+                        f"{range_name} min ({range_val[0]}) > max ({range_val[1]})"
+                    )
+                if range_val[0] < 0:
+                    raise ValidationError(
+                        f"{range_name} min ({range_val[0]}) must be >= 0"
+                    )
+
+    def get_fracture_plane_range(self) -> typing.Tuple[int, int]:
+        """Get the primary fracture plane range based on orientation."""
+        if self.orientation == "x":
+            assert self.x_range is not None
+            return self.x_range
+        elif self.orientation == "y":
+            assert self.y_range is not None
+            return self.y_range
+        else:  # z
+            assert self.z_range is not None
+            return self.z_range
+
+
 @attrs.define(slots=True, frozen=True)
 class Fracture:
     """
@@ -280,73 +605,91 @@ class Fracture:
     including its orientation, hydraulic properties, and modeling approach.
 
     Note: A geological fault is a specific type of fracture.
+
+    Usage Examples:
+
+    ```python
+    # Example 1: Sealing fault using permeability multiplier
+    geometry = FractureGeometry(
+        orientation="x",
+        x_range=(25, 25),
+        z_range=(0, 15),
+        geometric_throw=3
+    )
+    fracture = Fracture(
+        id="fault_1",
+        geometry=geometry,
+        permeability_multiplier=1e-4  # Scale existing permeabilities
+    )
+
+    # Example 2: Damage zone with absolute permeability values
+    damage_geometry = FractureGeometry(
+        orientation="y",
+        y_range=(10, 15)  # Multi-cell damage zone
+    )
+    damage_fracture = Fracture(
+        id="damage_zone",
+        geometry=damage_geometry,
+        permeability=0.01,  # Set absolute permeability (mD)
+        porosity=0.05
+    )
+    ```
     """
 
     id: str
     """Unique identifier for the fracture."""
 
-    slope: float = 0.0
+    geometry: FractureGeometry
     """
-    Slope of the fracture plane: z = z0 + slope*(x - x0) for x-oriented fractures,
-    or z = z0 + slope*(y - y0) for y-oriented fractures.
-    A slope of 0.0 creates a vertical fracture.
-    """
-
-    intercept: float = 0.0
-    """
-    Z-intercept (z0) of the fracture plane at the reference position.
-    For vertical fractures, this represents the base z-level of the fracture.
+    Fracture geometry specification using unified FractureGeometry class.
+    
+    Defines the spatial location, orientation, extent, and displacement
+    of the fracture using a consistent coordinate system.
     """
 
-    orientation: typing.Literal["x", "y"] = "x"
+    permeability_multiplier: typing.Optional[float] = None
     """
-    Orientation of the fracture plane:
-    - "x": fracture plane cuts through x-direction (perpendicular to x-axis)
-    - "y": fracture plane cuts through y-direction (perpendicular to y-axis)
-    """
+    Multiplier for permeabilities across the fracture.
 
-    fracture_index: int = 0
-    """
-    Nominal grid index where the fracture intersects:
-    - For x-oriented fractures: x-index of the fracture plane
-    - For y-oriented fractures: y-index of the fracture plane
-    """
-
-    transmissibility_scale: float = 1e-3
-    """
-    Scaling factor for transmissibilities across the fracture.
     - Values < 1.0 create sealing barriers (typical: 1e-3 to 1e-6)
-    - Values > 1.0 create conductive zones (for fractured fractures)
-    - Must be > MIN_TRANSMISSIBILITY_FACTOR for numerical stability
+    - Values > 1.0 create conductive zones (for enhanced fractures)
+    - Must be > `MIN_TRANSMISSIBILITY_FACTOR` for numerical stability
+    - If None and permeability is also None, defaults to 1e-3 for sealing behavior
+    
+    This scales the permeability values at the fracture interface, directly
+    affecting transmissibility (flow capacity) across the fracture.
+    
+    Mutually exclusive with `permeability`. Use one or the other:
+    - `permeability_multiplier`: Scale existing permeabilities
+    - `permeability`: Set absolute permeability value
     """
 
-    fracture_permeability: typing.Optional[float] = None
+    permeability: typing.Optional[float] = None
     """
     Permeability value for fracture zone cells (mD).
     If None, fracture zone properties are not modified.
+
+    Mutually exclusive with `permeability_multiplier`. Use one or the other:
+    - `permeability`: Set absolute permeability value
+    - `permeability_multiplier`: Scale existing permeabilities
     """
 
-    fracture_porosity: typing.Optional[float] = None
+    porosity: typing.Optional[float] = None
     """
     Porosity value for fracture zone cells (fraction).
     If None, fracture zone properties are not modified.
     """
 
-    geometric_throw_cells: int = 0
-    """
-    Number of cells to displace the downthrown block in z-direction.
-    Positive values create normal fractures (faults), negative values create reverse fractures (faults).
-    """
-
     conductive: bool = False
     """
     If True, the fracture acts as a high-permeability conduit.
-    This automatically sets appropriate transmissibility_scale if not manually specified.
+    This automatically sets appropriate `permeability_multiplier` if not manually specified.
     """
 
     mask: typing.Optional[np.ndarray] = None
     """
     Optional 3D boolean mask defining fracture geometry.
+
     If provided, overrides geometric fracture plane calculation.
     Must match the reservoir model grid dimensions.
     """
@@ -360,40 +703,47 @@ class Fracture:
     defaults: FractureDefaults = attrs.field(factory=lambda: FractureDefaults())
     """
     Custom default values for properties in displaced/expanded regions.
-    If None, uses `FractureDefaults()` with sensible defaults.
+    Uses `FractureDefaults()` with sensible defaults.
     """
 
     def __attrs_post_init__(self) -> None:
         """Validate fracture configuration parameters."""
-        if self.transmissibility_scale < c.MIN_TRANSMISSIBILITY_FACTOR:
-            object.__setattr__(
-                self, "transmissibility_scale", c.MIN_TRANSMISSIBILITY_FACTOR
-            )
-            logger.warning(
-                f"Fracture {self.id}: transmissibility_scale clamped to {c.MIN_TRANSMISSIBILITY_FACTOR}"
-            )
-
-        if self.conductive and self.transmissibility_scale < 1.0:
-            raise ValueError(
-                f"Fracture {self.id}: conductive fractures must have transmissibility_scale >= 1.0"
+        # Mutual exclusivity check
+        if self.permeability_multiplier is not None and self.permeability is not None:
+            raise ValidationError(
+                f"Fracture {self.id}: permeability_multiplier and permeability are mutually exclusive. "
+                "Use permeability_multiplier to scale existing permeabilities, or permeability to set absolute values."
             )
 
-        if self.fracture_permeability is not None and self.fracture_permeability < 0:
-            raise ValueError(
-                f"Fracture {self.id}: fracture_permeability must be non-negative"
+        # Validate permeability_multiplier if set
+        if self.permeability_multiplier is not None:
+            if self.permeability_multiplier < c.MIN_TRANSMISSIBILITY_FACTOR:
+                object.__setattr__(
+                    self, "permeability_multiplier", c.MIN_TRANSMISSIBILITY_FACTOR
+                )
+                logger.warning(
+                    f"Fracture {self.id}: permeability_multiplier clamped to {c.MIN_TRANSMISSIBILITY_FACTOR}"
+                )
+
+            if self.conductive and self.permeability_multiplier < 1.0:
+                raise ValidationError(
+                    f"Fracture {self.id}: conductive fractures must have permeability_multiplier >= 1.0"
+                )
+
+        if self.permeability is not None and self.permeability < 0:
+            raise ValidationError(
+                f"Fracture {self.id}: permeability must be non-negative"
             )
 
-        if self.fracture_porosity is not None and not (
-            0 <= self.fracture_porosity <= 1
-        ):
-            raise ValueError(
-                f"Fracture {self.id}: fracture_porosity must be between 0 and 1"
+        if self.porosity is not None and not (0 <= self.porosity <= 1):
+            raise ValidationError(
+                f"Fracture {self.id}: porosity must be between 0 and 1"
             )
 
 
 def apply_fracture(
-    model: ReservoirModel[NDimension], fracture: Fracture
-) -> ReservoirModel[NDimension]:
+    model: ReservoirModel[ThreeDimensions], fracture: Fracture
+) -> ReservoirModel[ThreeDimensions]:
     """
     Apply a single fracture to a reservoir model.
 
@@ -403,57 +753,56 @@ def apply_fracture(
 
     :param model: Input reservoir model to modify
     :param fracture: Fracture configuration defining geometry and properties
-    :return: New reservoir model with fracture applied
+    :return: The reservoir model with the fracture applied
     """
     logger.debug(f"Applying fracture '{fracture.id}' to reservoir model")
 
-    errors = validate_fracture(fracture, model.grid_shape)
+    errors = validate_fracture(fracture=fracture, grid_shape=model.grid_shape)
     if errors:
-        error = ""
-        for e in errors:
-            error += f"\n - {e}"
-        raise ValueError(f"Fracture {fracture.id} configuration is invalid: {error}")
+        msg = ""
+        for error in errors:
+            msg += f"\n - {error}"
+        raise ValidationError(f"Fracture {fracture.id} configuration is invalid: {msg}")
 
-    new_model = copy.deepcopy(model)
-    grid_shape = new_model.grid_shape
+    grid_shape = model.grid_shape
 
     if len(grid_shape) != 3:
-        raise ValueError("Fracture application requires 3D reservoir models")
-
-    new_model = typing.cast(ReservoirModel[ThreeDimensions], new_model)
+        raise ValidationError("Fracture application requires 3D reservoir models")
 
     # Generate or validate fracture mask
     if fracture.mask is not None:
         if fracture.mask.shape != grid_shape:
-            raise ValueError(
+            raise ValidationError(
                 f"Fracture {fracture.id}: mask shape {fracture.mask.shape} != grid shape {grid_shape}"
             )
         fracture_mask = fracture.mask.copy()
     else:
-        fracture_mask = _make_fracture_mask(grid_shape, fracture)  # type: ignore[arg-type]
+        fracture_mask = make_fracture_mask(grid_shape=grid_shape, fracture=fracture)  # type: ignore[arg-type]
 
     # Apply fracture effects in proper order
     # Modify fracture zone properties (before geometric displacement)
-    if (
-        fracture.fracture_permeability is not None
-        or fracture.fracture_porosity is not None
-    ):
-        new_model = _apply_fracture_zone_properties(new_model, fracture_mask, fracture)
+    if fracture.permeability is not None or fracture.porosity is not None:
+        model = _apply_fracture_zone_properties(
+            model=model, fracture_mask=fracture_mask, fracture=fracture
+        )
 
-    # Scale transmissibilities across fracture (before geometric displacement)
-    new_model = _scale_transmissibility(new_model, fracture_mask, fracture)
+    # Scale permeabilities across fracture (before geometric displacement)
+    if fracture.permeability_multiplier is not None:
+        model = _scale_permeability(
+            model=model, fracture_mask=fracture_mask, fracture=fracture
+        )
 
     # Apply geometric displacement (throw). This may change grid dimensions
-    if fracture.geometric_throw_cells != 0:
-        new_model = _apply_geometric_throw(new_model, fracture_mask, fracture)
+    if fracture.geometry.geometric_throw != 0:
+        model = _apply_geometric_throw(model=model, fracture=fracture)
 
     logger.debug(f"Successfully applied fracture '{fracture.id}'")
-    return typing.cast(ReservoirModel[NDimension], new_model)
+    return model
 
 
 def apply_fractures(
-    model: ReservoirModel[NDimension], *fractures: Fracture
-) -> ReservoirModel[NDimension]:
+    model: ReservoirModel[ThreeDimensions], *fractures: Fracture
+) -> ReservoirModel[ThreeDimensions]:
     """
     Apply multiple fractures to a reservoir model.
 
@@ -461,19 +810,19 @@ def apply_fractures(
 
     :param model: Input reservoir model
     :param fractures: Sequence of fracture configurations
-    :return: New reservoir model with all fractures applied
+    :return: The reservoir model with all fractures applied
     """
     logger.debug(f"Applying {len(fractures)} fractures to reservoir model")
 
     faulted_model = model
     for fracture in fractures:
-        faulted_model = apply_fracture(faulted_model, fracture)
+        faulted_model = apply_fracture(model=faulted_model, fracture=fracture)
 
     logger.debug(f"Successfully applied all {len(fractures)} fractures")
     return faulted_model
 
 
-def _make_fracture_mask(
+def make_fracture_mask(
     grid_shape: typing.Tuple[int, int, int], fracture: Fracture
 ) -> np.ndarray:
     """
@@ -482,6 +831,12 @@ def _make_fracture_mask(
     For inclined fractures, the mask follows the equation:
     z = z0 + slope * (coord - coord0)
 
+    Where:
+        z = vertical index
+        coord = x or y index depending on orientation
+        coord0 = fracture plane location
+        z0 = intercept
+
     :param grid_shape: Shape of the reservoir grid (nx, ny, nz)
     :param fracture: Fracture configuration
     :return: 3D boolean array marking fracture cells
@@ -489,53 +844,83 @@ def _make_fracture_mask(
     nx, ny, nz = grid_shape
     mask = np.zeros((nx, ny, nz), dtype=bool)
 
-    if fracture.orientation == "x":
-        # Fracture cuts through x-direction
-        if abs(fracture.slope) < 1e-6:
-            # Vertical fracture
-            if 0 <= fracture.fracture_index < nx:
-                mask[fracture.fracture_index, :, :] = True
-        else:
-            # Inclined fracture
-            for j in range(ny):
-                fracture_z = fracture.intercept + fracture.slope * (
-                    j - fracture.fracture_index
-                )
-                fracture_z = np.clip(fracture_z, 0, nz - 1)
-                z_low = max(0, int(fracture_z - 0.5))
-                z_high = min(nz - 1, int(fracture_z + 0.5))
-                mask[fracture.fracture_index, j, z_low : z_high + 1] = True
+    geom = fracture.geometry
 
-    elif fracture.orientation == "y":
-        # Fracture cuts through y-direction
-        if abs(fracture.slope) < 1e-6:
-            # Vertical fracture
-            if 0 <= fracture.fracture_index < ny:
-                mask[:, fracture.fracture_index, :] = True
-        else:
-            # Inclined fracture
-            for i in range(nx):
-                fracture_z = fracture.intercept + fracture.slope * (
-                    i - fracture.fracture_index
-                )
-                fracture_z = np.clip(fracture_z, 0, nz - 1)
-                z_low = max(0, int(fracture_z - 0.5))
-                z_high = min(nz - 1, int(fracture_z + 0.5))
-                mask[i, fracture.fracture_index, z_low : z_high + 1] = True
+    # Determine the cell range to apply
+    cell_min, cell_max = geom.get_fracture_plane_range()
 
+    # Determine vertical extent (z_range)
+    if geom.z_range is not None:
+        z_min, z_max = geom.z_range
+        z_min = max(0, min(z_min, nz - 1))  # Clamp to valid range
+        z_max = max(0, min(z_max, nz - 1))
+    else:
+        z_min, z_max = 0, nz - 1  # Full vertical extent
+
+    if geom.orientation == "x":
+        _mask_orientation_x(
+            mask=mask,
+            cell_min=cell_min,
+            cell_max=cell_max,
+            slope=float(geom.slope),
+            intercept=float(geom.intercept),
+            z_min=z_min,
+            z_max=z_max,
+        )
+
+    elif geom.orientation == "y":
+        _mask_orientation_y(
+            mask=mask,
+            cell_min=cell_min,
+            cell_max=cell_max,
+            slope=float(geom.slope),
+            intercept=float(geom.intercept),
+            z_min=z_min,
+            z_max=z_max,
+        )
+
+    elif geom.orientation == "z":
+        # Horizontal fracture - fracture plane in x-y plane
+        # Determine x and y extents
+        if geom.x_range is not None:
+            x_min, x_max = geom.x_range
+            x_min = max(0, min(x_min, nx - 1))
+            x_max = max(0, min(x_max, nx - 1))
+        else:
+            x_min, x_max = 0, nx - 1
+
+        if geom.y_range is not None:
+            y_min, y_max = geom.y_range
+            y_min = max(0, min(y_min, ny - 1))
+            y_max = max(0, min(y_max, ny - 1))
+        else:
+            y_min, y_max = 0, ny - 1
+
+        _mask_orientation_z(
+            mask=mask,
+            cell_min=cell_min,
+            cell_max=cell_max,
+            slope=float(geom.slope),
+            intercept=float(geom.intercept),
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+        )
     return mask
 
 
-def _scale_transmissibility(
+def _scale_permeability(
     model: ReservoirModel[ThreeDimensions],
     fracture_mask: np.ndarray,
     fracture: Fracture,
 ) -> ReservoirModel[ThreeDimensions]:
     """
-    Scale transmissibilities across fracture boundaries.
+    Scale permeabilities across fracture boundaries.
 
-    Identifies connections that cross the fracture and scales permeability
-    to reduce/increase transmissibility.
+    Identifies cells at the fracture and scales their permeability values
+    by the permeability_multiplier to reduce/increase flow capacity across
+    the fracture interface.
 
     :param model: Reservoir model to modify
     :param fracture_mask: 3D boolean array marking fracture cells
@@ -544,53 +929,37 @@ def _scale_transmissibility(
     """
     logger.debug(f"Scaling transmissibilities for fracture '{fracture.id}'")
 
-    nx, ny, nz = model.grid_shape
+    geom = fracture.geometry
+    if fracture.permeability_multiplier is None:
+        return model
 
     # Scale connections based on fracture orientation
-    if fracture.orientation == "x":
-        # Scale x-direction connections
-        for i, j, k in itertools.product(range(nx - 1), range(ny), range(nz)):
-            if fracture_mask[i, j, k] or fracture_mask[i + 1, j, k]:
-                if fracture_mask[i, j, k]:
-                    perm = model.rock_properties.absolute_permeability.x[i, j, k]
-                    model.rock_properties.absolute_permeability.x[i, j, k] = (
-                        perm * fracture.transmissibility_scale
-                    )
-                if fracture_mask[i + 1, j, k]:
-                    perm = model.rock_properties.absolute_permeability.x[i + 1, j, k]
-                    model.rock_properties.absolute_permeability.x[i + 1, j, k] = (
-                        perm * fracture.transmissibility_scale
-                    )
+    if geom.orientation == "x":
+        _scale_permeability_x_boundary(
+            perm_x=model.rock_properties.absolute_permeability.x,
+            mask=fracture_mask,
+            scale=float(fracture.permeability_multiplier),
+        )
+    elif geom.orientation == "y":
+        _scale_permeability_y_boundary(
+            perm_y=model.rock_properties.absolute_permeability.y,
+            mask=fracture_mask,
+            scale=float(fracture.permeability_multiplier),
+        )
+    elif geom.orientation == "z":
+        _scale_permeability_z_boundary(
+            perm_z=model.rock_properties.absolute_permeability.z,
+            mask=fracture_mask,
+            scale=float(fracture.permeability_multiplier),
+        )
 
-    elif fracture.orientation == "y":
-        # Scale y-direction connections
-        for i, j, k in itertools.product(range(nx), range(ny - 1), range(nz)):
-            if fracture_mask[i, j, k] or fracture_mask[i, j + 1, k]:
-                if fracture_mask[i, j, k]:
-                    perm = model.rock_properties.absolute_permeability.y[i, j, k]
-                    model.rock_properties.absolute_permeability.y[i, j, k] = (
-                        perm * fracture.transmissibility_scale
-                    )
-                if fracture_mask[i, j + 1, k]:
-                    perm = model.rock_properties.absolute_permeability.y[i, j + 1, k]
-                    model.rock_properties.absolute_permeability.y[i, j + 1, k] = (
-                        perm * fracture.transmissibility_scale
-                    )
-
-    # Always scale z-direction for inclined fractures
-    for i, j, k in itertools.product(range(nx), range(ny), range(nz - 1)):
-        if fracture_mask[i, j, k] or fracture_mask[i, j, k + 1]:
-            if fracture_mask[i, j, k]:
-                perm = model.rock_properties.absolute_permeability.z[i, j, k]
-                model.rock_properties.absolute_permeability.z[i, j, k] = (
-                    perm * fracture.transmissibility_scale
-                )
-            if fracture_mask[i, j, k + 1]:
-                perm = model.rock_properties.absolute_permeability.z[i, j, k + 1]
-                model.rock_properties.absolute_permeability.z[i, j, k + 1] = (
-                    perm * fracture.transmissibility_scale
-                )
-
+    # Always scale z-direction for inclined x/y fractures
+    if geom.orientation in ("x", "y"):
+        _scale_permeability_z_boundary(
+            perm_z=model.rock_properties.absolute_permeability.z,
+            mask=fracture_mask,
+            scale=float(fracture.permeability_multiplier),
+        )
     return model
 
 
@@ -609,25 +978,24 @@ def _apply_fracture_zone_properties(
     """
     logger.debug(f"Applying fracture zone properties for fracture '{fracture.id}'")
 
-    if fracture.fracture_permeability is not None:
+    if fracture.permeability is not None:
         model.rock_properties.absolute_permeability.x[fracture_mask] = (
-            fracture.fracture_permeability
+            fracture.permeability
         )
         model.rock_properties.absolute_permeability.y[fracture_mask] = (
-            fracture.fracture_permeability
+            fracture.permeability
         )
         model.rock_properties.absolute_permeability.z[fracture_mask] = (
-            fracture.fracture_permeability
+            fracture.permeability
         )
 
-    if fracture.fracture_porosity is not None:
-        model.rock_properties.porosity_grid[fracture_mask] = fracture.fracture_porosity
+    if fracture.porosity is not None:
+        model.rock_properties.porosity_grid[fracture_mask] = fracture.porosity
     return model
 
 
 def _apply_geometric_throw(
     model: ReservoirModel[ThreeDimensions],
-    fracture_mask: np.typing.NDArray,
     fracture: Fracture,
 ) -> ReservoirModel[ThreeDimensions]:
     """
@@ -643,13 +1011,15 @@ def _apply_geometric_throw(
     :param fracture: Fracture configuration
     :return: Modified reservoir model with updated grid dimensions
     """
-    logger.debug(f"Applying geometric throw ({fracture.geometric_throw_cells} cells)")
+    throw = fracture.geometry.geometric_throw
+    logger.debug(f"Applying geometric throw ({throw} cells)")
 
-    if fracture.geometric_throw_cells == 0:
+    if throw == 0:
         return model
 
-    throw = fracture.geometric_throw_cells
-    displacement_mask = _create_displacement_mask(model.grid_shape, fracture)
+    displacement_mask = make_displacement_mask(
+        grid_shape=model.grid_shape, fracture=fracture
+    )
     defaults = fracture.defaults
 
     # Create displacement context for all grids
@@ -843,8 +1213,7 @@ def _apply_geometric_throw(
     )
 
     # Update model with new grids and shape
-    new_model = attrs.evolve(
-        model,
+    new_model = model.evolve(
         grid_shape=ctx.new_shape,
         thickness_grid=new_thickness,
         rock_properties=new_rock,
@@ -854,7 +1223,7 @@ def _apply_geometric_throw(
     return new_model
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class DisplacementContext:
     """
     Context object that handles block-based displacement for all grids.
@@ -892,8 +1261,12 @@ class DisplacementContext:
         :return: Displaced grid (possibly expanded)
         """
         if self.preserve_data:
-            return self._displace_with_expansion(grid, property_name, property_type)
-        return self._displace_without_expansion(grid, property_name, property_type)
+            return self._displace_with_expansion(
+                grid=grid, property_name=property_name, property_type=property_type
+            )
+        return self._displace_without_expansion(
+            grid=grid, property_name=property_name, property_type=property_type
+        )
 
     def _displace_with_expansion(
         self,
@@ -926,7 +1299,7 @@ class DisplacementContext:
         new_grid = np.full((nx, ny, new_nz), fill_value=default_value, dtype=grid.dtype)
 
         # Identify upthrown and downthrown blocks
-        upthrown_mask = ~self.displacement_mask  # Not displaced
+        upthrown_mask = np.invert(self.displacement_mask)  # Not displaced
         downthrown_mask = self.displacement_mask  # Displaced
 
         if self.throw > 0:
@@ -997,7 +1370,7 @@ class DisplacementContext:
         new_grid = np.full((nx, ny, nz), fill_value=default_value, dtype=grid.dtype)
 
         # Identify blocks
-        upthrown_mask = ~self.displacement_mask
+        upthrown_mask = np.invert(self.displacement_mask)
         downthrown_mask = self.displacement_mask
 
         if self.throw > 0:
@@ -1016,7 +1389,7 @@ class DisplacementContext:
                         downthrown_mask[:, :, k]
                     ]
 
-            # Top of downthrown block exposed - already filled with defaults
+            # Top of downthrown block exposed and already filled with defaults
 
         else:
             # Reverse fault: downthrown moves up
@@ -1041,6 +1414,573 @@ class DisplacementContext:
         return new_grid
 
 
+def vertical_sealing_fault(
+    fault_id: str,
+    orientation: typing.Literal["x", "y", "z"],
+    index: int,
+    permeability_multiplier: float = 1e-4,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a sealing barrier at a grid index with optional extent control.
+
+    Creates a planar barrier that reduces fluid flow. Despite the name "vertical_sealing_fault",
+    this function supports all orientations including horizontal barriers (z-orientation).
+
+    Flexibility:
+    - Control lateral extent with `x_range`/`y_range`
+    - Control vertical extent with `z_range`
+    - Can create stratigraphically-bounded faults
+    - Can create faults that don't span entire grid
+    - Supports horizontal sealing layers (z-orientation)
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x', 'y' for vertical, 'z' for horizontal)
+    :param index: Grid index where the fault/barrier is located
+    :param permeability_multiplier: Flow reduction factor (default: 1e-4 = 99.99% sealing)
+    :param x_range: Optional lateral extent in x
+    :param y_range: Optional lateral extent in y
+    :param z_range: Optional vertical extent (for x/y orientation) or layer index (for z orientation)
+    :param defaults: Optional custom defaults for properties
+    :return: Configured `Fracture` object
+
+    Examples:
+    ```python
+    # Simple vertical fault through entire grid
+    vertical_sealing_fault(fault_id="f1", orientation="x", index=25)
+
+    # Shallow fault only in top 10 layers
+    vertical_sealing_fault(
+        fault_id="f1",
+        orientation="x",
+        index=25,
+        z_range=(0, 10)
+    )
+
+    # Horizontal sealing layer (e.g., shale barrier)
+    vertical_sealing_fault(
+        fault_id="shale_barrier",
+        orientation="z",
+        index=15,
+        x_range=(0, 50),
+        y_range=(0, 50)
+    )
+    ```
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=(index, index),
+            y_range=y_range,
+            z_range=z_range,
+        )
+    elif orientation == "y":
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=(index, index),
+            x_range=x_range,
+            z_range=z_range,
+        )
+    else:  # z-orientation
+        geometry = FractureGeometry(
+            orientation="z",
+            z_range=(index, index),
+            x_range=x_range,
+            y_range=y_range,
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def normal_fault_with_throw(
+    fault_id: str,
+    orientation: typing.Literal["x", "y"],
+    index: int,
+    throw_cells: int,
+    permeability_multiplier: float = 1e-4,
+    preserve_data: bool = True,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a normal fault with vertical displacement (throw).
+
+    Normal faults occur when the hanging wall (downthrown block) moves down
+    relative to the footwall. This creates juxtaposition of different reservoir
+    layers across the fault. Use positive `throw_cells`.
+
+    Displacement Behaviour:
+    - By default, only the fault plane itself (at the specified index) is displaced
+    - Use `displacement_range` to explicitly control which cells move
+    - This allows for localized faulting or displacing entire blocks
+
+    Flexibility:
+    - Control which cells are displaced with `displacement_range`
+    - Limit fault extent with x_range/y_range/z_range
+    - Create segmented faults or relay ramps
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x' or 'y')
+    :param index: Grid index where the fault is located
+    :param throw_cells: Number of cells to displace vertically (positive for normal fault)
+    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
+    :param preserve_data: If True, expand grid to preserve all data (recommended)
+    :param x_range: Optional lateral extent in x (for y-oriented faults)
+    :param y_range: Optional lateral extent in y (for x-oriented faults)
+    :param z_range: Optional vertical extent
+    :param displacement_range: Optional explicit control over which cells are displaced.
+        If None, only the fault plane at 'index' is displaced.
+    :param defaults: Optional custom defaults for expanded regions
+    :return: Configured `Fracture` object
+
+    Examples:
+    ```python
+    # Simple fault - only displaces the fault plane at x=25
+    normal_fault_with_throw(fault_id="f1", orientation="x", index=25, throw_cells=3)
+
+    # Fault affecting entire block from x=30 onward
+    normal_fault_with_throw(
+        fault_id="f1",
+        orientation="x",
+        index=25,
+        throw_cells=3,
+        displacement_range=(30, 50)
+    )
+
+    # Shallow fault with limited throw
+    normal_fault_with_throw(
+        fault_id="f1",
+        orientation="x",
+        index=25,
+        throw_cells=2,
+        z_range=(0, 10)
+    )
+    ```
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=(index, index),
+            y_range=y_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=throw_cells,
+        )
+    else:
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=(index, index),
+            x_range=x_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=throw_cells,
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        preserve_grid_data=preserve_data,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def reverse_fault_with_throw(
+    fault_id: str,
+    orientation: typing.Literal["x", "y"],
+    index: int,
+    throw_cells: int,
+    permeability_multiplier: float = 1e-4,
+    preserve_data: bool = True,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a reverse fault with vertical displacement (throw).
+
+    Reverse faults occur when the hanging wall moves up relative to the footwall,
+    typically due to compressional forces. Use negative throw_cells.
+
+    Displacement Behaviour:
+    - By default, only the fault plane itself (at the specified index) is displaced
+    - Use `displacement_range` to explicitly control which cells move
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x' or 'y')
+    :param index: Grid index where the fault is located
+    :param throw_cells: Number of cells to displace vertically (use negative for reverse)
+    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
+    :param preserve_data: If True, expand grid to preserve all data (recommended)
+    :param x_range: Optional lateral extent in x (for y-oriented faults)
+    :param y_range: Optional lateral extent in y (for x-oriented faults)
+    :param z_range: Optional vertical extent
+    :param displacement_range: Optional explicit control over which cells are displaced.
+        If None, only the fault plane at 'index' is displaced.
+    :param defaults: Optional custom defaults for expanded regions
+    :return: Configured `Fracture` object
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=(index, index),
+            y_range=y_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=-abs(throw_cells),  # Ensure negative
+        )
+    else:
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=(index, index),
+            x_range=x_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=-abs(throw_cells),  # Ensure negative
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        preserve_grid_data=preserve_data,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def inclined_sealing_fault(
+    fault_id: str,
+    orientation: typing.Literal["x", "y"],
+    index: int,
+    slope: float,
+    intercept: float,
+    permeability_multiplier: float = 1e-4,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create an inclined (non-vertical) sealing fault.
+
+    The fault plane follows:
+    ```
+    z = intercept + slope * (coordinate)
+    ```
+    where coordinate is x-position for y-oriented faults, or y-position for x-oriented faults.
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x' or 'y')
+    :param index: Grid index where the fault intersects
+    :param slope: Slope of the fault plane (dz/dx or dz/dy)
+    :param intercept: Z-intercept of the fault plane
+    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
+    :param x_range: Optional lateral extent in x (for y-oriented faults)
+    :param y_range: Optional lateral extent in y (for x-oriented faults)
+    :param z_range: Optional vertical extent to clip the inclined plane
+    :param defaults: Optional custom defaults for properties
+    :return: Configured `Fracture` object
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=(index, index),
+            y_range=y_range,
+            z_range=z_range,
+            slope=slope,
+            intercept=intercept,
+        )
+    else:
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=(index, index),
+            x_range=x_range,
+            z_range=z_range,
+            slope=slope,
+            intercept=intercept,
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def damage_zone_fault(
+    fault_id: str,
+    orientation: typing.Literal["x", "y", "z"],
+    cell_range: typing.Tuple[int, int],
+    permeability_multiplier: float = 1e-3,
+    zone_permeability: typing.Optional[float] = None,
+    zone_porosity: typing.Optional[float] = None,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a fault/barrier with a damage zone (multiple cells wide).
+
+    Fault damage zones are regions of reduced permeability and altered rock
+    properties surrounding the main fault plane. This is more realistic than
+    single-cell faults for large displacement faults. Also useful for modeling
+    horizontal low-permeability layers (z-orientation).
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x', 'y' for vertical, 'z' for horizontal)
+    :param cell_range: Range of cells defining the damage zone (inclusive)
+    :param permeability_multiplier: Flow reduction across the zone (default: 1e-3)
+    :param zone_permeability: Permeability within damage zone (mD), if different
+    :param zone_porosity: Porosity within damage zone (fraction), if different
+    :param x_range: Optional lateral extent in x
+    :param y_range: Optional lateral extent in y
+    :param z_range: Optional vertical extent (for x/y) or limits for z-orientation
+    :param defaults: Optional custom defaults for properties
+    :return: Configured `Fracture` object
+
+    Examples:
+    ```python
+    # Wide vertical damage zone from x=20 to x=30
+    damage_zone_fault(fault_id="f1", orientation="x", cell_range=(20, 30))
+
+    # Damage zone only in middle layers
+    damage_zone_fault(
+        fault_id="f1",
+        orientation="x",
+        cell_range=(20, 25),
+        z_range=(10, 20)
+    )
+
+    # Horizontal low-permeability layer (e.g., shale layer spanning z=10 to z=12)
+    damage_zone_fault(
+        fault_id="shale",
+        orientation="z",
+        cell_range=(10, 12),
+        zone_permeability=0.01
+    )
+    ```
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x", x_range=cell_range, y_range=y_range, z_range=z_range
+        )
+    elif orientation == "y":
+        geometry = FractureGeometry(
+            orientation="y", y_range=cell_range, x_range=x_range, z_range=z_range
+        )
+    else:  # z-orientation
+        geometry = FractureGeometry(
+            orientation="z", z_range=cell_range, x_range=x_range, y_range=y_range
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        permeability=zone_permeability,
+        porosity=zone_porosity,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def conductive_fracture_network(
+    fracture_id: str,
+    orientation: typing.Literal["x", "y", "z"],
+    cell_range: typing.Tuple[int, int],
+    fracture_permeability: float,
+    fracture_porosity: float = 0.01,
+    permeability_multiplier: float = 10.0,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a highly conductive fracture network (opposite of sealing fault).
+
+    Used for modeling natural fracture systems, hydraulically-fractured zones,
+    highly permeable conduits, or high-permeability horizontal layers that enhance flow.
+
+    :param fracture_id: Unique identifier for the fracture
+    :param orientation: Fracture orientation ('x', 'y' for vertical, 'z' for horizontal)
+    :param cell_range: Range of cells defining the fracture network
+    :param fracture_permeability: High permeability within fracture (mD)
+    :param fracture_porosity: Fracture porosity (typically low, default: 0.01)
+    :param permeability_multiplier: Flow enhancement factor (default: 10.0)
+    :param x_range: Optional lateral extent in x
+    :param y_range: Optional lateral extent in y
+    :param z_range: Optional vertical extent or limits for z-orientation
+    :param defaults: Optional custom defaults for properties
+    :return: Configured `Fracture` object
+
+    Examples:
+    ```python
+    # Conductive vertical fracture in pay zone only
+    conductive_fracture_network(
+        fault_id="frac1",
+        orientation="x",
+        cell_range=(25, 27),
+        fracture_permeability=1000,
+        z_range=(10, 20)
+    )
+
+    # Horizontal high-permeability layer (e.g., karst zone)
+    conductive_fracture_network(
+        fault_id="karst",
+        orientation="z",
+        cell_range=(15, 17),
+        fracture_permeability=5000
+    )
+    ```
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=cell_range,
+            y_range=y_range,
+            z_range=z_range,
+        )
+    elif orientation == "y":
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=cell_range,
+            x_range=x_range,
+            z_range=z_range,
+        )
+    else:  # z-orientation
+        geometry = FractureGeometry(
+            orientation="z",
+            z_range=cell_range,
+            x_range=x_range,
+            y_range=y_range,
+        )
+
+    return Fracture(
+        id=fracture_id,
+        geometry=geometry,
+        permeability=fracture_permeability,
+        porosity=fracture_porosity,
+        permeability_multiplier=permeability_multiplier,
+        conductive=True,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
+def fault_with_throw_and_damage_zone(
+    fault_id: str,
+    orientation: typing.Literal["x", "y"],
+    cell_range: typing.Tuple[int, int],
+    throw_cells: int,
+    permeability_multiplier: float = 1e-4,
+    zone_permeability: typing.Optional[float] = None,
+    zone_porosity: typing.Optional[float] = None,
+    preserve_data: bool = True,
+    x_range: typing.Optional[typing.Tuple[int, int]] = None,
+    y_range: typing.Optional[typing.Tuple[int, int]] = None,
+    z_range: typing.Optional[typing.Tuple[int, int]] = None,
+    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
+    defaults: typing.Optional[FractureDefaults] = None,
+) -> Fracture:
+    """
+    Create a fault with both geometric throw and a damage zone.
+
+    This combines vertical displacement with altered rock properties across
+    multiple cells, representing realistic large-displacement faults.
+
+    Displacement Behaviour:
+    - By default, only the damage zone cells (cell_range) are displaced
+    - Use displacement_range to control which cells move (e.g., displace entire blocks)
+
+    :param fault_id: Unique identifier for the fault
+    :param orientation: Fault orientation ('x' or 'y')
+    :param cell_range: Range of cells defining the damage zone
+    :param throw_cells: Number of cells to displace vertically
+    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
+    :param zone_permeability: Permeability within damage zone (mD)
+    :param zone_porosity: Porosity within damage zone (fraction)
+    :param preserve_data: If True, expand grid to preserve all data
+    :param x_range: Optional lateral extent in x (for y-oriented faults)
+    :param y_range: Optional lateral extent in y (for x-oriented faults)
+    :param z_range: Optional vertical extent
+    :param displacement_range: Optional explicit control over which cells are displaced.
+        If None, only the damage zone (cell_range) is displaced.
+    :param defaults: Optional custom defaults for expanded regions
+    :return: Configured `Fracture` object
+
+    Examples:
+    ```python
+    # Fault with damage zone - by default only displaces the damage zone itself
+    fault_with_throw_and_damage_zone(
+        fault_id="f1",
+        orientation="x",
+        cell_range=(20, 25),
+        throw_cells=3
+    )
+
+    # Fault with damage zone, but displacing entire right side
+    fault_with_throw_and_damage_zone(
+        fault_id="f1",
+        orientation="x",
+        cell_range=(20, 25),
+        throw_cells=3,
+        displacement_range=(26, 50)
+    )
+
+    # Segmented fault in specific layers
+    fault_with_throw_and_damage_zone(
+        fault_id="f1",
+        orientation="x",
+        cell_range=(20, 25),
+        throw_cells=2,
+        z_range=(10, 20)
+    )
+    ```
+    """
+    if orientation == "x":
+        geometry = FractureGeometry(
+            orientation="x",
+            x_range=cell_range,
+            y_range=y_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=throw_cells,
+        )
+    else:
+        geometry = FractureGeometry(
+            orientation="y",
+            y_range=cell_range,
+            x_range=x_range,
+            z_range=z_range,
+            displacement_range=displacement_range,
+            geometric_throw=throw_cells,
+        )
+
+    return Fracture(
+        id=fault_id,
+        geometry=geometry,
+        permeability_multiplier=permeability_multiplier,
+        permeability=zone_permeability,
+        porosity=zone_porosity,
+        preserve_grid_data=preserve_data,
+        defaults=defaults or FractureDefaults(),
+    )
+
+
 def validate_fracture(
     fracture: Fracture, grid_shape: typing.Tuple[int, ...]
 ) -> typing.List[str]:
@@ -1058,45 +1998,126 @@ def validate_fracture(
         return errors
 
     nx, ny, nz = grid_shape
+    geom = fracture.geometry
 
-    # Check fracture index bounds
-    if fracture.orientation == "x" and not (0 <= fracture.fracture_index < nx):
+    # Validate primary range based on orientation
+    if geom.orientation == "x":
+        if geom.x_range is not None:
+            x_min, x_max = geom.x_range
+            if x_min > x_max:
+                errors.append(
+                    f"Fracture {fracture.id!r}: x_range min > max ({x_min} > {x_max})"
+                )
+            if not (0 <= x_min < nx and 0 <= x_max < nx):
+                errors.append(
+                    f"Fracture {fracture.id!r}: x_range ({x_min}, {x_max}) out of bounds [0, {nx - 1}]"
+                )
+
+    elif geom.orientation == "y":
+        if geom.y_range is not None:
+            y_min, y_max = geom.y_range
+            if y_min > y_max:
+                errors.append(
+                    f"Fracture {fracture.id!r}: y_range min > max ({y_min} > {y_max})"
+                )
+            if not (0 <= y_min < ny and 0 <= y_max < ny):
+                errors.append(
+                    f"Fracture {fracture.id!r}: y_range ({y_min}, {y_max}) out of bounds [0, {ny - 1}]"
+                )
+
+    elif geom.orientation == "z":
+        if geom.z_range is not None:
+            z_min, z_max = geom.z_range
+            if z_min > z_max:
+                errors.append(
+                    f"Fracture {fracture.id!r}: z_range min > max ({z_min} > {z_max})"
+                )
+            if not (0 <= z_min < nz and 0 <= z_max < nz):
+                errors.append(
+                    f"Fracture {fracture.id!r}: z_range ({z_min}, {z_max}) out of bounds [0, {nz - 1}]"
+                )
+
+    # Validate z_range if specified (for x/y oriented fractures)
+    if geom.orientation in ("x", "y") and geom.z_range is not None:
+        z_min, z_max = geom.z_range
+        if z_min > z_max:
+            errors.append(
+                f"Fracture {fracture.id!r}: z_range min > max ({z_min} > {z_max})"
+            )
+        if not (0 <= z_min < nz and 0 <= z_max < nz):
+            errors.append(
+                f"Fracture {fracture.id!r}: z_range ({z_min}, {z_max}) out of bounds [0, {nz - 1}]"
+            )
+
+    # Validate intercept if applicable
+    if geom.intercept != 0.0 and not (0 <= geom.intercept < nz):
         errors.append(
-            f"Fracture {fracture.id}: fracture_index {fracture.fracture_index} out of x-range [0, {nx - 1}]"
-        )
-    elif fracture.orientation == "y" and not (0 <= fracture.fracture_index < ny):
-        errors.append(
-            f"Fracture {fracture.id}: fracture_index {fracture.fracture_index} out of y-range [0, {ny - 1}]"
+            f"Fracture {fracture.id!r}: intercept {geom.intercept} out of z-range [0, {nz - 1}]"
         )
 
-    # Check intercept bounds
-    if not (0 <= fracture.intercept < nz):
+    # Validate geometric throw
+    if geom.orientation == "z" and geom.geometric_throw != 0:
         errors.append(
-            f"Fracture {fracture.id}: intercept {fracture.intercept} out of z-range [0, {nz - 1}]"
+            f"Fracture {fracture.id!r}: geometric_throw is not supported for z-oriented fractures"
+        )
+    if abs(geom.geometric_throw) >= nz:
+        errors.append(
+            f"Fracture {fracture.id!r}: geometric_throw {geom.geometric_throw} too large for nz={nz}"
         )
 
-    # Check geometric throw bounds
-    if abs(fracture.geometric_throw_cells) >= nz:
-        errors.append(
-            f"Fracture {fracture.id}: geometric_throw_cells {fracture.geometric_throw_cells} too large for nz={nz}"
-        )
+    # Validate displacement_range if specified
+    if geom.displacement_range is not None:
+        disp_min, disp_max = geom.displacement_range
+        if disp_min > disp_max:
+            errors.append(
+                f"Fracture {fracture.id!r}: displacement_range min > max ({disp_min} > {disp_max})"
+            )
+        if geom.orientation == "x" and not (0 <= disp_min < nx and 0 <= disp_max < nx):
+            errors.append(
+                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of x-bounds [0, {nx - 1}]"
+            )
+        elif geom.orientation == "y" and not (
+            0 <= disp_min < ny and 0 <= disp_max < ny
+        ):
+            errors.append(
+                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of y-bounds [0, {ny - 1}]"
+            )
+        elif geom.orientation == "z" and not (
+            0 <= disp_min < nz and 0 <= disp_max < nz
+        ):
+            errors.append(
+                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of z-bounds [0, {nz - 1}]"
+            )
 
-    # Check mask shape if provided
+    # Validate mask shape if provided
     if fracture.mask is not None and fracture.mask.shape != grid_shape:
         errors.append(
-            f"Fracture {fracture.id}: mask shape {fracture.mask.shape} != grid shape {grid_shape}"
+            f"Fracture {fracture.id!r}: mask shape {fracture.mask.shape} != grid shape {grid_shape}"
         )
 
     return errors
 
 
-def _create_displacement_mask(
+def make_displacement_mask(
     grid_shape: typing.Tuple[int, int, int], fracture: Fracture
 ) -> np.ndarray:
     """
     Create a boolean mask indicating which cells should be displaced by the fracture.
 
-    This defines the "downthrown block" - cells that will move vertically.
+    This defines the "downthrown block", i.e., cells that will move vertically.
+
+    DISPLACEMENT LOGIC:
+
+    If displacement_range is specified in geometry:
+        - Only cells within that explicit range are displaced
+        - Provides fine-grained control over which cells move
+
+    If displacement_range is None (default):
+        - Only the fracture zone itself is displaced
+        - For x-oriented: cells within x_range are displaced
+        - For y-oriented: cells within y_range are displaced
+        - For z-oriented: cells within z_range are displaced
+        - This creates localized faulting rather than displacing entire half-grids
 
     :param grid_shape: Shape of the reservoir grid (nx, ny, nz)
     :param fracture: Fracture configuration
@@ -1105,15 +2126,37 @@ def _create_displacement_mask(
     nx, ny, nz = grid_shape
     displacement_mask = np.zeros((nx, ny, nz), dtype=bool)
 
-    # Determine which side is downthrown based on fracture orientation
-    if fracture.orientation == "x":
-        # Cells with x > fracture_index are downthrown
-        if fracture.fracture_index < nx - 1:
-            displacement_mask[fracture.fracture_index + 1 :, :, :] = True
+    geom = fracture.geometry
 
-    elif fracture.orientation == "y":
-        # Cells with y > fracture_index are downthrown
-        if fracture.fracture_index < ny - 1:
-            displacement_mask[:, fracture.fracture_index + 1 :, :] = True
+    # Determine the displacement range
+    if geom.displacement_range is not None:
+        # Explicit displacement_range provided
+        disp_min, disp_max = geom.displacement_range
+    else:
+        # Default: displace only the fracture zone itself
+        fault_plane_range = geom.get_fracture_plane_range()
+        disp_min, disp_max = fault_plane_range
+
+    # Apply displacement based on orientation
+    if geom.orientation == "x":
+        # Displace cells in x-range [disp_min, disp_max]
+        if disp_min < nx and disp_max >= 0:
+            disp_min = max(0, disp_min)
+            disp_max = min(nx - 1, disp_max)
+            displacement_mask[disp_min : disp_max + 1, :, :] = True
+
+    elif geom.orientation == "y":
+        # Displace cells in y-range [disp_min, disp_max]
+        if disp_min < ny and disp_max >= 0:
+            disp_min = max(0, disp_min)
+            disp_max = min(ny - 1, disp_max)
+            displacement_mask[:, disp_min : disp_max + 1, :] = True
+
+    elif geom.orientation == "z":
+        # Displace cells in z-range [disp_min, disp_max]
+        if disp_min < nz and disp_max >= 0:
+            disp_min = max(0, disp_min)
+            disp_max = min(nz - 1, disp_max)
+            displacement_mask[:, :, disp_min : disp_max + 1] = True
 
     return displacement_mask

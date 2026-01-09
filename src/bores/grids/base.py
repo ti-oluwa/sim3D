@@ -99,7 +99,7 @@ def build_layered_grid(
 
         for i, layer_value in enumerate(layer_values):
             layered_grid[i, :, :] = layer_value
-        return layered_grid.astype(dtype)
+        return layered_grid.astype(dtype, copy=False)
 
     elif orientation == Orientation.Y:  # Layering along y-axis
         if len(layer_values) != grid_shape[1]:
@@ -109,7 +109,7 @@ def build_layered_grid(
 
         for j, layer_value in enumerate(layer_values):
             layered_grid[:, j, :] = layer_value
-        return layered_grid.astype(dtype)
+        return layered_grid.astype(dtype, copy=False)
 
     elif orientation == Orientation.Z:  # Layering along z-axis
         if len(grid_shape) != 3:
@@ -124,7 +124,7 @@ def build_layered_grid(
 
         for k, layer_value in enumerate(layer_values):
             layered_grid[:, :, k] = layer_value
-        return layered_grid.astype(dtype)
+        return layered_grid.astype(dtype, copy=False)
 
     raise ValidationError(
         "Invalid layering direction. Must be one of 'x', 'y', or 'z'."
@@ -372,7 +372,7 @@ def apply_structural_dip(
         raise ValidationError("`dip_azimuth` must be between 0 and 360 degrees")
 
     dtype = get_dtype()
-    dipped_elevation_grid = elevation_grid.copy().astype(dtype)
+    dipped_elevation_grid = elevation_grid.copy().astype(dtype, copy=False)
     dip_angle_radians = np.radians(dip_angle)
     dip_azimuth_radians = np.radians(dip_azimuth)
 

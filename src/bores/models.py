@@ -319,7 +319,7 @@ class ReservoirModel(typing.Generic[NDimension]):
     """Rock-fluid properties of the reservoir model."""
     saturation_history = LazyField[SaturationHistory[NDimension]]()
     """Tracks historical maximum saturations and displacement regimes in the reservoir."""
-    boundary_conditions = LazyField[BoundaryConditions]()
+    boundary_conditions = LazyField[BoundaryConditions[NDimension]]()
     """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
 
     def __init__(
@@ -374,7 +374,7 @@ class ReservoirModel(typing.Generic[NDimension]):
             SaturationHistory[NDimension], saturation_history
         )
         self.boundary_conditions = typing.cast(
-            BoundaryConditions,
+            BoundaryConditions[NDimension],
             boundary_conditions
             if boundary_conditions is not None
             else BoundaryConditions(),
@@ -415,7 +415,7 @@ class ReservoirModel(typing.Generic[NDimension]):
             "dip_angle": self.dip_angle,
             "dip_azimuth": self.dip_azimuth,
         }
-        return type(self)(**{**attrs, **kwargs})
+        return type(self)(**{**attrs, **kwargs})  # type: ignore[arg-type]
 
     def get_elevation_grid(
         self, apply_dip: bool = False

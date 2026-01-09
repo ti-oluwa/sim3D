@@ -1009,10 +1009,10 @@ class BaseRenderer(ABC):
         """
         # Keep original data for display purposes (hover text, colorbar)
         dtype = get_dtype()
-        display_data = data.astype(dtype)
+        display_data = data.astype(dtype, copy=False)
 
         # Process data for plotting
-        processed_data = data.astype(dtype)
+        processed_data = data.astype(dtype, copy=False)
 
         if metadata.log_scale:
             # Handle zero/negative values for log scale

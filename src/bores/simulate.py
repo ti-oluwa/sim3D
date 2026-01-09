@@ -194,10 +194,10 @@ def _run_implicit_step(
         f"Residual: {solution.final_residual_norm:.4e}"
     )
     dtype = get_dtype()
-    padded_pressure_grid = solution.pressure_grid.astype(dtype)
-    padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype)
-    padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype)
-    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype)
+    padded_pressure_grid = solution.pressure_grid.astype(dtype, copy=False)
+    padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype, copy=False)
+    padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype, copy=False)
+    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype, copy=False)
 
     # Check for any out-of-range pressures
     min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
@@ -240,7 +240,7 @@ def _run_implicit_step(
     # Clamp pressures to valid range just for additional safety and to remove numerical noise
     padded_pressure_grid = clip(
         padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
-    ).astype(dtype)
+    ).astype(dtype, copy=False)
 
     # Update fluid properties with new pressure and saturation
     logger.debug("Updating fluid properties with new pressure and saturation grids...")
@@ -391,7 +391,7 @@ def _run_impes_step(
     # Clamp pressures to valid range just for additional safety and to remove numerical noise
     padded_pressure_grid = clip(
         padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
-    ).astype(dtype)
+    ).astype(dtype, copy=False)
 
     # Update fluid properties with new pressure grid
     logger.debug("Updating fluid properties with new pressure grid...")
@@ -508,9 +508,9 @@ def _run_impes_step(
     logger.debug("Saturation evolution completed!")
 
     logger.debug("Updating fluid properties with new saturation grids...")
-    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype)
-    padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype)
-    padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype)
+    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype, copy=False)
+    padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype, copy=False)
+    padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype, copy=False)
     padded_solvent_concentration_grid = solution.solvent_concentration_grid
 
     if padded_solvent_concentration_grid is None:
@@ -526,7 +526,7 @@ def _run_impes_step(
             water_saturation_grid=padded_water_saturation_grid,
             oil_saturation_grid=padded_oil_saturation_grid,
             gas_saturation_grid=padded_gas_saturation_grid,
-            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype),
+            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype, copy=False),
         )
 
     # Update residual saturation grids based on new saturations
@@ -664,7 +664,7 @@ def _run_explicit_step(
     # Clamp pressures to valid range just for additional safety and to remove numerical noise
     padded_pressure_grid = clip(
         padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
-    ).astype(dtype)
+    ).astype(dtype, copy=False)
 
     # For explicit schemes, we can re-use the current fluid properties
     # in the saturation evolution step.
@@ -744,9 +744,9 @@ def _run_explicit_step(
 
     logger.debug("Updating fluid properties with new saturation grids...")
 
-    padded_water_saturation_grid = saturation_solution.water_saturation_grid.astype(dtype)
-    padded_oil_saturation_grid = saturation_solution.oil_saturation_grid.astype(dtype)
-    padded_gas_saturation_grid = saturation_solution.gas_saturation_grid.astype(dtype)
+    padded_water_saturation_grid = saturation_solution.water_saturation_grid.astype(dtype, copy=False)
+    padded_oil_saturation_grid = saturation_solution.oil_saturation_grid.astype(dtype, copy=False)
+    padded_gas_saturation_grid = saturation_solution.gas_saturation_grid.astype(dtype, copy=False)
     padded_solvent_concentration_grid = saturation_solution.solvent_concentration_grid
     if padded_solvent_concentration_grid is None:
         padded_fluid_properties = attrs.evolve(
@@ -761,7 +761,7 @@ def _run_explicit_step(
             water_saturation_grid=padded_water_saturation_grid,
             oil_saturation_grid=padded_oil_saturation_grid,
             gas_saturation_grid=padded_gas_saturation_grid,
-            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype),
+            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype, copy=False),
         )
 
     # Update PVT properties with new state (pressure and saturations)

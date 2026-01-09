@@ -886,7 +886,7 @@ def compute_gas_compressibility_factor_hall_yarborough(
     active_mask = Pr >= 0.01
 
     # Newton-Raphson iteration (vectorized)
-    for iteration in range(max_iterations):
+    for _ in range(max_iterations):
         y_old = y.copy()
 
         # Function f(y) and its derivative f'(y)
@@ -1028,7 +1028,7 @@ def compute_gas_compressibility_factor_dranchuk_abou_kassem(
     active_mask = Pr >= 0.01
 
     # Iterative solution for Z (vectorized)
-    for iteration in range(max_iterations):
+    for _ in range(max_iterations):
         Z_old = Z.copy()
 
         # Reduced density: ρr = 0.27 * Pr / (Z * Tr)
@@ -1479,7 +1479,7 @@ def compute_water_bubble_point_pressure(
     while not it.finished:
         idx = it.multi_index
         bubble_point_pressure[idx] = brentq(  # type: ignore
-            _water_bubble_point_residual,
+            f=_water_bubble_point_residual,
             a=min_pressure[idx],
             b=max_pressure[idx],
             args=(
@@ -3173,7 +3173,7 @@ def estimate_bubble_point_pressure_standing(
         idx = it.multi_index
 
         bubble_point_pressure[idx] = brentq(
-            _standing_bp_residual_scalar,
+            f=_standing_bp_residual_scalar,
             a=14.696,
             b=10000.0,
             args=(

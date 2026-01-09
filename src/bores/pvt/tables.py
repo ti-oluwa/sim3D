@@ -50,7 +50,7 @@ __all__ = [
     "build_pvt_table_data",
     "build_gas_pseudo_pressure_table",
     "clear_pseudo_pressure_table_cache",
-    "get_pseudo_pressure_table_cache_info"
+    "get_pseudo_pressure_table_cache_info",
 ]
 
 
@@ -137,18 +137,18 @@ def compute_gas_pseudo_pressure(
     # This helps `quad()` adapt better to different pressure regimes
     if (p_max - p_min) > 1000:  # Large pressure range
         # Split into low, medium, high pressure segments
-        split_points = np.logspace(np.log10(p_min), np.log10(p_max), num=5)
+        split_points = np.logspace(start=np.log10(p_min), stop=np.log10(p_max), num=5)
         total_integral = 0.0
 
         for i in range(len(split_points) - 1):
             try:
                 segment_result, segment_error = quad(
-                    integrand,
-                    split_points[i],
-                    split_points[i + 1],
+                    func=integrand,
+                    a=split_points[i],
+                    b=split_points[i + 1],
                     epsabs=1e-6,
                     epsrel=1e-4,
-                    limit=200,  # Increase subdivision limit
+                    limit=200,
                 )
                 total_integral += segment_result
             except Exception as exc:
@@ -165,12 +165,12 @@ def compute_gas_pseudo_pressure(
         # Single integration for small range
         try:
             result, error = quad(
-                integrand,
-                p_min,
-                p_max,
-                epsabs=1e-6,  # Relaxed from 1e-8
-                epsrel=1e-4,  # Relaxed from 1e-6
-                limit=200,  # Increased from 100
+                func=integrand,
+                a=p_min,
+                b=p_max,
+                epsabs=1e-6,
+                epsrel=1e-4,
+                limit=200,
             )
         except Exception as exc:
             logger.warning(f"Integration failed: {exc}. Using trapezoidal fallback.")
@@ -507,7 +507,9 @@ class PVTTableData:
 
             if value is not None and isinstance(value, np.ndarray):
                 if value.dtype != dtype:
-                    object.__setattr__(self, field.name, value.astype(dtype))
+                    object.__setattr__(
+                        self, field.name, value.astype(dtype, copy=False)
+                    )
 
 
 class PVTTables:
