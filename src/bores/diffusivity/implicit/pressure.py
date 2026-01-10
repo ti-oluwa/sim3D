@@ -130,7 +130,7 @@ def evolve_pressure_implicitly(
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
     dtype = get_dtype()
     A = lil_matrix((interior_cell_count, interior_cell_count), dtype=dtype)
-    b = np.zeros(interior_cell_count, dtype=dtype)
+    b = np.zeros(interior_cell_count, dtype=dtype, order="C")
 
     # FIRST PASS: Initialize accumulation terms for all cells
     add_accumulation_terms(

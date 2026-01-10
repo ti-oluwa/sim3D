@@ -645,15 +645,19 @@ def compute_water_formation_volume_factor_mccain(
     - Salinity: 0-200,000 ppm
     """
     # Convert temperature to Celsius for correlation
-    T_C = fahrenheit_to_celsius(temperature)
+    temperature_in_celsius = fahrenheit_to_celsius(temperature)
 
     # Volume correction for temperature (ΔV_wT)
-    delta_V_wT = -1.0001e-2 + 1.33391e-4 * T_C + 5.50654e-7 * T_C**2
+    delta_V_wT = (
+        -1.0001e-2
+        + 1.33391e-4 * temperature_in_celsius
+        + 5.50654e-7 * temperature_in_celsius**2
+    )
 
     # Volume correction for pressure (ΔV_wp)
     delta_V_wp = (
-        -(1.95301e-9 * pressure * T_C)
-        - (1.72834e-13 * pressure**2 * T_C)
+        -(1.95301e-9 * pressure * temperature_in_celsius)
+        - (1.72834e-13 * pressure**2 * temperature_in_celsius)
         - (3.58922e-7 * pressure)
         - (2.25341e-10 * pressure**2)
     )
@@ -800,7 +804,9 @@ def compute_gas_compressibility_factor_papay(
         )
         + ((0.274 * pseudo_reduced_pressure**2) / pseudo_reduced_temperature**2)
     )
-    return np.maximum(0.1, compressibility_factor) # Ensure Z is not negative or too low
+    return np.maximum(
+        0.1, compressibility_factor
+    )  # Ensure Z is not negative or too low
 
 
 @numba.njit(cache=True)
@@ -2466,8 +2472,9 @@ def compute_gas_solubility_in_water(
         )
 
     molar_masses = {
-        "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-        "ch4": c.MOLECULAR_WEIGHT_CH4 / 1000,
+        "co2": c.MOLECULAR_WEIGHtemperature_in_celsiusO2
+        / 1000,  # Convert g/mol to kg/mol
+        "ch4": c.MOLECULAR_WEIGHtemperature_in_celsiusH4 / 1000,
         "n2": c.MOLECULAR_WEIGHT_N2 / 1000,
         "ar": c.MOLECULAR_WEIGHT_ARGON / 1000,
         "o2": c.MOLECULAR_WEIGHT_O2 / 1000,
@@ -2831,7 +2838,7 @@ def compute_water_density(
 
     if gas_free_water_formation_volume_factor <= 0:
         raise ValidationError(
-            "Calculated water formation volume factor (Bw) is non-positive, cannot calculate density."
+            "Gas-free water formation volume factor (Bw) is non-positive, cannot calculate density."
         )
 
     # Calculate Live Water Density (Imperial units first)

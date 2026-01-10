@@ -11,6 +11,7 @@ def _():
     from pathlib import Path
     import numpy as np
     import bores
+    import os
 
 
     logging.basicConfig(level=logging.INFO)
@@ -18,14 +19,19 @@ def _():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
+    # os.environ["OMP_NUM_THREADS"] = "30"
+    # os.environ["MKL_NUM_THREADS"] = "30"
+    # os.environ["OPENBLAS_NUM_THREADS"] = "30"
+    # os.environ["NUMBA_NUM_THREADS"] = "30"
+
 
     def main():
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
         grid_shape = typing.cast(
             bores.ThreeDimensions,
-            (40, 40, 10),  # 30x30 cells, 10 layers
+            (20, 20, 10),  # 30x30 cells, 10 layers
         )
-        dip_angle = 5.0
+        dip_angle = 2.0
         dip_azimuth = 90.0
 
         # Thickness distribution - typical reservoir layers
@@ -182,7 +188,7 @@ def _():
             water_exponent=2.0,
             oil_exponent=2.0,
             gas_exponent=2.0,
-            mixing_rule=bores.stone_II_rule,
+            mixing_rule=bores.eclipse_rule,
         )
 
         # Capillary pressure table
@@ -238,6 +244,22 @@ def _():
             value=0.65,  # Typical for associated gas
         )
 
+        pvt_table_data = bores.build_pvt_table_data(
+            pressures=bores.array(
+                [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
+            ),
+            temperatures=bores.array([120, 140, 160, 180, 200, 220]),
+            salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
+            oil_specific_gravity=0.845,
+            gas_gravity=0.65,
+            reservoir_gas="methane",
+        )
+        pvt_tables = bores.PVTTables(
+            table_data=pvt_table_data,
+            interpolation_method="linear",
+        )
+        del pvt_table_data
+
         model = bores.reservoir_model(
             grid_shape=grid_shape,
             cell_dimension=cell_dimension,
@@ -267,27 +289,14 @@ def _():
             reservoir_gas="methane",
             dip_angle=dip_angle,
             dip_azimuth=dip_azimuth,
+            pvt_tables=pvt_tables,
         )
 
-        pvt_table_data = bores.build_pvt_table_data(
-            pressures=bores.array(
-                [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
-            ),
-            temperatures=bores.array([120, 140, 160, 180, 200, 220]),
-            salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
-            oil_specific_gravity=0.845,
-            gas_gravity=0.65,
-            reservoir_gas="methane",
-        )
-        pvt_tables = bores.PVTTables(
-            table_data=pvt_table_data,
-            interpolation_method="cubic",
-        )
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=1.0),
             min_step_size=bores.Time(hours=1.0),
-            simulation_time=bores.Time(days=30),  # 5 years
+            simulation_time=bores.Time(days=30),  # 30 days
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -313,8 +322,7 @@ def _():
 def _(Path, bores):
     stabilization_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
-        metadata_dir=Path.cwd()
-        / "scenarios/states/stabilization_metadata",
+        metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata",
     )
     return
 
@@ -333,7 +341,6 @@ def _(bores, main):
     with stream:
         for state in stream:
             last_state = state
-
     return (last_state,)
 
 
@@ -341,8 +348,7 @@ def _(bores, main):
 def _(Path, bores, last_state):
     stabilized_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilized.zarr",
-        metadata_dir=Path.cwd()
-        / "scenarios/states/stabilized_metadata",
+        metadata_dir=Path.cwd() / "scenarios/states/stabilized_metadata",
     )
     stabilized_store.dump([last_state])
     return

@@ -1,23 +1,20 @@
 """Relative permeability models and mixing rules for multiphase flow simulations."""
 
-from functools import cached_property
 import typing
 
 import attrs
 import numba
 import numpy as np
-from scipy.interpolate import interp1d
+import numpy.typing as npt
 
 from bores.errors import ValidationError
 from bores.types import (
-    ArrayLike,
+    FloatOrArray,
     FluidPhase,
-    Interpolator,
     MixingRule,
     RelativePermeabilities,
     WettabilityType,
 )
-from bores.utils import clip
 
 
 __all__ = [
@@ -64,44 +61,45 @@ Comparison of common three-phase relative permeability mixing rules:
 
 @numba.njit(cache=True)
 def min_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Conservative rule for 3-phase oil relative permeability.
     kro = min(kro_w, kro_g)
     """
-    return min(kro_w, kro_g)
+    return np.minimum(kro_w, kro_g)
 
 
 @numba.njit(cache=True)
 def stone_I_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Stone I rule (1970) for 3-phase oil relative permeability.
     kro = (kro_w * kro_g) / (kro_w + kro_g - kro_w * kro_g)
     """
-    if kro_w <= 0.0 and kro_g <= 0.0:
-        return 0.0
-    return (kro_w * kro_g) / max((kro_w + kro_g - kro_w * kro_g), 1e-12)
+    denom = np.maximum(((kro_w + kro_g) - (kro_w * kro_g)), 1e-12)
+    result = (kro_w * kro_g) / denom
+    # Return 0 if both kro_w and kro_g are zero
+    return np.where((kro_w <= 0.0) & (kro_g <= 0.0), 0.0, result)
 
 
 @numba.njit(cache=True)
 def stone_II_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Stone II rule (1973) for 3-phase oil relative permeability.
 
@@ -111,22 +109,22 @@ def stone_II_rule(
         - Ensures smooth interpolation between the oil-water and oil-gas systems.
         - If denominators vanish (e.g., So=0), returns 0.0.
     """
-    kro = 0.0
-    if (oil_saturation + gas_saturation) > 0.0:
-        kro += kro_w * (oil_saturation / (oil_saturation + gas_saturation))
-    if (oil_saturation + water_saturation) > 0.0:
-        kro += kro_g * (oil_saturation / (oil_saturation + water_saturation))
-    return kro
+    denom_1 = oil_saturation + gas_saturation
+    term_1 = np.where(denom_1 > 0.0, kro_w * (oil_saturation / denom_1), 0.0)
+
+    denom_2 = oil_saturation + water_saturation
+    term_2 = np.where(denom_2 > 0.0, kro_g * (oil_saturation / denom_2), 0.0)
+    return term_1 + term_2
 
 
 @numba.njit(cache=True)
 def arithmetic_mean_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Simple arithmetic mean of oil-water and oil-gas relative permeabilities.
 
@@ -142,12 +140,12 @@ def arithmetic_mean_rule(
 
 @numba.njit(cache=True)
 def geometric_mean_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Geometric mean of oil-water and oil-gas relative permeabilities.
 
@@ -163,12 +161,12 @@ def geometric_mean_rule(
 
 @numba.njit(cache=True)
 def harmonic_mean_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Harmonic mean of oil-water and oil-gas relative permeabilities.
 
@@ -179,19 +177,19 @@ def harmonic_mean_rule(
         - Heavily weighted by the smaller value
         - Useful for series flow paths
     """
-    if kro_w <= 0.0 or kro_g <= 0.0:
-        return 0.0
-    return 2.0 / (1.0 / kro_w + 1.0 / kro_g)
+    result = 2.0 / ((1.0 / kro_w) + (1.0 / kro_g))
+    # Return 0 if either kro_w or kro_g is zero
+    return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
 @numba.njit(cache=True)
 def saturation_weighted_interpolation_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Saturation-weighted interpolation between oil-water and oil-gas systems.
 
@@ -204,29 +202,33 @@ def saturation_weighted_interpolation_rule(
         - Similar to Stone II but uses different saturation ratios
     """
     total_displacing_phase = water_saturation + gas_saturation
-    if total_displacing_phase <= 0.0:
-        return max(kro_w, kro_g)  # Pure oil
 
-    water_weight = water_saturation / total_displacing_phase
-    gas_weight = gas_saturation / total_displacing_phase
+    water_weight = np.where(
+        total_displacing_phase > 0.0, water_saturation / total_displacing_phase, 0.0
+    )
+    gas_weight = np.where(
+        total_displacing_phase > 0.0, gas_saturation / total_displacing_phase, 0.0
+    )
 
-    return kro_w * water_weight + kro_g * gas_weight
+    result = (kro_w * water_weight) + (kro_g * gas_weight)
+    # Return maximum of kro_w and kro_g if total_displacing_phase is zero (pure oil)
+    return np.where(total_displacing_phase > 0.0, result, np.maximum(kro_w, kro_g))
 
 
 @numba.njit(cache=True)
 def baker_linear_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Baker's linear interpolation rule (1988).
 
     kro = kro_w * (1 - Sg_norm) + kro_g * (1 - Sw_norm)
 
-    where Sg_norm and Sw_norm are normalized saturations.
+    where `Sg_norm` and `Sw_norm` are normalized saturations.
 
     Notes:
         - Linear interpolation based on normalized saturations
@@ -235,23 +237,22 @@ def baker_linear_rule(
     """
     # Normalize saturations
     total_sat = water_saturation + oil_saturation + gas_saturation
-    if total_sat <= 0.0:
-        return 0.0
 
-    sg_norm = gas_saturation / total_sat
-    sw_norm = water_saturation / total_sat
+    sg_norm = np.where(total_sat > 0.0, gas_saturation / total_sat, 0.0)
+    sw_norm = np.where(total_sat > 0.0, water_saturation / total_sat, 0.0)
 
-    return kro_w * (1.0 - sg_norm) + kro_g * (1.0 - sw_norm)
+    result = kro_w * (1.0 - sg_norm) + kro_g * (1.0 - sw_norm)
+    return np.where(total_sat > 0.0, result, 0.0)
 
 
 @numba.njit(cache=True)
 def blunt_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Blunt's rule for three-phase relative permeability.
 
@@ -262,20 +263,19 @@ def blunt_rule(
         - Accounts for pore-level displacement mechanisms
         - Generally gives conservative estimates
     """
-    if kro_w <= 0.0 or kro_g <= 0.0:
-        return 0.0
-
-    return kro_w * kro_g * (2.0 - kro_w - kro_g)
+    result = kro_w * kro_g * (2.0 - kro_w - kro_g)
+    # Return 0 if either kro_w or kro_g is zero
+    return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
 @numba.njit(cache=True)
 def hustad_hansen_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Hustad-Hansen rule (1995) for three-phase relative permeability.
 
@@ -286,11 +286,10 @@ def hustad_hansen_rule(
         - Ensures kro ≤ min(kro_w, kro_g)
         - Good for intermediate wettability systems
     """
-    if kro_w <= 0.0 and kro_g <= 0.0:
-        return 0.0
-
-    max_kr = max(kro_w, kro_g, 1e-12)
-    return (kro_w * kro_g) / max_kr
+    max_kr = np.maximum(np.maximum(kro_w, kro_g), 1e-12)
+    result = (kro_w * kro_g) / max_kr
+    # Return 0 if both kro_w and kro_g are zero
+    return np.where((kro_w <= 0.0) & (kro_g <= 0.0), 0.0, result)
 
 
 def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
@@ -313,27 +312,27 @@ def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
 
     @numba.njit(cache=True)
     def _rule(
-        kro_w: float,
-        kro_g: float,
-        water_saturation: float,
-        oil_saturation: float,
-        gas_saturation: float,
-    ) -> float:
-        if kro_w <= 0.0 or kro_g <= 0.0:
-            return 0.0
-        return (kro_w**a) * (kro_g**b)
+        kro_w: FloatOrArray,
+        kro_g: FloatOrArray,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
+    ) -> FloatOrArray:
+        result = (kro_w**a) * (kro_g**b)
+        # Return 0 if either kro_w or kro_g is zero
+        return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
     return _rule
 
 
 @numba.njit(cache=True)
 def eclipse_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     ECLIPSE simulator default three-phase rule.
 
@@ -350,31 +349,26 @@ def eclipse_rule(
     """
     total_mobile = oil_saturation + water_saturation + gas_saturation
 
-    if total_mobile <= 0.0:
-        return 0.0
+    # Saturation factors - use np.where to avoid type inconsistency
+    denom_w = oil_saturation + gas_saturation
+    f_w = np.where(denom_w > 0.0, oil_saturation / denom_w, 0.0)
 
-    # Saturation factors
-    if (oil_saturation + gas_saturation) > 0.0:
-        f_w = oil_saturation / (oil_saturation + gas_saturation)
-    else:
-        f_w = 0.0
+    denom_g = oil_saturation + water_saturation
+    f_g = np.where(denom_g > 0.0, oil_saturation / denom_g, 0.0)
 
-    if (oil_saturation + water_saturation) > 0.0:
-        f_g = oil_saturation / (oil_saturation + water_saturation)
-    else:
-        f_g = 0.0
-
-    return (kro_w * f_w) + (kro_g * f_g)
+    # Return 0 if total_mobile is zero, otherwise compute kro
+    result = (kro_w * f_w) + (kro_g * f_g)
+    return np.where(total_mobile > 0.0, result, 0.0)
 
 
 @numba.njit(cache=True)
 def max_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Maximum rule - most optimistic estimate.
 
@@ -385,17 +379,17 @@ def max_rule(
         - Rarely used in practice (too optimistic)
         - Useful for sensitivity analysis
     """
-    return max(kro_w, kro_g)
+    return np.maximum(kro_w, kro_g)
 
 
 @numba.njit(cache=True)
 def product_saturation_weighted_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Product of two-phase kr values weighted by oil saturation.
 
@@ -410,27 +404,25 @@ def product_saturation_weighted_rule(
     """
     n = 1.0  # Empirical exponent
 
-    if oil_saturation <= 0.0:
-        return 0.0
-
     # Assume maximum oil saturation is 1.0 - Swi - Sgr
     # For simplicity, use total saturation to normalize
     total_sat = water_saturation + oil_saturation + gas_saturation
-    if total_sat <= 0.0:
-        return 0.0
 
-    so_normalized = oil_saturation / total_sat
-    return (kro_w * kro_g) * (so_normalized**n)
+    so_normalized = np.where(total_sat > 0.0, oil_saturation / total_sat, 0.0)
+    result = (kro_w * kro_g) * (so_normalized**n)
+
+    # Return 0 if oil_saturation or total_sat is zero
+    return np.where((oil_saturation > 0.0) & (total_sat > 0.0), result, 0.0)
 
 
 @numba.njit(cache=True)
 def linear_interpolation_rule(
-    kro_w: float,
-    kro_g: float,
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
-) -> float:
+    kro_w: FloatOrArray,
+    kro_g: FloatOrArray,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
+) -> FloatOrArray:
     """
     Simple linear interpolation based on gas-to-water ratio.
 
@@ -445,13 +437,16 @@ def linear_interpolation_rule(
     """
     total_displacing = water_saturation + gas_saturation
 
-    if total_displacing <= 0.0:
-        # Pure oil - return maximum
-        return max(kro_w, kro_g)
+    gas_fraction = np.where(
+        total_displacing > 0.0, gas_saturation / total_displacing, 0.0
+    )
+    water_fraction = np.where(
+        total_displacing > 0.0, water_saturation / total_displacing, 0.0
+    )
 
-    gas_fraction = gas_saturation / total_displacing
-    water_fraction = water_saturation / total_displacing
-    return (kro_g * gas_fraction) + (kro_w * water_fraction)
+    result = (kro_g * gas_fraction) + (kro_w * water_fraction)
+    # Pure oil - return maximum
+    return np.where(total_displacing > 0.0, result, np.maximum(kro_w, kro_g))
 
 
 @attrs.frozen
@@ -460,6 +455,9 @@ class TwoPhaseRelPermTable:
     Two-phase relative permeability lookup table.
 
     Interpolates relative permeabilities for two fluid phases based on saturation values.
+    Uses `np.interp` for fast vectorized interpolation.
+
+    Supports both scalar and array inputs up to 3D.
 
     Example:
     - Oil-Water system: oil is non-wetting, water is wetting
@@ -470,42 +468,116 @@ class TwoPhaseRelPermTable:
     """The wetting fluid phase, e.g., 'water' (for oil-water (water-wet)) or 'oil' (for gas-oil (oil-wet))."""
     non_wetting_phase: FluidPhase
     """The non-wetting fluid phase, e.g., 'oil' (for oil-water (water-wet)) or 'gas' (for gas-oil (oil-wet))."""
-    wetting_phase_saturation: ArrayLike[float]
+    wetting_phase_saturation: npt.NDArray[np.floating] = attrs.field(
+        converter=np.asarray
+    )
     """The saturation values for the wetting phase, ranging from 0 to 1."""
-    wetting_phase_relative_permeability: ArrayLike[float]
+    wetting_phase_relative_permeability: npt.NDArray[np.floating] = attrs.field(
+        converter=np.asarray
+    )
     """Relative permeability values for wetting phase corresponding to the saturation values."""
-    non_wetting_phase_relative_permeability: ArrayLike[float]
+    non_wetting_phase_relative_permeability: npt.NDArray[np.floating] = attrs.field(
+        converter=np.asarray
+    )
     """Relative permeability values for non-wetting phase corresponding to the saturation values."""
 
-    @cached_property
-    def wetting_phase_interpolator(self) -> Interpolator:
-        """Return the interpolator for wetting phase relative permeability."""
-        return interp1d(
-            x=self.wetting_phase_saturation,
-            y=self.wetting_phase_relative_permeability,
-            bounds_error=False,
-            fill_value=(
-                self.wetting_phase_relative_permeability[0],  # type: ignore
-                self.wetting_phase_relative_permeability[-1],
-            ),
-        )
+    def __attrs_post_init__(self) -> None:
+        """Validate table data."""
+        if len(self.wetting_phase_saturation) != len(
+            self.wetting_phase_relative_permeability
+        ):
+            raise ValidationError(
+                f"Saturation and wetting phase kr arrays must have same length. "
+                f"Got {len(self.wetting_phase_saturation)} vs {len(self.wetting_phase_relative_permeability)}"
+            )
+        if len(self.wetting_phase_saturation) != len(
+            self.non_wetting_phase_relative_permeability
+        ):
+            raise ValidationError(
+                f"Saturation and non-wetting phase kr arrays must have same length. "
+                f"Got {len(self.wetting_phase_saturation)} vs {len(self.non_wetting_phase_relative_permeability)}"
+            )
+        if len(self.wetting_phase_saturation) < 2:
+            raise ValidationError("At least 2 points required for interpolation")
 
-    @cached_property
-    def non_wetting_phase_interpolator(self) -> Interpolator:
-        """Return the interpolator for non-wetting phase relative permeability."""
-        return interp1d(
-            x=self.wetting_phase_saturation,
-            y=self.non_wetting_phase_relative_permeability,
-            bounds_error=False,
-            fill_value=(
-                self.non_wetting_phase_relative_permeability[0],  # type: ignore
-                self.non_wetting_phase_relative_permeability[-1],
-            ),
-        )
+        # Ensure arrays are sorted by saturation (required for np.interp)
+        if not np.all(np.diff(self.wetting_phase_saturation) >= 0):
+            raise ValidationError(
+                "Wetting phase saturation must be monotonically increasing"
+            )
 
-    def get_interpolators(self) -> typing.Tuple[Interpolator, Interpolator]:
-        """Return interpolators for both phases (wetting, non-wetting)."""
-        return self.wetting_phase_interpolator, self.non_wetting_phase_interpolator
+    def get_wetting_phase_relative_permeability(
+        self, wetting_phase_saturation: FloatOrArray
+    ) -> FloatOrArray:
+        """
+        Get wetting phase relative permeability at given saturation(s).
+
+        Uses `np.interp` for fast linear interpolation. Supports both scalar
+        and array inputs up to 3D.
+
+        :param wetting_phase_saturation: Saturation of the wetting phase (scalar or array).
+        :return: Relative permeability value(s) - type matches input type.
+        """
+        # Handle scalar and array inputs
+        saturation = np.atleast_1d(wetting_phase_saturation)
+        original_shape = saturation.shape
+        saturation_flat = saturation.ravel()
+
+        # Fast linear interpolation using np.interp
+        kr_flat = np.interp(
+            x=saturation_flat,
+            xp=self.wetting_phase_saturation,  # type: ignore[arg-type]
+            fp=self.wetting_phase_relative_permeability,  # type: ignore[arg-type]
+            left=self.wetting_phase_relative_permeability[0],
+            right=self.wetting_phase_relative_permeability[-1],
+        )
+        # Reshape back to original dimensions
+        return kr_flat.reshape(original_shape)
+
+    def get_non_wetting_phase_relative_permeability(
+        self, wetting_phase_saturation: FloatOrArray
+    ) -> FloatOrArray:
+        """
+        Get non-wetting phase relative permeability at given wetting phase saturation(s).
+
+        Uses `np.interp` for fast linear interpolation. Supports both scalar
+        and array inputs up to 3D.
+
+        :param wetting_phase_saturation: Saturation of the wetting phase (scalar or array).
+        :return: Relative permeability value(s) - type matches input type.
+        """
+        # Handle scalar and array inputs
+        saturation = np.atleast_1d(wetting_phase_saturation)
+        original_shape = saturation.shape
+        saturation_flat = saturation.ravel()
+
+        # Fast linear interpolation using np.interp
+        kr_flat = np.interp(
+            x=saturation_flat,
+            xp=self.wetting_phase_saturation,  # type: ignore[arg-type]
+            fp=self.non_wetting_phase_relative_permeability,  # type: ignore[arg-type]
+            left=self.non_wetting_phase_relative_permeability[0],
+            right=self.non_wetting_phase_relative_permeability[-1],
+        )
+        # Reshape back to original dimensions
+        return kr_flat.reshape(original_shape)
+
+    def get_relative_permeabilities(
+        self, wetting_phase_saturation: FloatOrArray
+    ) -> typing.Tuple[FloatOrArray, FloatOrArray]:
+        """
+        Get both wetting and non-wetting phase relative permeabilities.
+
+        :param wetting_phase_saturation: Saturation of the wetting phase (scalar or array).
+        :return: Tuple of (wetting_kr, non_wetting_kr) - types match input type.
+        """
+        kr_wetting = self.get_wetting_phase_relative_permeability(
+            wetting_phase_saturation
+        )
+        kr_non_wetting = self.get_non_wetting_phase_relative_permeability(
+            wetting_phase_saturation
+        )
+        return kr_wetting, kr_non_wetting
 
 
 @attrs.frozen
@@ -539,8 +611,11 @@ class ThreePhaseRelPermTable:
     - So: Oil saturation
     - Sg: Gas saturation
     and return the mixed oil relative permeability.
+
     If None, a simple conservative rule (min(kro_w, kro_g)) is used.
     """
+    supports_arrays: bool = True
+    """Flag indicating support for array inputs."""
 
     def __attrs_post_init__(self) -> None:
         """Validate that the tables are set up correctly for three-phase flow."""
@@ -567,89 +642,91 @@ class ThreePhaseRelPermTable:
             )
 
     def get_relative_permeabilities(
-        self, water_saturation: float, oil_saturation: float, gas_saturation: float
+        self,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
     ) -> RelativePermeabilities:
         """
         Compute relative permeabilities for oil, water, gas.
         Uses two-phase tables + mixing rule for oil in 3-phase system.
 
-        :param water_saturation: Water saturation (fraction).
-        :param oil_saturation: Oil saturation (fraction).
-        :param gas_saturation: Gas saturation (fraction).
+        Supports both scalar and array inputs.
+
+        :param water_saturation: Water saturation (fraction) - scalar or array.
+        :param oil_saturation: Oil saturation (fraction) - scalar or array.
+        :param gas_saturation: Gas saturation (fraction) - scalar or array.
         :return: A dictionary with relative permeabilities for water, oil, and gas.
         0 <= water_saturation, oil_saturation, gas_saturation <= 1
         """
-        if not (
-            0 <= water_saturation <= 1
-            and 0 <= oil_saturation <= 1
-            and 0 <= gas_saturation <= 1
-        ):
-            raise ValidationError(
-                "Saturations must be between 0 and 1. "
-                f"Received: Sw={water_saturation}, So={oil_saturation}, Sg={gas_saturation}"
-            )
+        # Convert to arrays for vectorized operations
+        sw = np.atleast_1d(water_saturation)
+        so = np.atleast_1d(oil_saturation)
+        sg = np.atleast_1d(gas_saturation)
 
-        total_saturation = water_saturation + oil_saturation + gas_saturation
-        if abs(total_saturation - 1.0) > 1e-6 and total_saturation > 0.0:
-            # Normalize saturations if they do not sum to 1
-            water_saturation /= total_saturation
-            oil_saturation /= total_saturation
-            gas_saturation /= total_saturation
+        # Broadcast all arrays to same shape
+        sw, so, sg = np.broadcast_arrays(sw, so, sg)
+
+        # Validate saturations
+        if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
+            raise ValidationError("Saturations must be between 0 and 1.")
+
+        # Normalize saturations if they do not sum to 1
+        total_saturation = sw + so + sg
+        needs_norm = (np.abs(total_saturation - 1.0) > 1e-6) & (total_saturation > 0.0)
+        if np.any(needs_norm):
+            sw = np.where(needs_norm, sw / total_saturation, sw)
+            so = np.where(needs_norm, so / total_saturation, so)
+            sg = np.where(needs_norm, sg / total_saturation, sg)
 
         # For oil-water table
         # krw = wetting phase kr at wetting phase saturation
         # kro_w = non-wetting phase kr at wetting phase saturation
         if self.oil_water_table.wetting_phase == FluidPhase.WATER:
-            krw = float(
-                self.oil_water_table.wetting_phase_interpolator(water_saturation)
-            )
-            kro_w = float(
-                self.oil_water_table.non_wetting_phase_interpolator(water_saturation)
-            )
+            krw = self.oil_water_table.get_wetting_phase_relative_permeability(sw)
+            kro_w = self.oil_water_table.get_non_wetting_phase_relative_permeability(sw)
         else:
             # Oil is wetting phase in oil-water table
-            kro_w = float(
-                self.oil_water_table.wetting_phase_interpolator(oil_saturation)
-            )
-            krw = float(
-                self.oil_water_table.non_wetting_phase_interpolator(oil_saturation)
-            )
+            kro_w = self.oil_water_table.get_wetting_phase_relative_permeability(so)
+            krw = self.oil_water_table.get_non_wetting_phase_relative_permeability(so)
 
         # For gas-oil table: oil is wetting phase
         # kro_g = wetting phase kr at oil saturation
         # krg = non-wetting phase kr at oil saturation
-        kro_g = float(self.gas_oil_table.wetting_phase_interpolator(oil_saturation))
-        krg = float(self.gas_oil_table.non_wetting_phase_interpolator(oil_saturation))
+        kro_g = self.gas_oil_table.get_wetting_phase_relative_permeability(so)
+        krg = self.gas_oil_table.get_non_wetting_phase_relative_permeability(so)
 
         # Apply mixing rule for three-phase oil relative permeability
         if self.mixing_rule is not None:
             kro = self.mixing_rule(
                 kro_w=kro_w,
                 kro_g=kro_g,
-                water_saturation=water_saturation,
-                oil_saturation=oil_saturation,
-                gas_saturation=gas_saturation,
+                water_saturation=sw,
+                oil_saturation=so,
+                gas_saturation=sg,
             )
         else:
             # Simple conservative rule if no mixing rule supplied
-            kro = min(kro_w, kro_g)
+            kro = np.minimum(kro_w, kro_g)
 
-        return RelativePermeabilities(water=krw, oil=kro, gas=krg)
+        return RelativePermeabilities(water=krw, oil=kro, gas=krg)  # type: ignore[typeddict-item]
 
     def __call__(
         self,
         *,
-        water_saturation: float,
-        oil_saturation: float,
-        gas_saturation: float,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
         **kwargs: typing.Any,
     ) -> RelativePermeabilities:
         """
         Compute relative permeabilities for oil, water, gas.
 
-        :param water_saturation: Water saturation (fraction).
-        :param oil_saturation: Oil saturation (fraction).
-        :param gas_saturation: Gas saturation (fraction).
+        Supports both scalar and array inputs.
+
+        :param water_saturation: Water saturation (fraction) - scalar or array.
+        :param oil_saturation: Oil saturation (fraction) - scalar or array.
+        :param gas_saturation: Gas saturation (fraction) - scalar or array.
         :return: A dictionary with relative permeabilities for water, oil, and gas.
         0 <= water_saturation, oil_saturation, gas_saturation <= 1
         """
@@ -661,9 +738,9 @@ class ThreePhaseRelPermTable:
 
 
 def compute_corey_three_phase_relative_permeabilities(
-    water_saturation: float,
-    oil_saturation: float,
-    gas_saturation: float,
+    water_saturation: FloatOrArray,
+    oil_saturation: FloatOrArray,
+    gas_saturation: FloatOrArray,
     irreducible_water_saturation: float,
     residual_oil_saturation_water: float,
     residual_oil_saturation_gas: float,
@@ -673,16 +750,18 @@ def compute_corey_three_phase_relative_permeabilities(
     gas_exponent: float,
     wettability: WettabilityType = WettabilityType.WATER_WET,
     mixing_rule: MixingRule = stone_II_rule,
-) -> typing.Tuple[float, float, float]:
+) -> typing.Tuple[FloatOrArray, FloatOrArray, FloatOrArray]:
     """
     Computes relative permeability for water, oil, and gas in a three-phase system.
     Supports water-wet and oil-wet wettability assumptions.
 
     Uses Corey-type models for krw, krg, and Stone I rule for kro.
 
-    :param water_saturation: Current water saturation (fraction, between 0 and 1).
-    :param oil_saturation: Current oil saturation (fraction, between 0 and 1).
-    :param gas_saturation: Current gas saturation (fraction, between 0 and 1).
+    Supports both scalar and array inputs for saturations.
+
+    :param water_saturation: Current water saturation (fraction, between 0 and 1) - scalar or array.
+    :param oil_saturation: Current oil saturation (fraction, between 0 and 1) - scalar or array.
+    :param gas_saturation: Current gas saturation (fraction, between 0 and 1) - scalar or array.
     :param irreducible_water_saturation: Irreducible water saturation (Swc).
     :param residual_oil_saturation_water: Residual oil saturation after water flood (Sorw).
     :param residual_oil_saturation_gas: Residual oil saturation after gas flood (Sorg).
@@ -693,54 +772,54 @@ def compute_corey_three_phase_relative_permeabilities(
     :param wettability: Wettability type (water-wet or oil-wet).
     :return: (water_relative_permeability, oil_relative_permeability, gas_relative_permeability)
     """
-    if not (
-        0 <= water_saturation <= 1
-        and 0 <= oil_saturation <= 1
-        and 0 <= gas_saturation <= 1
-    ):
-        raise ValueError(
-            "Saturations must be between 0 and 1. "
-            f"Received: Sw={water_saturation}, So={oil_saturation}, Sg={gas_saturation}"
-        )
+    # Convert to arrays for vectorized operations
+    sw = np.atleast_1d(water_saturation)
+    so = np.atleast_1d(oil_saturation)
+    sg = np.atleast_1d(gas_saturation)
 
-    total_saturation = water_saturation + oil_saturation + gas_saturation
-    if abs(total_saturation - 1.0) > 1e-6 and total_saturation > 0.0:
-        water_saturation /= total_saturation
-        oil_saturation /= total_saturation
-        gas_saturation /= total_saturation
+    # Broadcast all arrays to same shape
+    sw, so, sg = np.broadcast_arrays(sw, so, sg)
+
+    # Validate saturations
+    if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
+        raise ValueError("Saturations must be between 0 and 1.")
+
+    # Normalize saturations if they do not sum to 1
+    total_saturation = sw + so + sg
+    needs_norm = (np.abs(total_saturation - 1.0) > 1e-6) & (total_saturation > 0.0)
+    if np.any(needs_norm):
+        sw = np.where(needs_norm, sw / total_saturation, sw)
+        so = np.where(needs_norm, so / total_saturation, so)
+        sg = np.where(needs_norm, sg / total_saturation, sg)
 
     if wettability == WettabilityType.WATER_WET:
         # 1. Water relperm (wetting phase)
         movable_water_range = (
             1.0 - irreducible_water_saturation - residual_oil_saturation_water
         )
-        if movable_water_range <= 1e-6:
-            effective_water_saturation = 0.0
-        else:
-            effective_water_saturation = (
-                water_saturation - irreducible_water_saturation
-            ) / movable_water_range
-            effective_water_saturation = clip(effective_water_saturation, 0.0, 1.0)
+        effective_water_saturation = np.where(
+            movable_water_range <= 1e-6,
+            np.zeros_like(sw),
+            np.clip((sw - irreducible_water_saturation) / movable_water_range, 0.0, 1.0)
+        )
         krw = effective_water_saturation**water_exponent
 
         # 2. Gas relperm (nonwetting)
         movable_gas_range = 1.0 - residual_gas_saturation - residual_oil_saturation_gas
-        if movable_gas_range <= 1e-6:
-            effective_gas_saturation = 0.0
-        else:
-            effective_gas_saturation = (
-                gas_saturation - residual_gas_saturation
-            ) / movable_gas_range
-            effective_gas_saturation = clip(effective_gas_saturation, 0.0, 1.0)
+        effective_gas_saturation = np.where(
+            movable_gas_range <= 1e-6,
+            np.zeros_like(sg),
+            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0)
+        )
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Oil relperm (intermediate phase) → Stone I blending
         kro = mixing_rule(
             kro_w=(1.0 - krw),
             kro_g=(1.0 - krg),
-            water_saturation=water_saturation,
-            oil_saturation=oil_saturation,
-            gas_saturation=gas_saturation,
+            water_saturation=sw,
+            oil_saturation=so,
+            gas_saturation=sg,
         )
         kro = kro**oil_exponent  # Apply oil Corey exponent as a curvature control
 
@@ -750,34 +829,32 @@ def compute_corey_three_phase_relative_permeabilities(
         movable_oil_range = (
             1.0 - residual_oil_saturation_water - residual_oil_saturation_gas
         )
-        if movable_oil_range <= 1e-6:
-            effective_oil_saturation = 0.0
-        else:
-            effective_oil_saturation = (
-                oil_saturation
-                - min(residual_oil_saturation_water, residual_oil_saturation_gas)
-            ) / movable_oil_range
-            effective_oil_saturation = clip(effective_oil_saturation, 0.0, 1.0)
+        min_residual = np.minimum(
+            residual_oil_saturation_water, residual_oil_saturation_gas
+        )
+        effective_oil_saturation = np.where(
+            movable_oil_range <= 1e-6,
+            np.zeros_like(so),
+            np.clip((so - min_residual) / movable_oil_range, 0.0, 1.0)
+        )
         kro = effective_oil_saturation**oil_exponent
 
         # 2. Gas relperm (nonwetting phase)
         movable_gas_range = 1.0 - residual_gas_saturation - irreducible_water_saturation
-        if movable_gas_range <= 1e-6:
-            effective_gas_saturation = 0.0
-        else:
-            effective_gas_saturation = (
-                gas_saturation - residual_gas_saturation
-            ) / movable_gas_range
-            effective_gas_saturation = clip(effective_gas_saturation, 0.0, 1.0)
+        effective_gas_saturation = np.where(
+            movable_gas_range <= 1e-6,
+            np.zeros_like(sg),
+            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0)
+        )
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Water relperm (intermediate phase, use Stone I style blending)
         krw = mixing_rule(
             kro_w=(1.0 - kro),  # treat oil as wetting
             kro_g=(1.0 - krg),  # treat gas as nonwetting
-            water_saturation=water_saturation,
-            oil_saturation=oil_saturation,
-            gas_saturation=gas_saturation,
+            water_saturation=sw,
+            oil_saturation=so,
+            gas_saturation=sg,
         )
         krw = krw**water_exponent
 
@@ -785,10 +862,10 @@ def compute_corey_three_phase_relative_permeabilities(
         raise ValueError(f"Wettability {wettability} not implemented.")
 
     # Clip all results to [0, 1]
-    krw = clip(krw, 0.0, 1.0)
-    kro = clip(kro, 0.0, 1.0)
-    krg = clip(krg, 0.0, 1.0)
-    return float(krw), float(kro), float(krg)
+    krw = np.clip(krw, 0.0, 1.0)
+    kro = np.clip(kro, 0.0, 1.0)
+    krg = np.clip(krg, 0.0, 1.0)
+    return krw, kro, krg  # type: ignore[return-value]
 
 
 @attrs.frozen
@@ -830,12 +907,14 @@ class BrooksCoreyThreePhaseRelPermModel:
     - Sg: Gas saturation
     and return the mixed oil relative permeability.
     """
+    supports_arrays: bool = True
+    """Flag indicating support for array inputs."""
 
     def get_relative_permeabilities(
         self,
-        water_saturation: float,
-        oil_saturation: float,
-        gas_saturation: float,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
         irreducible_water_saturation: typing.Optional[float] = None,
         residual_oil_saturation_water: typing.Optional[float] = None,
         residual_oil_saturation_gas: typing.Optional[float] = None,
@@ -844,9 +923,11 @@ class BrooksCoreyThreePhaseRelPermModel:
         """
         Compute relative permeabilities for water, oil, and gas.
 
-        :param water_saturation: Water saturation (fraction).
-        :param oil_saturation: Oil saturation (fraction).
-        :param gas_saturation: Gas saturation (fraction).
+        Supports both scalar and array inputs for saturations.
+
+        :param water_saturation: Water saturation (fraction) - scalar or array.
+        :param oil_saturation: Oil saturation (fraction) - scalar or array.
+        :param gas_saturation: Gas saturation (fraction) - scalar or array.
         :param irreducible_water_saturation: Optional override for irreducible water saturation.
         :param residual_oil_saturation_water: Optional override for residual oil saturation after water flood.
         :param residual_oil_saturation_gas: Optional override for residual oil saturation after gas flood.
@@ -874,42 +955,53 @@ class BrooksCoreyThreePhaseRelPermModel:
             if irreducible_water_saturation is not None
             else self.irreducible_water_saturation
         )
-        if Swc is None or Sorw is None or Sorg is None or Srg is None:
+        params_missing = []
+        if Swc is None:
+            params_missing.append("Swc")
+        if Sorw is None:
+            params_missing.append("Sorw")
+        if Sorg is None:
+            params_missing.append("Sorg")
+        if Srg is None:
+            params_missing.append("Srg")
+        if params_missing:
             raise ValidationError(
-                "Residual saturations must be provided either as arguments or set in the model instance."
-                f"Missing values: Swc={Swc}, Sorw={Sorw}, Sorw={Sorg}, Srg={Srg}"
+                f"Residual saturations must be provided either as arguments or set in the model instance. "
+                f"Missing: {', '.join(params_missing)}"
             )
 
         krw, kro, krg = compute_corey_three_phase_relative_permeabilities(
             water_saturation=water_saturation,
             oil_saturation=oil_saturation,
             gas_saturation=gas_saturation,
-            irreducible_water_saturation=Swc,
-            residual_oil_saturation_water=Sorw,
-            residual_oil_saturation_gas=Sorg,
-            residual_gas_saturation=Srg,
+            irreducible_water_saturation=Swc,  # type: ignore[arg-type]
+            residual_oil_saturation_water=Sorw,  # type: ignore[arg-type]
+            residual_oil_saturation_gas=Sorg,  # type: ignore[arg-type]
+            residual_gas_saturation=Srg,  # type: ignore[arg-type]
             water_exponent=self.water_exponent,
             oil_exponent=self.oil_exponent,
             gas_exponent=self.gas_exponent,
             wettability=self.wettability,
             mixing_rule=self.mixing_rule,
         )
-        return RelativePermeabilities(water=krw, oil=kro, gas=krg)
+        return RelativePermeabilities(water=krw, oil=kro, gas=krg)  # type: ignore[typeddict-item]
 
     def __call__(
         self,
         *,
-        water_saturation: float,
-        oil_saturation: float,
-        gas_saturation: float,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
         **kwargs: typing.Any,
     ) -> RelativePermeabilities:
         """
         Compute relative permeabilities for water, oil, and gas.
 
-        :param water_saturation: Water saturation (fraction).
-        :param oil_saturation: Oil saturation (fraction).
-        :param gas_saturation: Gas saturation (fraction).
+        Supports both scalar and array inputs for saturations.
+
+        :param water_saturation: Water saturation (fraction) - scalar or array.
+        :param oil_saturation: Oil saturation (fraction) - scalar or array.
+        :param gas_saturation: Gas saturation (fraction) - scalar or array.
         :kwarg irreducible_water_saturation: Optional override for irreducible water saturation.
         :kwarg residual_oil_saturation_water: Optional override for residual oil saturation after water flood.
         :kwarg residual_oil_saturation_gas: Optional override for residual oil saturation after gas flood.

@@ -1,3 +1,4 @@
+from bores._precision import get_dtype
 import logging
 import typing
 
@@ -143,13 +144,22 @@ def build_rock_fluid_properties_grids(
             logger.debug(
                 f"Scaling capillary pressure grids by factor {capillary_strength_factor}"
             )
+            dtype = get_dtype()
             oil_water_capillary_pressure_grid = typing.cast(
                 NDimensionalGrid[ThreeDimensions],
-                oil_water_capillary_pressure_grid * capillary_strength_factor,
+                np.multiply(
+                    oil_water_capillary_pressure_grid,
+                    capillary_strength_factor,
+                    dtype=dtype,
+                ),
             )
             gas_oil_capillary_pressure_grid = typing.cast(
                 NDimensionalGrid[ThreeDimensions],
-                gas_oil_capillary_pressure_grid * capillary_strength_factor,
+                np.multiply(
+                    gas_oil_capillary_pressure_grid,
+                    capillary_strength_factor,
+                    dtype=dtype,
+                ),
             )
 
     padded_relperm_grids = RelPermGrids(

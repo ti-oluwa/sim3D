@@ -1,3 +1,4 @@
+from bores._precision import get_dtype
 import logging
 import typing
 import warnings
@@ -44,12 +45,13 @@ def compute_fluid_density(
     :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Water")
     :return: Density in lbm/ft³
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    dtype = pressure.dtype
+    temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
+    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
 
     def _compute_density(
-        pressure_in_pascals,
-        temperature_in_kelvin,
+        pressure_in_pascals: float,
+        temperature_in_kelvin: float,
         fluid: str,
     ):
         density: float = PropsSI(
@@ -62,12 +64,12 @@ def compute_fluid_density(
         )
         return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
 
-    pressure_array = np.asarray(pressure_in_pascals)
-    temperature_array = np.asarray(temperature_in_kelvin)
     density_array = np.empty_like(pressure_array)
     for idx in np.ndindex(pressure_array.shape):
         density_array[idx] = _compute_density(
-            pressure_array[idx], temperature_array[idx], fluid
+            pressure_in_pascals=pressure_array[idx],  # type: ignore
+            temperature_in_kelvin=temperature_array[idx],  # type: ignore
+            fluid=fluid,
         )
     return density_array  # type: ignore[return-value]
 
@@ -85,8 +87,9 @@ def compute_fluid_viscosity(
     :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Water")
     :return: Viscosity in centipoise (cP)
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    dtype = pressure.dtype
+    temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
+    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
 
     def _compute_viscosity(pressure_in_pascals, temperature_in_kelvin, fluid: str):
         viscosity = PropsSI(
@@ -99,12 +102,12 @@ def compute_fluid_viscosity(
         )
         return viscosity * c.PASCAL_SECONDS_TO_CENTIPOISE
 
-    pressure_array = np.asarray(pressure_in_pascals)
-    temperature_array = np.asarray(temperature_in_kelvin)
     viscosity_array = np.empty_like(pressure_array)
     for idx in np.ndindex(pressure_array.shape):
         viscosity_array[idx] = _compute_viscosity(
-            pressure_array[idx], temperature_array[idx], fluid
+            pressure_in_pascals=pressure_array[idx],  # type: ignore
+            temperature_in_kelvin=temperature_array[idx],  # type: ignore
+            fluid=fluid,
         )
     return viscosity_array  # type: ignore[return-value]
 
@@ -122,8 +125,9 @@ def compute_fluid_compressibility_factor(
     :param fluid: str name (must be supported by CoolProp, e.g., "CO2", "Methane")
     :return: Compressibility factor Z (dimensionless)
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    dtype = pressure.dtype
+    temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
+    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
 
     def _compute_z(
         pressure_in_pascals,
@@ -139,11 +143,13 @@ def compute_fluid_compressibility_factor(
             fluid,
         )
 
-    pressure_array = np.asarray(pressure_in_pascals)
-    temperature_array = np.asarray(temperature_in_kelvin)
     z_array = np.empty_like(pressure_array)
     for idx in np.ndindex(pressure_array.shape):
-        z_array[idx] = _compute_z(pressure_array[idx], temperature_array[idx], fluid)
+        z_array[idx] = _compute_z(
+            pressure_in_pascals=pressure_array[idx],
+            temperature_in_kelvin=temperature_array[idx],  # type: ignore
+            fluid=fluid,
+        )
     return z_array  # type: ignore[return-value]
 
 
@@ -164,8 +170,9 @@ def compute_fluid_compressibility(
     :param fluid: str name supported by CoolProp (e.g., 'n-Octane')
     :return: Compressibility in psi⁻¹
     """
-    temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    dtype = pressure.dtype
+    temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
+    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
 
     def _compute_compressibility(
         pressure_in_pascals, temperature_in_kelvin, fluid: str
@@ -182,12 +189,12 @@ def compute_fluid_compressibility(
             / c.PA_TO_PSI
         )
 
-    pressure_array = np.asarray(pressure_in_pascals)
-    temperature_array = np.asarray(temperature_in_kelvin)
     compressibility_array = np.empty_like(pressure_array)
     for idx in np.ndindex(pressure_array.shape):
         compressibility_array[idx] = _compute_compressibility(
-            pressure_array[idx], temperature_array[idx], fluid
+            pressure_in_pascals=pressure_array[idx],
+            temperature_in_kelvin=temperature_array[idx],  # type: ignore
+            fluid=fluid,
         )
     return compressibility_array  # type: ignore[return-value]
 
@@ -201,13 +208,14 @@ def compute_gas_gravity(gas: str) -> float:
     :param gas: gas name supported by CoolProp (e.g., 'Methane')
     :return: Gas gravity (dimensionless)
     """
+    dtype = get_dtype()
     gas_density_at_stp = compute_fluid_density(
         c.STANDARD_PRESSURE_IMPERIAL, c.STANDARD_TEMPERATURE_IMPERIAL, fluid=gas
     )
     air_density_at_stp = compute_fluid_density(
         c.STANDARD_PRESSURE_IMPERIAL, c.STANDARD_TEMPERATURE_IMPERIAL, fluid="Air"
     )
-    return gas_density_at_stp / air_density_at_stp  # type: ignore[return-value]
+    return np.divide(gas_density_at_stp, air_density_at_stp, dtype=dtype)  # type: ignore[return-value]
 
 
 ####################################################
@@ -231,17 +239,19 @@ def compute_gas_gravity_from_density(
     :param density: Density of the gas in lbm/ft³
     :return: Gas gravity (dimensionless)
     """
+    dtype = pressure.dtype
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    temperature_in_kelvin = typing.cast(
-        NDimensionalGrid[NDimension], temperature_in_kelvin
-    )
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
     air_density = compute_fluid_density(
-        pressure_in_pascals,
-        temperature_in_kelvin,
+        pressure=pressure_in_pascals,
+        temperature=temperature_in_kelvin,  # type: ignore
         fluid="Air",
     )
-    return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
+    return np.divide(  # type: ignore[return-value]
+        density,
+        np.multiply(air_density, c.KG_PER_M3_TO_POUNDS_PER_FT3, dtype=dtype),
+        dtype=dtype,
+    )
 
 
 @numba.njit(cache=True)
@@ -310,17 +320,21 @@ def compute_oil_specific_gravity_from_density(
     :param oil_compressibility: Oil compressibility (psi⁻¹)
     :return: Specific gravity of oil (dimensionless)
     """
-    delta_p = c.STANDARD_PRESSURE_IMPERIAL - pressure
-    delta_t = c.STANDARD_TEMPERATURE_IMPERIAL - temperature
+    dtype = pressure.dtype
+    delta_p = np.subtract(c.STANDARD_PRESSURE_IMPERIAL, pressure, dtype=dtype)
+    delta_t = np.subtract(c.STANDARD_TEMPERATURE_IMPERIAL, temperature, dtype=dtype)
     correction_factor = np.exp(
         (oil_compressibility * delta_p)
-        + (c.OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL * delta_t)
+        + np.multiply(
+            c.OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL, delta_t, dtype=dtype
+        ),
+        dtype=dtype,
     )
     correction_factor = clip(
         correction_factor, 0.2, 2.0
     )  # Avoid numerical issues with small/large values
-    oil_density_at_stp = oil_density * correction_factor
-    return oil_density_at_stp / c.STANDARD_WATER_DENSITY_IMPERIAL
+    oil_density_at_stp = np.multiply(oil_density, correction_factor, dtype=dtype)
+    return np.divide(oil_density_at_stp, c.STANDARD_WATER_DENSITY_IMPERIAL, dtype=dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -424,7 +438,8 @@ def compute_oil_formation_volume_factor_standing(
         1.25 * temperature
     )
     oil_fvf = 0.972 + 0.000147 * (x**1.175)
-    return oil_fvf  # type: ignore[return-value]
+    dtype = temperature.dtype
+    return oil_fvf.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -475,6 +490,7 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
     :param gas_to_oil_ratio: Gas-to-oil ratio in SCF/STB
     :return: Formation volume factor (Bo) in bbl/STB
     """
+    dtype = oil_specific_gravity.dtype
     oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
     a1, a2, a3 = _get_vazquez_beggs_oil_fvf_coefficients(oil_api_gravity)
     oil_fvf = (
@@ -488,7 +504,7 @@ def compute_oil_formation_volume_factor_vazquez_and_beggs(
             * (oil_specific_gravity / gas_gravity)
         )
     )
-    return oil_fvf  # type: ignore[return-value]
+    return oil_fvf.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -636,16 +652,21 @@ def compute_water_formation_volume_factor_mccain(
     - P: 1000-20,000 psi
     - Salinity: 0-200,000 ppm
     """
+    dtype = pressure.dtype
     # Convert temperature to Celsius for correlation
-    T_C = fahrenheit_to_celsius(temperature)
+    temperature_in_celsius = fahrenheit_to_celsius(temperature)
 
     # Volume correction for temperature (ΔV_wT)
-    delta_V_wT = -1.0001e-2 + 1.33391e-4 * T_C + 5.50654e-7 * T_C**2
+    delta_V_wT = (
+        -1.0001e-2
+        + 1.33391e-4 * temperature_in_celsius
+        + 5.50654e-7 * temperature_in_celsius**2
+    )
 
     # Volume correction for pressure (ΔV_wp)
     delta_V_wp = (
-        -(1.95301e-9 * pressure * T_C)
-        - (1.72834e-13 * pressure**2 * T_C)
+        -(1.95301e-9 * pressure * temperature_in_celsius)
+        - (1.72834e-13 * pressure**2 * temperature_in_celsius)
         - (3.58922e-7 * pressure)
         - (2.25341e-10 * pressure**2)
     )
@@ -663,7 +684,7 @@ def compute_water_formation_volume_factor_mccain(
     if np.sign(gas_solubility) == 1:
         # Rs_w in SCF/STB
         B_w = B_w - (gas_solubility * 1.0e-6)  # Approximate correction
-    return B_w  # type: ignore[return-value]
+    return B_w.astype(dtype)  # type: ignore[return-value]
 
 
 def compute_gas_formation_volume_factor(
@@ -698,12 +719,13 @@ def compute_gas_formation_volume_factor(
     if min_(gas_compressibility_factor) <= 0:
         raise ValidationError("Z-factor must be positive.")
 
+    dtype = pressure.dtype
     return (
         gas_compressibility_factor
         * temperature
         * c.STANDARD_PRESSURE_IMPERIAL
         / (pressure * c.STANDARD_TEMPERATURE_IMPERIAL)
-    )
+    ).astype(dtype)
 
 
 @numba.njit(cache=True)
@@ -789,9 +811,9 @@ def compute_gas_compressibility_factor_papay(
         )
         + ((0.274 * pseudo_reduced_pressure**2) / pseudo_reduced_temperature**2)
     )
-    return np.maximum(0.1, compressibility_factor).astype(
-        pressure.dtype
-    )  # Ensure Z is not negative or too low
+    dtype = pressure.dtype
+    # Ensure Z is not negative or too low
+    return np.maximum(0.1, compressibility_factor).astype(dtype)
 
 
 @numba.njit(cache=True)
@@ -929,7 +951,8 @@ def compute_gas_compressibility_factor_hall_yarborough(
     Z = np.where(active_mask, A * Pr / y_safe, 1.0)
 
     # Clamp to physical range
-    return clip(Z, 0.2, 3.0).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return clip(Z, 0.2, 3.0).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1068,7 +1091,8 @@ def compute_gas_compressibility_factor_dranchuk_abou_kassem(
             break
 
     # Return with same dtype as input pressure
-    return Z.astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return Z.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1237,7 +1261,8 @@ def compute_gas_compressibility_factor(
             Z = np.where(invalid_mask, Z_papay, Z)
 
     # Ensure consistent return type matching input pressure dtype
-    return Z.astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return Z.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1261,8 +1286,8 @@ def compute_oil_api_gravity(
     if np.any(oil_specific_gravity <= 0):
         raise ValidationError("Oil specific gravity must be greater than zero.")
 
-    input_dtype = oil_specific_gravity.dtype
-    return ((141.5 / oil_specific_gravity) - 131.5).astype(input_dtype)  # type: ignore[return-value]
+    dtype = oil_specific_gravity.dtype
+    return ((141.5 / oil_specific_gravity) - 131.5).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1288,11 +1313,11 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
     :return: Tuple (C₁, C₂, C₃)
     """
     less_equal_30 = oil_api_gravity <= 30
-    input_type = oil_api_gravity.dtype
+    dtype = oil_api_gravity.dtype
     c1 = np.where(less_equal_30, 0.0362, 0.0178)
     c2 = np.where(less_equal_30, 1.0937, 1.1870)
     c3 = np.where(less_equal_30, 25.7240, 23.9310)
-    return c1.astype(input_type), c2.astype(input_type), c3.astype(input_type)  # type: ignore[return-value]
+    return c1.astype(dtype), c2.astype(dtype), c3.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1341,12 +1366,12 @@ def compute_oil_bubble_point_pressure(
         oil_api_gravity
     )
     temperature_rankine = temperature + 459.67
-    input_dtype = gas_to_oil_ratio.dtype
+    dtype = gas_to_oil_ratio.dtype
     pressure = (
         gas_to_oil_ratio
         / (c1 * gas_gravity * np.exp((c3 * oil_api_gravity) / temperature_rankine))
     ) ** (1 / c2)
-    return pressure.astype(input_dtype)  # type: ignore[return-value]
+    return pressure.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1371,9 +1396,10 @@ def compute_water_bubble_point_pressure_mccain(
     A = 2.12 + 0.00345 * temperature - 0.0000125 * temperature**2
     B = 0.000045
     denominator = B * (1.0 - 0.000001 * salinity)
+    dtype = temperature.dtype
     bubble_point_pressure = np.maximum(
         0.0, (gas_solubility_in_water - A) / denominator
-    ).astype(temperature.dtype)
+    ).astype(dtype)
     return bubble_point_pressure  # type: ignore[return-value]
 
 
@@ -1507,13 +1533,13 @@ def _compute_gor_vasquez_beggs(
     c1, c2, c3 = _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
         oil_api_gravity
     )
-    input_dtype = pressure.dtype
+    dtype = pressure.dtype
     return (  # type: ignore[return-value]
         (pressure**c2)
         * c1
         * gas_gravity
         * np.exp((c3 * oil_api_gravity) / temperature_in_rankine)
-    ).astype(input_dtype)
+    ).astype(dtype)
 
 
 @numba.njit(cache=True)
@@ -1563,11 +1589,11 @@ def compute_gas_to_oil_ratio(
         raise ValidationError("Pressure must be greater than zero.")
 
     temperature_in_rankine = temperature + 459.67
-    input_type = pressure.dtype
+    dtype = pressure.dtype
 
     # Compute GOR at bubble point
     if gor_at_bubble_point_pressure is not None:
-        gor_at_bp = gor_at_bubble_point_pressure.astype(input_type)
+        gor_at_bp = gor_at_bubble_point_pressure.astype(dtype)
     else:
         gor_at_bp = _compute_gor_vasquez_beggs(
             pressure=bubble_point_pressure,
@@ -1595,7 +1621,7 @@ def compute_gas_to_oil_ratio(
         )
         apply_mask(gor, saturated_mask, saturated_gor)
 
-    return np.maximum(0.0, gor).astype(input_type)  # type: ignore[return-value]
+    return np.maximum(0.0, gor).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1615,7 +1641,8 @@ def _compute_dead_oil_viscosity_modified_beggs(
         - 0.5644 * np.log10(temperature_rankine)
     )
     viscosity = (10**log_viscosity) - 1
-    return np.maximum(0.0, viscosity).astype(temperature.dtype)  # type: ignore[return-value]
+    dtype = temperature.dtype
+    return np.maximum(0.0, viscosity).astype(dtype)  # type: ignore[return-value]
 
 
 def compute_dead_oil_viscosity_modified_beggs(
@@ -1703,7 +1730,8 @@ def _compute_oil_viscosity(
         )
         apply_mask(result, undersaturated_mask, undersaturated_viscosity)
 
-    return np.maximum(result, 1e-6).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return np.maximum(result, 1e-6).astype(dtype)  # type: ignore[return-value]
 
 
 def compute_oil_viscosity(
@@ -1792,7 +1820,9 @@ def compute_gas_molecular_weight(
     """
     if min_(gas_gravity) <= 0:
         raise ValidationError("Gas specific gravity must be greater than zero.")
-    return gas_gravity * c.MOLECULAR_WEIGHT_AIR
+
+    dtype = gas_gravity.dtype
+    return np.multiply(gas_gravity, c.MOLECULAR_WEIGHT_AIR, dtype=dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -1869,8 +1899,11 @@ def compute_gas_pseudocritical_properties(
             )
         )
 
+    dtype = gas_gravity.dtype
     pseudocritical_temperature_fahrenheit = pseudocritical_temperature_rankine - 459.67
-    return pseudocritical_pressure, pseudocritical_temperature_fahrenheit  # type: ignore[return-value]
+    return pseudocritical_pressure.astype(
+        dtype
+    ), pseudocritical_temperature_fahrenheit.astype(dtype)  # type: ignore[return-value]
 
 
 def compute_gas_density(
@@ -1892,12 +1925,14 @@ def compute_gas_density(
     # lbm/lbmol is the same numerical value as g/mol
     gas_molecular_weight_lbm_per_lbmole = compute_gas_molecular_weight(gas_gravity)
     # Density in lbm/ft3
+    dtype = pressure.dtype
     gas_density = (pressure * gas_molecular_weight_lbm_per_lbmole) / (
-        gas_compressibility_factor
-        * c.IDEAL_GAS_CONSTANT_IMPERIAL
+        np.multiply(
+            gas_compressibility_factor, c.IDEAL_GAS_CONSTANT_IMPERIAL, dtype=dtype
+        )
         * temperature_in_rankine
     )
-    return gas_density
+    return gas_density  # type: ignore[return-value]
 
 
 def compute_gas_viscosity(
@@ -1952,7 +1987,9 @@ def compute_gas_viscosity(
     y = 2.4 - (0.2 * x)
 
     exponent = x * (density_in_grams_per_cm3**y)
-    exponent = np.minimum(np.maximum(exponent, -700), 700)  # cap to prevent overflow
+    exponent = np.minimum(
+        np.maximum(exponent, -700), 700, out=exponent
+    )  # cap to prevent overflow
 
     gas_viscosity = (k * 1e-4) * np.exp(exponent)
     return np.maximum(0.0, gas_viscosity).astype(temperature.dtype)
@@ -2081,7 +2118,8 @@ def _compute_oil_compressibility_liberation_correction_term(
     :param gor_at_bubble_point_pressure: GOR at bubble point pressure (scf/stb).
     :return: Correction term for oil compressibility.
     """
-    delta_p = np.maximum(0.01, 1e-4 * pressure).astype(pressure.dtype)
+    dtype = pressure.dtype
+    delta_p = np.maximum(0.01, 1e-4 * pressure).astype(dtype)
     pressure_plus = pressure - delta_p
     pressure_minus = pressure + delta_p
     gor_plus_delta = compute_gas_to_oil_ratio(
@@ -2324,7 +2362,8 @@ def compute_gas_compressibility(
         1 / (Z * pseudo_critical_pressure)
     ) * dZ_dP_r
     # Compressibility must be non-negative
-    return np.maximum(0.0, gas_compressibility).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return np.maximum(0.0, gas_compressibility).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -2376,7 +2415,8 @@ def _gas_solubility_in_water_mccain_methane(
     salinity_correction = 1.0 - (0.000001 * salinity)
     gas_solubility = A_term + (B * pressure * salinity_correction)
     # Clamp to non-negative
-    return np.maximum(0.0, gas_solubility).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return np.maximum(0.0, gas_solubility).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -2468,7 +2508,8 @@ def _gas_solubility_in_water_duan_sun_co2(
     # It combines molality -> mole fraction -> volume ratio.
     # For many reservoir engineering applications, a factor around 315.4 is used.
     rsw = m_co2_brine * MOLALITY_TO_SCF_STB_CO2
-    return rsw  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return rsw.astype(dtype)  # type: ignore[return-value]
 
 
 def _gas_solubility_in_water_henry_law(
@@ -2539,7 +2580,8 @@ def _gas_solubility_in_water_henry_law(
     gas_solubility = (
         (pressure / H) * (M / water_density) * salinity_factor
     )  # m³ gas / m³ water
-    return gas_solubility * c.M3_PER_M3_TO_SCF_PER_STB
+    dtype = pressure.dtype
+    return np.multiply(gas_solubility, c.M3_PER_M3_TO_SCF_PER_STB, dtype=dtype)
 
 
 def compute_gas_solubility_in_water(
@@ -2577,7 +2619,8 @@ def compute_gas_solubility_in_water(
         # Apply Henry's Law for out-of-range temperatures
         if np.any(henry_mask):
             molar_masses = {
-                "methane": c.MOLECULAR_WEIGHT_CH4 / 1000,  # Convert g/mol to kg/mol
+                "methane": c.MOLECULAR_WEIGHtemperature_in_celsiusH4
+                / 1000,  # Convert g/mol to kg/mol
             }
             henry_result = _gas_solubility_in_water_henry_law(
                 pressure=get_mask(pressure, henry_mask),
@@ -2608,7 +2651,8 @@ def compute_gas_solubility_in_water(
         # Apply Henry's Law for out-of-range temperatures
         if np.any(henry_mask):
             molar_masses = {
-                "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+                "co2": c.MOLECULAR_WEIGHtemperature_in_celsiusO2
+                / 1000,  # Convert g/mol to kg/mol
             }
             henry_result = _gas_solubility_in_water_henry_law(
                 pressure=get_mask(pressure, henry_mask),
@@ -2623,8 +2667,9 @@ def compute_gas_solubility_in_water(
     else:
         # Henry's Law for all temperatures (no specialized correlation)
         molar_masses = {
-            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
-            "ch4": c.MOLECULAR_WEIGHT_CH4 / 1000,
+            "co2": c.MOLECULAR_WEIGHtemperature_in_celsiusO2
+            / 1000,  # Convert g/mol to kg/mol
+            "ch4": c.MOLECULAR_WEIGHtemperature_in_celsiusH4 / 1000,
             "n2": c.MOLECULAR_WEIGHT_N2 / 1000,
             "ar": c.MOLECULAR_WEIGHT_ARGON / 1000,
             "o2": c.MOLECULAR_WEIGHT_O2 / 1000,
@@ -2676,7 +2721,9 @@ def compute_gas_free_water_formation_volume_factor(
     )
     isothermal_compressibility = -(1.95301e-9 * pressure) + (1.72492e-13 * pressure**2)
     gas_free_water_fvf = (1.0 + thermal_expansion) * (1.0 + isothermal_compressibility)
-    return np.maximum(0.9, gas_free_water_fvf).astype(pressure.dtype)  # type: ignore[return-value]  # Bw_gas_free is typically close to 1.0
+    dtype = pressure.dtype
+    # Bw_gas_free is typically close to 1.0
+    return np.maximum(0.9, gas_free_water_fvf).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -2830,7 +2877,8 @@ def compute_water_compressibility(
         apply_mask(result, saturated_mask, saturated_compressibility)
 
     # Ensure non-negative compressibility
-    return np.maximum(0.0, result).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return np.maximum(0.0, result).astype(dtype)  # type: ignore[return-value]
 
 
 def compute_live_oil_density(
@@ -2858,26 +2906,37 @@ def compute_live_oil_density(
     :return: Live oil density (lb/ft³) at reservoir conditions.
     """
     # Convert API to stock tank oil density (lb/ft³)
-    stock_tank_oil_density_lb_per_ft3 = (
-        141.5 / (api_gravity + 131.5)
-    ) * c.STANDARD_WATER_DENSITY_IMPERIAL
+    dtype = api_gravity.dtype
+    stock_tank_oil_density_lb_per_ft3 = np.multiply(
+        np.divide(141.5, np.add(api_gravity, 131.5, dtype=dtype), dtype=dtype),
+        c.STANDARD_WATER_DENSITY_IMPERIAL,
+        dtype=dtype,
+    )
 
     # Mass of oil per STB (lb)
-    mass_stock_tank_oil = stock_tank_oil_density_lb_per_ft3 / c.FT3_TO_STB
+    mass_stock_tank_oil = np.divide(
+        stock_tank_oil_density_lb_per_ft3, c.FT3_TO_STB, dtype=dtype
+    )
 
     # Mass of dissolved gas per STB (lb)
     # Approx: 1 scf = gas_gravity * (molecular weight of air) / 379.49 lb
-    gas_mass_per_scf = (gas_gravity * c.MOLECULAR_WEIGHT_AIR) / c.SCF_PER_POUND_MOLE
-    mass_dissolved_gas = gas_to_oil_ratio * gas_mass_per_scf
+    gas_mass_per_scf = np.divide(
+        (gas_gravity * c.MOLECULAR_WEIGHT_AIR), c.SCF_PER_POUND_MOLE, dtype=dtype
+    )
+    mass_dissolved_gas = np.multiply(gas_to_oil_ratio, gas_mass_per_scf, dtype=dtype)
 
     # Total mass and volume
     total_mass_lb_per_stb = mass_stock_tank_oil + mass_dissolved_gas
     # print(formation_volume_factor)
-    total_volume_ft3_per_stb = formation_volume_factor * c.BBL_TO_FT3
+    total_volume_ft3_per_stb = np.multiply(
+        formation_volume_factor, c.BBL_TO_FT3, dtype=dtype
+    )
 
     # Live oil density in lb/ft³
-    live_oil_density_lb_per_ft3 = total_mass_lb_per_stb / total_volume_ft3_per_stb
-    return live_oil_density_lb_per_ft3
+    live_oil_density_lb_per_ft3 = np.divide(
+        total_mass_lb_per_stb, total_volume_ft3_per_stb, dtype=dtype
+    )
+    return live_oil_density_lb_per_ft3  # type: ignore[return-value]
 
 
 def compute_water_density_mccain(
@@ -2910,18 +2969,18 @@ def compute_water_density_mccain(
     if min_(pressure) < 0:
         raise ValidationError("Pressure cannot be negative.")
 
+    dtype = pressure.dtype
     salinity_in_wt_percent = salinity / 10000.0
 
-    delta_salinity = 0.438603 * salinity_in_wt_percent
-    delta_pressure = 0.00001427 * (pressure - 14.7)
-    delta_temperature = -0.00048314 * (temperature - 60.0)
-    water_density = (
-        c.STANDARD_WATER_DENSITY_IMPERIAL
-        + delta_salinity
-        + delta_pressure
-        + delta_temperature
+    delta_salinity = np.multiply(0.438603, salinity_in_wt_percent, dtype=dtype)
+    delta_pressure = np.multiply(0.00001427, (pressure - 14.7), dtype=dtype)
+    delta_temperature = np.multiply(-0.00048314, (temperature - 60.0), dtype=dtype)
+    water_density = np.add(
+        c.STANDARD_WATER_DENSITY_IMPERIAL,
+        (delta_salinity + delta_pressure + delta_temperature),
+        dtype=dtype,
     )
-    return water_density
+    return water_density  # type:ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3032,7 +3091,7 @@ def compute_water_density(
 
     if min_(gas_free_water_formation_volume_factor) <= 0:
         raise ValidationError(
-            "Calculated water formation volume factor (Bw) is non-positive, cannot calculate density."
+            "Gas-free water formation volume factor (Bw) is non-positive, cannot calculate density."
         )
 
     # Calculate Live Water Density (Imperial units first)
@@ -3063,7 +3122,8 @@ def compute_water_density(
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
     )  # lb/ft^3
     # Ensure density is non-negative
-    return np.maximum(0.0, live_water_density_in_lb_per_ft3).astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return np.maximum(0.0, live_water_density_in_lb_per_ft3).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3107,11 +3167,12 @@ def compute_gas_to_oil_ratio_standing(
     gor = gas_gravity * (
         (pressure / 18.2 + 1.4) * 10 ** (0.0125 * oil_api_gravity)
     ) ** (1 / 1.2048)
-    return gor  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return gor.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
-def _standing_bp_residual_scalar(
+def _standing_oil_bubble_point_residual(
     pressure: float,
     oil_api: float,
     gas_gravity: float,
@@ -3129,10 +3190,10 @@ def _standing_bp_residual_scalar(
 
 
 def estimate_bubble_point_pressure_standing(
-    oil_api_gravity: np.ndarray,
-    gas_gravity: np.ndarray,
-    observed_gas_to_oil_ratio: np.ndarray,
-) -> np.ndarray:
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    observed_gas_to_oil_ratio: NDimensionalGrid[NDimension],
+) -> NDimensionalGrid[NDimension]:
     """
     Estimate bubble point pressure (Pb) using Standing's correlation
     given observed Rs and known oil API gravity and gas gravity.
@@ -3159,23 +3220,19 @@ def estimate_bubble_point_pressure_standing(
     :param observed_gas_to_oil_ratio: Observed solution gas-oil ratio (Rs) in SCF/STB.
     :return: Estimated bubble point pressure (Pb) (psi).
     """
-    # Make sure all inputs are arrays of same shape
-    oil_api_gravity = np.asarray(oil_api_gravity, dtype=float)
-    gas_gravity = np.asarray(gas_gravity, dtype=float)
-    observed_gas_to_oil_ratio = np.asarray(observed_gas_to_oil_ratio, dtype=float)
-
     # Allocate output
     bubble_point_pressure = np.empty_like(oil_api_gravity)
 
+    min_pressure = c.MIN_VALID_PRESSURE
+    max_pressure = c.MAX_VALID_PRESSURE
     # Loop over all cells
     it = np.nditer(oil_api_gravity, flags=["multi_index"])  # type: ignore
     while not it.finished:
         idx = it.multi_index
-
-        bubble_point_pressure[idx] = brentq(
-            f=_standing_bp_residual_scalar,
-            a=14.696,
-            b=10000.0,
+        bubble_point_pressure[idx] = brentq(  # type: ignore
+            f=_standing_oil_bubble_point_residual,
+            a=min_pressure,
+            b=max_pressure,
             args=(
                 oil_api_gravity[idx],
                 gas_gravity[idx],
@@ -3184,7 +3241,6 @@ def estimate_bubble_point_pressure_standing(
             xtol=1e-6,
             full_output=False,
         )
-
         it.iternext()
 
     return bubble_point_pressure
@@ -3258,6 +3314,7 @@ def compute_hydrocarbon_in_place(
     if min_(formation_volume_factor) <= 0:
         raise ValidationError("Formation volume factor must be a positive value.")
 
+    dtype = area.dtype
     if hydrocarbon_type == "oil" or hydrocarbon_type == "water":
         # Oil in Place (OIP) calculation (May include dissolved gas in undersaturated reservoirs)
         oip = (
@@ -3269,7 +3326,7 @@ def compute_hydrocarbon_in_place(
             * net_to_gross_ratio
             / formation_volume_factor
         )
-        return oip  # type: ignore[return-value]
+        return oip.astype(dtype)  # type: ignore[return-value]
 
     # Free Gas in Place (GIP) calculation
     free_gip = (
@@ -3281,7 +3338,7 @@ def compute_hydrocarbon_in_place(
         * net_to_gross_ratio
         / formation_volume_factor
     )
-    return free_gip  # type: ignore[return-value]
+    return free_gip.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3364,7 +3421,8 @@ def compute_miscibility_transition_factor(
 
     # Transition factor varies from 0 (immiscible) to 1 (miscible)
     transition_factor = 0.5 * (1.0 + np.tanh(normalized))
-    return transition_factor.astype(pressure.dtype)  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return transition_factor.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3411,7 +3469,8 @@ def compute_effective_todd_longstaff_omega(
         minimum_miscibility_pressure=minimum_miscibility_pressure,
         transition_width=transition_width,
     )
-    return base_omega * transition_factor  # type: ignore[return-value]
+    dtype = pressure.dtype
+    return (base_omega * transition_factor).astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3511,12 +3570,12 @@ def compute_todd_longstaff_effective_viscosity(
     C_s = solvent_concentration
     C_o = 1.0 - C_s
 
-    input_dtype = oil_viscosity.dtype
+    dtype = oil_viscosity.dtype
     # Handle edge cases
     if np.any(C_s >= 1.0):
-        return solvent_viscosity.astype(input_dtype)
+        return solvent_viscosity.astype(dtype)
     if np.any(C_s <= 0.0):
-        return oil_viscosity.astype(input_dtype)
+        return oil_viscosity.astype(dtype)
 
     # Fully mixed viscosity (arithmetic/linear mean)
     # Represents ideal miscibility - single homogeneous phase
@@ -3533,7 +3592,7 @@ def compute_todd_longstaff_effective_viscosity(
     #   ω = 1: μ_eff = μ_mix (fully mixed, arithmetic mean)
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
-    return mu_effective.astype(input_dtype)  # type: ignore[return-value]
+    return mu_effective.astype(dtype)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3640,13 +3699,13 @@ def compute_todd_longstaff_effective_density(
     C_s = solvent_concentration
     C_o = 1.0 - solvent_concentration
 
-    input_dtype = C_s.dtype
+    dtype = C_s.dtype
 
     # Handle edge cases
     if np.any(C_s >= 1.0):
-        return solvent_density.astype(input_dtype)
+        return solvent_density.astype(dtype)
     if np.any(C_s <= 0.0):
-        return oil_density.astype(input_dtype)
+        return oil_density.astype(dtype)
 
     # Fully mixed density (volume-weighted, arithmetic mean)
     # This is the density if phases are perfectly mixed by volume
@@ -3662,14 +3721,14 @@ def compute_todd_longstaff_effective_density(
     # Avoid division by zero (though should never happen with positive viscosities)
     if np.any(denominator < 1e-15):
         # If both viscosities are essentially zero, fall back to volume weighting
-        f_s = C_s.astype(input_dtype)
-        f_o = C_o.astype(input_dtype)
+        f_s = C_s.astype(dtype)
+        f_o = C_o.astype(dtype)
     else:
         f_s = (C_s * oil_viscosity) / denominator
         f_o = (C_o * solvent_viscosity) / denominator
 
-        f_s = f_s.astype(input_dtype)
-        f_o = f_o.astype(input_dtype)
+        f_s = f_s.astype(dtype)
+        f_o = f_o.astype(dtype)
 
     # Fully segregated density (flow-weighted)
     # This is the density if phases flow separately, weighted by their mobilities
@@ -3683,4 +3742,4 @@ def compute_todd_longstaff_effective_density(
     #   ω = 0: ρ_eff = ρ_segregated (flow-weighted, immiscible)
     #   ω = 1: ρ_eff = ρ_mix (volume-weighted, fully mixed)
     rho_effective = (rho_mix**omega) * (rho_segregated ** (1.0 - omega))
-    return rho_effective.astype(input_dtype)  # type: ignore[return-value]
+    return rho_effective.astype(dtype)  # type: ignore[return-value]

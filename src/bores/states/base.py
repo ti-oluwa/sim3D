@@ -118,7 +118,6 @@ class ModelState(typing.Generic[NDimension]):
         return self.wells.exists()
 
 
-
 def _validate_and_coerce_array(
     model_shape: tuple[int, ...],
     grid: np.ndarray,
@@ -408,7 +407,7 @@ def validate_state(
             rock_properties=rock_properties,  # type: ignore
             rock_fluid_properties=model.rock_fluid_properties,
             saturation_history=saturation_history,
-            boundary_conditions=model.boundary_conditions,
+            boundary_conditions=model.boundary_conditions,  # type: ignore
             dip_angle=model.dip_angle,
             dip_azimuth=model.dip_azimuth,
         )

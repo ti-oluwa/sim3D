@@ -219,39 +219,59 @@ def build_three_phase_capillary_pressure_grids(
     :return: Tuple of (oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid)
         where each grid is a N-Dimensional numpy array of capillary pressures (psi).
     """
-    oil_water_capillary_pressure_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape, value=0.0
-    )
-    gas_oil_capillary_pressure_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape, value=0.0
-    )
+    oil_saturation_grid = 1.0 - water_saturation_grid - gas_saturation_grid
+    # Check if table supports array/vectorized operations
+    supports_arrays = getattr(capillary_pressure_table, "supports_arrays", False)
 
-    for indices in itertools.product(*map(range, water_saturation_grid.shape)):
-        # Get current saturations for the cell
-        water_saturation = water_saturation_grid[indices]
-        gas_saturation = gas_saturation_grid[indices]
-
-        # Get cell-specific rock properties
-        irreducible_water_saturation = irreducible_water_saturation_grid[indices]
-        residual_oil_saturation_water = residual_oil_saturation_water_grid[indices]
-        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
-        residual_gas_saturation = residual_gas_saturation_grid[indices]
-
-        oil_saturation = 1.0 - water_saturation - gas_saturation
-        # Compute three-phase capillary pressures
+    if supports_arrays:
+        oil_saturation_grid = np.maximum(0.0, oil_saturation_grid)
         capillary_pressures = capillary_pressure_table(
-            water_saturation=water_saturation,
-            oil_saturation=max(0.0, oil_saturation),
-            gas_saturation=gas_saturation,
-            irreducible_water_saturation=irreducible_water_saturation,
-            residual_oil_saturation_water=residual_oil_saturation_water,
-            residual_oil_saturation_gas=residual_oil_saturation_gas,
-            residual_gas_saturation=residual_gas_saturation,
+            water_saturation=water_saturation_grid,
+            oil_saturation=oil_saturation_grid,
+            gas_saturation=gas_saturation_grid,
+            irreducible_water_saturation=irreducible_water_saturation_grid,
+            residual_oil_saturation_water=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas=residual_oil_saturation_gas_grid,
+            residual_gas_saturation=residual_gas_saturation_grid,
         )
-        oil_water_capillary_pressure_grid[indices] = capillary_pressures["oil_water"]
-        gas_oil_capillary_pressure_grid[indices] = capillary_pressures["gas_oil"]
+        oil_water_capillary_pressure_grid = capillary_pressures["oil_water"]  # type: ignore[assignment]
+        gas_oil_capillary_pressure_grid = capillary_pressures["gas_oil"]  # type: ignore[assignment]
+    else:
+        # Cell-by-cell approach for tables that don't support arrays
+        oil_water_capillary_pressure_grid = build_uniform_grid(
+            grid_shape=water_saturation_grid.shape, value=0.0
+        )
+        gas_oil_capillary_pressure_grid = build_uniform_grid(
+            grid_shape=water_saturation_grid.shape, value=0.0
+        )
 
-    return oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid
+        for indices in itertools.product(*map(range, water_saturation_grid.shape)):
+            # Get current saturations for the cell
+            water_saturation = water_saturation_grid[indices]
+            gas_saturation = gas_saturation_grid[indices]
+            oil_saturation = oil_saturation_grid[indices]
+
+            # Get cell-specific rock properties
+            irreducible_water_saturation = irreducible_water_saturation_grid[indices]
+            residual_oil_saturation_water = residual_oil_saturation_water_grid[indices]
+            residual_oil_saturation_gas = residual_oil_saturation_gas_grid[indices]
+            residual_gas_saturation = residual_gas_saturation_grid[indices]
+
+            capillary_pressures = capillary_pressure_table(
+                water_saturation=water_saturation,
+                oil_saturation=max(0.0, oil_saturation),
+                gas_saturation=gas_saturation,
+                irreducible_water_saturation=irreducible_water_saturation,
+                residual_oil_saturation_water=residual_oil_saturation_water,
+                residual_oil_saturation_gas=residual_oil_saturation_gas,
+                residual_gas_saturation=residual_gas_saturation,
+            )
+            oil_water_capillary_pressure_grid[indices] = capillary_pressures[
+                "oil_water"
+            ]
+            gas_oil_capillary_pressure_grid[indices] = capillary_pressures["gas_oil"]
+
+    return oil_water_capillary_pressure_grid, gas_oil_capillary_pressure_grid  # type: ignore[return-value]
 
 
 def build_three_phase_relative_permeabilities_grids(
@@ -284,69 +304,116 @@ def build_three_phase_relative_permeabilities_grids(
     :param relative_permeability_table: Relative permeability function to use for calculations (e.g., Corey model).
     :return: Tuple of (water_relative_permeability_grid, oil_relative_permeability_grid, gas_relative_permeability_grid) as fractions.
     """
-    water_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape, value=0.0
-    )
-    oil_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape, value=0.0
-    )
-    gas_relative_permeability_grid = build_uniform_grid(
-        grid_shape=water_saturation_grid.shape, value=0.0
-    )
-    nx, ny, nz = water_saturation_grid.shape
+    # Check if table supports array operations
+    supports_arrays = getattr(relative_permeability_table, "supports_arrays", False)
 
-    for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
-        # Get current saturations for the cell
-        water_saturation = water_saturation_grid[i, j, k]
-        oil_saturation = oil_saturation_grid[i, j, k]
-        gas_saturation = gas_saturation_grid[i, j, k]
-
-        # Get cell-specific rock properties
-        irreducible_water_saturation = irreducible_water_saturation_grid[i, j, k]
-        residual_oil_saturation_water = residual_oil_saturation_water_grid[i, j, k]
-        residual_oil_saturation_gas = residual_oil_saturation_gas_grid[i, j, k]
-        residual_gas_saturation = residual_gas_saturation_grid[i, j, k]
-
-        # Compute three-phase relative permeabilities
+    if supports_arrays:
         relative_permeabilities = relative_permeability_table(
-            water_saturation=water_saturation,
-            oil_saturation=oil_saturation,
-            gas_saturation=gas_saturation,
-            irreducible_water_saturation=irreducible_water_saturation,
-            residual_oil_saturation_water=residual_oil_saturation_water,
-            residual_oil_saturation_gas=residual_oil_saturation_gas,
-            residual_gas_saturation=residual_gas_saturation,
+            water_saturation=water_saturation_grid,
+            oil_saturation=oil_saturation_grid,
+            gas_saturation=gas_saturation_grid,
+            irreducible_water_saturation=irreducible_water_saturation_grid,
+            residual_oil_saturation_water=residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas=residual_oil_saturation_gas_grid,
+            residual_gas_saturation=residual_gas_saturation_grid,
         )
-        # Mark phases as inactive by setting relative permeability to the phase as zero
-        # if below 'residual/irreducible saturations + tolerance'
-        # Use hysteresis-aware residual oil saturation since not flux or mobility info is available here
-        if water_saturation > gas_saturation:
-            effective_residual_oil_saturation = residual_oil_saturation_water
-        else:
-            effective_residual_oil_saturation = residual_oil_saturation_gas
 
+        # Use hysteresis-aware residual oil saturation
+        effective_residual_oil_saturation_grid = np.where(
+            water_saturation_grid > gas_saturation_grid,
+            residual_oil_saturation_water_grid,
+            residual_oil_saturation_gas_grid,
+        )
+
+        # Mark phases as inactive by setting relative permeability to zero
+        # if below 'residual/irreducible saturations + tolerance'
         water_inactive = (
-            water_saturation
-            <= irreducible_water_saturation + phase_appearance_tolerance
+            water_saturation_grid
+            <= irreducible_water_saturation_grid + phase_appearance_tolerance
         )
         oil_inactive = (
-            oil_saturation
-            <= effective_residual_oil_saturation + phase_appearance_tolerance
+            oil_saturation_grid
+            <= effective_residual_oil_saturation_grid + phase_appearance_tolerance
         )
         gas_inactive = (
-            gas_saturation <= residual_gas_saturation + phase_appearance_tolerance
-        )
-        water_relative_permeability_grid[i, j, k] = (
-            relative_permeabilities["water"] if not water_inactive else 0.0
-        )
-        oil_relative_permeability_grid[i, j, k] = (
-            relative_permeabilities["oil"] if not oil_inactive else 0.0
-        )
-        gas_relative_permeability_grid[i, j, k] = (
-            relative_permeabilities["gas"] if not gas_inactive else 0.0
+            gas_saturation_grid
+            <= residual_gas_saturation_grid + phase_appearance_tolerance
         )
 
-    return (
+        water_relative_permeability_grid = np.where(
+            water_inactive, 0.0, relative_permeabilities["water"]
+        )  # type: ignore[assignment]
+        oil_relative_permeability_grid = np.where(
+            oil_inactive, 0.0, relative_permeabilities["oil"]
+        )  # type: ignore[assignment]
+        gas_relative_permeability_grid = np.where(
+            gas_inactive, 0.0, relative_permeabilities["gas"]
+        )  # type: ignore[assignment]
+    else:
+        # Cell-by-cell approach for tables that don't support arrays
+        water_relative_permeability_grid = build_uniform_grid(
+            grid_shape=water_saturation_grid.shape, value=0.0
+        )
+        oil_relative_permeability_grid = build_uniform_grid(
+            grid_shape=water_saturation_grid.shape, value=0.0
+        )
+        gas_relative_permeability_grid = build_uniform_grid(
+            grid_shape=water_saturation_grid.shape, value=0.0
+        )
+        nx, ny, nz = water_saturation_grid.shape
+
+        for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
+            # Get current saturations for the cell
+            water_saturation = water_saturation_grid[i, j, k]
+            oil_saturation = oil_saturation_grid[i, j, k]
+            gas_saturation = gas_saturation_grid[i, j, k]
+
+            # Get cell-specific rock properties
+            irreducible_water_saturation = irreducible_water_saturation_grid[i, j, k]
+            residual_oil_saturation_water = residual_oil_saturation_water_grid[i, j, k]
+            residual_oil_saturation_gas = residual_oil_saturation_gas_grid[i, j, k]
+            residual_gas_saturation = residual_gas_saturation_grid[i, j, k]
+
+            # Compute three-phase relative permeabilities
+            relative_permeabilities = relative_permeability_table(
+                water_saturation=water_saturation,
+                oil_saturation=oil_saturation,
+                gas_saturation=gas_saturation,
+                irreducible_water_saturation=irreducible_water_saturation,
+                residual_oil_saturation_water=residual_oil_saturation_water,
+                residual_oil_saturation_gas=residual_oil_saturation_gas,
+                residual_gas_saturation=residual_gas_saturation,
+            )
+            # Mark phases as inactive by setting relative permeability to the phase as zero
+            # if below 'residual/irreducible saturations + tolerance'
+            # Use hysteresis-aware residual oil saturation since not flux or mobility info is available here
+            if water_saturation > gas_saturation:
+                effective_residual_oil_saturation = residual_oil_saturation_water
+            else:
+                effective_residual_oil_saturation = residual_oil_saturation_gas
+
+            water_inactive = (
+                water_saturation
+                <= irreducible_water_saturation + phase_appearance_tolerance
+            )
+            oil_inactive = (
+                oil_saturation
+                <= effective_residual_oil_saturation + phase_appearance_tolerance
+            )
+            gas_inactive = (
+                gas_saturation <= residual_gas_saturation + phase_appearance_tolerance
+            )
+            water_relative_permeability_grid[i, j, k] = (
+                relative_permeabilities["water"] if not water_inactive else 0.0
+            )
+            oil_relative_permeability_grid[i, j, k] = (
+                relative_permeabilities["oil"] if not oil_inactive else 0.0
+            )
+            gas_relative_permeability_grid[i, j, k] = (
+                relative_permeabilities["gas"] if not gas_inactive else 0.0
+            )
+
+    return (  # type: ignore[return-value]
         water_relative_permeability_grid,
         oil_relative_permeability_grid,
         gas_relative_permeability_grid,
@@ -1037,7 +1104,7 @@ def build_oil_effective_viscosity_grid(
     :return: Effective mixture viscosity grid (cP)
 
     Example:
-    
+
     ```python
     # Simple case: constant omega everywhere (no pressure effects)
     visc_grid = build_oil_effective_viscosity_grid(

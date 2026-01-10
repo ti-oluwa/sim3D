@@ -498,9 +498,8 @@ def _build_table_interpolator(
 
     def _interpolator(pressure: float) -> float:
         # Clamp pressure to table bounds
-        p_clamped = np.clip(pressure, pvt_tables.pressures[0], pvt_tables.pressures[-1])
         result = pvt_tables.pt_interpolate(
-            name=property_name, pressure=p_clamped, temperature=temperature
+            name=property_name, pressure=pressure, temperature=temperature
         )
         # Ensure positive values
         if result is None:
@@ -532,7 +531,7 @@ class WellFluid:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
+        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
     ) -> typing.Tuple[typing.Any, ...]:
         """
         Build a hashable cache key for pseudo-pressure table lookup.
@@ -545,10 +544,13 @@ class WellFluid:
         # PVT tables hash: if tables provided, use a hash of their configuration
         # Otherwise, use None to indicate correlation-based calculation
         if pvt_tables is not None:
-            # Hash based on table metadata (not the full data arrays)
+            # Hash based on table metadata
+            p_bounds = pvt_tables._extrapolation_bounds.get("pressure", (0.0, 0.0))
+            t_bounds = pvt_tables._extrapolation_bounds.get("temperature", (0.0, 0.0))
             pvt_hash = (
-                tuple(pvt_tables.pressures.tolist()),  # Pressure grid
-                tuple(pvt_tables.temperatures.tolist()),  # Temperature grid
+                (round(p_bounds[0], 2), round(p_bounds[1], 2)),  # Pressure bounds
+                (round(t_bounds[0], 2), round(t_bounds[1], 2)),  # Temperature bounds
+                pvt_tables.interpolation_method,  # Interpolation method
                 pvt_tables.exists("gas_compressibility_factor"),  # Z table exists?
                 pvt_tables.exists("gas_viscosity"),  # μ table exists?
             )
@@ -583,7 +585,7 @@ class WellFluid:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
+        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
         use_cache: bool = True,
     ) -> GasPseudoPressureTable:
         """
@@ -698,7 +700,7 @@ class InjectedFluid(WellFluid):
     """Todd-Longstaff mixing parameter for miscible displacement (0 to 1)."""
     minimum_miscibility_pressure: typing.Optional[float] = None
     """Minimum miscibility pressure for this fluid-oil system (psi)"""
-    miscibility_transition_width: float = attrs.field(
+    miscibility_transition_width: float = attrs.field(  # type: ignore
         default=500.0, validator=attrs.validators.ge(0)
     )
     """Pressure range over which miscibility transitions from immiscible to miscible (psi)"""

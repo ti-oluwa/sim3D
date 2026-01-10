@@ -901,6 +901,7 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
     Top        → z+
 
     Defaults to no-flow boundary for all sides if not specified.
+    
     """
 
     left: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
@@ -1074,6 +1075,7 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
     pressure_bc.apply(pressure_grid, metadata=pressure_metadata)
     temperature_bc.apply(temperature_grid, metadata=temperature_metadata)
     ```
+
     """
 
     def __init__(

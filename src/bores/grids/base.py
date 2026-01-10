@@ -274,7 +274,9 @@ def _apply_dip_upward(
         for j in range(ny):
             x_distance = i * cell_size_x
             y_distance = j * cell_size_y
-            distance_along_dip = x_distance * dx_component + y_distance * dy_component
+            distance_along_dip = (x_distance * dx_component) + (
+                y_distance * dy_component
+            )
             dip_offset = distance_along_dip * tan_dip_angle
             # Upward: moving in dip direction decreases elevation
             dipped_elevation_grid[i, j, :] -= dip_offset
@@ -308,7 +310,9 @@ def _apply_dip_downward(
         for j in range(ny):
             x_distance = i * cell_size_x
             y_distance = j * cell_size_y
-            distance_along_dip = x_distance * dx_component + y_distance * dy_component
+            distance_along_dip = (x_distance * dx_component) + (
+                y_distance * dy_component
+            )
             dip_offset = distance_along_dip * tan_dip_angle
             # Downward: moving in dip direction increases depth
             dipped_elevation_grid[i, j, :] += dip_offset
@@ -373,10 +377,9 @@ def apply_structural_dip(
 
     dtype = get_dtype()
     dipped_elevation_grid = elevation_grid.copy().astype(dtype, copy=False)
-    dip_angle_radians = np.radians(dip_angle)
-    dip_azimuth_radians = np.radians(dip_azimuth)
+    dip_angle_radians = np.radians(dip_angle, dtype=dtype)
+    dip_azimuth_radians = np.radians(dip_azimuth, dtype=dtype)
 
-    cell_size_x, cell_size_y = cell_dimension
     grid_shape = elevation_grid.shape
     nx, ny = grid_shape[0], grid_shape[1]
 

@@ -198,7 +198,7 @@ class GasPseudoPressureTable:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         reference_pressure: typing.Optional[float] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
+        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
     ):
         """
         Build pseudo-pressure lookup table.
@@ -542,56 +542,69 @@ class PVTTables:
         """
         Initialize PVT tables from raw table data.
 
-        Builds fast interpolators from raw table data, then discards the raw tables to save memory.
-        The initialization process:
-        1. Extracts and stores grid arrays (pressures, temperatures, salinities)
-        2. Validates grid monotonicity and consistency
-        3. Optionally validates physical consistency of property tables
-        4. Builds interpolators for all non-None properties in table_data
-        5. Discards raw table arrays (keeping only interpolators)
+        Builds fast interpolators from raw table data. The initialization process mostly involves:
+        1. Validates grid monotonicity and consistency
+        2. Optionally validates physical consistency of property tables
+        3. Builds interpolators for all non-None properties in `table_data`
+        4. Discards raw table arrays (Garbage Collects) (keeping only interpolators)
+
+        Please note that `table_data` can be discarded after initialization to free memory,
+        as all necessary data is stored in the interpolators. This saves a substantial amount of memory
+        (~50%) when working with large PVT tables. The garbage collector will reclaim the memory used by
+        the raw arrays once there are no references to `table_data` but it is still recommended to explicitly delete.
+
+        For Example;
+        ```python
+        import gc
+
+        pvt_data = build_pvt_table_data(...)  # Build raw table data
+        pvt_tables = PVTTables(pvt_data)     # Build interpolators
+        del pvt_data                         # Discard raw data to free memory
+
+        gc.collect()                        # Optionally force garbage collection
+        ```
 
         :param table_data: `PVTTableData` containing all raw property tables and grids
         :param interpolation_method: Interpolation method for property lookup
             - 'linear': Fast, 1st-order accurate
             - 'cubic': Slower, 3rd-order accurate, smooth derivatives
-            - 'quintic': Slowest, 5th-order accurate, smoothest
+
         :param validate_tables: If True, perform physical consistency checks on tables
             - Checks monotonicity of viscosities, densities, etc.
             - Validates FVF > 0, compressibilities > 0
             - Raises ValidationError if inconsistencies found
+
         :param warn_on_extrapolation: If True, log warnings when queries exceed table bounds
             - Useful for detecting simulation conditions outside calibrated range
             - No warnings by default to avoid log spam
         """
-        # Store basic grids (small, needed for queries)
-        self.pressures = table_data.pressures
-        self.temperatures = table_data.temperatures
-        self.salinities = table_data.salinities
-        self.solution_gas_oil_ratios = table_data.solution_gas_oil_ratios
-        self.bubble_point_pressures = table_data.bubble_point_pressures
-
         # Store options
         if interpolation_method not in _INTERPOLATION_DEGREES:
             raise ValidationError(
                 f"Invalid interpolation_method '{interpolation_method}'. "
                 f"Must be one of: {list(_INTERPOLATION_DEGREES.keys())}"
             )
+
+        pressures = table_data.pressures
+        temperatures = table_data.temperatures
+        salinities = table_data.salinities
+
         if interpolation_method != "linear":
             # Cubic+ interpolation methods requires atleast 4 points
-            if len(self.pressures) < 4:
+            if len(pressures) < 4:
                 raise ValidationError(
                     f"Atleast 4 pressure points required for "
-                    f"'{interpolation_method}' interpolation, got {len(self.pressures)}"
+                    f"'{interpolation_method}' interpolation, got {len(pressures)}"
                 )
-            if len(self.temperatures) < 4:
+            if len(temperatures) < 4:
                 raise ValidationError(
                     f"Atleast 4 temperature points required for "
-                    f"'{interpolation_method}' interpolation, got {len(self.temperatures)}"
+                    f"'{interpolation_method}' interpolation, got {len(temperatures)}"
                 )
-            if self.salinities is not None and len(self.salinities) < 4:
+            if salinities is not None and len(salinities) < 4:
                 raise ValidationError(
                     f"Atleast 4 salinity points required for "
-                    f"'{interpolation_method}' interpolation, got {len(self.salinities)}"
+                    f"'{interpolation_method}' interpolation, got {len(salinities)}"
                 )
 
         self.interpolation_method = interpolation_method
@@ -601,33 +614,36 @@ class PVTTables:
         # Initialize caches
         self._interpolators = {}
         self._extrapolation_bounds = {}
+        self.default_salinity = salinities[0] if salinities is not None else None
+        self._pb_ndim = (
+            table_data.bubble_point_pressures.ndim
+            if table_data.bubble_point_pressures is not None
+            else None
+        )
 
         # Validate and build
-        self._validate_grids()
+        self._validate_grids(table_data)
 
         if self.validate_tables:
             self._check_physical_consistency(table_data)
 
         # Store bounds for extrapolation detection
         self._extrapolation_bounds = {
-            "pressure": (self.pressures[0], self.pressures[-1]),
-            "temperature": (self.temperatures[0], self.temperatures[-1]),
+            "pressure": (pressures[0], pressures[-1]),
+            "temperature": (temperatures[0], temperatures[-1]),
         }
-        if self.salinities is not None:
-            self._extrapolation_bounds["salinity"] = (
-                self.salinities[0],
-                self.salinities[-1],
-            )
+        if salinities is not None:
+            self._extrapolation_bounds["salinity"] = (salinities[0], salinities[-1])
 
         # Build all interpolators from table_data
         self._build_interpolators(table_data)
         logger.info(
-            f"PVT tables initialized: P ∈ [{self.pressures[0]:.4f}, {self.pressures[-1]:.4f}] psi, "
-            f"T ∈ [{self.temperatures[0]:.4f}, {self.temperatures[-1]:.4f}] °F, "
+            f"PVT tables initialized: P ∈ [{pressures[0]:.4f}, {pressures[-1]:.4f}] psi, "
+            f"T ∈ [{temperatures[0]:.4f}, {temperatures[-1]:.4f}] °F, "
             f"interpolation_method={self.interpolation_method!r}"
         )
 
-    def _validate_grids(self):
+    def _validate_grids(self, table_data: PVTTableData):
         """
         Validate grid dimensions and monotonicity.
 
@@ -637,63 +653,70 @@ class PVTTables:
         - Bubble point pressure dimensions match grid dimensions
         - Solution GOR array is provided when using 2D bubble point pressures
 
+        :param table_data: `PVTTableData` containing grids to validate
         :raises `ValidationError`: If any validation check fails
         """
+        pressures = table_data.pressures
+        temperatures = table_data.temperatures
+        salinities = table_data.salinities
+        solution_gas_oil_ratios = table_data.solution_gas_oil_ratios
+        bubble_point_pressures = table_data.bubble_point_pressures
+
         # Check dimensionality
-        if self.pressures.ndim != 1:
+        if pressures.ndim != 1:
             raise ValidationError("`pressures` must be 1-dimensional")
-        if self.temperatures.ndim != 1:
+        if temperatures.ndim != 1:
             raise ValidationError("`temperatures` must be 1-dimensional")
 
         # Check monotonicity (critical for interpolation)
-        if not np.all(np.diff(self.pressures) > 0):
+        if not np.all(np.diff(pressures) > 0):
             raise ValidationError(
                 "`pressures` must be strictly monotonically increasing"
             )
-        if not np.all(np.diff(self.temperatures) > 0):
+        if not np.all(np.diff(temperatures) > 0):
             raise ValidationError(
                 "`temperatures` must be strictly monotonically increasing"
             )
 
         # Validate bubble point pressures
-        if self.bubble_point_pressures is not None:
-            if self.bubble_point_pressures.ndim == 1:
+        if bubble_point_pressures is not None:
+            if bubble_point_pressures.ndim == 1:
                 # 1D: Pb(T) for single composition
-                if len(self.bubble_point_pressures) != len(self.temperatures):
+                if len(bubble_point_pressures) != len(temperatures):
                     raise ValidationError(
-                        f"`bubble_point_pressures` length ({len(self.bubble_point_pressures)}) "
-                        f"must match temperatures length ({len(self.temperatures)})"
+                        f"`bubble_point_pressures` length ({len(bubble_point_pressures)}) "
+                        f"must match temperatures length ({len(temperatures)})"
                     )
-            elif self.bubble_point_pressures.ndim == 2:
+            elif bubble_point_pressures.ndim == 2:
                 # 2D: Pb(Rs, T) for varying composition
-                if self.solution_gas_oil_ratios is None:
+                if solution_gas_oil_ratios is None:
                     raise ValidationError(
                         "`solution_gas_oil_ratios` array required for 2D bubble_point_pressures"
                     )
 
-                if not np.all(np.diff(self.solution_gas_oil_ratios) > 0):
+                if not np.all(np.diff(solution_gas_oil_ratios) > 0):
                     raise ValidationError(
                         "`solution_gas_oil_ratios` must be strictly monotonically increasing"
                     )
 
-                n_rs, n_t = self.bubble_point_pressures.shape  # type: ignore
-                if n_rs != len(self.solution_gas_oil_ratios):
+                n_rs, n_t = bubble_point_pressures.shape  # type: ignore
+                if n_rs != len(solution_gas_oil_ratios):
                     raise ValidationError(
                         f"`bubble_point_pressures` first dimension ({n_rs}) "
-                        f"must match solution_gas_oil_ratios length ({len(self.solution_gas_oil_ratios)})"
+                        f"must match solution_gas_oil_ratios length ({len(solution_gas_oil_ratios)})"
                     )
-                if n_t != len(self.temperatures):
+                if n_t != len(temperatures):
                     raise ValidationError(
                         f"`bubble_point_pressures` second dimension ({n_t}) "
-                        f"must match temperatures length ({len(self.temperatures)})"
+                        f"must match temperatures length ({len(temperatures)})"
                     )
             else:
                 raise ValidationError("`bubble_point_pressures` must be 1D or 2D")
 
-        if self.salinities is not None:
-            if self.salinities.ndim != 1:
+        if salinities is not None:
+            if salinities.ndim != 1:
                 raise ValidationError("salinities must be 1-dimensional")
-            if not np.all(np.diff(self.salinities) > 0):
+            if not np.all(np.diff(salinities) > 0):
                 raise ValidationError(
                     "salinities must be strictly monotonically increasing"
                 )
@@ -713,7 +736,7 @@ class PVTTables:
         :param table_data: `PVTTableData` to validate
         :raises `ValidationError`: If any physical consistency check fails
         """
-        n_p, n_t = len(self.pressures), len(self.temperatures)
+        n_p, n_t = len(table_data.pressures), len(table_data.temperatures)
 
         # Check 2D table shapes
         tables_2d = {
@@ -800,10 +823,10 @@ class PVTTables:
             )
 
         # Also check salinity bounds if provided
-        if salinity is not None and self.salinities is not None:
-            salinities_arr = np.atleast_1d(salinity)
+        if salinity is not None:
             s_min, s_max = self._extrapolation_bounds.get("salinity", (None, None))
             if s_min is not None and s_max is not None:
+                salinities_arr = np.atleast_1d(salinity)
                 if np.any(salinities_arr < s_min) or np.any(salinities_arr > s_max):
                     logger.warning(
                         f"Salinity extrapolation: queried S ∈ [{salinities_arr.min():.0f}, {salinities_arr.max():.0f}] ppm, "
@@ -825,12 +848,12 @@ class PVTTables:
         :param table_data: PVTTableData containing raw property tables
         """
         # Build bubble point pressure interpolator (1D or 2D)
-        if self.bubble_point_pressures is not None:
-            if self.bubble_point_pressures.ndim == 1:
+        if table_data.bubble_point_pressures is not None:
+            if table_data.bubble_point_pressures.ndim == 1:
                 # 1D - Pb(T)
                 self._interpolators["bubble_point_pressure"] = interp1d(
-                    x=self.temperatures,
-                    y=self.bubble_point_pressures,
+                    x=table_data.temperatures,
+                    y=table_data.bubble_point_pressures,
                     kind=self.interpolation_method,
                     bounds_error=False,
                     fill_value="extrapolate",  # type: ignore
@@ -839,9 +862,9 @@ class PVTTables:
                 # 2D - Pb(Rs, T)
                 k = _INTERPOLATION_DEGREES[self.interpolation_method]
                 self._interpolators["bubble_point_pressure"] = RectBivariateSpline(
-                    x=self.solution_gas_oil_ratios,
-                    y=self.temperatures,
-                    z=self.bubble_point_pressures,
+                    x=table_data.solution_gas_oil_ratios,
+                    y=table_data.temperatures,
+                    z=table_data.bubble_point_pressures,
                     kx=k,
                     ky=k,
                 )
@@ -869,12 +892,16 @@ class PVTTables:
             if data is not None:
                 # RectBivariateSpline is 10-50x faster than RegularGridInterpolator for 2D
                 self._interpolators[name] = RectBivariateSpline(
-                    x=self.pressures, y=self.temperatures, z=data, kx=k, ky=k
+                    x=table_data.pressures,
+                    y=table_data.temperatures,
+                    z=data,
+                    kx=k,
+                    ky=k,
                 )
 
         # Build 3D (Pressure-Temperature-Salinity) interpolator for salinity-dependent properties
         # For 3D, use RegularGridInterpolator (RectBivariateSpline is 2D only)
-        if self.salinities is None:
+        if table_data.salinities is None:
             return  # No salinity-dependent properties to build
 
         property_map_3d = {
@@ -888,7 +915,11 @@ class PVTTables:
         for name, data in property_map_3d.items():
             if data is not None:
                 self._interpolators[name] = RegularGridInterpolator(
-                    points=(self.pressures, self.temperatures, self.salinities),
+                    points=(
+                        table_data.pressures,
+                        table_data.temperatures,
+                        table_data.salinities,
+                    ),
                     values=data,
                     method=self.interpolation_method,
                     bounds_error=False,
@@ -900,24 +931,6 @@ class PVTTables:
     def exists(self, name: str) -> bool:
         """Check if a specific property interpolator exists."""
         return name in self._interpolators
-
-    def interpolate(
-        self, name: str, value: QueryType
-    ) -> typing.Union[float, np.ndarray, None]:
-        """
-        Fast 1D property lookup using built interpolator.
-
-        :param name: Property name (e.g., "bubble_point_pressure")
-        :param value: Query value(s) for interpolation
-        :return: Interpolated property value(s), or None if property not available
-        """
-        interp = self._interpolators.get(name)
-        if interp is None:
-            return None
-
-        # interp1d handles both scalars and arrays efficiently
-        result = interp(value)
-        return float(result) if np.isscalar(value) else result
 
     def pt_interpolate(
         self, name: str, pressure: QueryType, temperature: QueryType
@@ -1018,7 +1031,7 @@ class PVTTables:
         if interp is None:
             raise ValidationError("Bubble point pressure table not provided")
 
-        if self.bubble_point_pressures.ndim == 1:  # type: ignore
+        if self._pb_ndim == 1:  # type: ignore
             # 1D: Pb(T)
             if solution_gor is not None:
                 logger.debug(
@@ -1339,11 +1352,11 @@ class PVTTables:
         """
         if salinity is None:
             # Use the first (or only) salinity value as default
-            if self.salinities is None:
+            if self.default_salinity is None:
                 raise ValidationError(
                     "Salinity required but no salinity grid provided in PVT tables"
                 )
-            salinity = self.salinities[0]
+            salinity = self.default_salinity
 
         return self.pts_interpolate(
             name="water_viscosity",
@@ -1367,11 +1380,11 @@ class PVTTables:
         :return: Water compressibility in psi⁻¹
         """
         if salinity is None:
-            if self.salinities is None:
+            if self.default_salinity is None:
                 raise ValidationError(
                     "Salinity required but no salinity grid provided in PVT tables"
                 )
-            salinity = self.salinities[0]
+            salinity = self.default_salinity
 
         return self.pts_interpolate(
             name="water_compressibility",
@@ -1395,11 +1408,11 @@ class PVTTables:
         :return: Water density in lbm/ft³
         """
         if salinity is None:
-            if self.salinities is None:
+            if self.default_salinity is None:
                 raise ValidationError(
                     "Salinity required but no salinity grid provided in PVT tables"
                 )
-            salinity = self.salinities[0]
+            salinity = self.default_salinity
 
         return self.pts_interpolate(
             name="water_density",
@@ -1423,11 +1436,11 @@ class PVTTables:
         :return: Water formation volume factor in bbl/STB
         """
         if salinity is None:
-            if self.salinities is None:
+            if self.default_salinity is None:
                 raise ValidationError(
                     "Salinity required but no salinity grid provided in PVT tables"
                 )
-            salinity = self.salinities[0]
+            salinity = self.default_salinity
 
         return self.pts_interpolate(
             name="water_formation_volume_factor",
@@ -1511,11 +1524,11 @@ class PVTTables:
         :return: Gas solubility in water in SCF/STB
         """
         if salinity is None:
-            if self.salinities is None:
+            if self.default_salinity is None:
                 raise ValidationError(
                     "Salinity required but no salinity grid provided in PVT tables"
                 )
-            salinity = self.salinities[0]
+            salinity = self.default_salinity
 
         return self.pts_interpolate(
             name="gas_solubility_in_water",
@@ -1672,7 +1685,9 @@ def build_pvt_table_data(
     # Set defaults
     reservoir_gas = reservoir_gas or c.RESERVOIR_GAS_NAME
     reservoir_gas = typing.cast(str, reservoir_gas)
-    water_salinity_value = water_salinity if water_salinity is not None else 35000.0
+    water_salinity_value = (
+        water_salinity if water_salinity is not None else c.DEFAULT_WATER_SALINITY_PPM
+    )
     dtype = get_dtype()
 
     # Handle salinity array

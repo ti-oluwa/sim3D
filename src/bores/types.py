@@ -173,12 +173,12 @@ class MixingRule(typing.Protocol):
     def __call__(
         self,
         *,
-        kro_w: float,
-        kro_g: float,
-        water_saturation: float,
-        oil_saturation: float,
-        gas_saturation: float,
-    ) -> float:
+        kro_w: FloatOrArray,
+        kro_g: FloatOrArray,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
+    ) -> FloatOrArray:
         """
         Combines two properties based on their saturations.
 
@@ -195,16 +195,16 @@ class MixingRule(typing.Protocol):
 class RelativePermeabilities(TypedDict):
     """Dictionary holding relative permeabilities for different phases."""
 
-    water: float
-    oil: float
-    gas: float
+    water: FloatOrArray
+    oil: FloatOrArray
+    gas: FloatOrArray
 
 
 class CapillaryPressures(typing.TypedDict):
     """Dictionary containing capillary pressures for different phase pairs."""
 
-    oil_water: float  # Pcow = Po - Pw
-    gas_oil: float  # Pcgo = Pg - Po
+    oil_water: FloatOrArray  # Pcow = Po - Pw
+    gas_oil: FloatOrArray  # Pcgo = Pg - Po
 
 
 class WettabilityType(str, enum.Enum):

@@ -16,8 +16,7 @@ from bores.types import T
 
 @numba.vectorize(cache=True)
 def clip(val, min_, max_):
-    clipped = np.maximum(np.minimum(val, max_), min_)
-    return clipped
+    return np.maximum(np.minimum(val, max_), min_)
 
 
 @numba.njit(cache=True)

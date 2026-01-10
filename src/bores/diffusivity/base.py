@@ -598,7 +598,7 @@ def solve_linear_system(
             callback=None,
         )
         if info == 0:
-            return x, M
+            return np.ascontiguousarray(x), M
         else:
             logger.warning(
                 f"Solver {solver_func!r} failed to converge within {max_iterations} iterations. Info: {info}"
@@ -618,7 +618,7 @@ def solve_linear_system(
             "All iterative solvers and direct solver failed to solve the system."
         ) from exc
 
-    return x, None  # type: ignore[return-value]
+    return np.ascontiguousarray(x), None  # type: ignore[return-value]
 
 
 """

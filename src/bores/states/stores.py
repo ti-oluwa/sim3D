@@ -227,7 +227,7 @@ class PickleStore(StateStore):
 
         :param validate: If True, validate each state after loading
         :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
-                     Only applied when validate=True.
+            Only applied when validate=True.
         :return: Generator yielding ModelState instances
         """
         if validate and dtype is None:
@@ -265,7 +265,7 @@ class ZarrStore(StateStore):
         store: StoreLike,
         metadata_dir: PathLike,
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
-        compression_level: int = 8,
+        compression_level: int = 6,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
     ):
         """
@@ -961,7 +961,7 @@ class HDF5Store(StateStore):
         filepath: PathLike,
         metadata_dir: typing.Optional[PathLike] = None,
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
-        compression_opts: int = 8,
+        compression_opts: int = 6,
     ):
         """
         Initialize the store

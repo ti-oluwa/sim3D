@@ -487,6 +487,11 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Tolerance for gas solubility calculations",
         unit="fraction",
     ),
+    "DEFAULT_WATER_SALINITY_PPM": Constant(
+        value=35000,
+        description="Default water salinity in parts per million (ppm)",
+        unit="ppm",
+    ),
 }
 
 

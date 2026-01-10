@@ -828,7 +828,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     water_production_stb_day = np.where(
                         mask, water_production_stb_day, 0.0
                     )
-
                 step_production += np.nansum(water_production_stb_day * step_in_days)
 
             total_production += step_production

@@ -7,7 +7,7 @@ from pathlib import Path
 import typing
 from os import PathLike
 
-import psutil
+import numpy as np
 from typing_extensions import Self
 
 from bores.errors import StreamError
@@ -96,7 +96,7 @@ class StateStream(typing.Generic[NDimension]):
         ] = None,
         checkpoint_interval: typing.Optional[int] = None,
         checkpoint_dir: typing.Optional[PathLike] = None,
-        max_memory_mb: typing.Optional[float] = None,
+        max_batch_memory_mb: typing.Optional[float] = None,
     ) -> None:
         """
         Initialize state stream.
@@ -111,14 +111,13 @@ class StateStream(typing.Generic[NDimension]):
         :param lazy_load: When replaying from store, use lazy loading if supported (default: True)
         :param save_predicate: Optional function to filter which states to save.
             If provided, only states where save_predicate(state) returns True are saved.
-            Example: lambda s: s.step % 10 == 0 (save every 10th state)
+            Example: ```lambda s: s.step % 10 == 0``` (save every 10th state)
         :param checkpoint_interval: Optional interval for checkpointing. If provided,
             creates a checkpoint every N states for crash recovery. Example: 100
         :param checkpoint_dir: Directory to save checkpoints. Required if `checkpoint_interval` is set.
-        :param max_memory_mb: Optional soft memory limit in MB. If current process memory
-            exceeds this limit, batch is flushed immediately. Note: This is checked only
-            when deciding whether to flush, so actual memory usage may exceed this limit
-            between checks. Example: 1000.0
+        :param max_batch_memory_mb: Maximum batch memory in MB before forcing flush.
+            Estimated by sampling first state's memory footprint. Batch flushes when either
+            `batch_size` or `max_batch_memory_mb` threshold is reached. Example: 50.0 MB
         """
         self.states = states
         self.store = store
@@ -129,9 +128,8 @@ class StateStream(typing.Generic[NDimension]):
         self.lazy_load = lazy_load
         self.save_predicate = save_predicate
         self.checkpoint_interval = checkpoint_interval
-        self.max_memory_mb = max_memory_mb
+        self.max_batch_memory_mb = max_batch_memory_mb
 
-        # Warn if store-dependent features are configured without a store
         if self.store is None:
             if self.validate:
                 logger.warning(
@@ -146,9 +144,9 @@ class StateStream(typing.Generic[NDimension]):
                 logger.warning(
                     "save_predicate provided but no store configured. Predicate will be ignored."
                 )
-            if self.max_memory_mb is not None:
+            if self.max_batch_memory_mb is not None:
                 logger.warning(
-                    "max_memory_mb provided but no store configured. Memory-based flushing "
+                    "max_batch_memory_mb provided but no store configured. Memory-based flushing "
                     "will not occur without persistence."
                 )
 
@@ -158,11 +156,11 @@ class StateStream(typing.Generic[NDimension]):
         self._num_checkpoints: int = 0
         self._started: bool = False
         self._consumed: bool = False
+        self._state_size_mb: typing.Optional[float] = None
         self._checkpoint_dir = (
             Path(checkpoint_dir) if checkpoint_dir is not None else None
         )
 
-        # Validate checkpoint configuration
         if self.checkpoint_interval is not None:
             if self._checkpoint_dir is None:
                 raise StreamError(
@@ -290,60 +288,42 @@ class StateStream(typing.Generic[NDimension]):
         else:
             logger.error(f"Stream interrupted at {self._num_saved} states: {exc_val}")
 
-    def collect(self, *steps: int) -> typing.List[ModelState[NDimension]]:
+    def collect(self, *steps: int) -> typing.Iterator[ModelState[NDimension]]:
         """
-        Collect states from the stream into a list.
-
-        Note: This loads all states (or filtered states) into memory at once, which defeats
-        the memory-efficient purpose of streaming. Use sparingly for small datasets or when
-        you specifically need all states in memory for processing.
+        Iterate over states from the stream, optionally filtering by step numbers.
 
         :param steps: Optional step numbers to filter. If provided, only states with
-            matching step numbers are collected. Example: collect(0, 10, 20)
-        :return: List of collected ModelState instances
+            matching step numbers are yielded. Example: collect(0, 10, 20)
+        :return: Iterator of ModelState instances
 
         Example:
         ```python
-        # Collect all states (memory-intensive!)
-        all_states = stream.collect()
+        for state in stream.collect():
+            process(state)
 
-        # Collect specific steps only
-        initial_and_final = stream.collect(0, 100, 200)
-
-        # Better alternative for large datasets - iterate instead:
-        for state in stream:
-            if state.step in {0, 100, 200}:
-                process(state)
+        for state in stream.collect(0, 100, 200):
+            process(state)
         ```
         """
         if steps:
             logger.debug(f"Collecting states from stream (filtering steps: {steps})")
-            # Convert to set for O(1) lookup and track remaining steps
             remaining_steps = set(steps)
         else:
-            logger.warning(
-                "Collecting entire stream into memory. This may consume significant memory "
-                "for large simulations. Consider iterating instead if memory is a concern."
-            )
+            logger.debug("Iterating through entire stream")
             remaining_steps = None
 
-        states = []
         for state in self:
             if remaining_steps is not None:
                 if state.step in remaining_steps:
-                    states.append(state)
+                    yield state
                     remaining_steps.remove(state.step)
-                    # Early exit if we've collected all requested steps
                     if not remaining_steps:
                         logger.debug(
                             f"Collected all {len(steps)} requested steps, stopping early"
                         )
                         break
             else:
-                states.append(state)
-
-        logger.debug(f"Collected {len(states)} states into memory")
-        return states
+                yield state
 
     def consume(self) -> None:
         """
@@ -442,6 +422,8 @@ class StateStream(typing.Generic[NDimension]):
             raise
         finally:
             self._batch.clear()
+            # Force python garbage collection to free memory immediately
+            self._batch = []
 
     def get_pending_batch(self) -> typing.List[ModelState[NDimension]]:
         """
@@ -455,6 +437,40 @@ class StateStream(typing.Generic[NDimension]):
         :return: Copy of the current batch buffer (safe to modify without affecting stream)
         """
         return self._batch.copy()
+
+    def _estimate_state_size(self, state: ModelState[NDimension]) -> float:
+        """
+        Estimate memory footprint of a single state in MB.
+
+        :param state: State to measure
+        :return: Estimated size in MB
+        """
+        if self._state_size_mb is not None:
+            return self._state_size_mb
+
+        size_bytes = 0
+
+        for attr_name in dir(state):
+            if attr_name.startswith("_"):
+                continue
+
+            try:
+                attr = getattr(state, attr_name)
+                if isinstance(attr, np.ndarray):
+                    size_bytes += attr.nbytes
+                elif hasattr(attr, "__dict__"):
+                    for nested_attr_name in dir(attr):
+                        if nested_attr_name.startswith("_"):
+                            continue
+                        nested_attr = getattr(attr, nested_attr_name, None)
+                        if isinstance(nested_attr, np.ndarray):
+                            size_bytes += nested_attr.nbytes
+            except Exception:
+                continue
+
+        self._state_size_mb = size_bytes / 1024 / 1024
+        logger.debug(f"Estimated state size: {self._state_size_mb:.2f} MB")
+        return self._state_size_mb
 
     def _should_save(self, state: ModelState[NDimension]) -> bool:
         """
@@ -471,23 +487,23 @@ class StateStream(typing.Generic[NDimension]):
         """
         Determine if batch should be flushed based on batch size and memory limits.
 
-        Flushes if:
-            1. Batch size reached, OR
-            2. Memory limit exceeded (if configured)
-
         :return: True if batch should be flushed, False otherwise
         """
         if len(self._batch) >= self.batch_size:
             return True
 
-        if self.max_memory_mb is not None:
-            current_memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
-            if current_memory_mb > self.max_memory_mb:
+        if self.max_batch_memory_mb is not None and self._batch:
+            state_size = self._estimate_state_size(self._batch[0])
+            batch_memory_mb = state_size * len(self._batch)
+
+            if batch_memory_mb > self.max_batch_memory_mb:
                 logger.warning(
-                    f"Memory limit reached ({current_memory_mb:.1f} MB > "
-                    f"{self.max_memory_mb:.1f} MB), flushing batch early"
+                    f"Batch memory limit reached ({batch_memory_mb:.1f} MB > "
+                    f"{self.max_batch_memory_mb:.1f} MB) with {len(self._batch)} states, "
+                    f"flushing early"
                 )
-                return True     
+                return True
+
         return False
 
     def _should_checkpoint(self, state: ModelState[NDimension]) -> bool:
@@ -608,9 +624,13 @@ class StateStream(typing.Generic[NDimension]):
             - num_checkpoints: Total checkpoints created
             - batch_pending: States in current batch (not yet saved)
             - store_backend: Type of store being used (or None)
-            - memory_mb: Current process memory usage in MB
+            - memory_mb: Estimated batch memory in MB
         """
-        memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+        if self._batch and self._state_size_mb is not None:
+            batch_memory_mb = self._state_size_mb * len(self._batch)
+        else:
+            batch_memory_mb = 0.0
+
         return StreamProgress(
             {
                 "num_yielded": self._num_yielded,
@@ -618,7 +638,7 @@ class StateStream(typing.Generic[NDimension]):
                 "num_checkpoints": self._num_checkpoints,
                 "batch_pending": len(self._batch),
                 "store_backend": type(self.store).__name__ if self.store else None,
-                "memory_mb": memory_mb,
+                "memory_mb": batch_memory_mb,
             }
         )
 
