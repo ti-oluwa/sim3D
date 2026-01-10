@@ -196,5 +196,3 @@ class Config:
     """
     pvt_tables: typing.Optional[PVTTables] = None
     """PVT tables for fluid property lookups during the simulation."""
-    gas_pseudo_pressure_interpolation_method: typing.Literal["linear", "cubic"] = "linear"
-    """Interpolation method for gas pseudo-pressure tables ('linear' or 'cubic')."""

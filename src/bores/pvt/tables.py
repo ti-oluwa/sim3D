@@ -189,6 +189,10 @@ def compute_gas_pseudo_pressure(
 class GasPseudoPressureTable:
     """
     Pre-computed gas pseudo-pressure table for fast lookup during simulation.
+
+    Uses np.interp for fast linear interpolation.
+    Supports both forward (pressure → pseudo-pressure) and inverse (pseudo-pressure → pressure)
+    interpolation.
     """
 
     def __init__(
@@ -198,7 +202,6 @@ class GasPseudoPressureTable:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         reference_pressure: typing.Optional[float] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
     ):
         """
         Build pseudo-pressure lookup table.
@@ -240,34 +243,54 @@ class GasPseudoPressureTable:
                 reference_pressure=self.reference_pressure,
             )
         logger.debug("Pseudo-pressure table computation complete.")
-
-        # Build interpolator's for fast lookup
-        self.interpolator = interp1d(
-            x=self.pressures,
-            y=self.pseudo_pressures,
-            kind=interpolation_method,
-            bounds_error=True,
-            fill_value=(self.pseudo_pressures[0], self.pseudo_pressures[-1]),  # type: ignore
-        )
-        self.inverse_interpolator = interp1d(
-            x=self.pseudo_pressures,
-            y=self.pressures,
-            kind=interpolation_method,
-            bounds_error=True,
-            fill_value=(self.pressures[0], self.pressures[-1]),  # type: ignore
-        )
         logger.info(
             f"Pseudo-pressure table built: P ∈ [{min_pressure:.4f}, {max_pressure:.4f}] psi"
+        )
+
+    def interpolate(self, pressure: float) -> float:
+        """
+        Interpolate pseudo-pressure at given pressure.
+
+        Forward interpolation: pressure → pseudo-pressure
+
+        :param pressure: Pressure (psi)
+        :return: Pseudo-pressure m(P) (psi²/cP)
+        """
+        return np.interp(
+            x=pressure,
+            xp=self.pressures,
+            fp=self.pseudo_pressures,
+            left=self.pseudo_pressures[0],
+            right=self.pseudo_pressures[-1],
+        )
+
+    def inverse_interpolate(self, pseudo_pressure: float) -> float:
+        """
+        Inverse interpolate pressure at given pseudo-pressure.
+
+        Inverse interpolation: pseudo-pressure → pressure
+
+        :param pseudo_pressure: Pseudo-pressure m(P) (psi²/cP)
+        :return: Pressure (psi)
+        """
+        return np.interp(
+            x=pseudo_pressure,
+            xp=self.pseudo_pressures,
+            fp=self.pressures,
+            left=self.pressures[0],
+            right=self.pressures[-1],
         )
 
     def __call__(self, pressure: float) -> float:
         """
         Fast lookup of pseudo-pressure via interpolation.
 
+        Alias for interpolate() to maintain backward compatibility.
+
         :param pressure: Pressure (psi)
         :return: Pseudo-pressure m(P) (psi²/cP)
         """
-        return float(self.interpolator(pressure))
+        return self.interpolate(pressure)
 
     def gradient(self, pressure: float) -> float:
         """
@@ -293,7 +316,6 @@ def build_gas_pseudo_pressure_table(
     reference_pressure: typing.Optional[float] = None,
     pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
     points: typing.Optional[int] = None,
-    interpolation_method: typing.Literal["linear", "cubic"] = "cubic",
     cache_key: typing.Optional[typing.Hashable] = None,
 ) -> GasPseudoPressureTable:
     """
@@ -362,7 +384,6 @@ def build_gas_pseudo_pressure_table(
         reference_pressure=reference_pressure,
         pressure_range=pressure_range,
         points=points,
-        interpolation_method=interpolation_method,
     )
 
     # Cache if key provided

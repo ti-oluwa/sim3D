@@ -19,11 +19,6 @@ def _():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
-    # os.environ["OMP_NUM_THREADS"] = "30"
-    # os.environ["MKL_NUM_THREADS"] = "30"
-    # os.environ["OPENBLAS_NUM_THREADS"] = "30"
-    # os.environ["NUMBA_NUM_THREADS"] = "30"
-
 
     def main():
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
@@ -324,14 +319,14 @@ def _(Path, bores):
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
         metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata",
     )
-    return
+    return (stabilization_store,)
 
 
 @app.cell
-def _(bores, main):
+def _(bores, main, stabilization_store):
     stream = bores.StateStream(
         main(),
-        # store=stabilization_store,
+        store=stabilization_store,
         # checkpoint_interval=10,
         # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
         auto_replay=True,

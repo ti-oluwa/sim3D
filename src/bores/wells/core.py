@@ -460,8 +460,8 @@ def compute_required_bhp_for_gas_rate(
 
         # Find the pressure corresponding to required_pseudo_pressure
         try:
-            required_bhp = float(
-                pseudo_pressure_table.inverse_interpolator(required_pseudo_pressure)
+            required_bhp = pseudo_pressure_table.inverse_interpolate(
+                pseudo_pressure=required_pseudo_pressure
             )
         except ValidationError as exc:
             min_pseudo_p = pseudo_pressure_table.pseudo_pressures[0]
@@ -531,7 +531,6 @@ class WellFluid:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
     ) -> typing.Tuple[typing.Any, ...]:
         """
         Build a hashable cache key for pseudo-pressure table lookup.
@@ -539,6 +538,11 @@ class WellFluid:
         The key uniquely identifies a pseudo-pressure table based on all parameters
         that affect the Z-factor and viscosity functions.
 
+        :param temperature: Temperature (°F)
+        :param reference_pressure: Reference pressure (psi)
+        :param pressure_range: (min, max) pressure range (psi)
+        :param points: Number of points
+        :param pvt_tables: Optional PVT tables for Z and μ interpolation
         :return: Hashable tuple that can be used as cache key
         """
         # PVT tables hash: if tables provided, use a hash of their configuration
@@ -573,7 +577,6 @@ class WellFluid:
             if pressure_range is not None
             else None,  # Pressure range
             points,  # Number of points
-            interpolation_method,  # Interpolation method
             pvt_hash,  # PVT table configuration (or None)
         )
         return cache_key
@@ -585,7 +588,6 @@ class WellFluid:
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
-        interpolation_method: typing.Literal["linear", "cubic"] = "linear",
         use_cache: bool = True,
     ) -> GasPseudoPressureTable:
         """
@@ -599,7 +601,6 @@ class WellFluid:
         :param pressure_range: (min, max) pressure range (psi), default (14.7, 5000)
         :param points: Number of points, default 100
         :param pvt_tables: Optional PVT tables for Z and μ interpolation
-        :param interpolation_method: "linear" or "cubic"
         :param use_cache: If True, use global cache. If False, always compute new table.
         :return: `GasPseudoPressureTable` instance
 
@@ -669,7 +670,6 @@ class WellFluid:
                 pressure_range=pressure_range,
                 points=points,
                 pvt_tables=pvt_tables,
-                interpolation_method=interpolation_method,
             )
 
         return build_gas_pseudo_pressure_table(
@@ -678,7 +678,6 @@ class WellFluid:
             reference_pressure=reference_pressure,
             pressure_range=pressure_range,
             points=points,
-            interpolation_method=interpolation_method,
             cache_key=cache_key,
         )
 

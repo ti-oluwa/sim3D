@@ -13,6 +13,7 @@ import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 from zarr.storage import StoreLike
 
+from bores._precision import get_dtype
 from bores.errors import StorageError, ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
@@ -27,10 +28,9 @@ from bores.models import (
     RockProperties,
     SaturationHistory,
 )
+from bores.states.base import ModelState, validate_state
 from bores.timing import StepMetricsDict, TimerState
 from bores.utils import Lazy, load_pickle, save_as_pickle
-from bores._precision import get_dtype
-from bores.states.base import ModelState, validate_state
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,11 @@ def state_store(
     name: str,
     store_cls: typing.Optional[typing.Type[StoreT]] = None,
 ) -> typing.Union[None, typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]]:
-    """Register a state store class with a given name."""
+    """
+    Register a state store class with a given name.
+    
+    :param 
+    """
 
     def _decorator(store_cls: typing.Type[StoreT]) -> typing.Type[StoreT]:
         _STATE_STORES[name] = store_cls
@@ -175,7 +179,7 @@ class PickleStore(StateStore):
         self,
         filepath: PathLike,
         compression: typing.Optional[typing.Literal["gzip", "lzma"]] = "gzip",
-        compression_level: int = 6,
+        compression_level: int = 5,
     ):
         """
         Initialize the store
@@ -194,7 +198,7 @@ class PickleStore(StateStore):
         self,
         states: typing.Iterable[ModelState],
         exist_ok: bool = True,
-        validate: bool = True,
+        validate: bool = False,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -265,7 +269,7 @@ class ZarrStore(StateStore):
         store: StoreLike,
         metadata_dir: PathLike,
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
-        compression_level: int = 6,
+        compression_level: int = 3,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
     ):
         """
@@ -414,7 +418,7 @@ class ZarrStore(StateStore):
         self,
         states: typing.Iterable[ModelState],
         exist_ok: bool = True,
-        validate: bool = True,
+        validate: bool = False,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -961,7 +965,7 @@ class HDF5Store(StateStore):
         filepath: PathLike,
         metadata_dir: typing.Optional[PathLike] = None,
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
-        compression_opts: int = 6,
+        compression_opts: int = 3,
     ):
         """
         Initialize the store
@@ -1081,7 +1085,7 @@ class HDF5Store(StateStore):
         self,
         states: typing.Iterable[ModelState],
         exist_ok: bool = True,
-        validate: bool = True,
+        validate: bool = False,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -2265,7 +2269,9 @@ class NPZStore(StateStore):
 
 
 def new_store(
-    backend: typing.Literal["zarr", "hdf5", "npz", "pickle"] = "zarr",
+    backend: typing.Union[
+        str, typing.Literal["zarr", "hdf5", "npz", "pickle"]
+    ] = "zarr",
     *args: typing.Any,
     **kwargs: typing.Any,
 ) -> StateStore:

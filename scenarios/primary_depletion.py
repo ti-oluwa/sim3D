@@ -10,6 +10,7 @@ def _():
     from pathlib import Path
     import numpy as np
     import bores
+    import os
 
     logging.basicConfig(level=logging.INFO)
 
@@ -121,6 +122,7 @@ def _():
 
 @app.cell
 def _(Path, bores):
+
     depletion_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/primary_depletion.zarr",
         metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
@@ -129,12 +131,13 @@ def _(Path, bores):
 
 
 @app.cell
-def _(Path, bores, depletion_store, main):
+def _(bores, depletion_store, main):
     stream = bores.StateStream(
         main(),
         store=depletion_store,
-        checkpoint_interval=20,
-        checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
+        batch_size=50,
+        # checkpoint_interval=20,
+        # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
     )
 
     last_state = None
