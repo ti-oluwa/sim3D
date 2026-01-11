@@ -15,9 +15,9 @@ def _():
     bores.image_config(scale=3)
 
     store = bores.ZarrStore(
-        store=Path.cwd() / "scenarios/states/stabilization_coarse.zarr",
+        store=Path.cwd() / "scenarios/states/stabilization.zarr",
         metadata_dir=Path.cwd()
-        / "scenarios/states/stabilization_coarse_metadata/",
+        / "scenarios/states/stabilization_metadata/",
     )
     states = list(store.load(validate=False))
     return bores, itertools, np, states
@@ -354,7 +354,7 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="isosurface",
+        plot_type="scatter_3d",
         width=720,
         height=460,
         opacity=0.67,
@@ -369,7 +369,7 @@ def _(bores, states, viz):
 
     property = "oil-pressure"
     figures = []
-    timesteps = [30]
+    timesteps = [40]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

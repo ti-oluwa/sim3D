@@ -13,6 +13,7 @@ from bores.constants import c
 from bores.errors import ValidationError
 from bores.models import ReservoirModel
 from bores.types import ThreeDimensions
+from bores._precision import get_dtype
 
 __all__ = [
     "Fracture",
@@ -42,16 +43,31 @@ def _mask_orientation_x(
     intercept: float,
     z_min: int,
     z_max: int,
+    y_min: int,
+    y_max: int,
 ):
-    nx, ny, _ = mask.shape
+    """
+    Build fracture mask for x-oriented fractures.
+
+    :param mask: Output mask array to fill
+    :param cell_min: Minimum x-index of fracture plane
+    :param cell_max: Maximum x-index of fracture plane
+    :param slope: Slope for inclined fractures (dz/dy)
+    :param intercept: Z-intercept of fracture plane
+    :param z_min: Minimum z-index extent
+    :param z_max: Maximum z-index extent
+    :param y_min: Minimum y-index lateral extent
+    :param y_max: Maximum y-index lateral extent
+    """
+    nx, _, _ = mask.shape
     for i in numba.prange(cell_min, cell_max + 1):  # type: ignore[misc]
         if 0 <= i < nx:
             if abs(slope) < 1e-6:
-                for j in range(ny):
+                for j in range(y_min, y_max + 1):
                     for k in range(z_min, z_max + 1):
                         mask[i, j, k] = True
             else:
-                for j in range(ny):
+                for j in range(y_min, y_max + 1):
                     z_fracture = int(intercept + slope * j)
                     if z_min <= z_fracture <= z_max:
                         mask[i, j, z_fracture] = True
@@ -66,16 +82,31 @@ def _mask_orientation_y(
     intercept: float,
     z_min: int,
     z_max: int,
+    x_min: int,
+    x_max: int,
 ):
-    nx, ny, _ = mask.shape
+    """
+    Build fracture mask for y-oriented fractures.
+
+    :param mask: Output mask array to fill
+    :param cell_min: Minimum y-index of fracture plane
+    :param cell_max: Maximum y-index of fracture plane
+    :param slope: Slope for inclined fractures (dz/dx)
+    :param intercept: Z-intercept of fracture plane
+    :param z_min: Minimum z-index extent
+    :param z_max: Maximum z-index extent
+    :param x_min: Minimum x-index lateral extent
+    :param x_max: Maximum x-index lateral extent
+    """
+    _, ny, _ = mask.shape
     for j in numba.prange(cell_min, cell_max + 1):  # type: ignore[misc]
         if 0 <= j < ny:
             if abs(slope) < 1e-6:
-                for i in range(nx):
+                for i in range(x_min, x_max + 1):
                     for k in range(z_min, z_max + 1):
                         mask[i, j, k] = True
             else:
-                for i in range(nx):
+                for i in range(x_min, x_max + 1):
                     z_fracture = int(intercept + slope * i)
                     if z_min <= z_fracture <= z_max:
                         mask[i, j, z_fracture] = True
@@ -111,56 +142,65 @@ def _mask_orientation_z(
 def _scale_permeability_x_boundary(
     perm_x: np.ndarray, mask: np.ndarray, scale: float
 ) -> None:
-    """Scale x-direction permeability at fracture boundaries."""
+    """
+    Scale x-direction permeability for cells in the fracture zone.
+
+    This scales the permeability of all cells marked in the mask,
+    which affects transmissibility for flow in the x-direction.
+    """
     nx, ny, nz = perm_x.shape
-    for i in numba.prange(nx - 1):  # type: ignore[misc]
+    for i in numba.prange(nx):  # type: ignore[misc]
         for j in range(ny):
             for k in range(nz):
-                # Scale if either current or next cell is in fracture
-                if mask[i, j, k] or mask[i + 1, j, k]:
-                    if mask[i, j, k]:
-                        perm_x[i, j, k] *= scale
-                    if mask[i + 1, j, k]:
-                        perm_x[i + 1, j, k] *= scale
+                if mask[i, j, k]:
+                    perm_x[i, j, k] *= scale
 
 
 @numba.njit(parallel=True)
 def _scale_permeability_y_boundary(
     perm_y: np.ndarray, mask: np.ndarray, scale: float
 ) -> None:
-    """Scale y-direction permeability at fracture boundaries."""
+    """
+    Scale y-direction permeability for cells in the fracture zone.
+
+    This scales the permeability of all cells marked in the mask,
+    which affects transmissibility for flow in the y-direction.
+    """
     nx, ny, nz = perm_y.shape
     for i in numba.prange(nx):  # type: ignore[misc]
-        for j in range(ny - 1):
+        for j in range(ny):
             for k in range(nz):
-                # Scale if either current or next cell is in fracture
-                if mask[i, j, k] or mask[i, j + 1, k]:
-                    if mask[i, j, k]:
-                        perm_y[i, j, k] *= scale
-                    if mask[i, j + 1, k]:
-                        perm_y[i, j + 1, k] *= scale
+                if mask[i, j, k]:
+                    perm_y[i, j, k] *= scale
 
 
 @numba.njit(parallel=True)
 def _scale_permeability_z_boundary(
     perm_z: np.ndarray, mask: np.ndarray, scale: float
 ) -> None:
-    """Scale z-direction permeability at fracture boundaries."""
+    """
+    Scale z-direction permeability for cells in the fracture zone.
+
+    This scales the permeability of all cells marked in the mask,
+    which affects transmissibility for flow in the z-direction.
+    """
     nx, ny, nz = perm_z.shape
     for i in numba.prange(nx):  # type: ignore[misc]
         for j in range(ny):
-            for k in range(nz - 1):
-                # Scale if either current or next cell is in fracture
-                if mask[i, j, k] or mask[i, j, k + 1]:
-                    if mask[i, j, k]:
-                        perm_z[i, j, k] *= scale
-                    if mask[i, j, k + 1]:
-                        perm_z[i, j, k + 1] *= scale
+            for k in range(nz):
+                if mask[i, j, k]:
+                    perm_z[i, j, k] *= scale
 
 
 FloatDefault = typing.Union[float, np.floating[typing.Any]]
 StatDefault = typing.Literal[
-    "mean", "median", "min", "max", "zero", "nearest", "linear"
+    "mean",
+    "median",
+    "min",
+    "max",
+    "zero",
+    "nearest",
+    "linear",
 ]
 HookDefault = typing.Callable[[np.typing.NDArray], FloatDefault]
 DefaultDef = typing.Union[FloatDefault, StatDefault, HookDefault]
@@ -170,7 +210,8 @@ def _compute_nearest_default(
     grid: np.typing.NDArray,
     valid_data: np.typing.NDArray,
     property_type: typing.Optional[str] = None,
-) -> float:
+    dtype: typing.Optional[np.typing.DTypeLike] = None,
+) -> np.floating:
     """
     Compute nearest-neighbor default using boundary values.
 
@@ -207,16 +248,18 @@ def _compute_nearest_default(
         boundary_valid = boundary_valid[boundary_valid > 0]
 
     # Use median of boundaries (robust to outliers)
+    dtype = dtype if dtype is not None else get_dtype()
     if len(boundary_valid) > 0:
-        return float(np.median(boundary_valid))
-    return float(np.mean(valid_data))
+        return dtype(np.median(boundary_valid))  # type: ignore
+    return dtype(np.mean(valid_data))  # type: ignore
 
 
 def _compute_linear_default(
     grid: np.typing.NDArray,
     valid_data: np.typing.NDArray,
     property_type: typing.Optional[str] = None,
-) -> float:
+    dtype: typing.Optional[np.typing.DTypeLike] = None,
+) -> np.floating:
     """
     Compute linear interpolation default using boundary values.
 
@@ -251,9 +294,10 @@ def _compute_linear_default(
         boundary_valid = boundary_valid[boundary_valid > 0]
 
     # Use mean of boundaries (smooth average)
+    dtype = dtype if dtype is not None else get_dtype()
     if len(boundary_valid) > 0:
-        return float(np.mean(boundary_valid))
-    return float(np.mean(valid_data))
+        return dtype(np.mean(boundary_valid))  # type: ignore
+    return dtype(np.mean(valid_data))  # type: ignore
 
 
 @attrs.define(slots=True, frozen=True)
@@ -278,15 +322,10 @@ class FractureDefaults:
     - Can use 'nearest' or 'linear' for smooth spatial transitions
     """
 
-    # Geometric properties
     thickness: DefaultDef = "mean"
-
-    # Rock properties
     porosity: DefaultDef = "mean"
     permeability: DefaultDef = "mean"
     net_to_gross: DefaultDef = "mean"
-
-    # Saturation properties
     water_saturation: DefaultDef = "mean"
     oil_saturation: DefaultDef = "mean"
     gas_saturation: DefaultDef = "mean"
@@ -294,29 +333,19 @@ class FractureDefaults:
     residual_oil_saturation_water: DefaultDef = "mean"
     residual_oil_saturation_gas: DefaultDef = "mean"
     residual_gas_saturation: DefaultDef = "mean"
-
-    # Pressure and temperature
     pressure: DefaultDef = "median"  # Use median for pressure
     temperature: DefaultDef = "median"
-
-    # Fluid properties
     oil_viscosity: DefaultDef = "mean"
     water_viscosity: DefaultDef = "mean"
     gas_viscosity: DefaultDef = "mean"
-
     oil_density: DefaultDef = "mean"
     water_density: DefaultDef = "mean"
     gas_density: DefaultDef = "mean"
-
-    # Formation volume factors
     oil_fvf: DefaultDef = "mean"
     water_fvf: DefaultDef = "mean"
     gas_fvf: DefaultDef = "mean"
-
-    # Other properties
     compressibility: DefaultDef = "mean"
     bubble_point_pressure: DefaultDef = "mean"
-
     # Generic fallback for unspecified properties
     generic: DefaultDef = "mean"
 
@@ -325,7 +354,8 @@ class FractureDefaults:
         property_name: str,
         grid: np.typing.NDArray,
         property_type: typing.Optional[str] = None,
-    ) -> float:
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+    ) -> np.floating:
         """
         Compute value for a property based on configuration.
 
@@ -339,22 +369,29 @@ class FractureDefaults:
         if spec is None:
             spec = self.generic
 
+        dtype = dtype if dtype is not None else get_dtype()
         # Handle different specification types
         if isinstance(spec, (int, float)):
-            return float(spec)
+            return dtype(spec)  # type: ignore
 
         if callable(spec):
-            return float(spec(grid))  # type: ignore[call-arg]
+            return dtype(spec(grid))  # type: ignore
 
         if isinstance(spec, str):
             spec = typing.cast(StatDefault, spec)
             return self._compute_statistical_default(
-                method=spec, grid=grid, property_type=property_type
+                method=spec,
+                grid=grid,
+                property_type=property_type,
+                dtype=dtype,
             )
 
         # Fallback to mean if all else fails
         return self._compute_statistical_default(
-            method="mean", grid=grid, property_type=property_type
+            method="mean",
+            grid=grid,
+            property_type=property_type,
+            dtype=dtype,
         )
 
     def _compute_statistical_default(
@@ -362,7 +399,8 @@ class FractureDefaults:
         method: StatDefault,
         grid: np.typing.NDArray,
         property_type: typing.Optional[str] = None,
-    ) -> float:
+        dtype: typing.Optional[np.typing.DTypeLike] = None,
+    ) -> np.floating:
         """
         Compute statistical defaults from grid data.
 
@@ -384,24 +422,27 @@ class FractureDefaults:
         if len(valid_data) == 0:
             raise ValidationError(f"No valid data available for {property_type}")
 
+        dtype = dtype if dtype is not None else get_dtype()
         # Compute based on method
         if method == "mean":
-            return float(np.mean(valid_data))
+            return dtype(np.mean(valid_data))  # type: ignore
         elif method == "median":
-            return float(np.median(valid_data))
+            return dtype(np.median(valid_data))  # type: ignore
         elif method == "min":
-            return float(np.min(valid_data))
+            return dtype(np.min(valid_data))  # type: ignore
         elif method == "max":
-            return float(np.max(valid_data))
+            return dtype(np.max(valid_data))  # type: ignore
         elif method == "zero":
-            return 0.0
+            return dtype(0.0)  # type: ignore
         elif method == "nearest":
-            return _compute_nearest_default(grid, valid_data, property_type)
+            return _compute_nearest_default(
+                grid, valid_data, property_type, dtype=dtype
+            )
         elif method == "linear":
-            return _compute_linear_default(grid, valid_data, property_type)
+            return _compute_linear_default(grid, valid_data, property_type, dtype=dtype)
 
         logger.warning(f"Unknown method '{method}', using mean")
-        return float(np.mean(valid_data))
+        return dtype(np.mean(valid_data))  # type: ignore
 
 
 @attrs.frozen(slots=True)
@@ -596,7 +637,7 @@ class FractureGeometry:
             return self.z_range
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen(slots=True)
 class Fracture:
     """
     Configuration for applying fractures to reservoir models.
@@ -711,8 +752,8 @@ class Fracture:
         # Mutual exclusivity check
         if self.permeability_multiplier is not None and self.permeability is not None:
             raise ValidationError(
-                f"Fracture {self.id}: permeability_multiplier and permeability are mutually exclusive. "
-                "Use permeability_multiplier to scale existing permeabilities, or permeability to set absolute values."
+                f"Fracture {self.id!r}: `permeability_multiplier` and `permeability` are mutually exclusive. "
+                "Use `permeability_multiplier` to scale existing permeabilities, or `permeability` to set absolute values."
             )
 
         # Validate permeability_multiplier if set
@@ -722,22 +763,22 @@ class Fracture:
                     self, "permeability_multiplier", c.MIN_TRANSMISSIBILITY_FACTOR
                 )
                 logger.warning(
-                    f"Fracture {self.id}: permeability_multiplier clamped to {c.MIN_TRANSMISSIBILITY_FACTOR}"
+                    f"Fracture {self.id!r}: `permeability_multiplier` clamped to {c.MIN_TRANSMISSIBILITY_FACTOR}"
                 )
 
             if self.conductive and self.permeability_multiplier < 1.0:
                 raise ValidationError(
-                    f"Fracture {self.id}: conductive fractures must have permeability_multiplier >= 1.0"
+                    f"Fracture {self.id!r}: conductive fractures must have `permeability_multiplier` >= 1.0"
                 )
 
         if self.permeability is not None and self.permeability < 0:
             raise ValidationError(
-                f"Fracture {self.id}: permeability must be non-negative"
+                f"Fracture {self.id!r}: `permeability` must be non-negative"
             )
 
         if self.porosity is not None and not (0 <= self.porosity <= 1):
             raise ValidationError(
-                f"Fracture {self.id}: porosity must be between 0 and 1"
+                f"Fracture {self.id!r}: `porosity` must be between 0 and 1"
             )
 
 
@@ -777,7 +818,10 @@ def apply_fracture(
             )
         fracture_mask = fracture.mask.copy()
     else:
-        fracture_mask = make_fracture_mask(grid_shape=grid_shape, fracture=fracture)  # type: ignore[arg-type]
+        fracture_mask = make_fracture_mask(
+            grid_shape=grid_shape,
+            fracture=fracture,
+        )  # type: ignore[arg-type]
 
     # Apply fracture effects in proper order
     # Modify fracture zone properties (before geometric displacement)
@@ -842,7 +886,7 @@ def make_fracture_mask(
     :return: 3D boolean array marking fracture cells
     """
     nx, ny, nz = grid_shape
-    mask = np.zeros((nx, ny, nz), dtype=bool)
+    mask = np.zeros((nx, ny, nz), dtype=np.bool_)
 
     geom = fracture.geometry
 
@@ -858,6 +902,14 @@ def make_fracture_mask(
         z_min, z_max = 0, nz - 1  # Full vertical extent
 
     if geom.orientation == "x":
+        # For x-oriented fractures, determine y lateral extent
+        if geom.y_range is not None:
+            y_min, y_max = geom.y_range
+            y_min = max(0, min(y_min, ny - 1))
+            y_max = max(0, min(y_max, ny - 1))
+        else:
+            y_min, y_max = 0, ny - 1
+
         _mask_orientation_x(
             mask=mask,
             cell_min=cell_min,
@@ -866,9 +918,19 @@ def make_fracture_mask(
             intercept=float(geom.intercept),
             z_min=z_min,
             z_max=z_max,
+            y_min=y_min,
+            y_max=y_max,
         )
 
     elif geom.orientation == "y":
+        # For y-oriented fractures, determine x lateral extent
+        if geom.x_range is not None:
+            x_min, x_max = geom.x_range
+            x_min = max(0, min(x_min, nx - 1))
+            x_max = max(0, min(x_max, nx - 1))
+        else:
+            x_min, x_max = 0, nx - 1
+
         _mask_orientation_y(
             mask=mask,
             cell_min=cell_min,
@@ -877,6 +939,8 @@ def make_fracture_mask(
             intercept=float(geom.intercept),
             z_min=z_min,
             z_max=z_max,
+            x_min=x_min,
+            x_max=x_max,
         )
 
     elif geom.orientation == "z":
@@ -1260,6 +1324,13 @@ class DisplacementContext:
         :param property_type: Type hint for default computation
         :return: Displaced grid (possibly expanded)
         """
+        # Handle zero throw case - just return copy with correct shape
+        if self.throw == 0:
+            if self.preserve_data:
+                # Even with preserve_data, no expansion needed for zero throw
+                return grid.copy()
+            return grid.copy()
+
         if self.preserve_data:
             return self._displace_with_expansion(
                 grid=grid, property_name=property_name, property_type=property_type
@@ -1288,11 +1359,12 @@ class DisplacementContext:
         abs_throw = abs(self.throw)
         new_nz = nz + abs_throw
 
-        # Get smart default value for this property
+        # Get smart default value for this property, preserving grid dtype
         default_value = self.defaults.get_value(
             property_name=property_name,
             grid=grid,
             property_type=property_type,
+            dtype=grid.dtype,
         )
 
         # Create expanded grid filled with defaults
@@ -1360,11 +1432,12 @@ class DisplacementContext:
         4. Fill exposed regions with smart defaults
         """
         nx, ny, nz = self.original_shape
-        # Get smart default value
+        # Get smart default value, preserving grid dtype
         default_value = self.defaults.get_value(
             property_name=property_name,
             grid=grid,
             property_type=property_type,
+            dtype=grid.dtype,
         )
         # Create new grid filled with defaults
         new_grid = np.full((nx, ny, nz), fill_value=default_value, dtype=grid.dtype)

@@ -1,5 +1,7 @@
 import logging
+import threading
 import typing
+from concurrent.futures import ThreadPoolExecutor
 
 import attrs
 from cachetools import LFUCache
@@ -234,14 +236,24 @@ class GasPseudoPressureTable:
 
         # Compute pseudo-pressure at each point
         logger.info(f"Building pseudo-pressure table with {points} points...")
-        self.pseudo_pressures = np.zeros(points)
-        for i, pressure in enumerate(self.pressures):
-            self.pseudo_pressures[i] = compute_gas_pseudo_pressure(
+
+        def _compute(pressure: float) -> float:
+            """Compute pseudo-pressure for a single pressure point."""
+            return compute_gas_pseudo_pressure(
                 pressure=pressure,
                 z_factor_func=z_factor_func,
                 viscosity_func=viscosity_func,
                 reference_pressure=self.reference_pressure,
             )
+
+        # Use thread pool for parallel computation (I/O bound due to scipy.integrate.quad)
+        # Each integration is independent, so embarrassingly parallel
+        max_workers = min(8, points // 50 + 1)  # Scale workers with problem size
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            self.pseudo_pressures = np.array(
+                list(executor.map(_compute, self.pressures)), dtype=get_dtype()
+            )
+
         logger.debug("Pseudo-pressure table computation complete.")
         logger.info(
             f"Pseudo-pressure table built: P ∈ [{min_pressure:.4f}, {max_pressure:.4f}] psi"
@@ -285,8 +297,6 @@ class GasPseudoPressureTable:
         """
         Fast lookup of pseudo-pressure via interpolation.
 
-        Alias for interpolate() to maintain backward compatibility.
-
         :param pressure: Pressure (psi)
         :return: Pseudo-pressure m(P) (psi²/cP)
         """
@@ -299,8 +309,21 @@ class GasPseudoPressureTable:
         :param pressure: Pressure (psi)
         :return: dm/dP (psi/cP)
         """
+        if pressure <= 0:
+            return 0.0  # Gradient at P=0 is 0
+
         Z = self.z_factor_func(pressure)
         mu = self.viscosity_func(pressure)
+
+        # Protect against invalid values
+        if Z <= 0 or mu <= 0 or not np.isfinite(Z) or not np.isfinite(mu):
+            logger.warning(
+                f"Invalid Z={Z} or μ={mu} at P={pressure} in gradient calculation. "
+                "Using safe defaults."
+            )
+            Z = max(Z, 0.01) if np.isfinite(Z) else 1.0
+            mu = max(mu, 0.001) if np.isfinite(mu) else 0.01
+
         return 2.0 * pressure / (mu * Z)
 
 
@@ -308,6 +331,9 @@ _PSEUDO_PRESSURE_TABLE_CACHE: LFUCache[typing.Hashable, GasPseudoPressureTable] 
     LFUCache(maxsize=100)
 )
 """Global cache for pseudo-pressure tables"""
+
+_PSEUDO_PRESSURE_CACHE_LOCK = threading.Lock()
+"""Thread-safe lock for pseudo-pressure table cache access"""
 
 
 def build_gas_pseudo_pressure_table(
@@ -323,6 +349,9 @@ def build_gas_pseudo_pressure_table(
 
     Creates `GasPseudoPressureTable` instances with intelligent caching
     to avoid recomputing expensive integrals for identical fluid properties.
+
+    **Thread Safety:**
+    This function is thread-safe. Cache access is protected by a lock.
 
     **Caching Strategy:**
     - If `cache_key` is provided and a table with that key exists, return cached table
@@ -372,11 +401,12 @@ def build_gas_pseudo_pressure_table(
     """
     # Check cache if key provided
     if cache_key is not None:
-        if cache_key in _PSEUDO_PRESSURE_TABLE_CACHE:
-            logger.debug(f"Using cached pseudo-pressure table for key: {cache_key}")
-            return _PSEUDO_PRESSURE_TABLE_CACHE[cache_key]
+        with _PSEUDO_PRESSURE_CACHE_LOCK:
+            if cache_key in _PSEUDO_PRESSURE_TABLE_CACHE:
+                logger.debug(f"Using cached pseudo-pressure table for key: {cache_key}")
+                return _PSEUDO_PRESSURE_TABLE_CACHE[cache_key]
 
-    # Build new table
+    # Build new table (outside lock to avoid blocking other threads)
     logger.debug(f"Building new pseudo-pressure table for key: {cache_key}")
     table = GasPseudoPressureTable(
         z_factor_func=z_factor_func,
@@ -388,27 +418,35 @@ def build_gas_pseudo_pressure_table(
 
     # Cache if key provided
     if cache_key is not None:
-        _PSEUDO_PRESSURE_TABLE_CACHE[cache_key] = table
-        logger.debug(
-            f"Cached pseudo-pressure table. Cache size: {len(_PSEUDO_PRESSURE_TABLE_CACHE)}"
-        )
+        with _PSEUDO_PRESSURE_CACHE_LOCK:
+            # Double-check in case another thread built it while we were working
+            if cache_key not in _PSEUDO_PRESSURE_TABLE_CACHE:
+                _PSEUDO_PRESSURE_TABLE_CACHE[cache_key] = table
+                logger.debug(
+                    f"Cached pseudo-pressure table. Cache size: {len(_PSEUDO_PRESSURE_TABLE_CACHE)}"
+                )
+            else:
+                # Another thread cached it first, use that one
+                table = _PSEUDO_PRESSURE_TABLE_CACHE[cache_key]
     return table
 
 
 def clear_pseudo_pressure_table_cache() -> None:
     """Clear the global pseudo-pressure table cache to free memory."""
     global _PSEUDO_PRESSURE_TABLE_CACHE
-    cache_size = len(_PSEUDO_PRESSURE_TABLE_CACHE)
-    _PSEUDO_PRESSURE_TABLE_CACHE.clear()
+    with _PSEUDO_PRESSURE_CACHE_LOCK:
+        cache_size = len(_PSEUDO_PRESSURE_TABLE_CACHE)
+        _PSEUDO_PRESSURE_TABLE_CACHE.clear()
     logger.info(f"Cleared {cache_size} cached pseudo-pressure tables")
 
 
 def get_pseudo_pressure_table_cache_info() -> typing.Dict[str, typing.Any]:
     """Get information about the current cache state."""
-    return {
-        "cache_size": len(_PSEUDO_PRESSURE_TABLE_CACHE),
-        "cached_keys": list(_PSEUDO_PRESSURE_TABLE_CACHE.keys()),
-    }
+    with _PSEUDO_PRESSURE_CACHE_LOCK:
+        return {
+            "cache_size": len(_PSEUDO_PRESSURE_TABLE_CACHE),
+            "cached_keys": list(_PSEUDO_PRESSURE_TABLE_CACHE.keys()),
+        }
 
 
 QueryType = typing.Union[NDimensionalGrid, list, float, np.floating]
@@ -971,6 +1009,12 @@ class PVTTables:
         if interp is None:
             return None
 
+        # Fast path for scalar inputs to avoid numpy array conversion overhead
+        if isinstance(pressure, (int, float)) and isinstance(temperature, (int, float)):
+            if self.warn_on_extrapolation:
+                self._check_extrapolation(pressure, temperature)
+            return float(interp.ev(pressure, temperature))
+
         # Check for extrapolation if requested
         if self.warn_on_extrapolation:
             self._check_extrapolation(pressure, temperature)
@@ -1032,6 +1076,11 @@ class PVTTables:
         # Stack and evaluate
         points = np.column_stack([p.ravel(), t.ravel(), s.ravel()])
         result = interp(points).reshape(p.shape)
+
+        # Preserve global dtype precision
+        dtype = get_dtype()
+        if result.dtype != dtype:
+            result = result.astype(dtype, copy=False)
 
         return float(result) if result.size == 1 else result
 
@@ -1153,32 +1202,35 @@ class PVTTables:
         # Undersaturated conditions: P > Pb
         undersaturated = np.invert(saturated)
         if np.any(undersaturated):
-            # Get viscosity at bubble point
+            # Get viscosity at bubble point (mu_ob)
             mu_b = self.pt_interpolate(
                 name="oil_viscosity",
                 pressure=pb[undersaturated],
                 temperature=t[undersaturated],
             )
 
-            # Get compressibility if available
-            co = self.pt_interpolate(
-                name="oil_compressibility",
-                pressure=pb[undersaturated],
-                temperature=t[undersaturated],
-            )
-
-            if co is not None:
-                delta_p = p[undersaturated] - pb[undersaturated]
-                # μo increases slightly with pressure above Pb
-                # μo = μob * exp(co * (P - Pb))
-                result[undersaturated] = mu_b * np.exp(co * delta_p)
+            if mu_b is None:
+                # Fallback: use saturated viscosity as approximation
+                result[undersaturated] = self.pt_interpolate(
+                    name="oil_viscosity",
+                    pressure=p[undersaturated],
+                    temperature=t[undersaturated],
+                )  # type: ignore[assignment]
             else:
-                # No compressibility data: use μob as approximation
-                result[undersaturated] = mu_b
-                if self.warn_on_extrapolation:
-                    logger.warning(
-                        "Undersaturated oil viscosity: using bubble point value (no compressibility data)"
-                    )
+                # Apply Modified Beggs & Robinson undersaturated viscosity correlation
+                # (consistent with bores.pvt.arrays.compute_oil_viscosity)
+                # mu_o = mu_ob * (P / Pb)^X
+                # where X = 2.6 * P^1.187 * exp(-11.513 - 8.98e-5 * P)
+                # Reference: Beggs & Robinson (1975), Vazquez & Beggs (1980)
+
+                p_under = p[undersaturated]
+                pb_under = pb[undersaturated]
+
+                # Compute undersaturated exponent X
+                X = 2.6 * (p_under**1.187) * np.exp(-11.513 - 8.98e-5 * p_under)
+                # Apply pressure ratio correction
+                result[undersaturated] = mu_b * ((p_under / pb_under) ** X)
+
         return float(result) if result.size == 1 else result
 
     def oil_compressibility(
@@ -1256,7 +1308,8 @@ class PVTTables:
             )
 
         # Undersaturated: P > Pb
-        # Bo(P) = Bob * exp(-co * (P - Pb))
+        # Bo(P) = Bob * exp(-co_avg * (P - Pb))
+        # where co_avg is the average compressibility between Pb and P
         undersaturated = np.invert(saturated)
         if np.any(undersaturated):
             # Get Bo at bubble point
@@ -1268,16 +1321,31 @@ class PVTTables:
 
             # Get compressibility if available
             if "oil_compressibility" in self._interpolators:
-                co = self.pt_interpolate(
+                # Get compressibility at bubble point
+                co_pb = self.pt_interpolate(
                     name="oil_compressibility",
                     pressure=pb[undersaturated],
                     temperature=t[undersaturated],
                 )
-                if co is not None:
+                # Get compressibility at current pressure for average calculation
+                co_p = self.pt_interpolate(
+                    name="oil_compressibility",
+                    pressure=p[undersaturated],
+                    temperature=t[undersaturated],
+                )
+
+                if co_pb is not None:
+                    # Use average compressibility between Pb and P (McCain method)
+                    if co_p is not None:
+                        co_avg = 0.5 * (co_pb + co_p)
+                    else:
+                        # Fallback to bubble point compressibility if P is out of table range
+                        co_avg = co_pb
+
                     # Apply compression: Bo decreases with pressure above Pb
-                    # Bo(P) = Bob * exp(-co * (P - Pb))
+                    # Bo(P) = Bob * exp(-co_avg * (P - Pb))
                     result[undersaturated] = bob * np.exp(
-                        -co * (p[undersaturated] - pb[undersaturated])
+                        -co_avg * (p[undersaturated] - pb[undersaturated])
                     )
                 else:
                     # Interpolator exists but returned None (shouldn't happen)
@@ -1559,6 +1627,18 @@ class PVTTables:
         )
 
 
+def _validate_table_shape(
+    table: typing.Optional[np.ndarray],
+    expected_shape: typing.Tuple[int, ...],
+    name: str,
+) -> None:
+    """Helpers to validate pre-computed table shapes."""
+    if table is not None and table.shape != expected_shape:
+        raise ValidationError(
+            f"`{name}` shape {table.shape} does not match expected {expected_shape}"
+        )
+
+
 def build_pvt_table_data(
     pressures: OneDimensionalGrid,
     temperatures: OneDimensionalGrid,
@@ -1700,6 +1780,15 @@ def build_pvt_table_data(
     if not np.all(np.diff(temperatures) > 0):
         raise ValidationError("`temperatures` must be strictly increasing")
 
+    # Validate solution_gas_to_oil_ratios if provided
+    if solution_gas_to_oil_ratios is not None:
+        if solution_gas_to_oil_ratios.ndim != 1:
+            raise ValidationError("`solution_gas_to_oil_ratios` must be 1-dimensional")
+        if not np.all(np.diff(solution_gas_to_oil_ratios) > 0):
+            raise ValidationError(
+                "`solution_gas_to_oil_ratios` must be strictly increasing"
+            )
+
     n_p = len(pressures)
     n_t = len(temperatures)
 
@@ -1723,6 +1812,91 @@ def build_pvt_table_data(
 
     n_s = len(salinities)
 
+    # Validate pre-computed 2D table shapes (n_p, n_t)
+    expected_2d = (n_p, n_t)
+    _validate_table_shape(oil_viscosity_table, expected_2d, "oil_viscosity_table")
+    _validate_table_shape(
+        oil_compressibility_table, expected_2d, "oil_compressibility_table"
+    )
+    _validate_table_shape(
+        oil_specific_gravity_table, expected_2d, "oil_specific_gravity_table"
+    )
+    _validate_table_shape(oil_api_gravity_table, expected_2d, "oil_api_gravity_table")
+    _validate_table_shape(oil_density_table, expected_2d, "oil_density_table")
+    _validate_table_shape(
+        oil_formation_volume_factor_table,
+        expected_2d,
+        "oil_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        solution_gas_to_oil_ratio_table, expected_2d, "solution_gas_to_oil_ratio_table"
+    )
+    _validate_table_shape(gas_viscosity_table, expected_2d, "gas_viscosity_table")
+    _validate_table_shape(
+        gas_compressibility_table, expected_2d, "gas_compressibility_table"
+    )
+    _validate_table_shape(gas_gravity_table, expected_2d, "gas_gravity_table")
+    _validate_table_shape(
+        gas_molecular_weight_table, expected_2d, "gas_molecular_weight_table"
+    )
+    _validate_table_shape(gas_density_table, expected_2d, "gas_density_table")
+    _validate_table_shape(
+        gas_formation_volume_factor_table,
+        expected_2d,
+        "gas_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        gas_compressibility_factor_table,
+        expected_2d,
+        "gas_compressibility_factor_table",
+    )
+
+    # Validate pre-computed 3D table shapes (n_p, n_t, n_s)
+    expected_3d = (n_p, n_t, n_s)
+    _validate_table_shape(
+        water_bubble_point_pressure_table,
+        expected_3d,
+        "water_bubble_point_pressure_table",
+    )
+    _validate_table_shape(water_viscosity_table, expected_3d, "water_viscosity_table")
+    _validate_table_shape(
+        water_compressibility_table, expected_3d, "water_compressibility_table"
+    )
+    _validate_table_shape(water_density_table, expected_3d, "water_density_table")
+    _validate_table_shape(
+        water_formation_volume_factor_table,
+        expected_3d,
+        "water_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        gas_solubility_in_water_table, expected_3d, "gas_solubility_in_water_table"
+    )
+
+    # Validate bubble_point_pressures shape if provided
+    if bubble_point_pressures is not None:
+        if bubble_point_pressures.ndim == 1:
+            if len(bubble_point_pressures) != n_t:
+                raise ValidationError(
+                    f"`bubble_point_pressures` 1D length {len(bubble_point_pressures)} "
+                    f"does not match n_temperatures={n_t}"
+                )
+        elif bubble_point_pressures.ndim == 2:
+            if solution_gas_to_oil_ratios is None:
+                raise ValidationError(
+                    "2D `bubble_point_pressures` requires `solution_gas_to_oil_ratios` to be provided"
+                )
+            expected_bp_shape = (len(solution_gas_to_oil_ratios), n_t)
+            if bubble_point_pressures.shape != expected_bp_shape:
+                raise ValidationError(
+                    f"`bubble_point_pressures` shape {bubble_point_pressures.shape} "
+                    f"does not match expected {expected_bp_shape}"
+                )
+        else:
+            raise ValidationError("`bubble_point_pressures` must be 1D or 2D")
+
+    logger.info(
+        f"Building PVT tables: {n_p} pressures x {n_t} temperatures x {n_s} salinities",
+    )
     # CREATE MESHGRIDS
     # 2D meshgrid for oil and gas properties: (n_p, n_t)
     pressure_grid_2d, temperature_grid_2d = np.meshgrid(
@@ -1735,9 +1909,11 @@ def build_pvt_table_data(
 
     if gas_gravity is None:
         gas_gravity = compute_gas_gravity(gas=reservoir_gas)
+        logger.debug(f"Computed gas gravity = {gas_gravity:.4f} for {reservoir_gas}")
 
     # BUILD GAS PROPERTIES (2D TABLES)
     if build_gas_properties:
+        logger.debug("Building gas properties...")
         # Gas gravity (usually constant)
         if gas_gravity_table is None:
             gas_gravity_table = np.full((n_p, n_t), gas_gravity, dtype=dtype)
@@ -1789,9 +1965,11 @@ def build_pvt_table_data(
                 gas_density_grid=gas_density_table,
                 gas_molecular_weight_grid=gas_molecular_weight_table,
             )
+        logger.debug("Gas properties built")
 
     # BUILD WATER PROPERTIES (3D TABLES)
     if build_water_properties:
+        logger.debug("Building water properties...")
         # Water viscosity: μw(P, T, S)
         if water_viscosity_table is None:
             water_viscosity_table = build_water_viscosity_grid(
@@ -1875,9 +2053,11 @@ def build_pvt_table_data(
                     salinity_grid=salinity_grid_3d,
                 )
             )
+        logger.debug("Water properties built")
 
     # BUILD OIL PROPERTIES (2D TABLES)
     if build_oil_properties:
+        logger.debug("Building oil properties...")
         # Oil specific gravity (usually constant)
         if oil_specific_gravity_table is None:
             oil_specific_gravity_table = np.full(
@@ -1949,12 +2129,14 @@ def build_pvt_table_data(
                 kx=1,
                 ky=1,
             )
-            # Evaluate Pb at each Rs(P, T) value
-            for i in range(n_p):
-                for j in range(n_t):
-                    rs_val = solution_gas_to_oil_ratio_table[i, j]
-                    t_val = temperatures[j]
-                    bubble_point_pressure_grid_2d[i, j] = pb_interp(rs_val, t_val)[0, 0]
+            # Vectorized evaluation: evaluate Pb at each Rs(P, T) value
+            # Create temperature grid matching solution_gas_to_oil_ratio_table shape
+            t_grid = np.broadcast_to(temperatures, (n_p, n_t))
+            bubble_point_pressure_grid_2d = (
+                pb_interp.ev(solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel())
+                .reshape(n_p, n_t)
+                .astype(dtype)
+            )
 
             # TODO: Instead of requiring Rs(P,T) as input, compute it iteratively:
             # 1. Start with initial guess: Rs(P,T) from Standing correlation
@@ -2051,6 +2233,7 @@ def build_pvt_table_data(
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
                 gor_at_bubble_point_pressure_grid=rs_at_bp_grid,  # type: ignore
             )
+        logger.debug("Oil properties built")
 
     table_data = PVTTableData(
         pressures=pressures,

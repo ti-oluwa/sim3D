@@ -179,39 +179,94 @@ class ModelAnalyst(typing.Generic[NDimension]):
     captured during a simulation run.
     """
 
-    def __init__(self, states: typing.Iterable[ModelState[NDimension]]) -> None:
+    def __init__(
+        self,
+        states: typing.Iterable[ModelState[NDimension]],
+        initial_stoiip: typing.Optional[float] = None,
+        initial_stgiip: typing.Optional[float] = None,
+        initial_stwiip: typing.Optional[float] = None,
+    ) -> None:
         """
         Initializes the model analyst with a series of model states.
 
         :param states: An iterable of `ModelState` objects representing the reservoir model states
-        captured at different time steps during a simulation run.
+            captured at different time steps during a simulation run.
+        :param initial_stoiip: Optional pre-calculated stock tank oil initially in place (STB).
+            Use this when the initial state (step 0) is not available, e.g., in EOR simulations
+            that start from a depleted state.
+        :param initial_stgiip: Optional pre-calculated stock tank gas initially in place (SCF).
+            Use this when the initial state (step 0) is not available.
+        :param initial_stwiip: Optional pre-calculated stock tank water initially in place (STB).
+            Use this when the initial state (step 0) is not available.
         """
         self._states = {state.step: state for state in states}
+
+        if not self._states:
+            raise ValidationError(
+                "No states provided. ModelAnalyst requires at least one state."
+            )
+
+        self._min_step = min(self._states.keys())
         self._max_step = max(self._states.keys())
         self._state_count = len(self._states)
-        if self._max_step != (self._state_count - 1):
+        self._sorted_steps = sorted(self._states.keys())
+
+        # Store user-provided initial values for EOR/continuation scenarios
+        self._initial_stoiip = initial_stoiip
+        self._initial_stgiip = initial_stgiip
+        self._initial_stwiip = initial_stwiip
+
+        if self._max_step != (self._state_count - 1 + self._min_step):
             logger.debug(
-                "Model states have non-sequential time steps. Max time step: %d, State count: %d. ",
-                "Some production metrics may be inaccurate.",
+                "Model states have non-sequential time steps. Min step: %d, Max step: %d, "
+                "State count: %d. Some production metrics may be inaccurate.",
+                self._min_step,
                 self._max_step,
                 self._state_count,
             )
+
+    @property
+    def min_step(self) -> int:
+        """The minimum (first) step number in the available states."""
+        return self._min_step
+
+    @property
+    def max_step(self) -> int:
+        """The maximum (last) step number in the available states."""
+        return self._max_step
+
+    @property
+    def available_steps(self) -> typing.List[int]:
+        """List of all available step numbers in sorted order."""
+        return self._sorted_steps.copy()
+
+    def _resolve_step(self, step: int) -> int:
+        """
+        Resolve negative step indices to actual step numbers.
+
+        :param step: Step number (can be negative for indexing from end)
+        :return: Resolved step number
+        """
+        if step < 0:
+            # -1 should give max_step, -2 should give second-to-last, etc.
+            return self._max_step + step + 1
+        return step
 
     def get_state(self, step: int) -> typing.Optional[ModelState[NDimension]]:
         """
         Retrieves the model state for a specific time step.
 
         :param step: The time step index to retrieve the state for.
-        :return: The `ModelState` corresponding to the specified time step.
+            Negative values index from the end: -1 is the last step, -2 is second-to-last, etc.
+        :return: The `ModelState` corresponding to the specified time step, or None if not found.
         """
-        if step < 0:
-            step = self._state_count + step
+        step = self._resolve_step(step)
 
         state = self._states.get(step, None)
         if state is None:
             logger.warning(
                 f"Time step {step} not found. Available time steps: "
-                f"{sorted(self._states.keys())}"
+                f"{self._sorted_steps}"
             )
         else:
             logger.debug(f"Retrieved state at time step {step}")
@@ -219,45 +274,67 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
     @property
     def stock_tank_oil_initially_in_place(self) -> float:
-        """The stock tank oil initially in place (STOIIP) at the start of the simulation in stock tank barrels (STB)."""
-        return self.oil_in_place(0)
+        """
+        The stock tank oil initially in place (STOIIP) in stock tank barrels (STB).
+
+        If `initial_stoiip` was provided at initialization, returns that value.
+        Otherwise, computes from the earliest available state (which may not be step 0
+        in EOR/continuation scenarios).
+        """
+        if self._initial_stoiip is not None:
+            return self._initial_stoiip
+        return self.oil_in_place(self._min_step)
 
     stoiip = stock_tank_oil_initially_in_place
     """The stock tank oil initially in place (STOIIP) in stock tank barrels (STB)."""
 
     @property
     def stock_tank_gas_initially_in_place(self) -> float:
-        """The stock tank gas initially in place (STGIIP) at the start of the simulation in standard cubic feet (SCF)."""
-        return self.gas_in_place(0)
+        """
+        The stock tank gas initially in place (STGIIP) in standard cubic feet (SCF).
+
+        If `initial_stgiip` was provided at initialization, returns that value.
+        Otherwise, computes from the earliest available state.
+        """
+        if self._initial_stgiip is not None:
+            return self._initial_stgiip
+        return self.gas_in_place(self._min_step)
 
     stgiip = stock_tank_gas_initially_in_place
     """The stock tank gas initially in place (STGIIP) in standard cubic feet (SCF)."""
 
     @property
     def stock_tank_water_initially_in_place(self) -> float:
-        """The stock tank water initially in place at the start of the simulation in stock tank barrels (STB)."""
-        return self.water_in_place(0)
+        """
+        The stock tank water initially in place in stock tank barrels (STB).
+
+        If `initial_stwiip` was provided at initialization, returns that value.
+        Otherwise, computes from the earliest available state.
+        """
+        if self._initial_stwiip is not None:
+            return self._initial_stwiip
+        return self.water_in_place(self._min_step)
 
     @property
     def cumulative_oil_produced(self) -> float:
-        """The cumulative oil produced in stock tank barrels (STB) from the start of the simulation to the current time step."""
-        return self.oil_produced(0, -1)
+        """The cumulative oil produced in stock tank barrels (STB) from the earliest available state to the latest."""
+        return self.oil_produced(self._min_step, -1)
 
     No = cumulative_oil_produced
     """Cumulative oil produced in stock tank barrels (STB)."""
 
     @property
     def cumulative_free_gas_produced(self) -> float:
-        """Return the cumulative gas produced in standard cubic feet (SCF)."""
-        return self.free_gas_produced(0, -1)
+        """Return the cumulative gas produced in standard cubic feet (SCF) from the earliest available state to the latest."""
+        return self.free_gas_produced(self._min_step, -1)
 
     Ng = cumulative_free_gas_produced
     """Cumulative gas produced in standard cubic feet (SCF)."""
 
     @property
     def cumulative_water_produced(self) -> float:
-        """Return the cumulative water produced in stock tank barrels (STB)."""
-        return self.water_produced(0, -1)
+        """Return the cumulative water produced in stock tank barrels (STB) from the earliest available state to the latest."""
+        return self.water_produced(self._min_step, -1)
 
     Nw = cumulative_water_produced
     """Cumulative water produced in stock tank barrels (STB)."""
@@ -429,10 +506,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         initial_free_gas = self.stock_tank_gas_initially_in_place  # scf
 
         # Get initial solution gas in oil
-        initial_state = self.get_state(0)
+        initial_state = self.get_state(self._min_step)
         if initial_state is None:
             raise ValueError(
-                "Initial state (time step 0) is not available. Cannot compute total gas recovery factor."
+                f"Initial state (time step {self._min_step}) is not available. Cannot compute total gas recovery factor."
             )
 
         avg_initial_gor = np.nanmean(
@@ -599,14 +676,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
         Get the oil in place history between two time steps.
 
         :param from_step: The starting time step index (inclusive).
-        :param to_step: The ending time step index (inclusive).
+        :param to_step: The ending time step index (inclusive). Use -1 for the last step.
         :return: A generator yielding tuples of time step and oil in place in (STB).
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
-            yield (t, self.oil_in_place(t))
+            if t in self._states:
+                yield (t, self.oil_in_place(t))
 
     def gas_in_place_history(
         self, from_step: int = 0, to_step: int = -1, interval: int = 1
@@ -615,14 +692,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
         Computes the free gas in place history between two time steps.
 
         :param from_step: The starting time step index (inclusive).
-        :param to_step: The ending time step index (inclusive).
+        :param to_step: The ending time step index (inclusive). Use -1 for the last step.
         :return: A generator yielding tuples of time step and gas in place in (SCF).
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
-            yield (t, self.gas_in_place(t))
+            if t in self._states:
+                yield (t, self.gas_in_place(t))
 
     def water_in_place_history(
         self, from_step: int = 0, to_step: int = -1, interval: int = 1
@@ -631,16 +708,15 @@ class ModelAnalyst(typing.Generic[NDimension]):
         Computes the water in place history between two time steps.
 
         :param from_step: The starting time step index (inclusive).
-        :param to_step: The ending time step index (inclusive).
+        :param to_step: The ending time step index (inclusive). Use -1 for the last step.
         :return: A generator yielding tuples of time step and water in place in (STB).
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
-            yield (t, self.water_in_place(t))
+            if t in self._states:
+                yield (t, self.water_in_place(t))
 
-    @functools.cache
     def oil_produced(
         self,
         from_step: int,
@@ -653,10 +729,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         If:
         - production rates are present, they contribute positively to production.
         - `from_step` equals `to_step`, the production at that time step is returned.
-        - `from_step` is 0 and `to_step` is -1, the total cumulative production is returned.
+        - `from_step` is min_step and `to_step` is -1, the total cumulative production is returned.
 
         :param from_step: The starting time step index (inclusive).
-        :param to_step: The ending time step index (inclusive).
+        :param to_step: The ending time step index (inclusive). Use -1 for the last step.
         :param cells: Optional filter for specific cells, well name, or region.
             - None: Entire reservoir (default)
             - str: Well name (e.g., "PROD-1")
@@ -666,47 +742,55 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - Cells object: Pre-constructed Cells instance
         :return: The cumulative oil produced in STB
         """
-        logger.debug(
-            f"Computing oil produced from time step {from_step} to {to_step}, cells filter: {cells}"
-        )
-        # Convert to Cells if not already
+        # Convert to Cells first (hashable) before calling cached implementation
         cells_obj = _ensure_cells(cells)
+        return self._oil_produced(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _oil_produced(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `oil_produced`."""
+        logger.debug(
+            f"Computing oil produced from time step {from_step} to {to_step}, cells filter: {cells_obj}"
+        )
+        to_step = self._resolve_step(to_step)
 
         total_production = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj is not None
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Production is in ft³/day, convert to STB using FVF
             oil_production = state.production.oil
+            if oil_production is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
+            # Compute production in STB
+            oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
 
-            step_production = 0.0
-            if oil_production is not None:
-                oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
+            # Apply mask if filtering
+            if mask is not None:
+                oil_production_stb_day = oil_production_stb_day * mask
 
-                # Apply mask if filtering
-                if mask is not None:
-                    oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
+            total_production += np.nansum(oil_production_stb_day * step_in_days)
 
-                step_production += np.nansum(oil_production_stb_day * step_in_days)
-
-            total_production += step_production
         return float(total_production)
 
-    @functools.cache
     def free_gas_produced(
         self,
         from_step: int,
@@ -732,42 +816,49 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: The cumulative gas produced in SCF
         """
         cells_obj = _ensure_cells(cells)
+        return self._free_gas_produced(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _free_gas_produced(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `free_gas_produced`."""
+        to_step = self._resolve_step(to_step)
 
         total_production = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Production is in ft³/day, convert to SCF using FVF
             gas_production = state.production.gas
+            if gas_production is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
+            gas_production_SCF_day = gas_production / gas_fvf_grid
 
-            step_production = 0.0
-            if gas_production is not None:
-                gas_production_SCF_day = gas_production / gas_fvf_grid
+            # Apply mask if filtering
+            if mask is not None:
+                gas_production_SCF_day = gas_production_SCF_day * mask
 
-                # Apply mask if filtering
-                if mask is not None:
-                    gas_production_SCF_day = np.where(mask, gas_production_SCF_day, 0.0)
+            total_production += np.nansum(gas_production_SCF_day * step_in_days)
 
-                step_production += np.nansum(gas_production_SCF_day * step_in_days)
-
-            total_production += step_production
         return float(total_production)
 
-    @functools.cache
     def water_produced(
         self,
         from_step: int,
@@ -793,44 +884,49 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: The cumulative water produced in STB
         """
         cells_obj = _ensure_cells(cells)
+        return self._water_produced(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _water_produced(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `water_produced`."""
+        to_step = self._resolve_step(to_step)
 
         total_production = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Production is in ft³/day, convert to STB using FVF
             water_production = state.production.water
+            if water_production is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
+            water_production_stb_day = water_production * c.FT3_TO_BBL / water_fvf_grid
 
-            step_production = 0.0
-            if water_production is not None:
-                water_production_stb_day = (
-                    water_production * c.FT3_TO_BBL / water_fvf_grid
-                )
+            # Apply mask if filtering
+            if mask is not None:
+                water_production_stb_day = water_production_stb_day * mask
 
-                # Apply mask if filtering
-                if mask is not None:
-                    water_production_stb_day = np.where(
-                        mask, water_production_stb_day, 0.0
-                    )
-                step_production += np.nansum(water_production_stb_day * step_in_days)
+            total_production += np.nansum(water_production_stb_day * step_in_days)
 
-            total_production += step_production
         return float(total_production)
 
     @functools.cache
@@ -859,40 +955,49 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: The cumulative oil injected in STB
         """
         cells_obj = _ensure_cells(cells)
+        return self._oil_injected(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _oil_injected(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `oil_injected`."""
+        to_step = self._resolve_step(to_step)
 
         total_injection = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Injection is in ft³/day, convert to STB using FVF
             oil_injection = state.injection.oil
+            if oil_injection is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            step_injection = 0.0
-            if oil_injection is not None:
-                oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
+            oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
 
-                # Apply mask if filtering
-                if mask is not None:
-                    oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
+            # Apply mask if filtering
+            if mask is not None:
+                oil_injection_stb_day = oil_injection_stb_day * mask
 
-                step_injection += np.nansum(oil_injection_stb_day * step_in_days)
-            total_injection += step_injection
+            total_injection += np.nansum(oil_injection_stb_day * step_in_days)
+
         return float(total_injection)
 
-    @functools.cache
     def gas_injected(
         self,
         from_step: int,
@@ -918,40 +1023,50 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: The cumulative gas injected in SCF
         """
         cells_obj = _ensure_cells(cells)
+        return self._gas_injected(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _gas_injected(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `gas_injected`."""
+        to_step = self._resolve_step(to_step)
 
         total_injection = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Injection is in ft³/day, convert to SCF using FVF
             gas_injection = state.injection.gas
+            if gas_injection is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            step_injection = 0.0
-            if gas_injection is not None:
-                gas_injection_SCF_day = gas_injection / gas_fvf_grid
 
-                # Apply mask if filtering
-                if mask is not None:
-                    gas_injection_SCF_day = np.where(mask, gas_injection_SCF_day, 0.0)
+            gas_injection_SCF_day = gas_injection / gas_fvf_grid
 
-                step_injection += np.nansum(gas_injection_SCF_day * step_in_days)
-            total_injection += step_injection
+            # Apply mask if filtering
+            if mask is not None:
+                gas_injection_SCF_day = gas_injection_SCF_day * mask
+
+            total_injection += np.nansum(gas_injection_SCF_day * step_in_days)
+
         return float(total_injection)
 
-    @functools.cache
     def water_injected(
         self,
         from_step: int,
@@ -977,43 +1092,50 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: The cumulative water injected in STB
         """
         cells_obj = _ensure_cells(cells)
+        return self._water_injected(from_step, to_step, cells_obj)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+    @functools.cache
+    def _water_injected(
+        self,
+        from_step: int,
+        to_step: int,
+        cells_obj: typing.Optional[Cells],
+    ) -> float:
+        """Internal cached implementation of `water_injected`."""
+        to_step = self._resolve_step(to_step)
 
         total_injection = 0.0
-        for t in range(from_step, to_step + 1):
-            state = self.get_state(t)
-            if state is None:
-                continue
+        mask = None  # Cache mask across iterations
+        mask_computed = False
 
-            # Get cell mask for filtering
-            mask = (
-                cells_obj.get_mask(state.model.grid_shape, state.wells)
-                if cells_obj
-                else None
-            )
+        for t in range(from_step, to_step + 1):
+            if t not in self._states:
+                continue
+            state = self._states[t]
+
+            # Compute mask once using first available state (grid_shape is constant)
+            if cells_obj is not None and not mask_computed:
+                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
+                mask_computed = True
 
             # Injection is in ft³/day, convert to STB using FVF
             water_injection = state.injection.water
+            if water_injection is None:
+                continue
+
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            step_injection = 0.0
-            if water_injection is not None:
-                water_injection_stb_day = (
-                    water_injection * c.FT3_TO_BBL / water_fvf_grid
-                )
 
-                # Apply mask if filtering
-                if mask is not None:
-                    water_injection_stb_day = np.where(
-                        mask, water_injection_stb_day, 0.0
-                    )
+            water_injection_stb_day = water_injection * c.FT3_TO_BBL / water_fvf_grid
 
-                step_injection += np.nansum(water_injection_stb_day * step_in_days)
-            total_injection += step_injection
+            # Apply mask if filtering
+            if mask is not None:
+                water_injection_stb_day = water_injection_stb_day * mask
+
+            total_injection += np.nansum(water_injection_stb_day * step_in_days)
+
         return float(total_injection)
 
     def oil_production_history(
@@ -1040,15 +1162,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and oil produced (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.oil_produced(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative production from start of simulation to time step t
-                yield (t, self.oil_produced(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add production for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.oil_produced(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add production from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.oil_produced(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
                 yield (t, self.oil_produced(t, t, cells=cells_obj))
@@ -1077,15 +1216,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and gas produced (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.free_gas_produced(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative production from start of simulation
-                yield (t, self.free_gas_produced(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add production for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.free_gas_produced(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add production from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.free_gas_produced(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
                 yield (t, self.free_gas_produced(t, t, cells=cells_obj))
@@ -1114,15 +1270,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and water produced (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.water_produced(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative production from start of simulation
-                yield (t, self.water_produced(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add production for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.water_produced(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add production from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.water_produced(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
                 yield (t, self.water_produced(t, t, cells=cells_obj))
@@ -1151,15 +1324,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and oil injected (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.oil_injected(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative injection from start of simulation
-                yield (t, self.oil_injected(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add injection for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.oil_injected(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add injection from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.oil_injected(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
                 yield (t, self.oil_injected(t, t, cells=cells_obj))
@@ -1188,15 +1378,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and gas injected (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.gas_injected(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative injection from start of simulation
-                yield (t, self.gas_injected(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add injection for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.gas_injected(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add injection from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.gas_injected(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
                 yield (t, self.gas_injected(t, t, cells=cells_obj))
@@ -1225,15 +1432,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: A generator yielding tuples of time step and water injected (cumulative or exclusive).
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        if cumulative:
+            # Optimized: Use incremental accumulation instead of recalculating from min_step each time
+            cumulative_total = 0.0
+            # First, catch up from min_step to from_step - 1 (if needed)
+            if from_step > self._min_step:
+                cumulative_total = self.water_injected(
+                    self._min_step, from_step - 1, cells=cells_obj
+                )
 
-        for t in range(from_step, to_step + 1, interval):
-            if cumulative:
-                # Cumulative injection from start of simulation
-                yield (t, self.water_injected(0, t, cells=cells_obj))
-            else:
+            for t in range(from_step, to_step + 1, interval):
+                # Add injection for steps since last yield
+                if t == from_step:
+                    cumulative_total += self.water_injected(
+                        from_step, from_step, cells=cells_obj
+                    )
+                else:
+                    # Add injection from last yielded step to current step
+                    prev_t = t - interval
+                    cumulative_total += self.water_injected(
+                        prev_t + 1, t, cells=cells_obj
+                    )
+                yield (t, cumulative_total)
+        else:
+            for t in range(from_step, to_step + 1, interval):
                 # Calculate injection at time step t (exclusive)
                 # Use time step t for both from and to to get injection at that step
                 yield (t, self.water_injected(t, t, cells=cells_obj))
@@ -1293,9 +1517,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         ```
         """
         cells_obj = _ensure_cells(cells)
-
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         # If cells filter is specified, compute STOIIP for that region
         if stoiip is not None:
@@ -1303,9 +1525,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         elif cells_obj is None:
             stoiip = self.stock_tank_oil_initially_in_place
         else:
-            initial_state = self.get_state(0)
+            initial_state = self.get_state(self._min_step)
             if initial_state is None:
-                raise ValidationError("Initial state not available")
+                raise ValidationError(
+                    f"Initial state (step {self._min_step}) not available"
+                )
             mask = cells_obj.get_mask(
                 initial_state.model.grid_shape, initial_state.wells
             )
@@ -1340,7 +1564,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 yield (t, 0.0)
         else:
             for t in range(from_step, to_step + 1, interval):
-                cumulative_oil = self.oil_produced(0, t, cells=cells_obj)
+                cumulative_oil = self.oil_produced(self._min_step, t, cells=cells_obj)
                 rf = cumulative_oil / stoiip
                 yield (t, rf)
 
@@ -1386,9 +1610,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         ```
         """
         cells_obj = _ensure_cells(cells)
-
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         # If cells filter is specified, compute GIIP for that region
         if stgiip is not None:
@@ -1396,9 +1618,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         elif cells_obj is None:
             giip = self.stock_tank_gas_initially_in_place
         else:
-            initial_state = self.get_state(0)
+            initial_state = self.get_state(self._min_step)
             if initial_state is None:
-                raise ValidationError("Initial state not available")
+                raise ValidationError(
+                    f"Initial state (step {self._min_step}) not available"
+                )
             mask = cells_obj.get_mask(
                 initial_state.model.grid_shape, initial_state.wells
             )
@@ -1432,7 +1656,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 yield (t, 0.0)
         else:
             for t in range(from_step, to_step + 1, interval):
-                cumulative_gas = self.free_gas_produced(0, t, cells=cells_obj)
+                cumulative_gas = self.free_gas_produced(
+                    self._min_step, t, cells=cells_obj
+                )
                 rf = cumulative_gas / giip
                 yield (t, rf)
 
@@ -1474,14 +1700,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
         ```
         """
         cells_obj = _ensure_cells(cells)
+        to_step = self._resolve_step(to_step)
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
-
-        initial_state = self.get_state(0)
+        initial_state = self.get_state(self._min_step)
         if initial_state is None:
             raise ValidationError(
-                "Initial state (time step 0) is not available. Cannot compute total gas recovery factor history."
+                f"Initial state (time step {self._min_step}) is not available. Cannot compute total gas recovery factor history."
             )
 
         # Get initial total gas
@@ -1548,8 +1772,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 yield (t, 0.0)
         else:
             for t in range(from_step, to_step + 1, interval):
-                cumulative_free_gas = self.free_gas_produced(0, t, cells=cells_obj)
-                cumulative_oil = self.oil_produced(0, t, cells=cells_obj)
+                cumulative_free_gas = self.free_gas_produced(
+                    self._min_step, t, cells=cells_obj
+                )
+                cumulative_oil = self.oil_produced(self._min_step, t, cells=cells_obj)
                 cumulative_solution_gas = cumulative_oil * avg_initial_gor
                 total_gas_produced = cumulative_free_gas + cumulative_solution_gas
                 rf = float(total_gas_produced / total_initial_gas)
@@ -1816,9 +2042,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param step: The time step index to analyze cumulative production for.
         :return: `CumulativeProduction` containing detailed cumulative analysis.
         """
-        cumulative_oil = self.oil_produced(0, step)
-        cumulative_free_gas = self.free_gas_produced(0, step)
-        cumulative_water = self.water_produced(0, step)
+        cumulative_oil = self.oil_produced(self._min_step, step)
+        cumulative_free_gas = self.free_gas_produced(self._min_step, step)
+        cumulative_water = self.water_produced(self._min_step, step)
         return CumulativeProduction(
             cumulative_oil=cumulative_oil,
             cumulative_free_gas=cumulative_free_gas,
@@ -1860,10 +2086,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: `MaterialBalanceAnalysis` containing drive mechanism analysis.
         """
         state = self.get_state(step)
-        initial_state = self.get_state(0)
+        initial_state = self.get_state(self._min_step)
         if state is None or initial_state is None:
             logger.warning(
-                f"State at time step {step} or initial state is not available. Returning zero material balance analysis."
+                f"State at time step {step} or initial state (step {self._min_step}) is not available. Returning zero material balance analysis."
             )
             return MaterialBalanceAnalysis(
                 pressure=0.0,
@@ -1925,13 +2151,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
             state.model.fluid_properties.gas_compressibility_grid
         )
         # Cumulative production
-        cumulative_oil = self.oil_produced(0, step)
-        cumulative_water = self.water_produced(0, step)
+        cumulative_oil = self.oil_produced(self._min_step, step)
+        cumulative_water = self.water_produced(self._min_step, step)
 
         # Initial volumes in place
-        initial_oil = self.oil_in_place(0)
-        initial_gas = self.gas_in_place(0)
-        initial_water = self.water_in_place(0)
+        initial_oil = self.oil_in_place(self._min_step)
+        initial_gas = self.gas_in_place(self._min_step)
+        initial_water = self.water_in_place(self._min_step)
 
         # Calculate total compressibility (rock + fluid)
         total_compressibility = (
@@ -2078,11 +2304,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 contacted/uncontacted oil (STB), areal sweep, and vertical sweep metrics.
         """
         state = self.get_state(step)
-        initial_state = self.get_state(0)
+        initial_state = self.get_state(self._min_step)
         if state is None or initial_state is None:
             logger.warning(
-                "State at time step %s or initial state is not available. Returning zeros.",
+                "State at time step %s or initial state (step %s) is not available. Returning zeros.",
                 step,
+                self._min_step,
             )
             return SweepEfficiencyAnalysis(
                 volumetric_sweep_efficiency=0.0,
@@ -2599,16 +2826,22 @@ class ModelAnalyst(typing.Generic[NDimension]):
             return 0.0
 
         # Get cumulative injection volumes (with optional cell filter)
-        cumulative_water_injected = self.water_injected(0, step, cells=cells_obj)  # STB
+        cumulative_water_injected = self.water_injected(
+            self._min_step, step, cells=cells_obj
+        )  # STB
         cumulative_gas_injected = self.gas_injected(
-            0, step, cells=cells_obj
+            self._min_step, step, cells=cells_obj
         )  # SCF (free gas only)
 
         # Get cumulative production volumes (with optional cell filter)
-        cumulative_oil_produced = self.oil_produced(0, step, cells=cells_obj)  # STB
-        cumulative_water_produced = self.water_produced(0, step, cells=cells_obj)  # STB
+        cumulative_oil_produced = self.oil_produced(
+            self._min_step, step, cells=cells_obj
+        )  # STB
+        cumulative_water_produced = self.water_produced(
+            self._min_step, step, cells=cells_obj
+        )  # STB
         cumulative_free_gas_produced = self.free_gas_produced(
-            0, step, cells=cells_obj
+            self._min_step, step, cells=cells_obj
         )  # SCF (free gas only)
 
         # Get average formation volume factors at current reservoir conditions
@@ -2932,8 +3165,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if phase not in {"oil", "gas", "water"}:
             raise ValueError("Invalid phase specified for decline curve analysis.")
 
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         # Collect production rate data over specified time range
         steps_list = []
@@ -3495,8 +3727,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval.
         :return: Generator yielding (step, `ReservoirVolumetrics`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.reservoir_volumetrics_analysis(t))
@@ -3517,8 +3748,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param rate_type: Type of rates ('production' or 'injection').
         :return: Generator yielding (step, `InstantaneousRates`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         rate_method = (
             self.instantaneous_production_rates
@@ -3540,8 +3770,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval.
         :return: Generator yielding (step, `CumulativeProduction`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.cumulative_production_analysis(t))
@@ -3557,8 +3786,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval.
         :return: Generator yielding (step, `MaterialBalanceAnalysis`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.material_balance_analysis(t))
@@ -3581,8 +3809,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval.
         :return: Generator yielding (step, `SweepEfficiencyAnalysis`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (
@@ -3612,8 +3839,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param phase: Phase to analyze ('oil', 'gas', 'water').
         :return: Generator yielding (step, `ProductivityAnalysis`) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.productivity_analysis(t, phase=phase))
@@ -3635,8 +3861,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval for sampling.
         :return: Generator yielding tuples of (step, voidage_replacement_ratio).
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.voidage_replacement_ratio(t))
@@ -3661,8 +3886,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param interval: Time step interval.
         :return: Generator yielding (step, mobility_ratio) tuples.
         """
-        if to_step < 0:
-            to_step = self._state_count + to_step
+        to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
             yield (

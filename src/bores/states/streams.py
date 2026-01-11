@@ -220,6 +220,7 @@ class StateStream(typing.Generic[NDimension]):
         self._io_thread: typing.Optional[threading.Thread] = None
         self._io_error: typing.Optional[Exception] = None
         self._shutdown_event: typing.Optional[threading.Event] = None
+        self._num_saved_lock = threading.Lock()  # Protects _num_saved in async mode
 
         if self.checkpoint_interval is not None:
             if self._checkpoint_dir is None:
@@ -278,7 +279,8 @@ class StateStream(typing.Generic[NDimension]):
                             exist_ok=True,
                             validate=self.validate,
                         )
-                        self._num_saved += len(batch)
+                        with self._num_saved_lock:
+                            self._num_saved += len(batch)
                         del batch  # Free memory immediately
                         logger.debug(
                             f"I/O worker completed batch "
@@ -633,10 +635,9 @@ class StateStream(typing.Generic[NDimension]):
                 self._io_queue.put(self._batch.copy(), timeout=10.0)
                 logger.debug(f"Batch enqueued (queue size: ~{self._io_queue.qsize()})")
 
-                # Clear batch immediately (state now owned by I/O thread)
-                self._batch.clear()
-                # Reassign to new list to free memory immediately
+                # Clear batch and reassign to new list to free memory immediately
                 self._batch = []
+
                 # If blocking requested, wait for queue to drain
                 if block:
                     self._wait_for_queue()
@@ -665,8 +666,7 @@ class StateStream(typing.Generic[NDimension]):
                 logger.error(f"Failed to flush batch: {exc}")
                 raise
             finally:
-                self._batch.clear()
-                # Force python garbage collection to free memory immediately
+                # Reassign to new list to free memory immediately
                 self._batch = []
 
     def get_pending_batch(self) -> typing.List[ModelState[NDimension]]:
@@ -802,7 +802,7 @@ class StateStream(typing.Generic[NDimension]):
         checkpoint_files = self._checkpoint_dir.glob(f"checkpoint_{step:06d}.pkl*")
         checkpoint_path = next(checkpoint_files, None)
         if checkpoint_path is None:
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+            raise FileNotFoundError(f"Checkpoint not found for step {step}")
 
         checkpoint_store = PickleStore(filepath=checkpoint_path)
         state = next(checkpoint_store.load(validate=False), None)

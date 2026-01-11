@@ -87,8 +87,8 @@ def state_store(
 ) -> typing.Union[None, typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]]:
     """
     Register a state store class with a given name.
-    
-    :param 
+
+    :param
     """
 
     def _decorator(store_cls: typing.Type[StoreT]) -> typing.Type[StoreT]:
@@ -262,6 +262,7 @@ class ZarrStore(StateStore):
 
     Fast, efficient compression with lazy loading.
     Best for large 3D numpy arrays.
+    Best lazy loading support among available formats.
     """
 
     def __init__(
@@ -1331,7 +1332,11 @@ class HDF5Store(StateStore):
         Load states from HDF5 format.
 
         :param lazy: If True, defer loading of state properties until access.
-            Wrap factory functions in Lazy.defer() for deferred loading
+            Uses batch lazy loading: on first field access for a state, all fields
+            are loaded in a single file open/close cycle and cached.
+            Note: For best performance, use `lazy=False` (default) when you need all fields.
+            Lazy loading is most beneficial when loading many states but only accessing
+            a few of them.
         :param validate: If True, validate each state after loading
         :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
                      Only applied when validate=True.
@@ -1341,52 +1346,108 @@ class HDF5Store(StateStore):
             dtype = get_dtype()
 
         metadata = self._load_metadata(lazy=lazy)
+        filepath = str(self.filepath)  # Capture for lazy closures
 
-        with h5py.File(name=str(self.filepath), mode="r") as f:
+        with h5py.File(name=filepath, mode="r") as f:
             for key in sorted(f.keys()):
                 step_group = f[key]  # type: ignore
+                step_key = key  # Capture for lazy closures
 
                 step = typing.cast(int, step_group.attrs["step"])
                 step_size = typing.cast(float, step_group.attrs["step_size"])
                 time = typing.cast(float, step_group.attrs["time"])
 
-                # Load timer state if present
+                # Load timer state if present (always load eagerly as it's small)
                 timer_state: typing.Optional[TimerState] = None
                 if "timer_state" in step_group:  # type: ignore
                     timer_group = typing.cast(h5py.Group, step_group["timer_state"])  # type: ignore
                     timer_state = self._load_timer_state(group=timer_group)
 
                 if lazy:
+                    # Batch lazy loading: load all fields in one file open when any is accessed
+                    # Use a shared cache dict that gets populated on first access
+                    lazy_cache: typing.Dict[str, typing.Any] = {}
+
+                    def load_all_fields(
+                        fp: str,
+                        sk: str,
+                        cache: typing.Dict[str, typing.Any],
+                        meta: StateMetadata,
+                    ) -> None:
+                        """Load all fields for this state in one file open."""
+                        if cache:  # Already loaded
+                            return
+                        with h5py.File(name=fp, mode="r") as lazy_f:
+                            sg = lazy_f[sk]
+                            cache["model"] = self._load_model(
+                                group=typing.cast(h5py.Group, sg["model"]),  # type: ignore[index]
+                                metadata=meta,
+                            )
+                            cache["injection"] = self._load_rates(
+                                group=typing.cast(h5py.Group, sg["injection"])  # type: ignore[index]
+                            )
+                            cache["production"] = self._load_rates(
+                                group=typing.cast(h5py.Group, sg["production"])  # type: ignore[index]
+                            )
+                            cache["relperm"] = self._load_relperm(
+                                group=typing.cast(
+                                    h5py.Group,
+                                    sg["relative_permeabilities"],  # type: ignore[index]
+                                )
+                            )
+                            cache["relative_mobilities"] = (
+                                self._load_relative_mobilities(
+                                    group=typing.cast(
+                                        h5py.Group,
+                                        sg["relative_mobilities"],  # type: ignore[index]
+                                    )
+                                )
+                            )
+                            cache["capillary_pressures"] = (
+                                self._load_capillary_pressures(
+                                    group=typing.cast(
+                                        h5py.Group,
+                                        sg["capillary_pressures"],  # type: ignore[index]
+                                    )
+                                )
+                            )
+
+                    # Create lazy wrappers that share the same cache
                     model = Lazy.defer(
-                        lambda sg=step_group: self._load_model(
-                            group=typing.cast(h5py.Group, sg["model"]),  # type: ignore[index]
-                            metadata=metadata,
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["model"],
+                        )[1]
                     )
                     injection = Lazy.defer(
-                        lambda sg=step_group: self._load_rates(
-                            group=typing.cast(h5py.Group, sg["injection"])  # type: ignore[index]
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["injection"],
+                        )[1]
                     )
                     production = Lazy.defer(
-                        lambda sg=step_group: self._load_rates(
-                            group=typing.cast(h5py.Group, sg["production"])  # type: ignore[index]
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["production"],
+                        )[1]
                     )
                     relperm = Lazy.defer(
-                        lambda sg=step_group: self._load_relperm(
-                            group=typing.cast(h5py.Group, sg["relative_permeabilities"])  # type: ignore[index]
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["relperm"],
+                        )[1]
                     )
                     relative_mobilities = Lazy.defer(
-                        lambda sg=step_group: self._load_relative_mobilities(
-                            group=typing.cast(h5py.Group, sg["relative_mobilities"])  # type: ignore[index]
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["relative_mobilities"],
+                        )[1]
                     )
                     capillary_pressures = Lazy.defer(
-                        lambda sg=step_group: self._load_capillary_pressures(
-                            group=typing.cast(h5py.Group, sg["capillary_pressures"])  # type: ignore[index]
-                        )
+                        lambda fp=filepath, sk=step_key, c=lazy_cache, m=metadata: (
+                            load_all_fields(fp, sk, c, m),
+                            c["capillary_pressures"],
+                        )[1]
                     )
                 else:
                     model = self._load_model(
@@ -1611,7 +1672,7 @@ class HDF5Store(StateStore):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(filepath={self.filepath}, "
-            f"compression={self.compression}, compression_opts={self.compression_opts}, "
+            f"compression={self.compression}, compression_opts={self.compression_opts})"
         )
 
 
@@ -1965,7 +2026,8 @@ class NPZStore(StateStore):
         Load states from NPZ format.
 
         :param lazy: If True, defer loading of state properties until access.
-            Wrap factory functions in Lazy.defer() for deferred loading
+            Wrap factory functions in Lazy.defer() for deferred loading.
+            Note: The NPZ file stays open as long as any lazy-loaded state is in memory.
         :param validate: If True, validate each state after loading
         :param dtype: Optional dtype to coerce loaded arrays to. If None, uses global dtype.
                      Only applied when validate=True.

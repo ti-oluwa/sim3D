@@ -26,6 +26,8 @@ __all__ = [
     "TimeDependentBoundary",
     "LinearGradientBoundary",
     "FluxBoundary",
+    "RobinBoundary",
+    "PeriodicBoundary",
     "GridBoundaryCondition",
     "BoundaryConditions",
 ]
@@ -60,6 +62,7 @@ def get_neighbor_indices(
     :param boundary_indices: Slice indices defining the boundary region
     :param direction: The boundary direction (left, right, etc.)
     :return: Tuple of slice indices for the neighboring interior cells
+    :raises ValidationError: If Z-direction is used with 2D grid indices
 
     Example usage:
     ```python
@@ -77,6 +80,14 @@ def get_neighbor_indices(
     ```
     """
     neighbor_indices = list(boundary_indices)
+    ndim = len(boundary_indices)
+
+    # Validate Z-direction usage with grid dimensionality
+    if direction in [BoundaryDirection.Z_MINUS, BoundaryDirection.Z_PLUS] and ndim < 3:
+        raise ValidationError(
+            f"Cannot use {direction.name} boundary direction with {ndim}D grid. "
+            "Z-direction boundaries require 3D grids."
+        )
 
     if direction == BoundaryDirection.X_MINUS:
         # Left boundary: neighbor is at x=1
@@ -194,12 +205,10 @@ class BoundaryMetadata:
                 nx, ny = self.grid_shape
 
                 # Create coordinate arrays (including ghost cells)
-                x_coords = np.arange(
-                    -dx / 2, (nx + 0.5) * dx, dx
-                )  # nx+2 points for ghost cells
-                y_coords = np.arange(
-                    -dy / 2, (ny + 0.5) * dy, dy
-                )  # ny+2 points for ghost cells
+                # Using linspace for predictable array lengths (avoids floating-point issues with arange)
+                # nx+2 points: from -dx/2 to (nx+0.5)*dx with ghost cells
+                x_coords = np.linspace(-dx / 2, (nx + 0.5) * dx, nx + 2)
+                y_coords = np.linspace(-dy / 2, (ny + 0.5) * dy, ny + 2)
 
                 # Create meshgrid and stack
                 xx, yy = np.meshgrid(x_coords, y_coords, indexing="ij")
@@ -209,13 +218,9 @@ class BoundaryMetadata:
                 # 3D grid - need thickness information for z-coordinates
                 nx, ny, nz = self.grid_shape
 
-                # Create x and y coordinate arrays
-                x_coords = np.arange(
-                    -dx / 2, (nx + 0.5) * dx, dx
-                )  # nx+2 points for ghost cells
-                y_coords = np.arange(
-                    -dy / 2, (ny + 0.5) * dy, dy
-                )  # ny+2 points for ghost cells
+                # Create x and y coordinate arrays using linspace for consistent lengths
+                x_coords = np.linspace(-dx / 2, (nx + 0.5) * dx, nx + 2)
+                y_coords = np.linspace(-dy / 2, (ny + 0.5) * dy, ny + 2)
 
                 # For z-coordinates, use thickness_grid if available, otherwise assume uniform thickness
                 if self.thickness_grid is not None:
@@ -232,11 +237,16 @@ class BoundaryMetadata:
 
                         if layer_thickness is not None:
                             # Generate z-coordinates from cumulative thickness
+                            # Convention: k=0 is TOP (shallowest), k increases downward (deeper)
+                            # z-coordinate represents depth, increasing downward
                             z_coords = np.zeros(nz + 2)  # Include ghost cells
-                            z_coords[0] = -layer_thickness[0] / 2  # Bottom ghost cell
 
-                            # Interior cells: cumulative centers
-                            cumulative_depth = 0
+                            # Top ghost cell (above k=0, negative depth)
+                            z_coords[0] = -layer_thickness[0] / 2
+
+                            # Interior cells: cumulative depth centers
+                            # k=0 (top/shallowest) is at z_coords[1]
+                            cumulative_depth = 0.0
                             for k in range(nz):
                                 if k == 0:
                                     z_coords[k + 1] = layer_thickness[k] / 2
@@ -246,21 +256,21 @@ class BoundaryMetadata:
                                         cumulative_depth + layer_thickness[k] / 2
                                     )
 
-                            # Top ghost cell
+                            # Bottom ghost cell (below k=-1, deepest)
                             cumulative_depth += layer_thickness[-1]
                             z_coords[-1] = cumulative_depth + layer_thickness[-1] / 2
                         else:
                             # Fallback: assume uniform thickness equal to dx
                             dz = dx  # Default thickness
-                            z_coords = np.arange(-dz / 2, (nz + 0.5) * dz, dz)
+                            z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
                     else:
                         # Fallback: assume uniform thickness equal to dx
                         dz = dx  # Default thickness
-                        z_coords = np.arange(-dz / 2, (nz + 0.5) * dz, dz)
+                        z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
                 else:
                     # Fallback: assume uniform thickness equal to dx
-                    dz = dx  # Default thicknessF
-                    z_coords = np.arange(-dz / 2, (nz + 0.5) * dz, dz)
+                    dz = dx  # Default thickness
+                    z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
 
                 # Create meshgrid and stack
                 xx, yy, zz = np.meshgrid(x_coords, y_coords, z_coords, indexing="ij")
@@ -397,8 +407,9 @@ class ConstantBoundary(typing.Generic[NDimension]):
         direction: BoundaryDirection,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
-        """Apply constant boundary condition."""
-        grid[boundary_indices] = self.constant
+        """Apply constant boundary condition, preserving grid dtype."""
+        # Preserve the grid's dtype when setting constant value
+        grid[boundary_indices] = grid.dtype.type(self.constant)
 
 
 @attrs.frozen
@@ -468,13 +479,13 @@ class VariableBoundary(typing.Generic[NDimension]):
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply variable boundary condition using the provided function."""
-        grid[boundary_indices] = self.func(grid, boundary_indices, direction, metadata)
+        result = self.func(grid, boundary_indices, direction, metadata)
+        # Preserve the grid's dtype
+        grid[boundary_indices] = np.asarray(result, dtype=grid.dtype)
 
 
 DirichletBoundary = ConstantBoundary
 """Alias for `ConstantBoundary` representing Dirichlet boundary conditions."""
-NeumannBoundary = VariableBoundary
-"""Alias for `VariableBoundary` representing Neumann boundary conditions."""
 
 
 @attrs.frozen
@@ -547,25 +558,23 @@ class SpatialBoundary(typing.Generic[NDimension]):
         # Extract coordinates at boundary
         coords = metadata.coordinates[boundary_indices]
 
-        # Apply spatial function based on dimensionality
+        # Apply spatial function based on dimensionality and preserve dtype
         if coords.ndim == 2:  # 2D case
             if coords.shape[-1] >= 2:
-                grid[boundary_indices] = self.spatial_func(
-                    coords[..., 0], coords[..., 1]
-                )
+                result = self.spatial_func(coords[..., 0], coords[..., 1])
             else:
-                grid[boundary_indices] = self.spatial_func(coords[..., 0])
+                result = self.spatial_func(coords[..., 0])
+            grid[boundary_indices] = np.asarray(result, dtype=grid.dtype)
         elif coords.ndim == 3:  # 3D case
             if coords.shape[-1] >= 3:
-                grid[boundary_indices] = self.spatial_func(
+                result = self.spatial_func(
                     coords[..., 0], coords[..., 1], coords[..., 2]
                 )
             elif coords.shape[-1] >= 2:
-                grid[boundary_indices] = self.spatial_func(
-                    coords[..., 0], coords[..., 1]
-                )
+                result = self.spatial_func(coords[..., 0], coords[..., 1])
             else:
-                grid[boundary_indices] = self.spatial_func(coords[..., 0])
+                result = self.spatial_func(coords[..., 0])
+            grid[boundary_indices] = np.asarray(result, dtype=grid.dtype)
         else:
             # Fallback: flatten coordinates and apply function
             flat_coords = coords.reshape(-1, coords.shape[-1])
@@ -573,7 +582,9 @@ class SpatialBoundary(typing.Generic[NDimension]):
                 result = self.spatial_func(flat_coords[:, 0], flat_coords[:, 1])
             else:
                 result = self.spatial_func(flat_coords[:, 0])
-            grid[boundary_indices] = result.reshape(coords.shape[:-1])
+            grid[boundary_indices] = np.asarray(result, dtype=grid.dtype).reshape(
+                coords.shape[:-1]
+            )
 
 
 @attrs.frozen
@@ -644,7 +655,8 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
             raise ValidationError(f"{self.__class__.__name__} requires time metadata")
 
         value = self.time_func(metadata.time)
-        grid[boundary_indices] = value
+        # Preserve the grid's dtype
+        grid[boundary_indices] = grid.dtype.type(value)
 
 
 @attrs.frozen
@@ -750,14 +762,15 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
         coord_max = np.max(coord_values)
 
         if coord_max == coord_min:
-            # No gradient possible, use start value
-            grid[boundary_indices] = self.start_value
+            # No gradient possible, use start value (preserve dtype)
+            grid[boundary_indices] = grid.dtype.type(self.start_value)
         else:
-            # Linear interpolation
+            # Linear interpolation, preserve dtype
             normalized_coords = (coord_values - coord_min) / (coord_max - coord_min)
-            grid[boundary_indices] = self.start_value + normalized_coords * (
+            result = self.start_value + normalized_coords * (
                 self.end_value - self.start_value
             )
+            grid[boundary_indices] = result.astype(grid.dtype, copy=False)
 
 
 @attrs.frozen
@@ -832,7 +845,17 @@ class FluxBoundary(typing.Generic[NDimension]):
         direction: BoundaryDirection,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
-        """Apply flux boundary condition."""
+        """Apply flux boundary condition.
+
+        The sign convention follows the outward normal:
+        - For MINUS faces (left, front, bottom): outward normal points negative
+        - For PLUS faces (right, back, top): outward normal points positive
+        - Positive flux = flow INTO the domain (injection)
+        - Negative flux = flow OUT OF the domain (production)
+
+        Note: In this codebase, k=0 is the TOP (shallowest) layer, and k increases
+        downward. So Z_PLUS (top) corresponds to k=0, and Z_MINUS (bottom) to k=-1.
+        """
         if metadata is None or metadata.cell_dimension is None:
             raise ValidationError(
                 f"{self.__class__.__name__} requires cell dimension metadata"
@@ -850,13 +873,277 @@ class FluxBoundary(typing.Generic[NDimension]):
         elif direction in [BoundaryDirection.Y_MINUS, BoundaryDirection.Y_PLUS]:
             spacing = dy / 2.0
         elif direction in [BoundaryDirection.Z_MINUS, BoundaryDirection.Z_PLUS]:
-            # For 3D, assume uniform thickness or use thickness_grid
-            spacing = dx / 2.0  # Default to dx for z-direction
+            # For 3D, use thickness_grid if available for z-direction spacing
+            # Note: k=0 is TOP, k=-1 is BOTTOM in this codebase
+            if (
+                metadata.thickness_grid is not None
+                and metadata.thickness_grid.ndim == 3
+            ):
+                # Use average thickness at boundary layer for spacing
+                # thickness_grid has no ghost cells, so we need to map boundary to interior
+                if direction == BoundaryDirection.Z_MINUS:
+                    # Bottom boundary (deepest) - use last layer thickness (k=-1)
+                    avg_thickness = np.mean(metadata.thickness_grid[:, :, -1])
+                else:  # Z_PLUS
+                    # Top boundary (shallowest) - use first layer thickness (k=0)
+                    avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
+                spacing = avg_thickness / 2.0
+            else:
+                # Fallback to dx if no thickness info
+                spacing = dx / 2.0
         else:
             spacing = dx / 2.0
 
-        # Apply flux boundary: dφ/dn = flux, so φ_boundary = φ_neighbor + flux * spacing
-        grid[boundary_indices] = neighbor_values + self.flux_value * spacing
+        # Determine sign based on boundary direction
+        # For MINUS faces, outward normal is negative, so we need to flip the sign
+        # For PLUS faces, outward normal is positive
+        # φ_boundary = φ_neighbor + flux * spacing * sign
+        # where sign accounts for the direction of the outward normal
+        if direction in [
+            BoundaryDirection.X_MINUS,
+            BoundaryDirection.Y_MINUS,
+            BoundaryDirection.Z_MINUS,
+        ]:
+            # Outward normal points in negative direction
+            # Positive flux (into domain) means gradient points inward (negative outward)
+            sign = -1.0
+        else:
+            # Outward normal points in positive direction
+            sign = 1.0
+
+        # Apply flux boundary: dφ/dn = flux (outward normal convention)
+        # φ_boundary = φ_neighbor + sign * flux * spacing
+        # Preserve the grid's dtype
+        result = neighbor_values + sign * self.flux_value * spacing
+        grid[boundary_indices] = result.astype(grid.dtype, copy=False)
+
+
+@attrs.frozen
+class RobinBoundary(typing.Generic[NDimension]):
+    """
+    Implements a Robin (mixed/convective) boundary condition.
+
+    Combines Dirichlet and Neumann conditions: α*φ + β*∂φ/∂n = γ
+
+    Common applications:
+    - Heat transfer with convection: h*(T - T_inf) = -k*∂T/∂n
+    - Mass transfer with surface reaction
+    - Pressure boundaries with partial flow resistance
+
+    Example usage:
+    ```python
+    import numpy as np
+    from bores.boundary_conditions import RobinBoundary, BoundaryMetadata, GridBoundaryCondition
+
+    # Example 1: Convective heat transfer boundary
+    # h*(T - T_ambient) = -k*∂T/∂n  =>  α=h, β=k, γ=h*T_ambient
+    # Rearranged: T_boundary = (γ + β*T_neighbor/spacing) / (α + β/spacing)
+    convective_bc = RobinBoundary(
+        alpha=10.0,      # Heat transfer coefficient h (BTU/hr/ft²/°F)
+        beta=0.5,        # Thermal conductivity k (BTU/hr/ft/°F)
+        gamma=700.0      # h * T_ambient (10 * 70°F)
+    )
+
+    # Example 2: Semi-permeable pressure boundary
+    # Partial resistance to flow at boundary
+    semi_permeable = RobinBoundary(
+        alpha=1.0,       # Dirichlet weight
+        beta=0.1,        # Neumann weight (small = more Dirichlet-like)
+        gamma=2000.0     # Reference pressure
+    )
+
+    # Example 3: Pure Dirichlet (β=0): α*φ = γ => φ = γ/α
+    dirichlet_like = RobinBoundary(alpha=1.0, beta=0.0, gamma=1500.0)
+
+    # Example 4: Pure Neumann (α=0): β*∂φ/∂n = γ
+    neumann_like = RobinBoundary(alpha=0.0, beta=1.0, gamma=100.0)
+
+    metadata = BoundaryMetadata(
+        cell_dimension=(20.0, 20.0),
+        grid_shape=(50, 25)
+    )
+
+    temperature_bc = GridBoundaryCondition(
+        left=convective_bc,
+        right=semi_permeable,
+    )
+
+    temperature_grid = np.full((52, 27), 100.0)
+    temperature_bc.apply(temperature_grid, metadata=metadata)
+    ```
+    """
+
+    alpha: float
+    """Coefficient for the value term (Dirichlet weight)."""
+    beta: float
+    """Coefficient for the gradient term (Neumann weight)."""
+    gamma: float
+    """Right-hand side constant."""
+
+    def __attrs_post_init__(self) -> None:
+        if self.alpha == 0.0 and self.beta == 0.0:
+            raise ValidationError(
+                "At least one of `alpha` or `beta` must be non-zero for Robin boundary."
+            )
+
+    def apply(
+        self,
+        *,
+        grid: NDimensionalGrid[NDimension],
+        boundary_indices: typing.Tuple[slice, ...],
+        direction: BoundaryDirection,
+        metadata: typing.Optional[BoundaryMetadata] = None,
+    ) -> None:
+        """Apply Robin boundary condition: α*φ + β*∂φ/∂n = γ
+
+        Note: In this codebase, k=0 is the TOP (shallowest) layer, and k increases
+        downward. So Z_PLUS (top) corresponds to k=0, and Z_MINUS (bottom) to k=-1.
+        """
+        if metadata is None or metadata.cell_dimension is None:
+            raise ValidationError(
+                f"{self.__class__.__name__} requires cell dimension metadata"
+            )
+
+        # Get neighboring cell values
+        neighbor_indices = get_neighbor_indices(boundary_indices, direction)
+        neighbor_values = grid[neighbor_indices]
+
+        # Calculate spacing
+        dx, dy = metadata.cell_dimension
+        if direction in [BoundaryDirection.X_MINUS, BoundaryDirection.X_PLUS]:
+            spacing = dx / 2.0
+        elif direction in [BoundaryDirection.Y_MINUS, BoundaryDirection.Y_PLUS]:
+            spacing = dy / 2.0
+        else:
+            # Z-direction: use thickness if available
+            # Note: k=0 is TOP, k=-1 is BOTTOM in this codebase
+            if (
+                metadata.thickness_grid is not None
+                and metadata.thickness_grid.ndim == 3
+            ):
+                if direction == BoundaryDirection.Z_MINUS:
+                    # Bottom boundary (deepest) - use last layer thickness (k=-1)
+                    avg_thickness = np.mean(metadata.thickness_grid[:, :, -1])
+                else:  # Z_PLUS
+                    # Top boundary (shallowest) - use first layer thickness (k=0)
+                    avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
+                spacing = avg_thickness / 2.0
+            else:
+                spacing = dx / 2.0
+
+        # Direction sign for gradient (outward normal convention)
+        if direction in [
+            BoundaryDirection.X_MINUS,
+            BoundaryDirection.Y_MINUS,
+            BoundaryDirection.Z_MINUS,
+        ]:
+            sign = -1.0
+        else:
+            sign = 1.0
+
+        # Robin BC: α*φ_boundary + β*∂φ/∂n = γ
+        # Discretized gradient: ∂φ/∂n ≈ sign * (φ_boundary - φ_neighbor) / spacing
+        # Substituting: α*φ_boundary + β*sign*(φ_boundary - φ_neighbor)/spacing = γ
+        # Solving for φ_boundary:
+        # φ_boundary * (α + β*sign/spacing) = γ + β*sign*φ_neighbor/spacing
+        # φ_boundary = (γ + β*sign*φ_neighbor/spacing) / (α + β*sign/spacing)
+
+        effective_beta = self.beta * sign / spacing
+        denominator = self.alpha + effective_beta
+
+        if np.abs(denominator) < 1e-12:
+            # Degenerate case - fall back to neighbor value
+            grid[boundary_indices] = neighbor_values
+        else:
+            # Preserve the grid's dtype
+            result = (self.gamma + effective_beta * neighbor_values) / denominator
+            grid[boundary_indices] = result.astype(grid.dtype, copy=False)
+
+
+@attrs.frozen
+class PeriodicBoundary(typing.Generic[NDimension]):
+    """
+    Implements a periodic boundary condition.
+
+    Links opposite boundaries so that flow/values wrap around,
+    useful for modeling repeating geological patterns or infinite domains.
+
+    Note: For proper periodic BCs, both opposite faces must use PeriodicBoundary.
+
+    Example usage:
+    ```python
+    import numpy as np
+    from bores.boundary_conditions import PeriodicBoundary, GridBoundaryCondition
+
+    # Example 1: Periodic in x-direction (left-right wrap)
+    periodic_x = GridBoundaryCondition(
+        left=PeriodicBoundary(),   # Copies from right interior
+        right=PeriodicBoundary(),  # Copies from left interior
+    )
+
+    # Example 2: Fully periodic 2D domain
+    fully_periodic = GridBoundaryCondition(
+        left=PeriodicBoundary(),
+        right=PeriodicBoundary(),
+        front=PeriodicBoundary(),
+        back=PeriodicBoundary(),
+    )
+
+    pressure_grid = np.random.uniform(1000, 2000, (52, 27))
+    fully_periodic.apply(pressure_grid)
+
+    # Result:
+    # - Left ghost cells = right interior values
+    # - Right ghost cells = left interior values
+    # - Front ghost cells = back interior values
+    # - Back ghost cells = front interior values
+    ```
+    """
+
+    def apply(
+        self,
+        *,
+        grid: NDimensionalGrid[NDimension],
+        boundary_indices: typing.Tuple[slice, ...],
+        direction: BoundaryDirection,
+        metadata: typing.Optional[BoundaryMetadata] = None,
+    ) -> None:
+        """Apply periodic boundary by copying from opposite interior boundary."""
+        # Get indices of the opposite interior cells
+        opposite_indices = list(boundary_indices)
+
+        if direction == BoundaryDirection.X_MINUS:
+            # Left boundary copies from right interior (second-to-last)
+            opposite_indices[0] = slice(-2, -1)
+        elif direction == BoundaryDirection.X_PLUS:
+            # Right boundary copies from left interior (second from start)
+            opposite_indices[0] = slice(1, 2)
+        elif direction == BoundaryDirection.Y_MINUS:
+            # Front boundary copies from back interior
+            opposite_indices[1] = slice(-2, -1)
+        elif direction == BoundaryDirection.Y_PLUS:
+            # Back boundary copies from front interior
+            opposite_indices[1] = slice(1, 2)
+        elif direction == BoundaryDirection.Z_MINUS:
+            # Bottom boundary copies from top interior
+            if len(boundary_indices) < 3:
+                raise ValidationError(
+                    f"Cannot apply {direction.name} to {len(boundary_indices)}D grid"
+                )
+            opposite_indices[2] = slice(-2, -1)
+        elif direction == BoundaryDirection.Z_PLUS:
+            # Top boundary copies from bottom interior
+            if len(boundary_indices) < 3:
+                raise ValidationError(
+                    f"Cannot apply {direction.name} to {len(boundary_indices)}D grid"
+                )
+            opposite_indices[2] = slice(1, 2)
+
+        grid[boundary_indices] = grid[tuple(opposite_indices)]
+
+
+NeumannBoundary = FluxBoundary
+"""Alias for `FluxBoundary` representing Neumann boundary conditions (flux-based)."""
 
 
 @attrs.frozen
@@ -901,7 +1188,7 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
     Top        → z+
 
     Defaults to no-flow boundary for all sides if not specified.
-    
+
     """
 
     left: BoundaryCondition = attrs.field(factory=NoFlowBoundary)
@@ -927,7 +1214,19 @@ class GridBoundaryCondition(typing.Generic[NDimension]):
 
         - For 2D grids (shape: [nx+2, ny+2]), x and y boundaries are applied.
         - For 3D grids (shape: [nx+2, ny+2, nz+2]), x, y, and z boundaries are applied.
+
+        :raises ValidationError: If grid dimensions are inconsistent with metadata.grid_shape
         """
+        # Validate ghost cells if metadata provides grid_shape
+        if metadata is not None and metadata.grid_shape is not None:
+            expected_shape = tuple(s + 2 for s in metadata.grid_shape)
+            if padded_grid.shape != expected_shape:
+                raise ValidationError(
+                    f"Grid shape {padded_grid.shape} does not match expected padded shape "
+                    f"{expected_shape} (grid_shape {metadata.grid_shape} + 2 ghost cells per dimension). "
+                    "Ensure the grid has ghost cells before applying boundary conditions."
+                )
+
         if padded_grid.ndim == 2:
             self.left.apply(
                 grid=padded_grid,

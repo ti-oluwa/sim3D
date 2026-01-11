@@ -123,8 +123,8 @@ def _():
 @app.cell
 def _(Path, bores):
 
-    depletion_store = bores.ZarrStore(
-        store=Path.cwd() / "scenarios/states/primary_depletion.zarr",
+    depletion_store = bores.HDF5Store(
+        filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
         metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
     )
     return (depletion_store,)
@@ -139,7 +139,6 @@ def _(bores, depletion_store, main):
         # checkpoint_interval=20,
         # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
     )
-
     last_state = None
     with stream:
         for state in stream:

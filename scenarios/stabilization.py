@@ -228,7 +228,7 @@ def _():
         boundary_conditions = bores.BoundaryConditions(
             conditions={
                 "pressure": bores.GridBoundaryCondition(
-                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
+                    bottom=bores.ConstantBoundary(4600),  # Aquifer pressure
                 ),
             }
         )
@@ -250,8 +250,7 @@ def _():
             reservoir_gas="methane",
         )
         pvt_tables = bores.PVTTables(
-            table_data=pvt_table_data,
-            interpolation_method="linear",
+            table_data=pvt_table_data, interpolation_method="linear"
         )
         del pvt_table_data
 
@@ -319,14 +318,14 @@ def _(Path, bores):
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
         metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata",
     )
-    return (stabilization_store,)
+    return
 
 
 @app.cell
-def _(bores, main, stabilization_store):
+def _(bores, main):
     stream = bores.StateStream(
         main(),
-        store=stabilization_store,
+        # store=stabilization_store,
         # checkpoint_interval=10,
         # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
         auto_replay=True,
