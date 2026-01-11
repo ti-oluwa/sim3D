@@ -793,94 +793,387 @@ model = bores.apply_fractures(model, fault1, fault2, fracture_network)
 
 ## Capillary Pressure & Relative Permeability
 
-### Brooks-Corey Relative Permeability Model
+BORES provides both **analytical models** and **tabular data** for relative permeability and capillary pressure. For three-phase flow, two-phase data must be combined into three-phase tables using appropriate mixing rules.
+
+### Key Concepts
+
+**Two-Phase vs Three-Phase**: Laboratory data typically measures two-phase systems (oil-water or gas-oil). For three-phase simulation, these must be combined using mixing rules that account for phase interactions.
+
+**Wetting Phase**: The phase that preferentially adheres to rock surfaces:
+
+- **Water-wet**: Water preferentially wets rock (most sandstones)
+- **Oil-wet**: Oil preferentially wets rock (some carbonates)
+- **Mixed-wet**: Both water-wet and oil-wet regions exist
+
+**Saturation Endpoints**:
+
+- `Swc` (irreducible water saturation): Minimum water saturation
+- `Sorw` (residual oil to water): Oil remaining after water flood
+- `Sorg` (residual oil to gas): Oil remaining after gas flood  
+- `Sgr` (residual gas): Minimum gas saturation
+
+---
+
+### Relative Permeability Models
+
+#### Brooks-Corey Three-Phase Model
+
+The most common model using Corey-type power-law functions:
 
 ```python
 relperm_model = bores.BrooksCoreyThreePhaseRelPermModel(
-    # Saturation endpoints (can provide defaults or pass per-call)
-    irreducible_water_saturation=0.15,  # Swc
-    residual_oil_saturation_water=0.25,  # Sor to water flooding
-    residual_oil_saturation_gas=0.15,    # Sor to gas flooding
+    # Saturation endpoints
+    irreducible_water_saturation=0.15,   # Swc
+    residual_oil_saturation_water=0.25,  # Sor to water flood
+    residual_oil_saturation_gas=0.15,    # Sor to gas flood
     residual_gas_saturation=0.045,       # Sgr
     
-    # Corey exponents
-    water_exponent=2.0,
+    # Corey exponents (typically 1.5-4.0)
+    water_exponent=2.0,  # Higher = more convex curve
     oil_exponent=2.0,
     gas_exponent=2.0,
     
-    # Wettability and mixing rule
-    wettability=bores.WettabilityType.WATER_WET,
-    mixing_rule=bores.eclipse_rule,  # 3-phase kro mixing
+    # Wettability
+    wettability=bores.WettabilityType.WATER_WET,  # WATER_WET, OIL_WET
+    
+    # Three-phase oil mixing rule
+    mixing_rule=bores.stone_II_rule,
+)
+
+# Use in reservoir model
+model = bores.reservoir_model(
+    # ... other params ...
+    relative_permeability_table=relperm_model,
 )
 ```
 
-### Relative Permeability Mixing Rules
+---
 
-For three-phase oil relative permeability:
+### Three-Phase Oil Relative Permeability Mixing Rules
+
+The challenge in three-phase flow is computing oil relative permeability when both water and gas are present. BORES provides multiple mixing rules:
 
 ```python
-bores.stone_I_rule       # Stone I (1970) - moderate, water-wet
-bores.stone_II_rule      # Stone II (1973) - industry standard (default)
-bores.eclipse_rule       # Eclipse-style - commercial standard
-bores.min_rule           # Conservative (min of kro_w, kro_g)
-bores.geometric_mean_rule  # Conservative geometric mean
-bores.arithmetic_mean_rule # Optimistic arithmetic mean
-bores.harmonic_mean_rule   # Most conservative
-bores.baker_linear_rule    # Baker's linear interpolation
-bores.saturation_weighted_interpolation_rule  # Saturation-weighted
+# Conservative rules (lower kro estimates)
+bores.min_rule              # kro = min(kro_w, kro_g) - most conservative
+bores.harmonic_mean_rule    # 2/(1/kro_w + 1/kro_g) - series flow
+bores.geometric_mean_rule   # sqrt(kro_w × kro_g)
+bores.hustad_hansen_rule    # (kro_w × kro_g) / max(kro_w, kro_g)
+bores.blunt_rule            # For strongly water-wet systems
+
+# Industry standard rules
+bores.stone_I_rule          # Stone I (1970) - water-wet systems
+bores.stone_II_rule         # Stone II (1973) - most widely used (default)
+bores.eclipse_rule          # ECLIPSE simulator default
+
+# Other rules
+bores.arithmetic_mean_rule  # (kro_w + kro_g) / 2 - optimistic
+bores.baker_linear_rule     # Baker's linear interpolation (1988)
+bores.saturation_weighted_interpolation_rule  # Weighted by Sw, Sg
+bores.linear_interpolation_rule  # Simple linear interpolation
+bores.max_rule              # max(kro_w, kro_g) - most optimistic
+
+# Parameterized rule
+bores.aziz_settari_rule(a=0.5, b=0.5)  # kro = kro_w^a × kro_g^b
 ```
 
-### Brooks-Corey Capillary Pressure Model
+**Comparison Table**:
+
+| Rule | Conservativeness | Best For |
+|------|------------------|----------|
+| `min_rule` | Very conservative | Lower bound, safety analysis |
+| `harmonic_mean_rule` | Very conservative | Tight rocks, series flow |
+| `geometric_mean_rule` | Conservative | General purpose |
+| `stone_I_rule` | Moderate | Water-wet sandstones |
+| `stone_II_rule` | Moderate | Industry standard |
+| `eclipse_rule` | Moderate | Matching commercial simulators |
+| `arithmetic_mean_rule` | Optimistic | Upper bound estimate |
+| `max_rule` | Very optimistic | Sensitivity analysis |
+
+---
+
+### Relative Permeability Tables
+
+For lab-measured or history-matched data, use tabular input. **Two-phase tables must be combined into a three-phase table.**
+
+#### Two-Phase Tables
+
+```python
+# Oil-Water system (water = wetting phase in water-wet rock)
+oil_water_relperm = bores.TwoPhaseRelPermTable(
+    wetting_phase=bores.FluidPhase.WATER,
+    non_wetting_phase=bores.FluidPhase.OIL,
+    wetting_phase_saturation=np.array([0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75]),
+    wetting_phase_relative_permeability=np.array([0.0, 0.02, 0.06, 0.12, 0.22, 0.35, 0.45]),  # krw
+    non_wetting_phase_relative_permeability=np.array([1.0, 0.7, 0.45, 0.25, 0.10, 0.02, 0.0]),  # kro
+)
+
+# Gas-Oil system (oil = wetting phase)
+gas_oil_relperm = bores.TwoPhaseRelPermTable(
+    wetting_phase=bores.FluidPhase.OIL,
+    non_wetting_phase=bores.FluidPhase.GAS,
+    wetting_phase_saturation=np.array([0.15, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]),  # Oil saturation
+    wetting_phase_relative_permeability=np.array([0.0, 0.05, 0.15, 0.35, 0.55, 0.80, 1.0]),  # kro
+    non_wetting_phase_relative_permeability=np.array([0.9, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),  # krg
+)
+```
+
+#### Constructing Three-Phase Table from Two-Phase Data
+
+**Two-phase tables cannot be used directly** — they must be combined with a mixing rule:
+
+```python
+# Construct three-phase table from two-phase data
+three_phase_relperm = bores.ThreePhaseRelPermTable(
+    oil_water_table=oil_water_relperm,  # Water-oil relative permeabilities
+    gas_oil_table=gas_oil_relperm,      # Gas-oil relative permeabilities
+    mixing_rule=bores.stone_II_rule,    # How to compute kro in 3-phase
+)
+
+# Use in reservoir model
+model = bores.reservoir_model(
+    # ... other params ...
+    relative_permeability_table=three_phase_relperm,
+)
+```
+
+#### Querying Relative Permeabilities
+
+```python
+# Query at specific saturations
+result = three_phase_relperm.get_relative_permeabilities(
+    water_saturation=0.3,
+    oil_saturation=0.5,
+    gas_saturation=0.2,
+)
+
+print(result["water"])  # krw
+print(result["oil"])    # kro (computed via mixing rule)
+print(result["gas"])    # krg
+```
+
+---
+
+### Capillary Pressure Models
+
+#### Brooks-Corey Capillary Pressure Model
+
+The standard model for petroleum applications:
 
 ```python
 capillary_model = bores.BrooksCoreyCapillaryPressureModel(
-    # Saturation endpoints (optional defaults)
+    # Saturation endpoints
     irreducible_water_saturation=0.15,
     residual_oil_saturation_water=0.25,
     residual_oil_saturation_gas=0.15,
     residual_gas_saturation=0.045,
     
-    # Oil-water system (water-wet)
-    oil_water_entry_pressure_water_wet=2.0,  # Entry pressure (psi)
-    oil_water_pore_size_distribution_index_water_wet=2.0,  # λ
+    # Oil-water system parameters (water-wet)
+    oil_water_entry_pressure_water_wet=5.0,  # Entry/threshold pressure (psi)
+    oil_water_pore_size_distribution_index_water_wet=2.0,  # λ (higher = narrower pore size dist)
     
-    # Oil-water system (oil-wet, for mixed-wet)
-    oil_water_entry_pressure_oil_wet=5.0,
-    oil_water_pore_size_distribution_index_oil_wet=2.0,
+    # Oil-water system parameters (oil-wet, used for mixed-wet)
+    oil_water_entry_pressure_oil_wet=8.0,
+    oil_water_pore_size_distribution_index_oil_wet=1.5,
     
-    # Gas-oil system
-    gas_oil_entry_pressure=2.8,  # psi
-    gas_oil_pore_size_distribution_index=2.0,
+    # Gas-oil system parameters
+    gas_oil_entry_pressure=2.0,
+    gas_oil_pore_size_distribution_index=2.5,
     
     # Wettability
-    wettability=bores.WettabilityType.WATER_WET,  # or OIL_WET, MIXED_WET
-    mixed_wet_water_fraction=0.5,  # For MIXED_WET only
+    wettability=bores.WettabilityType.WATER_WET,  # WATER_WET, OIL_WET, MIXED_WET
+    mixed_wet_water_fraction=0.6,  # Fraction water-wet (for MIXED_WET only)
+)
+```
+
+**Wettability effects:**
+
+- **WATER_WET**: Pcow > 0 (oil pressure > water pressure)
+- **OIL_WET**: Pcow < 0 (water pressure > oil pressure)
+- **MIXED_WET**: Pcow varies with saturation (weighted combination)
+
+#### Van Genuchten Capillary Pressure Model
+
+Alternative model with smoother transitions near endpoints:
+
+```python
+capillary_model = bores.VanGenuchtenCapillaryPressureModel(
+    # Saturation endpoints
+    irreducible_water_saturation=0.15,
+    residual_oil_saturation_water=0.25,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.045,
+    
+    # Oil-water parameters (α in 1/psi, n > 1)
+    oil_water_alpha_water_wet=0.1,   # Higher α = lower entry pressure
+    oil_water_n_water_wet=2.5,       # Higher n = sharper transition
+    oil_water_alpha_oil_wet=0.08,
+    oil_water_n_oil_wet=2.0,
+    
+    # Gas-oil parameters
+    gas_oil_alpha=0.15,
+    gas_oil_n=2.2,
+    
+    # Wettability
+    wettability=bores.WettabilityType.WATER_WET,
+    mixed_wet_water_fraction=0.5,
+)
+```
+
+#### Leverett J-Function Model
+
+For scaling capillary pressure across rock types using the dimensionless J-function:
+
+```python
+capillary_model = bores.LeverettJCapillaryPressureModel(
+    # Saturation endpoints
+    irreducible_water_saturation=0.15,
+    residual_oil_saturation_water=0.25,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.045,
+    
+    # Rock properties
+    permeability=100.0,  # mD
+    porosity=0.2,
+    
+    # Interfacial tensions (dynes/cm)
+    oil_water_interfacial_tension=30.0,
+    gas_oil_interfacial_tension=20.0,
+    
+    # Contact angles (degrees)
+    contact_angle_oil_water=0.0,   # 0° = water-wet, 180° = oil-wet
+    contact_angle_gas_oil=0.0,
+    
+    wettability=bores.WettabilityType.WATER_WET,
+)
+```
+
+---
+
+### Capillary Pressure Tables
+
+Similar to relative permeability, two-phase tables must be combined.
+
+#### Two-Phase Capillary Pressure Tables
+
+```python
+# Oil-water capillary pressure (Pcow = Po - Pw)
+oil_water_pc = bores.TwoPhaseCapillaryPressureTable(
+    wetting_phase=bores.FluidPhase.WATER,
+    non_wetting_phase=bores.FluidPhase.OIL,
+    wetting_phase_saturation=np.array([0.15, 0.25, 0.35, 0.50, 0.65, 0.75]),
+    capillary_pressure=np.array([50.0, 15.0, 6.0, 2.0, 0.5, 0.0]),  # psi
 )
 
-# Alternative alias for wettability
+# Gas-oil capillary pressure (Pcgo = Pg - Po)
+gas_oil_pc = bores.TwoPhaseCapillaryPressureTable(
+    wetting_phase=bores.FluidPhase.OIL,
+    non_wetting_phase=bores.FluidPhase.GAS,
+    wetting_phase_saturation=np.array([0.15, 0.30, 0.50, 0.70, 0.85, 0.95]),  # Oil saturation
+    capillary_pressure=np.array([30.0, 12.0, 5.0, 1.5, 0.3, 0.0]),  # psi
+)
+```
+
+#### Constructing Three-Phase Capillary Pressure Table
+
+```python
+# Combine into three-phase table
+three_phase_pc = bores.ThreePhaseCapillaryPressureTable(
+    oil_water_table=oil_water_pc,
+    gas_oil_table=gas_oil_pc,
+)
+
+# Use in reservoir model
+model = bores.reservoir_model(
+    # ... other params ...
+    capillary_pressure_table=three_phase_pc,
+)
+```
+
+#### Querying Capillary Pressures
+
+```python
+result = three_phase_pc.get_capillary_pressures(
+    water_saturation=0.3,
+    oil_saturation=0.5,
+    gas_saturation=0.2,
+)
+
+print(result["oil_water"])  # Pcow = Po - Pw (psi)
+print(result["gas_oil"])    # Pcgo = Pg - Po (psi)
+```
+
+---
+
+### Wettability Types
+
+```python
+# Using WettabilityType enum
+bores.WettabilityType.WATER_WET   # Water preferentially wets rock
+bores.WettabilityType.OIL_WET     # Oil preferentially wets rock
+bores.WettabilityType.MIXED_WET   # Both water-wet and oil-wet regions
+
+# Alias for convenience
 bores.Wettability.WATER_WET  # Same as WettabilityType.WATER_WET
 ```
 
-### Using Tables Instead of Models
+---
 
-For more complex or lab-derived data:
+### Complete Example: Lab Data to Simulation
 
 ```python
-# Two-phase rel perm table
-ow_relperm = bores.TwoPhaseRelPermTable(
+import numpy as np
+import bores
+
+# 1. Define two-phase relative permeability from lab SCAL data
+oil_water_kr = bores.TwoPhaseRelPermTable(
     wetting_phase=bores.FluidPhase.WATER,
     non_wetting_phase=bores.FluidPhase.OIL,
-    wetting_phase_saturation=np.array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
-    krw=np.array([0.0, 0.02, 0.06, 0.12, 0.20, 0.30, 0.35]),
-    kro=np.array([1.0, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0]),
+    wetting_phase_saturation=np.array([0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.75]),
+    wetting_phase_relative_permeability=np.array([0.0, 0.01, 0.04, 0.10, 0.20, 0.32, 0.38]),
+    non_wetting_phase_relative_permeability=np.array([1.0, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),
 )
 
-# Capillary pressure table
-pc_table = bores.TwoPhaseCapillaryPressureTable(
+gas_oil_kr = bores.TwoPhaseRelPermTable(
+    wetting_phase=bores.FluidPhase.OIL,
+    non_wetting_phase=bores.FluidPhase.GAS,
+    wetting_phase_saturation=np.array([0.25, 0.35, 0.50, 0.65, 0.80, 0.95]),
+    wetting_phase_relative_permeability=np.array([0.0, 0.08, 0.25, 0.50, 0.78, 1.0]),
+    non_wetting_phase_relative_permeability=np.array([0.85, 0.55, 0.28, 0.10, 0.02, 0.0]),
+)
+
+# 2. Combine into three-phase table with Stone II mixing
+three_phase_kr = bores.ThreePhaseRelPermTable(
+    oil_water_table=oil_water_kr,
+    gas_oil_table=gas_oil_kr,
+    mixing_rule=bores.stone_II_rule,
+)
+
+# 3. Define capillary pressure from lab data
+oil_water_pc = bores.TwoPhaseCapillaryPressureTable(
     wetting_phase=bores.FluidPhase.WATER,
     non_wetting_phase=bores.FluidPhase.OIL,
-    wetting_phase_saturation=np.array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
-    capillary_pressure=np.array([50.0, 20.0, 10.0, 5.0, 2.0, 0.5, 0.0]),  # psi
+    wetting_phase_saturation=np.array([0.20, 0.30, 0.45, 0.60, 0.75]),
+    capillary_pressure=np.array([35.0, 12.0, 4.0, 1.0, 0.0]),
+)
+
+gas_oil_pc = bores.TwoPhaseCapillaryPressureTable(
+    wetting_phase=bores.FluidPhase.OIL,
+    non_wetting_phase=bores.FluidPhase.GAS,
+    wetting_phase_saturation=np.array([0.25, 0.40, 0.60, 0.80, 0.95]),
+    capillary_pressure=np.array([20.0, 8.0, 3.0, 0.8, 0.0]),
+)
+
+three_phase_pc = bores.ThreePhaseCapillaryPressureTable(
+    oil_water_table=oil_water_pc,
+    gas_oil_table=gas_oil_pc,
+)
+
+# 4. Use in reservoir model
+model = bores.reservoir_model(
+    # ... grid, properties, etc. ...
+    relative_permeability_table=three_phase_kr,
+    capillary_pressure_table=three_phase_pc,
 )
 ```
 
