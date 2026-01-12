@@ -10,7 +10,9 @@ import typing
 import attrs
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
+from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
 
 
@@ -224,11 +226,13 @@ class BaseRenderer(ABC):
         :param name: Name of the series for error messages
         """
         if not hasattr(series_data, "ndim"):
-            raise ValueError(f"Series '{name}' must be a numpy array")
+            raise ValidationError(f"Series '{name}' must be a numpy array")
         if series_data.ndim != 2:
-            raise ValueError(f"Series '{name}' requires 2D data array")
+            raise ValidationError(f"Series '{name}' requires 2D data array")
         if series_data.shape[1] != 2:
-            raise ValueError(f"Series '{name}' requires shape (n, 2) for (x, y) pairs")
+            raise ValidationError(
+                f"Series '{name}' requires shape (n, 2) for (x, y) pairs"
+            )
 
     def normalize_param(
         self,
@@ -252,13 +256,13 @@ class BaseRenderer(ABC):
             return [param] * num_series
         elif isinstance(param, (list, tuple)):
             if len(param) != num_series:
-                raise ValueError(
+                raise ValidationError(
                     f"Length of {param_name} ({len(param)}) must match "
                     f"number of series ({num_series})"
                 )
             return list(param)
         else:
-            raise ValueError(f"Invalid type for {param_name}")
+            raise ValidationError(f"Invalid type for {param_name}")
 
     def get_color(self, index: int, custom_color: typing.Optional[str] = None) -> str:
         """
@@ -475,7 +479,7 @@ class LineRenderer(BaseRenderer):
         # Override with user-provided names
         if series_names is not None:
             if len(series_names) != num_series:
-                raise ValueError(
+                raise ValidationError(
                     f"Number of series names ({len(series_names)}) must match "
                     f"number of series ({num_series})"
                 )
@@ -699,7 +703,9 @@ class BarRenderer(BaseRenderer):
         # Override with user-provided names
         if series_names is not None:
             if len(series_names) != num_series:
-                raise ValueError("Number of series names must match number of series")
+                raise ValidationError(
+                    "Number of series names must match number of series"
+                )
             names_list = list(series_names)
 
         # Normalize colors
@@ -758,7 +764,7 @@ class BarRenderer(BaseRenderer):
             first_series = series_list[0]
             x_positions = first_series[:, 0]
             if len(categories) != len(x_positions):
-                raise ValueError(
+                raise ValidationError(
                     f"Number of categories ({len(categories)}) must match number of x-positions ({len(x_positions)})"
                 )
             # Update x-axis with custom tick labels
@@ -862,15 +868,15 @@ class TornadoRenderer(BaseRenderer):
             values_array = np.array([data[name] for name in var_names])
         else:
             if not isinstance(data, np.ndarray):
-                raise ValueError("Data must be numpy array or mapping")
+                raise ValidationError("Data must be numpy array or mapping")
             if data.ndim != 2:
-                raise ValueError(
+                raise ValidationError(
                     "Data array must have shape (n, 3) for [low, base, high]"
                 )
             values_array = data
             if series_names is not None:
                 if len(series_names) != len(values_array):
-                    raise ValueError("Number of series names must match data rows")
+                    raise ValidationError("Number of series names must match data rows")
                 var_names = list(series_names)
             else:
                 var_names = [f"Variable {i + 1}" for i in range(len(values_array))]
@@ -1064,7 +1070,9 @@ class ScatterRenderer(BaseRenderer):
         # Override with user-provided names
         if series_names is not None:
             if len(series_names) != num_series:
-                raise ValueError("Number of series names must match number of series")
+                raise ValidationError(
+                    "Number of series names must match number of series"
+                )
             names_list = list(series_names)
 
         # Normalize parameters
@@ -1156,7 +1164,8 @@ class ScatterRenderer(BaseRenderer):
         color: str,
         name: str,
     ) -> None:
-        """Add trendline to the figure.
+        """
+        Add trendline to the figure.
 
         :param fig: Figure to add trendline to
         :param x_values: X coordinates (1D array)
@@ -1233,7 +1242,7 @@ class DataVisualizer:
         :param renderer_instance: Renderer instance implementing BaseRenderer
         """
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
         self._renderers[plot_type] = renderer_instance
 
     def get_renderer(self, plot_type: PlotType) -> BaseRenderer:
@@ -1244,10 +1253,10 @@ class DataVisualizer:
         :return: The renderer instance for the specified plot type
         """
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
         renderer = self._renderers.get(plot_type, None)
         if renderer is None:
-            raise ValueError(f"No renderer registered for plot type: {plot_type}")
+            raise ValidationError(f"No renderer registered for plot type: {plot_type}")
         return renderer
 
     def make_plot(
@@ -1269,7 +1278,7 @@ class DataVisualizer:
             try:
                 plot_type = PlotType(plot_type)
             except ValueError:
-                raise ValueError(
+                raise ValidationError(
                     f"Invalid plot_type string: '{plot_type}'. "
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
@@ -1307,10 +1316,8 @@ class DataVisualizer:
         :param kwargs: Additional parameters passed to renderers
         :return: Plotly figure with subplots
         """
-        from plotly.subplots import make_subplots
-
         if len(data_list) > rows * cols:
-            raise ValueError(
+            raise ValidationError(
                 f"Too many plots ({len(data_list)}) for {rows}x{cols} subplot grid"
             )
 
@@ -1319,7 +1326,7 @@ class DataVisualizer:
             try:
                 plot_types = PlotType(plot_types)
             except ValueError:
-                raise ValueError(
+                raise ValidationError(
                     f"Invalid plot_type string: '{plot_types}'. "
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
@@ -1335,7 +1342,7 @@ class DataVisualizer:
             plot_types_list = [plot_types] * len(data_list)
 
         if len(plot_types_list) != len(data_list):
-            raise ValueError(
+            raise ValidationError(
                 f"Number of plot types ({len(plot_types_list)}) must match "
                 f"number of data arrays ({len(data_list)})"
             )

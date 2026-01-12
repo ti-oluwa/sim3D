@@ -159,9 +159,9 @@ class Timer:
     """Whether to use a constant time step size."""
 
     # Performance tracking
-    recent_metrics: deque = attrs.field(init=False)
+    recent_metrics: typing.Deque[StepMetrics] = attrs.field(init=False)
     """Recent step performance metrics."""
-    failed_step_sizes: deque = attrs.field(init=False)
+    failed_step_sizes: typing.Deque[float] = attrs.field(init=False)
     """Recent failed step sizes for memory."""
 
     def __attrs_post_init__(self) -> None:
@@ -186,7 +186,8 @@ class Timer:
 
         If True, simulation has reached it ends.
         """
-        if self.elapsed_time >= self.simulation_time:
+        # Use small tolerance for floating-point comparison
+        if self.elapsed_time >= self.simulation_time - 1e-9:
             return True
 
         if self.max_steps is not None and self.step >= self.max_steps:
@@ -329,7 +330,25 @@ class Timer:
             )
 
         self.next_step_size *= factor
+
+        # Warn when hitting minimum step size
+        if self.next_step_size < self.min_step_size:
+            logger.warning(
+                f"Step size {self.next_step_size:.6e} would be below minimum "
+                f"{self.min_step_size:.6e}. Clamping to minimum."
+            )
         self.next_step_size = max(self.next_step_size, self.min_step_size)
+
+        # Check if we're stuck at minimum step size (panic mode detection)
+        if self.next_step_size <= self.min_step_size * 1.01:
+            min_failures = sum(
+                1 for s in self.failed_step_sizes if s <= self.min_step_size * 1.1
+            )
+            if min_failures >= 3:
+                logger.error(
+                    f"Repeated failures ({min_failures}) at or near minimum step size "
+                    f"({self.min_step_size:.6e}). Simulation may be unstable."
+                )
 
         # Update EMA to reflect the reduction
         self.ema_step_size = self.next_step_size
@@ -361,7 +380,8 @@ class Timer:
         :param newton_iterations: Number of Newton iterations taken (if applicable).
         :return: The next proposed time step size.
         """
-        if step_size > self.time_remaining:
+        # Use small tolerance for floating point comparison as step sizes may slightly overshoot
+        if step_size > self.time_remaining + 1e-9:
             raise TimingError(
                 f"Step size {step_size} exceeds remaining time {self.time_remaining}. "
                 "This indicates a bug in the time stepping logic."
@@ -394,6 +414,9 @@ class Timer:
         if max_cfl_encountered is not None and max_cfl_encountered > 0.0:
             target_cfl = max_cfl * self.cfl_safety_margin
             cfl_ratio = target_cfl / max_cfl_encountered
+
+            # Cap CFL-based growth to prevent wild jumps when CFL is very low
+            cfl_ratio = min(cfl_ratio, self.max_growth_per_step)
 
             # Be more conservative if we were close to the limit
             if max_cfl_encountered > 0.8 * max_cfl:

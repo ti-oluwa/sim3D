@@ -12,6 +12,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
 from bores.visualization.base import ColorScheme, PropertyMetadata
 
@@ -277,9 +278,9 @@ class HeatmapRenderer(BaseRenderer):
         :return: Updated figure
         """
         if data.ndim != 2:
-            raise ValueError("Heatmap plotting requires 2D data")
+            raise ValidationError("Heatmap plotting requires 2D data")
 
-        normalized_data, display_data = self.normalize_data(
+        _, display_data = self.normalize_data(
             data=data, metadata=metadata, normalize_range=False
         )
 
@@ -295,8 +296,8 @@ class HeatmapRenderer(BaseRenderer):
             hover_row = []
             for j in range(data.shape[1]):
                 hover_row.append(
-                    f"{x_label}: {x_coords[j]:.2f}<br>"
-                    f"{y_label}: {y_coords[i]:.2f}<br>"
+                    f"{x_label}: {x_coords[j]:.4f}<br>"
+                    f"{y_label}: {y_coords[i]:.4f}<br>"
                     f"{metadata.display_name}: {self.format_value(display_data[i, j], metadata)} {metadata.unit}"
                 )
             hover_text.append(hover_row)
@@ -391,9 +392,9 @@ class ContourRenderer(BaseRenderer):
         :return: Updated figure
         """
         if data.ndim != 2:
-            raise ValueError("Contour plotting requires 2D data")
+            raise ValidationError("Contour plotting requires 2D data")
 
-        normalized_data, display_data = self.normalize_data(
+        _, display_data = self.normalize_data(
             data=data, metadata=metadata, normalize_range=False
         )
 
@@ -501,9 +502,9 @@ class ScatterRenderer(BaseRenderer):
         :return: Updated figure
         """
         if data.ndim != 2:
-            raise ValueError("Scatter plotting requires 2D data")
+            raise ValidationError("Scatter plotting requires 2D data")
 
-        normalized_data, display_data = self.normalize_data(
+        _, display_data = self.normalize_data(
             data=data, metadata=metadata, normalize_range=False
         )
 
@@ -519,7 +520,7 @@ class ScatterRenderer(BaseRenderer):
         # Apply threshold filter
         mask = display_data > threshold
         if not np.any(mask):
-            raise ValueError("No data points above threshold for scatter plot")
+            raise ValidationError("No data points above threshold for scatter plot")
 
         x_scatter = X[mask]
         y_scatter = Y[mask]
@@ -527,8 +528,8 @@ class ScatterRenderer(BaseRenderer):
 
         # Create hover text
         hover_text = [
-            f"{x_label}: {x:.2f}<br>"
-            f"{y_label}: {y:.2f}<br>"
+            f"{x_label}: {x:.4f}<br>"
+            f"{y_label}: {y:.4f}<br>"
             f"{metadata.display_name}: {self.format_value(v, metadata)} {metadata.unit}"
             for x, y, v in zip(x_scatter, y_scatter, values)
         ]
@@ -616,9 +617,9 @@ class LineRenderer(BaseRenderer):
         :return: Updated figure
         """
         if data.ndim != 2:
-            raise ValueError("Line plotting requires 2D data")
+            raise ValidationError("Line plotting requires 2D data")
 
-        normalized_data, display_data = self.normalize_data(
+        _, display_data = self.normalize_data(
             data=data, metadata=metadata, normalize_range=False
         )
 
@@ -643,7 +644,7 @@ class LineRenderer(BaseRenderer):
                         x=x_coords,
                         y=display_data[idx, :],
                         mode="lines+markers",
-                        name=f"{y_label}={y_coords[idx]:.2f}",
+                        name=f"{y_label}={y_coords[idx]:.4f}",
                         line=dict(width=self.config.line_width),
                         marker=dict(
                             size=8,
@@ -662,7 +663,7 @@ class LineRenderer(BaseRenderer):
                         x=y_coords,
                         y=display_data[:, idx],
                         mode="lines+markers",
-                        name=f"{x_label}={x_coords[idx]:.2f}",
+                        name=f"{x_label}={x_coords[idx]:.4f}",
                         line=dict(width=self.config.line_width),
                         marker=dict(
                             size=8,
@@ -682,7 +683,7 @@ class LineRenderer(BaseRenderer):
                         x=y_coords,
                         y=display_data[:, idx],
                         mode="lines+markers",
-                        name=f"{x_label}={x_coords[idx]:.2f}",
+                        name=f"{x_label}={x_coords[idx]:.4f}",
                         line=dict(width=self.config.line_width),
                         marker=dict(
                             size=8,
@@ -749,9 +750,9 @@ class SurfaceRenderer(BaseRenderer):
         :return: Updated figure
         """
         if data.ndim != 2:
-            raise ValueError("Surface plotting requires 2D data")
+            raise ValidationError("Surface plotting requires 2D data")
 
-        normalized_data, display_data = self.normalize_data(
+        _, display_data = self.normalize_data(
             data=data, metadata=metadata, normalize_range=False
         )
 
@@ -862,7 +863,7 @@ class DataVisualizer:
         :param kwargs: Initialization keyword arguments for the renderer class
         """
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
         self._renderers[plot_type] = renderer_type(self.config, *args, **kwargs)
 
     def get_renderer(self, plot_type: typing.Union[PlotType, str]) -> BaseRenderer:
@@ -872,21 +873,22 @@ class DataVisualizer:
         :param plot_type: The type of plot to get (PlotType enum or string)
         :return: The renderer instance for the specified plot type
         """
-        # Convert string plot_type to PlotType enum if needed
+        # Convert string `plot_type` to `PlotType` enum if needed
         if isinstance(plot_type, str):
             try:
                 plot_type = PlotType(plot_type)
             except ValueError:
-                raise ValueError(
+                raise ValidationError(
                     f"Invalid plot_type string: '{plot_type}'. "
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
+
         renderer = self._renderers.get(plot_type, None)
         if renderer is None:
-            raise ValueError(f"No renderer registered for plot type: {plot_type}")
+            raise ValidationError(f"No renderer registered for plot type: {plot_type}")
         return renderer
 
     def make_plot(
@@ -922,13 +924,13 @@ class DataVisualizer:
         :return: Plotly figure object containing the 2D visualization
         """
         if data.ndim != 2:
-            raise ValueError("2D visualization requires 2D data array")
+            raise ValidationError("2D visualization requires 2D data array")
 
         if isinstance(plot_type, str):
             try:
                 plot_type = PlotType(plot_type)
             except ValueError:
-                raise ValueError(f"Invalid plot type: {plot_type}")
+                raise ValidationError(f"Invalid plot type: {plot_type}")
 
         data = typing.cast(TwoDimensionalGrid, data)
 
@@ -1024,7 +1026,7 @@ class DataVisualizer:
         :return: Plotly figure with subplots
         """
         if len(data_list) > rows * cols:
-            raise ValueError(
+            raise ValidationError(
                 f"Too many plots ({len(data_list)}) for {rows}x{cols} subplot grid"
             )
 
@@ -1032,7 +1034,7 @@ class DataVisualizer:
             try:
                 plot_types = PlotType(plot_types)
             except ValueError:
-                raise ValueError(f"Invalid plot type: {plot_types}")
+                raise ValidationError(f"Invalid plot type: {plot_types}")
 
         # Handle plot types
         if isinstance(plot_types, PlotType):
@@ -1043,7 +1045,9 @@ class DataVisualizer:
             ]
 
         if len(plot_types) != len(data_list):
-            raise ValueError("Number of plot types must match number of data arrays")
+            raise ValidationError(
+                "Number of plot types must match number of data arrays"
+            )
 
         # Create subplot figure
         subplot_kwargs: typing.Dict[str, typing.Any] = {
@@ -1066,7 +1070,7 @@ class DataVisualizer:
             col = (idx % cols) + 1
 
             if data.ndim != 2:
-                raise ValueError("2D visualization requires 2D data array")
+                raise ValidationError("2D visualization requires 2D data array")
             data = typing.cast(TwoDimensionalGrid, data)
 
             # Create temporary figure for this subplot

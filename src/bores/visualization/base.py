@@ -899,7 +899,6 @@ def merge_plots(
     )
     ```
     """
-    # Validate inputs
     if not figures:
         raise ValueError("At least one figure must be provided")
 
@@ -945,7 +944,7 @@ def merge_plots(
             f"Need at least {num_figures} subplot positions."
         )
 
-    # Validate subplot_titles if provided
+    # Validate `subplot_titles` if provided
     if subplot_titles is not None:
         if len(subplot_titles) != num_figures:
             raise ValueError(
@@ -982,7 +981,7 @@ def merge_plots(
     if width is None:
         width = int(600 * cols)
 
-    # Determine subplot types - check if any figures have 3D traces
+    # Determine subplot types and check if any figures have 3D traces
     specs = [[{"type": "xy"} for _ in range(cols)] for _ in range(rows)]
     for idx, fig in enumerate(valid_figures):
         row = idx // cols
@@ -1057,7 +1056,7 @@ def merge_plots(
             is_scene = specs[row - 1][col - 1].get("type") == "scene"
 
             if is_scene:
-                # Handle 3D scene properties - comprehensive copy of all scene settings
+                # Copy all the 3D scene properties comprehensively
                 scene_key = (
                     "scene"
                     if row == 1 and col == 1
@@ -1065,7 +1064,7 @@ def merge_plots(
                 )
                 _copy_scene_properties(fig, combined_fig, scene_key)
             else:
-                # Handle 2D x-axis and y-axis properties - comprehensive copy
+                # Copy 2D x-axis and y-axis properties
                 if hasattr(fig.layout, "xaxis") and fig.layout.xaxis:
                     xaxis_key = (
                         "xaxis"
@@ -1162,7 +1161,7 @@ def merge_plots(
                         combined_fig.data[combined_trace_idx].colorbar = colorbar_dict
 
     # Apply subplot-specific background colors using shapes
-    # Plotly's plot_bgcolor is global, so we use shapes to create per-subplot backgrounds
+    # Plotly's `plot_bgcolor` is global, so we use shapes to create per-subplot backgrounds
     shapes = []
     for (row, col), bg_settings in subplot_backgrounds.items():
         if "plot_bgcolor" in bg_settings:

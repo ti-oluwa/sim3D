@@ -113,13 +113,15 @@ class StateStream(typing.Generic[NDimension]):
 
     def __init__(
         self,
-        states: typing.Union[
-            typing.Generator[ModelState[NDimension]],
-            typing.Iterator[ModelState[NDimension]],
-        ],
+        states: typing.Optional[
+            typing.Union[
+                typing.Generator[ModelState[NDimension]],
+                typing.Iterator[ModelState[NDimension]],
+            ]
+        ] = None,
         store: typing.Optional[StateStore] = None,
         batch_size: int = 10,
-        validate: bool = True,
+        validate: bool = False,
         auto_save: bool = True,
         auto_replay: bool = False,
         lazy_load: bool = True,
@@ -129,7 +131,7 @@ class StateStream(typing.Generic[NDimension]):
         checkpoint_interval: typing.Optional[int] = None,
         checkpoint_dir: typing.Optional[PathLike] = None,
         max_batch_memory_mb: typing.Optional[float] = None,
-        async_io: bool = True,
+        async_io: bool = False,
         max_queue_size: int = 50,
         io_thread_name: str = "state-io-worker",
         queue_timeout: float = 1.0,
@@ -140,7 +142,7 @@ class StateStream(typing.Generic[NDimension]):
         :param states: Generator or iterator of `ModelState` instances
         :param store: Optional `StateStore` for persistence. If None, states only yielded (no persistence)
         :param batch_size: Number of states to accumulate before flushing to disk (default: 10)
-        :param validate: Validate states before persisting (default: True)
+        :param validate: Validate states before persisting (default: False)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
         :param auto_replay: If True, automatically replay from store when iterating after consumption.
             If False, raises `StreamError` instead (default: False, explicit replay required)
@@ -154,7 +156,7 @@ class StateStream(typing.Generic[NDimension]):
         :param max_batch_memory_mb: Maximum batch memory in MB before forcing flush.
             Estimated by sampling first state's memory footprint. Batch flushes when either
             `batch_size` or `max_batch_memory_mb` threshold is reached. Example: 50.0 MB
-        :param async_io: Enable asynchronous I/O for non-blocking disk writes (default: True).
+        :param async_io: Enable asynchronous I/O for non-blocking disk writes (default: False).
             When enabled, disk writes happen in a background thread, allowing simulation to continue.
             Provides 2-3x speedup when I/O is slower than simulation timesteps.
         :param max_queue_size: Maximum states/batches in I/O queue before blocking (default: 50).
@@ -228,6 +230,23 @@ class StateStream(typing.Generic[NDimension]):
                     "`checkpoint_dir` must be provided when `checkpoint_interval` is set"
                 )
             self._checkpoint_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+
+        if self.states is None and self.store is None:
+            raise StreamError(
+                "Either `states` or `store` must be provided. "
+                "Cannot create a stream with neither a state source nor a store for replay."
+            )
+
+        if self.states is None and self.store is not None:
+            # Store-only mode is intended for replay
+            if not self.auto_replay:
+                logger.warning(
+                    "Creating stream with `store` but no `states`. "
+                    "Setting `auto_replay=True` since replay is the only available operation."
+                )
+                self.auto_replay = True
+            # Mark as already consumed since there's no states to iterate
+            self._consumed = True
 
         if self.async_io:
             self._start_io_worker()
@@ -391,6 +410,14 @@ class StateStream(typing.Generic[NDimension]):
                     "Cannot iterate again: the underlying iterable has been exhausted. "
                     "Either provide a fresh iterable or use a store with replay capability."
                 )
+
+        # No states provided, this shouldn't happen as `_consumed` should already be set to false
+        # but still handle it
+        if self.states is None:
+            raise StreamError(
+                "No states provided and stream not consumed. "
+                "This is an internal error - please report this bug."
+            )
 
         if self.store is None:
             logger.info("No store provided, streaming without persistence")

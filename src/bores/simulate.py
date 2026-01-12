@@ -289,6 +289,7 @@ def _run_implicit_step(
         message=result.message,
         accept_kwargs={
             "max_cfl_encountered": None,
+            "cfl_threshold": None,
             "newton_iterations": solution.newton_iterations,
         },
     )

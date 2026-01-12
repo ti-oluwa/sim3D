@@ -199,7 +199,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param initial_stwiip: Optional pre-calculated stock tank water initially in place (STB).
             Use this when the initial state (step 0) is not available.
         """
-        self._states = {state.step: state for state in states}
+        self._states = {int(state.step): state for state in states}
 
         if not self._states:
             raise ValidationError(
@@ -249,8 +249,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         if step < 0:
             # -1 should give max_step, -2 should give second-to-last, etc.
-            return self._max_step + step + 1
-        return step
+            return int(self._max_step + step + 1)
+        return int(step)
 
     def get_state(self, step: int) -> typing.Optional[ModelState[NDimension]]:
         """

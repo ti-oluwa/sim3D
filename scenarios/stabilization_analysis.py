@@ -16,10 +16,14 @@ def _():
 
     store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
-        metadata_dir=Path.cwd()
-        / "scenarios/states/stabilization_metadata/",
+        metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata/",
     )
-    states = list(store.load(validate=False))
+    stream = bores.StateStream(
+        store=store,
+        lazy_load=False,
+        auto_replay=True,
+    )
+    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 2 == 0))
     return bores, itertools, np, states
 
 
@@ -369,7 +373,7 @@ def _(bores, states, viz):
 
     property = "oil-saturation"
     figures = []
-    timesteps = [40]
+    timesteps = [4]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

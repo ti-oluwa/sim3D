@@ -15,7 +15,9 @@ import plotly.graph_objects as go
 from typing_extensions import TypedDict, Unpack
 
 from bores._precision import get_dtype
+from bores.errors import ValidationError
 from bores.grids.base import coarsen_grid
+from bores.models import ReservoirModel
 from bores.states import ModelState
 from bores.types import (
     NDimension,
@@ -750,9 +752,8 @@ def coarsen_grid_and_coords(
     """
     if batch_size is None:
         batch_size = typing.cast(NDimension, (2,) * data.ndim)
-    # ---------------------------
-    # 1. Pad data to be divisible by batch_size
-    # ---------------------------
+
+    # Pad data to be divisible by `batch_size`
     pad_width = []
     for dim, b in zip(data.shape, batch_size):
         remainder = dim % b
@@ -767,20 +768,16 @@ def coarsen_grid_and_coords(
     elif method == "min":
         pad_value = np.inf
     else:
-        raise ValueError(f"Unsupported method '{method}'")
+        raise ValidationError(f"Unsupported method '{method}'")
 
     data_padded = np.pad(
         data, pad_width=pad_width, mode="constant", constant_values=pad_value
     )
 
-    # ---------------------------
-    # 2. Coarsen data
-    # ---------------------------
+    # Coarsen data
     coarsened_data = coarsen_grid(data_padded, batch_size=batch_size, method=method)
 
-    # ---------------------------
-    # 3. Coarsen 1D coordinates (x, y)
-    # ---------------------------
+    # Coarsen 1D coordinates (x, y)
     def coarsen_1d(coords: np.ndarray, b: int) -> np.ndarray:
         remainder = len(coords) % b
         if remainder > 0:
@@ -791,13 +788,11 @@ def coarsen_grid_and_coords(
     x_batch = coarsen_1d(x_coords, batch_size[0])
     y_batch = coarsen_1d(y_coords, batch_size[1])
 
-    # ---------------------------
-    # 4. Coarsen z-coordinates
-    # ---------------------------
+    # Coarsen z-coordinates
     z_batch = None
     if z_coords is not None:
         if data.ndim != 3:
-            raise ValueError("z_coords is only valid for 3D data")
+            raise ValidationError("z_coords is only valid for 3D data")
 
         bx, by, bz = batch_size
 
@@ -825,7 +820,7 @@ def coarsen_grid_and_coords(
             # Append last boundary layer along Z to maintain nz+1
             z_batch = np.concatenate([z_batch, z_batch[:, :, -1:]], axis=2)
         else:
-            raise ValueError("z_coords must be 1D or 3D array for 3D data")
+            raise ValidationError("z_coords must be 1D or 3D array for 3D data")
 
     return (
         typing.cast(NDimensionalGrid[NDimension], coarsened_data),
@@ -1974,7 +1969,7 @@ class VolumeRenderer(BaseRenderer):
 
     supports_physical_dimensions: typing.ClassVar[bool] = True
 
-    def render(
+    def render(  # type: ignore[override]
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
@@ -2022,7 +2017,7 @@ class VolumeRenderer(BaseRenderer):
         :return: Plotly figure object with volume rendering
         """
         if data.ndim != 3:
-            raise ValueError("Volume rendering requires 3D data")
+            raise ValidationError("Volume rendering requires 3D data")
 
         use_opacity_scaling = (
             use_opacity_scaling
@@ -2045,13 +2040,13 @@ class VolumeRenderer(BaseRenderer):
         if metadata.log_scale:
             # Validate that user provided positive values for log scale
             if original_cmin is not None and original_cmin <= 0:
-                raise ValueError("cmin must be > 0 for log scale data")
+                raise ValidationError("cmin must be > 0 for log scale data")
             if original_cmax is not None and original_cmax <= 0:
-                raise ValueError("cmax must be > 0 for log scale data")
+                raise ValidationError("cmax must be > 0 for log scale data")
             if original_isomin is not None and original_isomin <= 0:
-                raise ValueError("isomin must be > 0 for log scale data")
+                raise ValidationError("isomin must be > 0 for log scale data")
             if original_isomax is not None and original_isomax <= 0:
-                raise ValueError("isomax must be > 0 for log scale data")
+                raise ValidationError("isomax must be > 0 for log scale data")
 
             # Convert to log₁₀ space for internal use
             cmin = np.log10(original_cmin) if original_cmin is not None else None
@@ -2291,7 +2286,7 @@ class IsosurfaceRenderer(BaseRenderer):
 
     supports_physical_dimensions: typing.ClassVar[bool] = True
 
-    def render(
+    def render(  # type: ignore[override]
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
@@ -2337,7 +2332,7 @@ class IsosurfaceRenderer(BaseRenderer):
         :return: Plotly figure object with isosurface plot
         """
         if data.ndim != 3:
-            raise ValueError("Isosurface plotting requires 3D data")
+            raise ValidationError("Isosurface plotting requires 3D data")
 
         # Store original user-provided values in original units
         original_cmin = cmin
@@ -2354,13 +2349,13 @@ class IsosurfaceRenderer(BaseRenderer):
         if metadata.log_scale:
             # Validate that user provided positive values for log scale
             if original_cmin is not None and original_cmin <= 0:
-                raise ValueError("cmin must be > 0 for log scale data")
+                raise ValidationError("cmin must be > 0 for log scale data")
             if original_cmax is not None and original_cmax <= 0:
-                raise ValueError("cmax must be > 0 for log scale data")
+                raise ValidationError("cmax must be > 0 for log scale data")
             if original_isomin is not None and original_isomin <= 0:
-                raise ValueError("isomin must be > 0 for log scale data")
+                raise ValidationError("isomin must be > 0 for log scale data")
             if original_isomax is not None and original_isomax <= 0:
-                raise ValueError("isomax must be > 0 for log scale data")
+                raise ValidationError("isomax must be > 0 for log scale data")
 
             # Convert to log₁₀ space for internal use
             cmin = np.log10(original_cmin) if original_cmin is not None else None
@@ -2616,7 +2611,7 @@ class CellBlockRenderer(BaseRenderer):
 
     supports_physical_dimensions: typing.ClassVar[bool] = True
 
-    def render(
+    def render(  # type: ignore[override]
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
@@ -2672,9 +2667,9 @@ class CellBlockRenderer(BaseRenderer):
         :return: Plotly figure object with cell block visualization
         """
         if data.ndim != 3:
-            raise ValueError("Cell block plotting requires 3D data")
+            raise ValidationError("Cell block plotting requires 3D data")
         if subsampling_factor < 1:
-            raise ValueError("Subsample factor must be at least 1")
+            raise ValidationError("Subsample factor must be at least 1")
 
         show_outline = (
             show_outline if show_outline is not None else self.config.show_cell_outlines
@@ -2751,9 +2746,9 @@ class CellBlockRenderer(BaseRenderer):
         if metadata.log_scale:
             # Validate that user provided positive values for log scale
             if original_cmin is not None and original_cmin <= 0:
-                raise ValueError("cmin must be > 0 for log scale data")
+                raise ValidationError("cmin must be > 0 for log scale data")
             if original_cmax is not None and original_cmax <= 0:
-                raise ValueError("cmax must be > 0 for log scale data")
+                raise ValidationError("cmax must be > 0 for log scale data")
 
             # Convert to log₁₀ space for internal use
             cmin = np.log10(original_cmin) if original_cmin is not None else None
@@ -3141,7 +3136,7 @@ class Scatter3DRenderer(BaseRenderer):
 
     supports_physical_dimensions = True
 
-    def render(
+    def render(  # type: ignore[override]
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
@@ -3187,7 +3182,7 @@ class Scatter3DRenderer(BaseRenderer):
         :return: Plotly figure object with 3D scatter plot
         """
         if data.ndim != 3:
-            raise ValueError("Scatter3D plotting requires 3D data")
+            raise ValidationError("Scatter3D plotting requires 3D data")
 
         # Store original user-provided values in original units
         original_cmin = cmin
@@ -3203,9 +3198,9 @@ class Scatter3DRenderer(BaseRenderer):
         if metadata.log_scale:
             # Validate that user provided positive values for log scale
             if original_cmin is not None and original_cmin <= 0:
-                raise ValueError("cmin must be > 0 for log scale data")
+                raise ValidationError("cmin must be > 0 for log scale data")
             if original_cmax is not None and original_cmax <= 0:
-                raise ValueError("cmax must be > 0 for log scale data")
+                raise ValidationError("cmax must be > 0 for log scale data")
 
             # Convert to log₁₀ space for internal use
             cmin = np.log10(original_cmin) if original_cmin is not None else None
@@ -3249,7 +3244,7 @@ class Scatter3DRenderer(BaseRenderer):
             values = display_data[mask]  # Use original values for display
 
         if values.size == 0:
-            raise ValueError(
+            raise ValidationError(
                 "No data points selected for Scatter3D plot. "
                 "Check your threshold, sample rate or data values."
             )
@@ -3514,10 +3509,10 @@ class DataVisualizer:
         :param renderer_type: The class implementing the ``BaseRenderer`` interface
         :param args: Initialization arguments for the renderer class
         :param kwargs: Initialization keyword arguments for the renderer class
-        :raises ValueError: If plot_type is not a valid PlotType
+        :raises ValidationError: If plot_type is not a valid PlotType
         """
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
         self._renderers[plot_type] = renderer_type(self.config, *args, **kwargs)
 
     def get_renderer(self, plot_type: PlotType) -> BaseRenderer:
@@ -3526,13 +3521,13 @@ class DataVisualizer:
 
         :param plot_type: The type of plot to get (must be a valid PlotType)
         :return: The renderer instance for the specified plot type
-        :raises ValueError: If plot_type is not a valid PlotType or no renderer is registered
+        :raises ValidationError: If plot_type is not a valid PlotType or no renderer is registered
         """
         if not isinstance(plot_type, PlotType):
-            raise ValueError(f"Invalid plot type: {plot_type}")
+            raise ValidationError(f"Invalid plot type: {plot_type}")
         renderer = self._renderers.get(plot_type, None)
         if renderer is None:
-            raise ValueError(f"No renderer registered for plot type: {plot_type}")
+            raise ValidationError(f"No renderer registered for plot type: {plot_type}")
         return renderer
 
     def apply_slice(
@@ -3556,7 +3551,7 @@ class DataVisualizer:
         :param y_slice: Y dimension slice specification
         :param z_slice: Z dimension slice specification
         :return: Tuple of (sliced_data, actual_slices_used)
-        :raises ValueError: If slicing would result in non-3D data
+        :raises ValidationError: If slicing would result in non-3D data
         """
         nx, ny, nz = data.shape
 
@@ -3571,7 +3566,7 @@ class DataVisualizer:
                 if spec < 0:
                     spec = dim_size + spec  # Handle negative indexing
                 if spec < 0 or spec >= dim_size:
-                    raise ValueError(
+                    raise ValidationError(
                         f"{dim_name}_slice index {spec} out of range [0, {dim_size - 1}]"
                     )
                 return slice(spec, spec + 1)  # Single element slice
@@ -3585,7 +3580,7 @@ class DataVisualizer:
             elif isinstance(spec, slice):
                 return spec
             else:
-                raise ValueError(f"Invalid {dim_name}_slice specification: {spec}")
+                raise ValidationError(f"Invalid {dim_name}_slice specification: {spec}")
 
         # Normalize all slice specifications
         x_slice_obj = normalize_slice_spec(x_slice, nx, "x")
@@ -3597,7 +3592,7 @@ class DataVisualizer:
 
         # Validate result is still 3D
         if sliced_data.ndim != 3:
-            raise ValueError(
+            raise ValidationError(
                 f"Slicing resulted in {sliced_data.ndim}D data. "
                 f"All slice specifications must preserve 3D structure. "
                 f"Result shape: {sliced_data.shape}"
@@ -3605,7 +3600,7 @@ class DataVisualizer:
 
         # Check minimum size requirements
         if any(dim < 1 for dim in sliced_data.shape):
-            raise ValueError(
+            raise ValidationError(
                 f"Slicing resulted in empty dimension(s). Shape: {sliced_data.shape}"
             )
         return typing.cast(ThreeDimensionalGrid, sliced_data), (
@@ -3615,18 +3610,29 @@ class DataVisualizer:
         )
 
     def _get_property_data(
-        self, model_state: ModelState[ThreeDimensions], name: str
+        self,
+        source: typing.Union[ModelState[ThreeDimensions], ReservoirModel],
+        name: str,
     ) -> ThreeDimensionalGrid:
         """
         Get property data from model state.
 
-        :param model_state: The model state containing reservoir model
+        :param source: The model or model state containing reservoir model
         :param name: Name of the property to extract as defined by the `PropertyMetadata.name`
         :return: A three-dimensional numpy array containing the state data
         :raises AttributeError: If property is not found in reservoir model properties
         :raises TypeError: If property is not a numpy array
         """
-        state = model_state.asdict()
+        source_type = "model state"
+        if isinstance(source, ReservoirModel):
+            if not name.startswith("model."):
+                raise ValidationError(
+                    f"Property {name.split('.')[-1]} not available on model"
+                )
+            name = name.removeprefix("model.")
+            source_type = "reservoir model"
+
+        state = source.asdict()
         name_parts = name.split(".")
         data = None
         if len(name_parts) == 1:
@@ -3643,14 +3649,14 @@ class DataVisualizer:
                 if value is not _missing:
                     data = value
                     continue
-                raise AttributeError(f"Property '{name}' not found in model state.")
+                raise AttributeError(f"Property '{name}' not found in {source_type}.")
 
         if data is None or data is _missing:
             raise AttributeError(
-                f"Property '{name}' not found on model state or property value is invalid."
+                f"Property '{name}' not found on {source_type} or property value is invalid."
             )
         elif not isinstance(data, np.ndarray):
-            data = np.array(data, dtype=np.float64)
+            data = np.array(data, dtype=get_dtype())
 
         if data.ndim != 3:
             raise TypeError(f"Property '{name}' is not a 3 dimensional array.")
@@ -3682,7 +3688,11 @@ class DataVisualizer:
 
     def make_plot(
         self,
-        source: typing.Union[ModelState[ThreeDimensions], ThreeDimensionalGrid],
+        source: typing.Union[
+            ReservoirModel[ThreeDimensions],
+            ModelState[ThreeDimensions],
+            ThreeDimensionalGrid,
+        ],
         property: typing.Optional[str] = None,
         plot_type: typing.Optional[typing.Union[PlotType, str]] = None,
         figure: typing.Optional[go.Figure] = None,
@@ -3705,7 +3715,7 @@ class DataVisualizer:
         """
         Plot a specific model property or raw 3D grid data in 3D with optional data slicing.
 
-        :param source: Either a ModelState containing reservoir model data, or a raw ThreeDimensionalGrid
+        :param source: Either a `ReservoirModel` or `ModelState` containing reservoir model data, or a raw `ThreeDimensionalGrid`
         :param property: Name of the property to plot (from `PropertyRegistry`). Required when source is a ModelState,
             optional when source is a ThreeDimensionalGrid (will use generic metadata if not provided)
         :param plot_type: Type of 3D plot to create (volume, isosurface, slice, scatter, cell_blocks)
@@ -3770,26 +3780,32 @@ class DataVisualizer:
             try:
                 plot_type = PlotType(plot_type)
             except ValueError:
-                raise ValueError(
-                    f"Invalid plot_type string: '{plot_type}'. "
+                raise ValidationError(
+                    f"Invalid `plot_type` string: '{plot_type}'. "
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
         # Extract data and metadata based on source type
         is_model_state = isinstance(source, ModelState)
+        is_model = isinstance(source, ReservoirModel)
 
-        if is_model_state:
-            # Working with ModelState - property is required
+        if is_model_state or is_model:
+            # When working with a model or model state, property is required
             if property is None:
-                raise ValueError(
-                    "property parameter is required when source is a ModelState"
+                raise ValidationError(
+                    "property parameter is required when source is a model or model state"
                 )
+
             metadata = self.registry[property]
             data = self._get_property_data(source, metadata.name)  # type: ignore
 
             # Get original cell dimensions and depth grid from model
-            cell_dimension = source.model.cell_dimension  # type: ignore
-            depth_grid = source.model.get_depth_grid(apply_dip=True)  # type: ignore
+            if is_model_state:
+                cell_dimension = source.model.cell_dimension  # type: ignore
+                depth_grid = source.model.get_depth_grid(apply_dip=True)  # type: ignore
+            else:
+                cell_dimension = source.cell_dimension  # type: ignore
+                depth_grid = source.get_depth_grid(apply_dip=True)  # type: ignore
         else:
             # Working with raw ThreeDimensionalGrid
             data = source
@@ -3873,36 +3889,31 @@ class DataVisualizer:
         else:
             fig = renderer.render(fig, data, metadata, **kwargs)  # type: ignore
 
-        # Add well visualization if requested (only for ModelState data)
-        if show_wells:
-            if not is_model_state:
-                logger.warning(
-                    "show_wells=True ignored: wells can only be shown with ModelState data"
-                )
-            elif source.wells_exists():  # type: ignore
-                # Extract z_scale for well rendering (default to 1.0 if not specified)
-                z_scale = kwargs.get("z_scale", 1.0)
+        # Add well visualization if requested (only for `ModelState` data)
+        if show_wells and is_model_state and source.wells_exists():  # type: ignore
+            # Extract z_scale for well rendering (default to 1.0 if not specified)
+            z_scale = kwargs.get("z_scale", 1.0)
 
-                # Extract well visualization kwargs from the kwargs dict using TypedDict keys
-                well_kwargs: WellKwargs = {}
-                for key in WellKwargs.__annotations__.keys():
-                    if key in kwargs:
-                        well_kwargs[key] = kwargs.pop(key)  # type: ignore
+            # Extract well visualization kwargs from the kwargs dict using TypedDict keys
+            well_kwargs: WellKwargs = {}
+            for key in WellKwargs.__annotations__.keys():
+                if key in kwargs:
+                    well_kwargs[key] = kwargs.pop(key)  # type: ignore
 
-                # Add wells to the figure using the renderer's method
-                logger.debug(
-                    f"Rendering wells: {len(source.wells.injection_wells)} injection, "  # type: ignore
-                    f"{len(source.wells.production_wells)} production"  # type: ignore
-                )
-                renderer.render_wells(
-                    figure=fig,
-                    wells=source.wells,  # type: ignore
-                    cell_dimension=cell_dimension,
-                    depth_grid=depth_grid,
-                    coordinate_offsets=coordinate_offsets,
-                    z_scale=z_scale,
-                    **well_kwargs,
-                )
+            # Add wells to the figure using the renderer's method
+            logger.debug(
+                f"Rendering wells: {len(source.wells.injection_wells)} injection, "  # type: ignore
+                f"{len(source.wells.production_wells)} production"  # type: ignore
+            )
+            renderer.render_wells(
+                figure=fig,
+                wells=source.wells,  # type: ignore
+                cell_dimension=cell_dimension,
+                depth_grid=depth_grid,
+                coordinate_offsets=coordinate_offsets,
+                z_scale=z_scale,
+                **well_kwargs,
+            )
 
         final_title = self.get_title(plot_type, metadata, title)
 
@@ -3919,6 +3930,7 @@ class DataVisualizer:
     def animate(
         self,
         sequence: typing.Union[
+            typing.List[ReservoirModel[ThreeDimensions]],
             typing.Sequence[ModelState[ThreeDimensions]],
             typing.Sequence[ThreeDimensionalGrid],
         ],
@@ -3944,7 +3956,7 @@ class DataVisualizer:
         """
         Create an animated plot showing property evolution over time.
 
-        :param sequence: Sequence of ModelStates or ThreeDimensionalGrids representing time steps
+        :param sequence: Sequence of `ReservoirModel`s, `ModelState`s or `ThreeDimensionalGrid`s representing time steps
         :param property: Name of the property to animate. Required when sequence contains ModelStates,
             optional when sequence contains raw grids
         :param plot_type: Type of 3D plot for animation frames
@@ -3965,14 +3977,15 @@ class DataVisualizer:
         :return: Animated Plotly figure with time controls
         """
         if not sequence:
-            raise ValueError("No data provided")
+            raise ValidationError("No data provided")
 
-        # Determine if we're working with ModelStates or raw grids
+        # Determine if we're working with models, model states or raw grids
         is_model_state_sequence = isinstance(sequence[0], ModelState)
+        is_model_sequence = isinstance(sequence[0], ReservoirModel)
 
-        if is_model_state_sequence and property is None:
-            raise ValueError(
-                "property parameter is required when sequence contains ModelStates"
+        if (is_model_state_sequence or is_model_sequence) and property is None:
+            raise ValidationError(
+                "property parameter is required when sequence contains models or model states"
             )
 
         # Convert string plot_type to PlotType enum if needed
@@ -3980,13 +3993,13 @@ class DataVisualizer:
             try:
                 plot_type = PlotType(plot_type)
             except ValueError:
-                raise ValueError(
+                raise ValidationError(
                     f"Invalid plot_type string: '{plot_type}'. "
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
         # Get metadata
-        if is_model_state_sequence:
+        if is_model_state_sequence or is_model_sequence:
             metadata = self.registry[property]  # type: ignore
         else:
             # For raw grids, create or retrieve metadata
@@ -4004,12 +4017,10 @@ class DataVisualizer:
 
         if "cmin" not in kwargs:
             # Add cmin/cmax to kwargs for consistent color mapping across frames
-            if is_model_state_sequence:
-                sequence = typing.cast(
-                    typing.Sequence[ModelState[ThreeDimensions]], sequence
-                )
+            if is_model_state_sequence or is_model_sequence:
                 data_list: typing.List[ThreeDimensionalGrid] = [
-                    self._get_property_data(state, metadata.name) for state in sequence
+                    self._get_property_data(source, metadata.name)  # type: ignore[arg-type]
+                    for source in sequence
                 ]
             else:
                 data_list = typing.cast(

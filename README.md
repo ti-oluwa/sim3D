@@ -495,6 +495,7 @@ store = bores.ZarrStore(
 stream = bores.StateStream(
     bores.run(model=model, timer=timer, wells=wells, config=config),
     store=store,
+    async_io=True, # Prevent state persistence I/O operations from block stream
     batch_size=50,  # Persist every 50 states
     checkpoint_interval=200,  # Checkpoint every 200 steps
     checkpoint_dir=Path("./results/checkpoints/"),
@@ -1568,6 +1569,18 @@ Use `ModelAnalyst` for common analysis operations:
 > Check the `bores.analyses` module for more details or check `scenerios/*_analysis.py` for real usage examples.
 
 ```python
+store = bores.ZarrStore(
+    store=Path("/results/simulation.zarr"), 
+    metadata_dir=Path("/results/metadata")
+)
+# Create stream in store replay mode (no need for lazy loading since grid will mostly be used immediately)
+stream = bores.StateStream(
+    store=store, 
+    lazy_load=False, 
+    auto_replay=True
+)
+# Collect only the initial state and states at every 10th step
+states = stream.collect(key=lambda s: s.step == 0 or s.step % 10 == 0) # this returns a generator
 analyst = bores.ModelAnalyst(states)
 
 # Sweep efficiency over time
@@ -1680,7 +1693,8 @@ With 20+ property grids, state history storage, and solver matrices, memory can 
 3. **Use `bicgstab` solver** with `ilu` preconditioner for most cases. Although using a `diagonal` or no preconditioner may be faster, it may require more iterations.
 4. **Batch state storage** with `StateStream` to avoid memory buildup
 5. **Avoid keeping states in memory** unless necessary for analysis. When using `bores.run`, iterate through states directly or use a store. Never do list(bores.run(...)) for large simulations.
-6. **Profile your simulation** to identify bottlenecks:
+6. **Use `StateStream` for post-simulation analysis** — Model analysis with `ModelAnalyst` can be memory-intensive since all collected states need to be loaded into memory. Use `StateStream.collect()` with a predicate to filter only the timesteps you need for analysis (e.g., every 10th step, specific time intervals, or final state only). This prevents loading hundreds of states when only a subset is needed.
+7. **Profile your simulation** to identify bottlenecks:
 
    ```python
    import cProfile
@@ -2178,20 +2192,21 @@ stream = bores.StateStream(
     batch_size=50,
 )
 with stream: # Use context manager to ensure proper stream setup and teardown
-    for state in stream:
-        if state.step % 10 == 0:
-            avg_pressure = state.model.fluid_properties.pressure_grid.mean()
-            print(f"Step {state.step}: Avg pressure = {avg_pressure:.1f} psia")
+    for state in stream.collect(key=lambda s: s.step % 10 == 0):
+        avg_pressure = state.model.fluid_properties.pressure_grid.mean()
+        print(f"Step {state.step}: Avg pressure = {avg_pressure:.1f} psia")
 
-# 21. Analyze results
-states = store.load(validate=False, lazy=False)
+# 21. Analyze results (reuse stream with `auto_replay` for memory-efficient analysis)
+stream = bores.StateStream(store=store, lazy_load=False, auto_replay=True)
+# Collect only states at every 5th step to reduce memory footprint
+states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 5 == 0))
 analyst = bores.ModelAnalyst(states)
 
 # Cumulative oil production
 oil_cum = list(analyst.oil_production_history(interval=1, cumulative=True, from_step=1))
 print(f"Total oil produced: {oil_cum[-1][1]:.0f} STB")
 
-# Plot production history
+# Plot production history (collect states again for a separate analysis)
 pressure_history = [(s.step, s.model.fluid_properties.pressure_grid.mean()) for s in states]
 fig = bores.make_series_plot(
     data={"Avg. Reservoir Pressure": np.array(pressure_history)},

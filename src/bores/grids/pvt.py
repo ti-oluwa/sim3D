@@ -38,6 +38,7 @@ from bores.pvt.arrays import (
     compute_water_density,
     compute_water_formation_volume_factor,
     compute_water_viscosity,
+    estimate_solution_gor,
 )
 from bores.types import (
     CapillaryPressureTable,
@@ -59,6 +60,7 @@ __all__ = [
     "build_oil_specific_gravity_grid",
     "build_gas_compressibility_factor_grid",
     "build_oil_formation_volume_factor_grid",
+    "build_estimated_solution_gas_to_oil_ratio_grid",
 ]
 
 
@@ -668,6 +670,64 @@ def build_solution_gas_to_oil_ratio_grid(
 
 
 @numba.njit(cache=True)
+def build_estimated_solution_gas_to_oil_ratio_grid(
+    pressure_grid: NDimensionalGrid[NDimension],
+    temperature_grid: NDimensionalGrid[NDimension],
+    oil_api_gravity_grid: NDimensionalGrid[NDimension],
+    gas_gravity_grid: NDimensionalGrid[NDimension],
+    max_iterations: int = 20,
+    tolerance: float = 1e-4,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Computes a N-Dimensional grid of solution gas-to-oil ratios using iterative solver.
+
+    This function solves for Rs(P, T) at each grid point by iterating between:
+    - Rs estimate from Standing correlation
+    - Bubble point pressure Pb from Vazquez-Beggs correlation
+
+    This is useful when bubble point pressures are composition-dependent (2D Pb table)
+    and Rs cannot be computed directly without knowing Pb, which itself depends on Rs.
+
+    The algorithm handles both:
+    - Saturated oil (P <= Pb): Rs varies with pressure
+    - Undersaturated oil (P > Pb): Rs = Rsb (constant at bubble point value)
+
+    :param pressure_grid: N-Dimensional array of pressure values (psi)
+    :param temperature_grid: N-Dimensional array of temperature values (°F)
+    :param oil_api_gravity_grid: N-Dimensional array of oil API gravity values (°API)
+    :param gas_gravity_grid: N-Dimensional array of gas gravity values (dimensionless)
+    :param max_iterations: Maximum iterations for convergence at each point (default: 20)
+    :param tolerance: Relative tolerance for convergence (default: 1e-4)
+    :return: N-Dimensional array of solution gas-to-oil ratios (SCF/STB)
+
+    Example:
+    ```python
+    import numpy as np
+    
+    pressures = np.linspace(500, 5000, 50)
+    temperatures = np.linspace(100, 250, 30)
+    p_grid, t_grid = np.meshgrid(pressures, temperatures, indexing='ij')
+    api_grid = np.full_like(p_grid, 35.0)  # 35° API oil
+    gg_grid = np.full_like(p_grid, 0.65)   # Gas gravity
+    rs_grid = build_estimated_solution_gas_to_oil_ratio_grid(
+        pressure_grid=p_grid,
+        temperature_grid=t_grid,
+        oil_api_gravity_grid=api_grid,
+        gas_gravity_grid=gg_grid,
+    )
+    ```
+    """
+    result = estimate_solution_gor(
+        pressure=pressure_grid,
+        temperature=temperature_grid,
+        oil_api_gravity=oil_api_gravity_grid,
+        gas_gravity=gas_gravity_grid,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+    )
+    return result  # type: ignore[return-value]
+
+
 def build_oil_bubble_point_pressure_grid(
     gas_gravity_grid: NDimensionalGrid[NDimension],
     oil_api_gravity_grid: NDimensionalGrid[NDimension],

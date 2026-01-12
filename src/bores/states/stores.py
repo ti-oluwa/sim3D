@@ -1353,9 +1353,9 @@ class HDF5Store(StateStore):
                 step_group = f[key]  # type: ignore
                 step_key = key  # Capture for lazy closures
 
-                step = typing.cast(int, step_group.attrs["step"])
-                step_size = typing.cast(float, step_group.attrs["step_size"])
-                time = typing.cast(float, step_group.attrs["time"])
+                step = int(step_group.attrs["step"]) # type: ignore
+                step_size = float(step_group.attrs["step_size"]) # type: ignore
+                time = float(step_group.attrs["time"]) # type: ignore
 
                 # Load timer state if present (always load eagerly as it's small)
                 timer_state: typing.Optional[TimerState] = None

@@ -28,13 +28,14 @@ from bores.grids.pvt import (
     build_oil_formation_volume_factor_grid,
     build_oil_viscosity_grid,
     build_solution_gas_to_oil_ratio_grid,
+    build_estimated_solution_gas_to_oil_ratio_grid,
     build_water_bubble_point_pressure_grid,
     build_water_compressibility_grid,
     build_water_density_grid,
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from bores.pvt.core import compute_gas_gravity
+from bores.pvt.core import compute_gas_gravity, compute_oil_api_gravity
 from bores.types import (
     NDimensionalGrid,
     OneDimensionalGrid,
@@ -997,8 +998,7 @@ class PVTTables:
         """
         Fast 2D property lookup using Pressure-Temperature interpolator.
 
-        Uses `RectBivariateSpline` for efficient vectorized evaluation (10-50x faster than
-        `RegularGridInterpolator` for 2D data). Handles scalar and array inputs.
+        Uses `RectBivariateSpline` for efficient vectorized evaluation. Handles scalar and array inputs.
 
         :param name: Property name (e.g., "oil_viscosity", "gas_density")
         :param pressure: Pressure value(s) in psi
@@ -1309,7 +1309,7 @@ class PVTTables:
 
         # Undersaturated: P > Pb
         # Bo(P) = Bob * exp(-co_avg * (P - Pb))
-        # where co_avg is the average compressibility between Pb and P
+        # where `co_avg` is the average compressibility between Pb and P
         undersaturated = np.invert(saturated)
         if np.any(undersaturated):
             # Get Bo at bubble point
@@ -1645,16 +1645,13 @@ def build_pvt_table_data(
     oil_specific_gravity: float = 0.85,  # Typical light-medium crude oil
     gas_gravity: typing.Optional[float] = None,
     water_salinity: typing.Optional[float] = None,
-    # Array inputs
+    estimated_solution_gor: typing.Optional[float] = None,
     salinities: typing.Optional[OneDimensionalGrid] = None,
     solution_gas_to_oil_ratios: typing.Optional[OneDimensionalGrid] = None,
-    # Bubble point pressures (1D or 2D)
     bubble_point_pressures: typing.Optional[
         typing.Union[OneDimensionalGrid, TwoDimensionalGrid]
     ] = None,
-    # Gas specification
     reservoir_gas: typing.Optional[str] = None,
-    # Control flags
     build_oil_properties: bool = True,
     build_water_properties: bool = True,
     build_gas_properties: bool = True,
@@ -1707,6 +1704,10 @@ def build_pvt_table_data(
     :param gas_gravity: Gas specific gravity (dimensionless), e.g. 0.65
     :param water_salinity: Single salinity value (ppm NaCl), e.g. 35000.
         Used if `salinities` array is not provided.
+    :param estimated_solution_gor: Estimated solution gas-to-oil ratio (SCF/STB) for
+        1D bubble point calculation when `solution_gas_to_oil_ratios` is not provided.
+        If None, defaults to 500 SCF/STB (typical value for medium crude oils).
+        This only affects the bubble point curve, not the actual Rs(P,T) table.
     :param salinities: 1D array of salinities (ppm) for 3D water property tables.
         If None, uses [water_salinity] as single-value array.
     :param solution_gas_to_oil_ratios: 1D array of Rs values (SCF/STB) for 2D bubble point table
@@ -1814,62 +1815,102 @@ def build_pvt_table_data(
 
     # Validate pre-computed 2D table shapes (n_p, n_t)
     expected_2d = (n_p, n_t)
-    _validate_table_shape(oil_viscosity_table, expected_2d, "oil_viscosity_table")
     _validate_table_shape(
-        oil_compressibility_table, expected_2d, "oil_compressibility_table"
+        table=oil_viscosity_table,
+        expected_shape=expected_2d,
+        name="oil_viscosity_table",
     )
     _validate_table_shape(
-        oil_specific_gravity_table, expected_2d, "oil_specific_gravity_table"
-    )
-    _validate_table_shape(oil_api_gravity_table, expected_2d, "oil_api_gravity_table")
-    _validate_table_shape(oil_density_table, expected_2d, "oil_density_table")
-    _validate_table_shape(
-        oil_formation_volume_factor_table,
-        expected_2d,
-        "oil_formation_volume_factor_table",
+        table=oil_compressibility_table,
+        expected_shape=expected_2d,
+        name="oil_compressibility_table",
     )
     _validate_table_shape(
-        solution_gas_to_oil_ratio_table, expected_2d, "solution_gas_to_oil_ratio_table"
-    )
-    _validate_table_shape(gas_viscosity_table, expected_2d, "gas_viscosity_table")
-    _validate_table_shape(
-        gas_compressibility_table, expected_2d, "gas_compressibility_table"
-    )
-    _validate_table_shape(gas_gravity_table, expected_2d, "gas_gravity_table")
-    _validate_table_shape(
-        gas_molecular_weight_table, expected_2d, "gas_molecular_weight_table"
-    )
-    _validate_table_shape(gas_density_table, expected_2d, "gas_density_table")
-    _validate_table_shape(
-        gas_formation_volume_factor_table,
-        expected_2d,
-        "gas_formation_volume_factor_table",
+        table=oil_specific_gravity_table,
+        expected_shape=expected_2d,
+        name="oil_specific_gravity_table",
     )
     _validate_table_shape(
-        gas_compressibility_factor_table,
-        expected_2d,
-        "gas_compressibility_factor_table",
+        table=oil_api_gravity_table,
+        expected_shape=expected_2d,
+        name="oil_api_gravity_table",
+    )
+    _validate_table_shape(
+        table=oil_density_table, expected_shape=expected_2d, name="oil_density_table"
+    )
+    _validate_table_shape(
+        table=oil_formation_volume_factor_table,
+        expected_shape=expected_2d,
+        name="oil_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        table=solution_gas_to_oil_ratio_table,
+        expected_shape=expected_2d,
+        name="solution_gas_to_oil_ratio_table",
+    )
+    _validate_table_shape(
+        table=gas_viscosity_table,
+        expected_shape=expected_2d,
+        name="gas_viscosity_table",
+    )
+    _validate_table_shape(
+        table=gas_compressibility_table,
+        expected_shape=expected_2d,
+        name="gas_compressibility_table",
+    )
+    _validate_table_shape(
+        table=gas_gravity_table, expected_shape=expected_2d, name="gas_gravity_table"
+    )
+    _validate_table_shape(
+        table=gas_molecular_weight_table,
+        expected_shape=expected_2d,
+        name="gas_molecular_weight_table",
+    )
+    _validate_table_shape(
+        table=gas_density_table, expected_shape=expected_2d, name="gas_density_table"
+    )
+    _validate_table_shape(
+        table=gas_formation_volume_factor_table,
+        expected_shape=expected_2d,
+        name="gas_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        table=gas_compressibility_factor_table,
+        expected_shape=expected_2d,
+        name="gas_compressibility_factor_table",
     )
 
     # Validate pre-computed 3D table shapes (n_p, n_t, n_s)
     expected_3d = (n_p, n_t, n_s)
     _validate_table_shape(
-        water_bubble_point_pressure_table,
-        expected_3d,
-        "water_bubble_point_pressure_table",
-    )
-    _validate_table_shape(water_viscosity_table, expected_3d, "water_viscosity_table")
-    _validate_table_shape(
-        water_compressibility_table, expected_3d, "water_compressibility_table"
-    )
-    _validate_table_shape(water_density_table, expected_3d, "water_density_table")
-    _validate_table_shape(
-        water_formation_volume_factor_table,
-        expected_3d,
-        "water_formation_volume_factor_table",
+        table=water_bubble_point_pressure_table,
+        expected_shape=expected_3d,
+        name="water_bubble_point_pressure_table",
     )
     _validate_table_shape(
-        gas_solubility_in_water_table, expected_3d, "gas_solubility_in_water_table"
+        table=water_viscosity_table,
+        expected_shape=expected_3d,
+        name="water_viscosity_table",
+    )
+    _validate_table_shape(
+        table=water_compressibility_table,
+        expected_shape=expected_3d,
+        name="water_compressibility_table",
+    )
+    _validate_table_shape(
+        table=water_density_table,
+        expected_shape=expected_3d,
+        name="water_density_table",
+    )
+    _validate_table_shape(
+        table=water_formation_volume_factor_table,
+        expected_shape=expected_3d,
+        name="water_formation_volume_factor_table",
+    )
+    _validate_table_shape(
+        table=gas_solubility_in_water_table,
+        expected_shape=expected_3d,
+        name="gas_solubility_in_water_table",
     )
 
     # Validate bubble_point_pressures shape if provided
@@ -2020,7 +2061,7 @@ def build_pvt_table_data(
                 gas_gravity_table[:, :, np.newaxis], (n_p, n_t, n_s)
             ).copy()
         else:
-            # Use default gas gravity
+            # Use default gas gravity. This will mostlikely not be reached.
             gas_gravity_3d = np.full((n_p, n_t, n_s), 0.65, dtype=dtype)
 
         # Water compressibility: Cw(P, T, S)
@@ -2089,8 +2130,19 @@ def build_pvt_table_data(
                     )
             else:
                 # Build 1D bubble point table: Pb(T)
-                # Use typical Rs = 500 SCF/STB as reference
-                estimated_rs_grid = np.full(n_t, 500.0, dtype=dtype)
+                # Use user-specified Rs estimate or default to 500 SCF/STB
+                # The default of 500 is a moderate value typical for medium crude oils
+                # and provides stable behavior for most reservoir conditions.
+                if estimated_solution_gor is not None:
+                    estimated_rs = estimated_solution_gor
+                else:
+                    estimated_rs = 500.0
+
+                estimated_rs_grid = np.full(n_t, estimated_rs, dtype=dtype)
+                oil_api = compute_oil_api_gravity(oil_specific_gravity)
+                logger.debug(
+                    f"Using Rs = {estimated_rs:.1f} SCF/STB for 1D bubble point (API = {oil_api:.1f}°)"
+                )
                 bubble_point_pressures = build_oil_bubble_point_pressure_grid(
                     gas_gravity_grid=np.full(n_t, gas_gravity, dtype=dtype),
                     oil_api_gravity_grid=build_oil_api_gravity_grid(
@@ -2107,21 +2159,24 @@ def build_pvt_table_data(
                 bubble_point_pressures[np.newaxis, :], (n_p, n_t)
             ).copy()
         else:
-            # 2D: Pb(Rs, T) - requires Rs(P, T) table to be provided
+            # 2D: Pb(Rs, T) - compute Rs(P, T) iteratively if not provided
             if solution_gas_to_oil_ratio_table is None:
-                raise ValidationError(
-                    "2D `bubble_point_pressures` table Pb(Rs, T) provided, but no "
-                    "`solution_gas_to_oil_ratio_table` Rs(P, T) provided. "
-                    "When using compositional variations (2D bubble point), you must provide "
-                    "a 2D Rs(P, T) table specifying the gas-oil ratio at each pressure and temperature."
+                # Use iterative solver to estimate Rs(P, T) without needing Pb
+                logger.debug(
+                    "Computing Rs(P, T) iteratively for 2D bubble point pressures..."
+                )
+                solution_gas_to_oil_ratio_table = (
+                    build_estimated_solution_gas_to_oil_ratio_grid(
+                        pressure_grid=pressure_grid_2d,
+                        temperature_grid=temperature_grid_2d,
+                        oil_api_gravity_grid=oil_api_gravity_table,
+                        gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                    )
                 )
 
-            # Use the provided Rs(P,T) table to determine Pb at each (P,T)
-            # This requires inverting Pb(Rs, T) to find Rs given (P, T)
-            # For now, we'll build Pb grid from the Rs table
-            bubble_point_pressure_grid_2d = np.zeros((n_p, n_t), dtype=dtype)
-
+            # Use the Rs(P,T) table to determine Pb at each (P,T)
             # For each (P, T), interpolate Pb from the 2D table Pb(Rs, T)
+            bubble_point_pressure_grid_2d = np.zeros((n_p, n_t), dtype=dtype)
             pb_interp = RectBivariateSpline(
                 x=solution_gas_to_oil_ratios,
                 y=temperatures,
@@ -2129,20 +2184,14 @@ def build_pvt_table_data(
                 kx=1,
                 ky=1,
             )
-            # Vectorized evaluation: evaluate Pb at each Rs(P, T) value
-            # Create temperature grid matching solution_gas_to_oil_ratio_table shape
+            # Evaluate Pb at each Rs(P, T) value
+            # Create temperature grid matching `solution_gas_to_oil_ratio_table` shape
             t_grid = np.broadcast_to(temperatures, (n_p, n_t))
             bubble_point_pressure_grid_2d = (
                 pb_interp.ev(solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel())
                 .reshape(n_p, n_t)
                 .astype(dtype)
             )
-
-            # TODO: Instead of requiring Rs(P,T) as input, compute it iteratively:
-            # 1. Start with initial guess: Rs(P,T) from Standing correlation
-            # 2. Compute Pb(P,T) using Rs(P,T) and the 2D table
-            # 3. Update Rs(P,T) based on new Pb(P,T)
-            # 4. Iterate until convergence
 
         # SOLUTION GOR TABLE: Rs(P, T)
         if solution_gas_to_oil_ratio_table is None:
@@ -2154,29 +2203,19 @@ def build_pvt_table_data(
                 oil_api_gravity_grid=oil_api_gravity_table,
             )
 
-        # OIL FORMATION VOLUME FACTOR: Bo(P, T)
-        # Need initial compressibility estimate for Bo calculation
-        if oil_compressibility_table is None:
-            # Use typical oil compressibility as temporary value
-            oil_compressibility_temp = np.full((n_p, n_t), 1e-5, dtype=dtype)
-        else:
-            oil_compressibility_temp = oil_compressibility_table
+        # OIL FORMATION VOLUME FACTOR & COMPRESSIBILITY
+        # These have a circular dependency: oil FVF depends on oil compressibility, oil compressibility depends on oil FVF
+        # So we use temporary a oil compressibility estimate for initial oil FVF, then compute actual oil compressibility,
+        # then recalculate Bo with accurate oil compressibility values.
+        need_bo = oil_formation_volume_factor_table is None
+        need_co = oil_compressibility_table is None
 
-        if oil_formation_volume_factor_table is None:
-            oil_formation_volume_factor_table = build_oil_formation_volume_factor_grid(
-                pressure_grid=pressure_grid_2d,
-                temperature_grid=temperature_grid_2d,
-                bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
-                oil_specific_gravity_grid=oil_specific_gravity_table,
-                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
-                solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
-                oil_compressibility_grid=oil_compressibility_temp,
-            )
+        # Rs at bubble point will be computed lazily when needed for oil compressibility or viscosity
+        rs_at_bp_grid: typing.Optional[TwoDimensionalGrid] = None
+        gas_fvf_for_co: typing.Optional[TwoDimensionalGrid] = None
 
-        # OIL COMPRESSIBILITY: Co(P, T)
-        if oil_compressibility_table is None:
-            # Compute Rs at bubble point for each (P, T) pair
-            # When P = Pb, oil is saturated: Rs(Pb, T) = Rsb(T)
+        # Compute Rs at bubble point (needed for Co calculation and viscosity)
+        if need_co:
             rs_at_bp_grid = build_solution_gas_to_oil_ratio_grid(
                 pressure_grid=bubble_point_pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
@@ -2191,6 +2230,24 @@ def build_pvt_table_data(
             else:
                 gas_fvf_for_co = np.ones((n_p, n_t), dtype=dtype)
 
+        # Do initial Bo calculation with temporary Co estimate
+        if need_bo:
+            # Use typical oil compressibility as temporary value for initial Bo
+            oil_compressibility_temp = np.full((n_p, n_t), 1e-5, dtype=dtype)
+            oil_formation_volume_factor_table = build_oil_formation_volume_factor_grid(
+                pressure_grid=pressure_grid_2d,
+                temperature_grid=temperature_grid_2d,
+                bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
+                oil_specific_gravity_grid=oil_specific_gravity_table,
+                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
+                oil_compressibility_grid=oil_compressibility_temp,
+            )
+
+        # Compute actual Co using initial Bo estimate
+        if need_co:
+            assert rs_at_bp_grid is not None  # Guaranteed by need_co check above
+            assert gas_fvf_for_co is not None
             oil_compressibility_table = build_oil_compressibility_grid(
                 pressure_grid=pressure_grid_2d,
                 temperature_grid=temperature_grid_2d,
@@ -2200,6 +2257,19 @@ def build_pvt_table_data(
                 gor_at_bubble_point_pressure_grid=rs_at_bp_grid,
                 gas_formation_volume_factor_grid=gas_fvf_for_co,
                 oil_formation_volume_factor_grid=oil_formation_volume_factor_table,
+            )
+
+        # Recalculate Bo with accurate Co values
+        if need_bo and need_co:
+            logger.debug("Recalculating Bo with accurate Co values...")
+            oil_formation_volume_factor_table = build_oil_formation_volume_factor_grid(
+                pressure_grid=pressure_grid_2d,
+                temperature_grid=temperature_grid_2d,
+                bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
+                oil_specific_gravity_grid=oil_specific_gravity_table,
+                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
+                oil_compressibility_grid=oil_compressibility_table,
             )
 
         # OIL DENSITY: ρo(P, T)
@@ -2213,8 +2283,7 @@ def build_pvt_table_data(
 
         # OIL VISCOSITY: μo(P, T)
         if oil_viscosity_table is None:
-            # Need Rs at bubble point (computed above if Co was None)
-            if "rs_at_bp_grid" not in locals():
+            if rs_at_bp_grid is None:
                 # Compute Rs at bubble point for each (P, T) pair
                 # When P = Pb, oil is saturated: Rs(Pb, T) = Rsb(T)
                 rs_at_bp_grid = build_solution_gas_to_oil_ratio_grid(
@@ -2231,7 +2300,7 @@ def build_pvt_table_data(
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
                 oil_specific_gravity_grid=oil_specific_gravity_table,
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
-                gor_at_bubble_point_pressure_grid=rs_at_bp_grid,  # type: ignore
+                gor_at_bubble_point_pressure_grid=rs_at_bp_grid,
             )
         logger.debug("Oil properties built")
 

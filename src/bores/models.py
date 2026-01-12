@@ -484,3 +484,22 @@ class ReservoirModel(typing.Generic[NDimension]):
             dip_angle=self.dip_angle,
             dip_azimuth=self.dip_azimuth,
         )
+
+    def asdict(self) -> typing.Dict[str, typing.Any]:
+        """
+        Convert the `ReservoirModel` instance to a dictionary representation.
+
+        :return: Dictionary representation of the `ReservoirModel` instance.
+        """
+        return {
+            "grid_shape": self.grid_shape,
+            "cell_dimension": self.cell_dimension,
+            "thickness_grid": self.thickness_grid,
+            "fluid_properties": attrs.asdict(self.fluid_properties),
+            "rock_properties": attrs.asdict(self.rock_properties),
+            "rock_fluid_properties": attrs.asdict(self.rock_fluid_properties),
+            "saturation_history": attrs.asdict(self.saturation_history),
+            "boundary_conditions": attrs.asdict(self.boundary_conditions),
+            "dip_angle": self.dip_angle,
+            "dip_azimuth": self.dip_azimuth,
+        }

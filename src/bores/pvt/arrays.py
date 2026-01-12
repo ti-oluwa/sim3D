@@ -18,6 +18,7 @@ from bores.pvt.core import (
     clip_temperature,
     compute_gas_solubility_in_water as compute_gas_solubility_in_water_scalar,
     compute_gas_to_oil_ratio_standing as compute_gas_to_oil_ratio_standing_scalar,
+    estimate_solution_gor as estimate_solution_gor_scalar,
     fahrenheit_to_celsius,
     fahrenheit_to_kelvin,
 )
@@ -3171,6 +3172,72 @@ def compute_gas_to_oil_ratio_standing(
     return gor.astype(dtype)  # type: ignore[return-value]
 
 
+@numba.njit(cache=True, parallel=True)
+def estimate_solution_gor(
+    pressure: NDimensionalGrid[NDimension],
+    temperature: NDimensionalGrid[NDimension],
+    oil_api_gravity: NDimensionalGrid[NDimension],
+    gas_gravity: NDimensionalGrid[NDimension],
+    max_iterations: int = 20,
+    tolerance: float = 1e-4,
+) -> NDimensionalGrid[NDimension]:
+    """
+    Estimate solution gas-to-oil ratio Rs(P, T) iteratively for arrays.
+
+    This solves the coupled system where:
+    - Rs depends on P and Pb via the correlation
+    - Pb depends on Rs and T via Vazquez-Beggs
+
+    The algorithm at each point:
+    1. Initial guess: Rs from Standing correlation (uses P, API, γg)
+    2. Compute Pb from Rs using Vazquez-Beggs
+    3. If P > Pb: oil is undersaturated, find Rs where Pb(Rs,T) = P
+    4. If P <= Pb: oil is saturated, Rs from Standing
+    5. Iterate until convergence
+
+    For undersaturated oil (P > Pb):
+        Rs remains constant at Rsb (the Rs at bubble point pressure)
+
+    For saturated oil (P <= Pb):
+        Rs varies with pressure - more gas dissolves at higher P
+
+    :param pressure: Reservoir pressure array (psi)
+    :param temperature: Reservoir temperature array (°F)
+    :param oil_api_gravity: Oil API gravity array (°API, typically 15-50)
+    :param gas_gravity: Gas specific gravity array (dimensionless, typically 0.6-1.2)
+    :param max_iterations: Maximum iterations for convergence (default: 20)
+    :param tolerance: Relative tolerance for convergence (default: 1e-4)
+    :return: Solution gas-to-oil ratio Rs array (SCF/STB)
+
+    Notes:
+        - Convergence is typically achieved in 3-5 iterations
+        - Uses Standing correlation for initial guess (ignores T)
+        - Uses Vazquez-Beggs for Pb calculation (includes T)
+        - Handles both saturated and undersaturated conditions
+        - Parallelized for performance on large arrays
+    """
+    flat_size = pressure.size
+    dtype = pressure.dtype
+    result = np.empty(flat_size, dtype=dtype)
+
+    pressure_flat = pressure.ravel()
+    temperature_flat = temperature.ravel()
+    api_gravity_flat = oil_api_gravity.ravel()
+    gas_gravity_flat = gas_gravity.ravel()
+
+    for i in numba.prange(flat_size):
+        result[i] = estimate_solution_gor_scalar(
+            pressure=pressure_flat[i],
+            temperature=temperature_flat[i],
+            oil_api_gravity=api_gravity_flat[i],
+            gas_gravity=gas_gravity_flat[i],
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+
+    return result.reshape(pressure.shape)
+
+
 @numba.njit(cache=True)
 def _standing_oil_bubble_point_residual(
     pressure: float,
@@ -3385,21 +3452,23 @@ def compute_miscibility_transition_factor(
         1 = fully miscible behavior
 
     Example:
-        >>> # CO2 injection with MMP = 2000 psi, base omega = 0.67
-        >>> omega_base = 0.67
-        >>> mmp = 2000.0
-        >>>
-        >>> # Well below MMP - immiscible
-        >>> factor = compute_miscibility_transition_factor(1000, mmp, 500)
-        >>> omega_eff = omega_base * factor  # ~0.08 (nearly immiscible)
-        >>>
-        >>> # At MMP - transitional
-        >>> factor = compute_miscibility_transition_factor(2000, mmp, 500)
-        >>> omega_eff = omega_base * factor  # ~0.34 (partial miscibility)
-        >>>
-        >>> # Above MMP - miscible
-        >>> factor = compute_miscibility_transition_factor(3000, mmp, 500)
-        >>> omega_eff = omega_base * factor  # ~0.59 (near full miscibility)
+    ```python
+    # CO2 injection with MMP = 2000 psi, base omega = 0.67
+    omega_base = 0.67
+    mmp = 2000.0
+
+    # Well below MMP - immiscible
+    factor = compute_miscibility_transition_factor(1000, mmp, 500)
+    omega_eff = omega_base * factor  # ~0.08 (nearly immiscible)
+
+    # At MMP - transitional
+    factor = compute_miscibility_transition_factor(2000, mmp, 500)
+    omega_eff = omega_base * factor  # ~0.34 (partial miscibility)
+
+    # Above MMP - miscible
+    factor = compute_miscibility_transition_factor(3000, mmp, 500)
+    omega_eff = omega_base * factor  # ~0.59 (near full miscibility)
+    ```
 
     References:
         Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and

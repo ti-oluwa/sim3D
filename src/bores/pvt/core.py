@@ -2963,6 +2963,178 @@ def estimate_bubble_point_pressure_standing(
 
 
 @numba.njit(cache=True)
+def _compute_bubble_point_pressure_vazquez_beggs(
+    gas_gravity: float,
+    oil_api_gravity: float,
+    temperature: float,
+    gas_to_oil_ratio: float,
+) -> float:
+    """
+    Internal njit version of bubble point pressure calculation using Vazquez-Beggs.
+
+    Same as `compute_oil_bubble_point_pressure` but without input validation
+    for use in tight loops.
+
+    :param gas_gravity: Gas specific gravity (dimensionless)
+    :param oil_api_gravity: Oil API gravity in degrees API.
+    :param temperature: Temperature (°F)
+    :param gas_to_oil_ratio: Gas-to-oil ratio (GOR) in SCF/STB
+    :return: Bubble point pressure (psi)
+    """
+    # Get Vazquez-Beggs coefficients based on API gravity
+    if oil_api_gravity <= 30.0:
+        c1, c2, c3 = 0.0362, 1.0937, 25.7240
+    else:
+        c1, c2, c3 = 0.0178, 1.1870, 23.9310
+
+    temperature_rankine = temperature + 459.67
+    pressure = (
+        gas_to_oil_ratio
+        / (c1 * gas_gravity * np.exp((c3 * oil_api_gravity) / temperature_rankine))
+    ) ** (1 / c2)
+    return pressure
+
+
+@numba.njit(cache=True)
+def _compute_gas_to_oil_ratio_standing_internal(
+    pressure: float, oil_api_gravity: float, gas_gravity: float
+) -> float:
+    """
+    Internal njit version of Standing correlation for Rs.
+
+    Same as `compute_gas_to_oil_ratio_standing` but without input validation.
+
+    :param pressure: Pressure (psi)
+    :param oil_api_gravity: API gravity of the oil in degrees API.
+    :param gas_gravity: Specific gravity of the gas (relative to air).
+    :return: Solution gas-oil ratio (Rs) in (SCF/STB).
+    """
+    gor = gas_gravity * (
+        (pressure / 18.2 + 1.4) * 10 ** (0.0125 * oil_api_gravity)
+    ) ** (1 / 1.2048)
+    return gor
+
+
+@numba.njit(cache=True)
+def estimate_solution_gor(
+    pressure: float,
+    temperature: float,
+    oil_api_gravity: float,
+    gas_gravity: float,
+    max_iterations: int = 20,
+    tolerance: float = 1e-4,
+) -> float:
+    """
+    Estimate solution gas-to-oil ratio Rs(P, T) iteratively.
+
+    This solves the coupled system where:
+    - Rs depends on P and Pb via the correlation
+    - Pb depends on Rs and T via Vazquez-Beggs
+
+    The algorithm:
+    1. Initial guess: Rs from Standing correlation (uses P, API, γg)
+    2. Compute Pb from Rs using Vazquez-Beggs
+    3. If P > Pb: oil is undersaturated, Rs = Rs_max (at bubble point)
+    4. If P <= Pb: oil is saturated, refine Rs estimate
+    5. Iterate until convergence
+
+    For undersaturated oil (P > Pb):
+        Rs remains constant at Rsb (the Rs at bubble point pressure)
+
+    For saturated oil (P <= Pb):
+        Rs varies with pressure - more gas dissolves at higher P
+
+    :param pressure: Reservoir pressure (psi)
+    :param temperature: Reservoir temperature (°F)
+    :param oil_api_gravity: Oil API gravity in degrees API (typically 15-50)
+    :param gas_gravity: Gas specific gravity relative to air (typically 0.6-1.2)
+    :param max_iterations: Maximum iterations for convergence (default: 20)
+    :param tolerance: Relative tolerance for convergence (default: 1e-4)
+    :return: Solution gas-to-oil ratio Rs in SCF/STB
+
+    Notes:
+        - Convergence is typically achieved in 3-5 iterations
+        - Uses Standing correlation for initial guess (ignores T)
+        - Uses Vazquez-Beggs for Pb calculation (includes T)
+        - Handles both saturated and undersaturated conditions
+    """
+    # Initial guess from Standing correlation
+    rs_current = _compute_gas_to_oil_ratio_standing_internal(
+        pressure=pressure,
+        oil_api_gravity=oil_api_gravity,
+        gas_gravity=gas_gravity,
+    )
+
+    # Ensure reasonable bounds for Rs
+    rs_min = 0.0
+    rs_max = 5000.0  # Practical upper limit for Rs (SCF/STB)
+    rs_current = max(rs_min, min(rs_current, rs_max))
+
+    for _ in range(max_iterations):
+        # Compute bubble point pressure from current Rs estimate
+        pb_current = _compute_bubble_point_pressure_vazquez_beggs(
+            gas_gravity=gas_gravity,
+            oil_api_gravity=oil_api_gravity,
+            temperature=temperature,
+            gas_to_oil_ratio=rs_current,
+        )
+
+        # Determine saturation state and update Rs
+        if pressure > pb_current:
+            # Undersaturated: P > Pb
+            # Rs should be the Rs at bubble point (Rsb)
+            # Since Pb(Rs) is monotonically increasing with Rs,
+            # we need to find Rs such that Pb(Rs, T) = P
+            # Use bisection to find Rsb where Pb(Rsb, T) ≈ P
+
+            rs_lo = 0.0
+            rs_hi = rs_max
+
+            # Bisection to find Rs where Pb(Rs, T) = P
+            for _ in range(50):  # Inner bisection iterations
+                rs_mid = (rs_lo + rs_hi) / 2.0
+                pb_mid = _compute_bubble_point_pressure_vazquez_beggs(
+                    gas_gravity=gas_gravity,
+                    oil_api_gravity=oil_api_gravity,
+                    temperature=temperature,
+                    gas_to_oil_ratio=rs_mid,
+                )
+
+                if pb_mid < pressure:
+                    rs_lo = rs_mid
+                else:
+                    rs_hi = rs_mid
+
+                if (rs_hi - rs_lo) < tolerance * rs_mid:
+                    break
+
+            rs_new = (rs_lo + rs_hi) / 2.0
+        else:
+            # Saturated: P <= Pb
+            # Rs varies with P so we use the Standing-based estimate
+            # but refine using the relationship that P should equal Pb(Rs, T)
+            # when oil is exactly at bubble point
+
+            # For saturated oil below bubble point, Rs increases with P
+            # Use the current Standing estimate as is, since it's pressure-based
+            rs_new = _compute_gas_to_oil_ratio_standing_internal(
+                pressure=pressure,
+                oil_api_gravity=oil_api_gravity,
+                gas_gravity=gas_gravity,
+            )
+
+        # Check convergence
+        if rs_current > tolerance:  # Avoid division by zero
+            relative_change = abs(rs_new - rs_current) / rs_current
+            if relative_change < tolerance:
+                return rs_new
+
+        rs_current = rs_new
+
+    return rs_current
+
+
+@numba.njit(cache=True)
 def compute_hydrocarbon_in_place(
     area: float,
     thickness: float,
