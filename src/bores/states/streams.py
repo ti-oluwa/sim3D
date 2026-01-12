@@ -490,22 +490,59 @@ class StateStream(typing.Generic[NDimension]):
                 f"Stream interrupted after {self._num_saved} states have been saved: {exc_val}"
             )
 
-    def collect(self, *steps: int) -> typing.Iterator[ModelState[NDimension]]:
+    def collect(
+        self,
+        *steps: int,
+        key: typing.Optional[typing.Callable[[ModelState[NDimension]], bool]] = None,
+    ) -> typing.Iterator[ModelState[NDimension]]:
         """
-        Iterate over states from the stream, optionally filtering by step numbers.
+        Iterate over states from the stream, optionally filtering by step numbers or a predicate.
+
+        This method provides flexible filtering capabilities:
+        - Filter by specific step numbers (positional arguments)
+        - Filter by a custom predicate function (key argument)
+        - Combine both filters (state must match step AND predicate)
+        - No filtering (iterate through all states)
+
+        When filtering by steps, iteration stops early once all requested steps have been
+        collected, which can significantly improve performance for large streams.
 
         :param steps: Optional step numbers to filter. If provided, only states with
-            matching step numbers are yielded. Example: collect(0, 10, 20)
-        :return: Iterator of ModelState instances
+            matching step numbers are yielded. Supports any number of step values.
+            Example: ``collect(0, 10, 20)`` yields only steps 0, 10, and 20.
+        :param key: Optional predicate function to filter states. If provided, only states
+            for which ``key(state)`` returns ``True`` are yielded. When combined with
+            ``steps``, both conditions must be satisfied.
+        :return: Iterator of ``ModelState`` instances matching the filter criteria.
 
-        Example:
+        Examples:
         ```python
+        # Iterate through entire stream (no filtering)
         for state in stream.collect():
             process(state)
 
+        # Collect specific steps only
         for state in stream.collect(0, 100, 200):
             process(state)
+
+        # Collect states matching a predicate
+        for state in stream.collect(key=lambda s: s.step % 50 == 0):
+            process(state)
+
+        # Combine step filter with predicate (both must match)
+        for state in stream.collect(0, 50, 100, key=lambda s: s.model.pressure_grid.mean() > 3000):
+            process(state)
+
+        # Collect first and last states
+        for state in stream.collect(0, -1):  # Note: -1 won't work, use key instead
+            process(state)
         ```
+
+        Note:
+            - When using ``steps``, the method stops early once all requested steps are found.
+            - The ``key`` predicate is evaluated for every state, even those not in ``steps``.
+            - For replaying from store with filtering, consider using store's native filtering
+              if available for better performance.
         """
         if steps:
             logger.debug(f"Collecting states from stream (filtering steps: {steps})")
@@ -515,10 +552,15 @@ class StateStream(typing.Generic[NDimension]):
             remaining_steps = None
 
         for state in self:
+            # Apply key filter first (if provided)
+            if key is not None and not key(state):
+                continue
+
+            # Apply step filter (if provided)
             if remaining_steps is not None:
                 if state.step in remaining_steps:
                     yield state
-                    remaining_steps.remove(state.step)
+                    remaining_steps.discard(state.step)
                     if not remaining_steps:
                         logger.debug(
                             f"Collected all {len(steps)} requested steps, stopping early"

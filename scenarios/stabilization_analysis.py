@@ -305,8 +305,8 @@ def _(analyst, bores, np):
     # Reserves
     oil_water_reserves_fig = bores.make_series_plot(
         data={
-            "Oil In Place": np.array(list(oil_in_place_history)),
             "Water In Place": np.array(list(water_in_place_history)),
+            "Oil In Place": np.array(list(oil_in_place_history)),
         },
         title="Oil & Water Reserves Stability Analysis (Case 1)",
         x_label="Time Step",
@@ -354,7 +354,7 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="scatter_3d",
+        plot_type="isosurface",
         width=720,
         height=460,
         opacity=0.67,
@@ -367,7 +367,7 @@ def _(bores, states, viz):
         show_perforations=True,
     )
 
-    property = "oil-pressure"
+    property = "oil-saturation"
     figures = []
     timesteps = [40]
     for timestep in timesteps:

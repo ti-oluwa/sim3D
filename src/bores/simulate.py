@@ -1,4 +1,5 @@
 """Run a simulation workflow on a 3-Dimensional reservoir model."""
+
 import copy
 import logging
 import typing
@@ -197,7 +198,9 @@ def _run_implicit_step(
     padded_pressure_grid = solution.pressure_grid.astype(dtype, copy=False)
     padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype, copy=False)
     padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype, copy=False)
-    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype, copy=False)
+    padded_water_saturation_grid = solution.water_saturation_grid.astype(
+        dtype, copy=False
+    )
 
     # Check for any out-of-range pressures
     min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
@@ -508,7 +511,9 @@ def _run_impes_step(
     logger.debug("Saturation evolution completed!")
 
     logger.debug("Updating fluid properties with new saturation grids...")
-    padded_water_saturation_grid = solution.water_saturation_grid.astype(dtype, copy=False)
+    padded_water_saturation_grid = solution.water_saturation_grid.astype(
+        dtype, copy=False
+    )
     padded_oil_saturation_grid = solution.oil_saturation_grid.astype(dtype, copy=False)
     padded_gas_saturation_grid = solution.gas_saturation_grid.astype(dtype, copy=False)
     padded_solvent_concentration_grid = solution.solvent_concentration_grid
@@ -526,7 +531,9 @@ def _run_impes_step(
             water_saturation_grid=padded_water_saturation_grid,
             oil_saturation_grid=padded_oil_saturation_grid,
             gas_saturation_grid=padded_gas_saturation_grid,
-            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype, copy=False),
+            solvent_concentration_grid=padded_solvent_concentration_grid.astype(
+                dtype, copy=False
+            ),
         )
 
     # Update residual saturation grids based on new saturations
@@ -744,9 +751,15 @@ def _run_explicit_step(
 
     logger.debug("Updating fluid properties with new saturation grids...")
 
-    padded_water_saturation_grid = saturation_solution.water_saturation_grid.astype(dtype, copy=False)
-    padded_oil_saturation_grid = saturation_solution.oil_saturation_grid.astype(dtype, copy=False)
-    padded_gas_saturation_grid = saturation_solution.gas_saturation_grid.astype(dtype, copy=False)
+    padded_water_saturation_grid = saturation_solution.water_saturation_grid.astype(
+        dtype, copy=False
+    )
+    padded_oil_saturation_grid = saturation_solution.oil_saturation_grid.astype(
+        dtype, copy=False
+    )
+    padded_gas_saturation_grid = saturation_solution.gas_saturation_grid.astype(
+        dtype, copy=False
+    )
     padded_solvent_concentration_grid = saturation_solution.solvent_concentration_grid
     if padded_solvent_concentration_grid is None:
         padded_fluid_properties = attrs.evolve(
@@ -761,7 +774,9 @@ def _run_explicit_step(
             water_saturation_grid=padded_water_saturation_grid,
             oil_saturation_grid=padded_oil_saturation_grid,
             gas_saturation_grid=padded_gas_saturation_grid,
-            solvent_concentration_grid=padded_solvent_concentration_grid.astype(dtype, copy=False),
+            solvent_concentration_grid=padded_solvent_concentration_grid.astype(
+                dtype, copy=False
+            ),
         )
 
     # Update PVT properties with new state (pressure and saturations)
@@ -914,7 +929,9 @@ def run(
         )
 
         # Unpad the fluid properties back to the original grid shape for model state snapshots
-        model = model.evolve(fluid_properties=padded_fluid_properties.unpad(pad_width=1))
+        model = model.evolve(
+            fluid_properties=padded_fluid_properties.unpad(pad_width=1)
+        )
         padded_water_saturation_grid = padded_fluid_properties.water_saturation_grid
         padded_oil_saturation_grid = padded_fluid_properties.oil_saturation_grid
         padded_gas_saturation_grid = padded_fluid_properties.gas_saturation_grid
@@ -1197,8 +1214,12 @@ def run(
                 padded_rock_properties = result.rock_properties
                 padded_saturation_history = result.saturation_history
 
-                # Take a snapshot of the model state at specified intervals and at the last time step
-                if (timer.step % output_frequency == 0) or timer.is_last_step:
+                # Take a snapshot of the model state at start, at specified intervals and at the last time step
+                if (
+                    timer.step == 1
+                    or (timer.step % output_frequency == 0)
+                    or timer.is_last_step
+                ):
                     logger.debug(f"Capturing model state at time step {timer.step}")
                     # The production rates are negative in the evolution
                     # so we need to negate them to report positive production values
@@ -1235,7 +1256,7 @@ def run(
                         water=water_production_grid,
                         gas=gas_production_grid,
                     )
-                    logger.debug("Creating model state snapshot")
+                    logger.debug("Taking model state snapshot")
                     # Capture the current state of the wells
                     wells_snapshot = copy.deepcopy(wells)
                     # Capture the current model with updated fluid properties
@@ -1264,7 +1285,7 @@ def run(
                         production=production_rates,
                         timer_state=timer.dump_state(),
                     )
-                    logger.debug("Yielding model state snapshot")
+                    logger.debug("Yielding model state")
                     yield state
 
             except StopSimulation as exc:

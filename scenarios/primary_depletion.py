@@ -107,7 +107,7 @@ def _():
         )
         config = bores.Config(
             scheme="impes",
-            output_frequency=1,
+            output_frequency=28,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
             log_interval=5,

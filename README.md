@@ -6,7 +6,9 @@
 
 > 📚 **Documentation Notice**: Full API documentation is coming soon. In the meantime, this README provides an intuitive introduction through practical examples. For detailed API information, refer to the source code and docstrings.
 
-BORES is a reservoir simulation framework designed for black-oil modelling of three-phase (oil, water, gas) flow in porous media built with Python. It provides a clean, modular API for building reservoir models, defining wells, defining fractures and faults, running simulations, and analyzing results.
+BORES is a reservoir engineering framework designed for 3D black-oil modelling and simulation of three-phase (oil, water, gas) flow in porous media built with Python. It provides a clean and modular API for building reservoir models, defining wells, defining fractures and faults, running simulations, and analyzing results. BORES APIs are also easily extensible for custom models and workflows, if you know what you are doing.
+
+BORES started as a final year project for my Bachelor's degree in Petroleum Engineering at the Federal University of Petroleum Resources, Effurun, Nigeria. Why write this when there are other commercial and open-source reservoir simulators like Eclipse, CMG, MRST, OpenPorousMedia, etc.? Well, Existing libraries are either closed-source, written in low-level languages (C/C++, Fortran), or have complex APIs with poor documentation that make prototyping and experimentation difficult. BORES aims to fill this gap by providing a simple, Pythonic interface for reservoir simulation that is easy to understand and extend. Simply put, this make thing more accessible to petroleum engineers and researchers who may not be expert programmers as Python is such a simple language to learn and use, and is widely adopted in the scientific computing community.
 
 ## Table of Contents
 
@@ -109,8 +111,7 @@ For constant properties across the entire grid:
 
 ```python
 temperature_grid = bores.uniform_grid(
-    grid_shape=grid_shape,
-    value=180.0,  # °F
+    grid_shape=grid_shape, value=180.0  # °F
 )
 ```
 
@@ -236,7 +237,7 @@ model = bores.reservoir_model(
     boundary_conditions=boundary_conditions,
     dip_angle=dip_angle,
     dip_azimuth=dip_azimuth,
-    reservoir_gas="methane",
+    reservoir_gas="methane", # Assumed that reservoir gas is methane. Can be any gas supported by CoolProp
     pvt_tables=pvt_tables,
 )
 ```
@@ -257,7 +258,7 @@ PVT tables offer several advantages:
 - **Performance**: Interpolation is faster than evaluating complex correlations at each cell/timestep
 - **Flexibility**: Can incorporate lab PVT data directly
 - **Consistency**: Ensures thermodynamic consistency through pre-computation
-- **Pseudo-pressure support**: Pre-computed gas pseudo-pressure tables for efficient gas well calculations
+- **Pseudo-pressure support**: Used in pre-computed gas pseudo-pressure tables for efficient gas well calculations
 
 ### Building PVT Tables
 
@@ -286,7 +287,7 @@ This builds tables for:
 ```python
 pvt_tables = bores.PVTTables(
     table_data=pvt_table_data,
-    interpolation_method="linear",  # or "cubic" for smoother interpolation
+    interpolation_method="linear",  # or "cubic" for smoother but slower interpolation
 )
 ```
 
@@ -309,14 +310,14 @@ The `PVTTables` object provides methods for querying properties:
 bo = pvt_tables.oil_formation_volume_factor(
     pressure=2500.0,  # psia
     temperature=180.0,  # °F
-    solution_gas_oil_ratio=500.0,  # scf/STB
+    solution_gor=500.0,  # scf/STB
 )
 
 # Grid-based query (for simulation)
 viscosity_grid = pvt_tables.oil_viscosity(
-    pressure_grid=pressure_grid,
-    temperature_grid=temperature_grid,
-    solution_gas_oil_ratio_grid=rs_grid,
+    pressure=pressure_grid,
+    temperature=temperature_grid,
+    solution_gor=rs_grid,
 )
 ```
 
@@ -324,7 +325,7 @@ viscosity_grid = pvt_tables.oil_viscosity(
 
 ## Simulation Configs & Timers
 
-### Timer Configuration
+### `Timer` Configuration
 
 The `Timer` manages adaptive time-stepping with CFL-based control:
 
@@ -349,7 +350,7 @@ timer = bores.Timer(
 )
 ```
 
-### The Time Helper
+### The `Time` Helper
 
 `bores.Time()` converts human-readable time to seconds:
 
@@ -400,7 +401,7 @@ config = bores.Config(
 | `"impes"`    | Implicit Pressure, Explicit Saturation    | Moderate          | Fast             |
 | `"explicit"` | Fully explicit in pressure and saturation | Requires small Δt | Fastest per step |
 
-> **Note**: Fully implicit scheme (`"implicit"`) is planned but not yet implemented. The option may be added in future releases.
+> **Note**: Fully implicit scheme (`"implicit"`) is planned but not yet implemented. The option may be added in future releases. I'll gladly accept contributions toward this feature too.
 
 ---
 
@@ -414,7 +415,7 @@ import bores
 # Enable 32-bit precision (default is already 32-bit)
 bores.use_32bit_precision()
 
-# Arrays created via bores.array() will use the configured precision
+# Arrays created via `bores.array()` will use the configured precision
 pressure = bores.array([1000, 2000, 3000])  # float32 array
 ```
 
@@ -455,6 +456,7 @@ state.production    # Production rate grids
 state.relative_permeabilities  # krw, kro, krg grids
 state.relative_mobilities      # Phase mobility grids
 state.capillary_pressures      # Pcow, Pcgo grids
+state.timer_state            # Dumped `Timer` state at this step
 ```
 
 ### Accessing Model Properties
@@ -464,7 +466,7 @@ model = state.model
 fluid_props = model.fluid_properties
 
 # Pressure and saturations
-pressure_grid = fluid_props.pressure_grid
+pressure = fluid_props.pressure_grid
 oil_saturation = fluid_props.oil_saturation_grid
 water_saturation = fluid_props.water_saturation_grid
 gas_saturation = fluid_props.gas_saturation_grid
@@ -476,7 +478,9 @@ density = fluid_props.oil_effective_density_grid
 
 ### State Streams
 
-For long simulations, use `StateStream` to process states incrementally and persist to storage:
+For long simulations, use `StateStream` to process states incrementally and persist to storage. It provides substantial performance improvements by reducing memory usage and I/O overhead. It supports checkpointing and batch persistence.
+
+A checkpoint is a saved state of the simulation that allows resuming from that point in case of interruptions from errors or system failures.
 
 ```python
 from pathlib import Path
@@ -504,6 +508,12 @@ with stream:
     
     # Or consume all at once
     # stream.consume()
+
+    # Or collect states from specific steps
+    # selected_states = stream.collect(1, 5, 10, 20)
+
+    # Or collect states with a predicate. Can be computationally expensive.
+    # high_pressure_states = stream.collect(key=lambda s: s.model.fluid_properties.pressure_grid.mean() > 3000)
 ```
 
 ### State Stores
@@ -515,6 +525,7 @@ BORES provides multiple storage backends:
 zarr_store = bores.ZarrStore(
     store=Path("./results/simulation.zarr"),
     metadata_dir=Path("./results/metadata/"),
+    compression_level=3,  # Zlib compression level (0-9)
 )
 
 # HDF5
@@ -530,7 +541,8 @@ pickle_store = bores.PickleStore(
 
 # NPZ (NumPy compressed)
 npz_store = bores.NPZStore(
-    filepath=Path("./results/npz/")
+    filepath=Path("./results/npz/"),
+    metadata_dir=Path("./results/metadata/"),
 )
 ```
 
@@ -538,13 +550,20 @@ npz_store = bores.NPZStore(
 
 ```python
 # Load all states
-states = list(store.load(validate=False, lazy=False))
+states = store.load(validate=False, lazy=False)
 
 # Lazy loading (loads metadata only, grids on access)
-states = list(store.load(validate=False, lazy=True))
+states = store.load(validate=False, lazy=True)
 
 # Get the last state for continuation
-last_state = states[-1]
+# Note that `load` returns a generator and we do not use list(states)
+# to avoid loading all states into memory.
+last_state = None
+while True:
+    try:
+        last_state = next(states)
+    except StopIteration:
+        break
 model = last_state.model
 ```
 
@@ -555,7 +574,8 @@ model = last_state.model
 ### Production Wells
 
 ```python
-# Define production clamp (limits)
+# Define production clamp (limits). Prevents positive rates as production rates are taken as negative.
+# Hence production clamp prevents production wells from injecting fluids.
 clamp = bores.ProductionClamp()
 
 # Multi-phase rate control
@@ -586,6 +606,7 @@ producer = bores.production_well(
     perforating_intervals=[((14, 10, 3), (14, 10, 4))],  # Grid cells (i, j, k)
     radius=0.3542,  # ft (8.5" wellbore)
     control=control,
+    # We produce oil, gas, and water
     produced_fluids=(
         bores.ProducedFluid(
             name="Oil",
@@ -614,7 +635,8 @@ producer = bores.production_well(
 ### Injection Wells
 
 ```python
-# Injection clamp
+# Injection clamp. Prevents negative rates as injection rates are positive.
+# Hence injection clamp prevents injection wells from producing fluids.
 injection_clamp = bores.InjectionClamp()
 
 # Rate control for injector
@@ -748,7 +770,7 @@ fault = bores.inclined_sealing_fault(
     fault_id="IF-1",
     orientation="x",
     index=15,
-    dip_angle=45.0,  # degrees from horizontal
+    slope=1.0,  # Rise over run
     permeability_multiplier=1e-4,
 )
 ```
@@ -760,10 +782,8 @@ fault = bores.inclined_sealing_fault(
 fault = bores.damage_zone_fault(
     fault_id="DZ-1",
     orientation="x",
-    index=18,
-    core_permeability_multiplier=1e-4,   # Fault core (sealing)
-    damage_zone_permeability_multiplier=5.0,  # Enhanced permeability
-    damage_zone_width=3,  # cells on each side
+    cell_range=(15, 18),
+    permeability_multiplier=1e-4,   # Fault core (sealing)
 )
 ```
 
@@ -774,8 +794,8 @@ fault = bores.damage_zone_fault(
 fracture_network = bores.conductive_fracture_network(
     network_id="CFN-1",
     orientation="x",
-    index_range=(10, 12),  # Multiple fracture planes
-    permeability_multiplier=100.0,  # High conductivity
+    cell_range=(10, 12),  # Multiple fracture planes
+    permeability_multiplier=15.0,  # High conductivity
 )
 ```
 
@@ -793,7 +813,7 @@ model = bores.apply_fractures(model, fault1, fault2, fracture_network)
 
 ## Capillary Pressure & Relative Permeability
 
-BORES provides both **analytical models** and **tabular data** for relative permeability and capillary pressure. For three-phase flow, two-phase data must be combined into three-phase tables using appropriate mixing rules.
+BORES provides both **analytical models** and **tables** for relative permeability and capillary pressure. For three-phase flow, two-phase data must be combined into three-phase tables using appropriate mixing rules.
 
 ### Key Concepts
 
@@ -903,18 +923,18 @@ For lab-measured or history-matched data, use tabular input. **Two-phase tables 
 oil_water_relperm = bores.TwoPhaseRelPermTable(
     wetting_phase=bores.FluidPhase.WATER,
     non_wetting_phase=bores.FluidPhase.OIL,
-    wetting_phase_saturation=np.array([0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75]),
-    wetting_phase_relative_permeability=np.array([0.0, 0.02, 0.06, 0.12, 0.22, 0.35, 0.45]),  # krw
-    non_wetting_phase_relative_permeability=np.array([1.0, 0.7, 0.45, 0.25, 0.10, 0.02, 0.0]),  # kro
+    wetting_phase_saturation=bores.array([0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75]),
+    wetting_phase_relative_permeability=bores.array([0.0, 0.02, 0.06, 0.12, 0.22, 0.35, 0.45]),  # krw
+    non_wetting_phase_relative_permeability=bores.array([1.0, 0.7, 0.45, 0.25, 0.10, 0.02, 0.0]),  # kro
 )
 
 # Gas-Oil system (oil = wetting phase)
 gas_oil_relperm = bores.TwoPhaseRelPermTable(
     wetting_phase=bores.FluidPhase.OIL,
     non_wetting_phase=bores.FluidPhase.GAS,
-    wetting_phase_saturation=np.array([0.15, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]),  # Oil saturation
-    wetting_phase_relative_permeability=np.array([0.0, 0.05, 0.15, 0.35, 0.55, 0.80, 1.0]),  # kro
-    non_wetting_phase_relative_permeability=np.array([0.9, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),  # krg
+    wetting_phase_saturation=bores.array([0.15, 0.25, 0.40, 0.55, 0.70, 0.85, 0.95]),  # Oil saturation
+    wetting_phase_relative_permeability=bores.array([0.0, 0.05, 0.15, 0.35, 0.55, 0.80, 1.0]),  # kro
+    non_wetting_phase_relative_permeability=bores.array([0.9, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),  # krg
 )
 ```
 
@@ -1129,17 +1149,16 @@ import bores
 oil_water_kr = bores.TwoPhaseRelPermTable(
     wetting_phase=bores.FluidPhase.WATER,
     non_wetting_phase=bores.FluidPhase.OIL,
-    wetting_phase_saturation=np.array([0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.75]),
-    wetting_phase_relative_permeability=np.array([0.0, 0.01, 0.04, 0.10, 0.20, 0.32, 0.38]),
-    non_wetting_phase_relative_permeability=np.array([1.0, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),
+    wetting_phase_saturation=bores.array([0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.75]),
+    wetting_phase_relative_permeability=bores.array([0.0, 0.01, 0.04, 0.10, 0.20, 0.32, 0.38]),
+    non_wetting_phase_relative_permeability=bores.array([1.0, 0.65, 0.40, 0.20, 0.08, 0.01, 0.0]),
 )
-
 gas_oil_kr = bores.TwoPhaseRelPermTable(
     wetting_phase=bores.FluidPhase.OIL,
     non_wetting_phase=bores.FluidPhase.GAS,
-    wetting_phase_saturation=np.array([0.25, 0.35, 0.50, 0.65, 0.80, 0.95]),
-    wetting_phase_relative_permeability=np.array([0.0, 0.08, 0.25, 0.50, 0.78, 1.0]),
-    non_wetting_phase_relative_permeability=np.array([0.85, 0.55, 0.28, 0.10, 0.02, 0.0]),
+    wetting_phase_saturation=bores.array([0.25, 0.35, 0.50, 0.65, 0.80, 0.95]),
+    wetting_phase_relative_permeability=bores.array([0.0, 0.08, 0.25, 0.50, 0.78, 1.0]),
+    non_wetting_phase_relative_permeability=bores.array([0.85, 0.55, 0.28, 0.10, 0.02, 0.0]),
 )
 
 # 2. Combine into three-phase table with Stone II mixing
@@ -1153,17 +1172,15 @@ three_phase_kr = bores.ThreePhaseRelPermTable(
 oil_water_pc = bores.TwoPhaseCapillaryPressureTable(
     wetting_phase=bores.FluidPhase.WATER,
     non_wetting_phase=bores.FluidPhase.OIL,
-    wetting_phase_saturation=np.array([0.20, 0.30, 0.45, 0.60, 0.75]),
-    capillary_pressure=np.array([35.0, 12.0, 4.0, 1.0, 0.0]),
+    wetting_phase_saturation=bores.array([0.20, 0.30, 0.45, 0.60, 0.75]),
+    capillary_pressure=bores.array([35.0, 12.0, 4.0, 1.0, 0.0]),
 )
-
 gas_oil_pc = bores.TwoPhaseCapillaryPressureTable(
     wetting_phase=bores.FluidPhase.OIL,
     non_wetting_phase=bores.FluidPhase.GAS,
-    wetting_phase_saturation=np.array([0.25, 0.40, 0.60, 0.80, 0.95]),
-    capillary_pressure=np.array([20.0, 8.0, 3.0, 0.8, 0.0]),
+    wetting_phase_saturation=bores.array([0.25, 0.40, 0.60, 0.80, 0.95]),
+    capillary_pressure=bores.array([20.0, 8.0, 3.0, 0.8, 0.0]),
 )
-
 three_phase_pc = bores.ThreePhaseCapillaryPressureTable(
     oil_water_table=oil_water_pc,
     gas_oil_table=gas_oil_pc,
@@ -1181,7 +1198,7 @@ model = bores.reservoir_model(
 
 ## Constants
 
-BORES provides physical constants and conversion factors:
+BORES also provides and uses physical constants and conversion factors with the context of a simulation run.
 
 ```python
 import bores
@@ -1204,23 +1221,30 @@ c.IDEAL_GAS_CONSTANT_IMPERIAL            # 10.73 (psia·ft³)/(lbmol·°R)
 # Conversion factors
 c.PSI_TO_PA            # 6894.76
 c.BBL_TO_FT3     # 5.6146
+
+# And many others...
 ```
 
 ### Customizing Constants
 
 ```python
 # Create custom constants context
-custom_constants = bores.Constants(
-    STANDARD_TEMPERATURE_IMPERIAL=70.0,  # Different standard temp
+my_constants = bores.Constants()
+my_constants["STANDARD_TEMPERATURE_IMPERIAL"] = bores.Constant(
+    70.0,  # Different standard temperature
+    unit="°F",
+    description="Custom standard temperature",
 )
+# Or just set constant directly
+my_constants.STANDARD_PRESSURE_IMPERIAL = 70.0  # Different standard pressure
 
 # Use in specific calculations
-with bores.ConstantsContext(custom_constants):
+with bores.ConstantsContext(my_constants):
     # Calculations here use custom constants
     pass
 
 # Or use constant object directly
-with custom_constants():
+with my_constants():
     # Calculations here use custom constants
     pass
 ```
@@ -1255,7 +1279,7 @@ constant = bores.ConstantBoundary(value=3000.0)  # psia
 dirichlet = bores.DirichletBoundary(value=2800.0)
 
 # Neumann (fixed flux)
-neumann = bores.NeumannBoundary(flux=100.0)  # STB/day
+neumann = bores.NeumannBoundary(flux=100.0)  # e.g bbl/day/ft²
 
 # Linear gradient
 gradient = bores.LinearGradientBoundary(
@@ -1329,22 +1353,34 @@ from bores.errors import (
 
 ### Error Handling
 
+Below is an example of handling solver errors during simulation:
+
 ```python
 import bores
 from bores.errors import SolverError, StopSimulation
 
-try:
-    states = list(bores.run(model=model, timer=timer, wells=wells, config=config))
-except SolverError as e:
-    print(f"Solver failed to converge: {e}")
-    # Try with relaxed settings
-    config = bores.Config(
-        scheme="impes",
-        convergence_tolerance=1e-4,  # Relax tolerance
-        max_iterations=500,
-    )
-except StopSimulation:
-    print("Simulation terminated gracefully")
+config = bores.Config(
+    scheme="impes",
+    convergence_tolerance=1e-6,
+    max_iterations=250,
+)
+
+for _ in range(3):  # Retry up to 3 times
+    try:
+        for state in bores.run(model=model, timer=timer, wells=wells, config=config):
+            ... # Process each state
+        
+    except SolverError as e:
+        print(f"Solver failed to converge: {e}")
+        # Try with relaxed settings
+        config = bores.Config(
+            scheme="impes",
+            convergence_tolerance=1e-4,  # Relax tolerance
+            max_iterations=500,
+        )
+    except StopSimulation:
+        print("Simulation terminated gracefully")
+        break
 ```
 
 ---
@@ -1371,7 +1407,7 @@ config = bores.Config(
     # or: "lgmres", "gmres", "tfqmr"
     
     preconditioner="ilu",  # ILU (recommended)
-    # or: "diagonal", "ilu", "amg", "cpr", "none"
+    # or: "diagonal", "ilu", "amg", "cpr", None
     
     # Convergence settings
     convergence_tolerance=1e-6,
@@ -1414,8 +1450,10 @@ bores.image_config(scale=3)  # Higher DPI for publication-quality
 import numpy as np
 
 # Prepare data: list of (time_step, value) tuples
-pressure_history = [(state.step, state.model.fluid_properties.pressure_grid.mean()) 
-                    for state in states]
+pressure_history = [
+    (state.step, state.model.fluid_properties.pressure_grid.mean()) 
+    for state in states
+]
 
 # Create series plot
 fig = bores.make_series_plot(
@@ -1527,6 +1565,8 @@ fig.show()
 
 Use `ModelAnalyst` for common analysis operations:
 
+> Check the `bores.analyses` module for more details or check `scenerios/*_analysis.py` for real usage examples.
+
 ```python
 analyst = bores.ModelAnalyst(states)
 
@@ -1628,8 +1668,8 @@ With 20+ property grids, state history storage, and solver matrices, memory can 
 
 **Tips for reducing memory:**
 
-- Use 32-bit precision: `bores.use_32bit_precision()` (halves grid memory)
-- Use `StateStream` with `ZarrStore` to persist states to disk instead of holding in memory. Most stores also support lazy loading, so use that when analyzing results.
+- Use 32-bit precision: `bores.use_32bit_precision()` (halves grid memory usage)
+- Use `StateStream` with a `StateStore` to persist states to disk instead of holding in memory. Most stores also support lazy loading, so use that when analyzing results.
 - Increase `output_frequency` in `Config` to store fewer states
 - Use coarser grids during prototyping, then refine
 
@@ -1637,13 +1677,25 @@ With 20+ property grids, state history storage, and solver matrices, memory can 
 
 1. **Use 32-bit precision** for large grids (significant speedup with NumPy/Numba)
 2. **Start with coarse grids** and refine after validating the model setup
-3. **Use `bicgstab` solver** with `ilu` preconditioner for most cases. Using a `diagonal` or no preconditioner is faster but may require more iterations.
+3. **Use `bicgstab` solver** with `ilu` preconditioner for most cases. Although using a `diagonal` or no preconditioner may be faster, it may require more iterations.
 4. **Batch state storage** with `StateStream` to avoid memory buildup
-5. **Profile your simulation** to identify bottlenecks:
+5. **Avoid keeping states in memory** unless necessary for analysis. When using `bores.run`, iterate through states directly or use a store. Never do list(bores.run(...)) for large simulations.
+6. **Profile your simulation** to identify bottlenecks:
 
    ```python
    import cProfile
    cProfile.run('list(bores.run(model, timer, wells, config))')
+   ```
+
+   ```python
+   import memory_profiler
+
+   @memory_profiler.profile
+   def run_simulation():
+       # Setup model, timer, wells, config and run simulation
+       ...
+    
+   run_simulation()
    ```
 
 ### Language & Hardware Limitations
@@ -1688,7 +1740,7 @@ A: Non-convergence usually indicates numerical issues:
 A: This indicates numerical instability, although BORES enforces saturation bounds:
 
 1. Reduce time step size (lower `max_step_size`, `initial_step_size`)
-2. Tighten CFL thresholds in Config
+2. Tighten CFL thresholds in `Config`
 3. Check relative permeability endpoints for consistency
 4. Ensure capillary pressure curves are monotonic
 
@@ -1719,17 +1771,18 @@ A: Load the final state from storage and use it to rebuild the model:
 
 ```python
 # Load states
-store = bores.ZarrStore(store=Path("results/simulation.zarr"), metadata_dir=Path("results/metadata"))
+store = bores.HDF5Store(filepath=Path("results/simulation.h5"), metadata_dir=Path("results/metadata"))
 states = store.load(validate=False, lazy=False)
-final_state = None
+
+last_state = None
 while True:
     try:
-        final_state = next(states)
+        last_state = next(states)
     except StopIteration:
         break
 
-# Continue simulation with last recoreded timer state
-new_timer = bores.Timer.load_state(final_state.timer_state)
+# Continue simulation with last recorded timer state
+timer = bores.Timer.load_state(last_state.timer_state)
 ```
 
 **Q: Why are my well rates different from what I specified?**
@@ -1749,13 +1802,6 @@ A: Large simulations can exhaust RAM (especially with many stored states). Solut
 2. Enable 32-bit precision
 3. Reduce grid resolution
 4. Increase `output_frequency` to store fewer states
-
-### Common Error Messages
-
-| Error                                  | Likely Cause                | Solution                                                |
-| -------------------------------------- | --------------------------- | ------------------------------------------------------- |
-| `ValidationError: Saturation sum != 1` | So + Sw + Sg ≠ 1            | Check initial saturations from `build_saturation_grids` |
-| `SolverError`               | Matrix is ill-conditioned   | Reduce time step, check extreme property values         |
 
 ---
 
@@ -2131,14 +2177,14 @@ stream = bores.StateStream(
     store=store,
     batch_size=50,
 )
-with stream:
+with stream: # Use context manager to ensure proper stream setup and teardown
     for state in stream:
         if state.step % 10 == 0:
             avg_pressure = state.model.fluid_properties.pressure_grid.mean()
             print(f"Step {state.step}: Avg pressure = {avg_pressure:.1f} psia")
 
 # 21. Analyze results
-states = list(store.load(validate=False, lazy=False))
+states = store.load(validate=False, lazy=False)
 analyst = bores.ModelAnalyst(states)
 
 # Cumulative oil production

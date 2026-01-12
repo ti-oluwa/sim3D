@@ -286,6 +286,15 @@ def _():
             pvt_tables=pvt_tables,
         )
 
+        fault = bores.vertical_sealing_fault(
+            fault_id="F-2",
+            orientation="y",
+            index=15,
+            y_range=(5, 25),  # Lateral extent
+            z_range=(0, 8),  # Vertical extent (shallow fault)
+        )
+        model = bores.apply_fracture(model, fault)
+
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=1.0),
@@ -318,14 +327,14 @@ def _(Path, bores):
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
         metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata",
     )
-    return
+    return (stabilization_store,)
 
 
 @app.cell
-def _(bores, main):
+def _(bores, main, stabilization_store):
     stream = bores.StateStream(
         main(),
-        # store=stabilization_store,
+        store=stabilization_store,
         # checkpoint_interval=10,
         # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
         auto_replay=True,
