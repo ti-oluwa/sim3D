@@ -612,9 +612,18 @@ model = last_state.model
 
 BORES has a specialized API for defining and managing wells in reservoir simulations. It supports various well types, control strategies, and scheduling options.
 
+### Well Controls
+
+BORES provides several well control mechanisms for both production and injection wells. These controls allow you to specify target rates, bottom-hole pressures (BHP), and other parameters. Available well control types include:
+
+- `BHPControl` - Control well by maintaining a specified bottom-hole pressure.
+- `ConstantRateControl` - Control well by maintaining a constant production/injection rate.
+- `AdaptiveBHPRateControl` - Adjust rate to maintain a target rate while respecting BHP limits.
+- `MultiPhaseRateControl` - Control multiple phases (oil, gas, water) simultaneously with independent rate targets and BHP limits.
+
 ### Production Wells
 
-Production wells can be configured with multi-phase rate control using adaptive bottom-hole pressure (BHP) control for oil, gas, and water phases. A single well can produce multiple phases simultaneously with independent rate targets and BHP limits.
+Production wells can be configured with various control mechanisms for oil, gas, and water phases. A single well can produce multiple phases simultaneously with independent rate targets and BHP limits.
 
 > Note that production rates are negative values (indicating a net removal of fluid) in BORES, while injection rates are positive values.
 
@@ -679,7 +688,7 @@ producer = bores.production_well(
 
 ### Injection Wells
 
-Injection wells can be configured similarly, with rate control for the injected phase. BORES supports various injected fluids, including water, gas, and miscible fluids like CO2.
+Injection wells can be configured similarly, with rate control for the injected phase. BORES supports water, gas, and miscible gas (e.g CO2) injection.
 
 ```python
 # Injection clamp. Prevents negative rates as injection rates are positive.
@@ -726,7 +735,7 @@ Schedule changes to wells during simulation using `WellEvent` objects. You can c
 
 There are several built-in hooks and actions for common well events:
 
-- `well_time_hook(time)` - Trigger event at specific simulation time, time step
+- `well_time_hook(time)` - Trigger event at specific simulation time or time step
 - `well_update_action(...)` - Update well parameters (e.g., `is_active`, `control`, etc.)
 
 You can write your hook and/or action if you need more complex scheduling logic. A hook is simply a callable that takes two parameters: `well: Well` and `state: ModelState`, and returns a boolean indicating whether to trigger the event.
