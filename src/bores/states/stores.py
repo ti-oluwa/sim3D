@@ -408,7 +408,7 @@ class ZarrStore(StateStore):
 
     def _create_dataset(
         self, group: zarr.Group, name: str, data: np.typing.NDArray
-    ) -> zarr.Dataset:
+    ) -> zarr.Array:
         """
         Helper to create compressed dataset.
 
