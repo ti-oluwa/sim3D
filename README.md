@@ -1786,14 +1786,8 @@ A: Load the final state from storage and use it to rebuild the model:
 ```python
 # Load states
 store = bores.HDF5Store(filepath=Path("results/simulation.h5"), metadata_dir=Path("results/metadata"))
-states = store.load(validate=False, lazy=False)
-
-last_state = None
-while True:
-    try:
-        last_state = next(states)
-    except StopIteration:
-        break
+stream = bores.StateStream(store=store, validate=False, auto_replay=True, lazy_load=False)
+last_state = stream.last()
 
 # Continue simulation with last recorded timer state
 timer = bores.Timer.load_state(last_state.timer_state)

@@ -128,6 +128,8 @@ def evolve_fully_implicit(
     absolute_permeability_z = rock_properties.absolute_permeability.z
 
     cell_count_x, cell_count_y, cell_count_z = pressure_grid.shape
+    # Get grid shape without padding
+    original_grid_shape = (cell_count_x - 2, cell_count_y - 2, cell_count_z - 2)
 
     max_newton_iterations = config.max_iterations
     convergence_tolerance = config.convergence_tolerance
@@ -294,41 +296,11 @@ def evolve_fully_implicit(
 
         if needs_reassembly or cached_jacobian is None:
             logger.debug(f"Assembling Jacobian for iteration {iteration}...")
-            jacobian = assemble_jacobian(
-                cell_dimension=cell_dimension,
-                thickness_grid=thickness_grid,
-                pressure_grid=pressure_grid,
-                elevation_grid=elevation_grid,
-                oil_saturation_grid=oil_saturation_grid,
-                gas_saturation_grid=gas_saturation_grid,
-                water_saturation_grid=water_saturation_grid,
-                time_step_size=time_step_in_days,
-                rock_properties=rock_properties,
-                fluid_properties=fluid_properties,
-                rock_fluid_properties=rock_fluid_properties,
-                oil_mobility_grid_x=oil_mobility_grid_x,
-                oil_mobility_grid_y=oil_mobility_grid_y,
-                oil_mobility_grid_z=oil_mobility_grid_z,
-                gas_mobility_grid_x=gas_mobility_grid_x,
-                gas_mobility_grid_y=gas_mobility_grid_y,
-                gas_mobility_grid_z=gas_mobility_grid_z,
-                water_mobility_grid_x=water_mobility_grid_x,
-                water_mobility_grid_y=water_mobility_grid_y,
-                water_mobility_grid_z=water_mobility_grid_z,
-                oil_well_rate_grid=oil_well_rate_grid,
-                gas_well_rate_grid=gas_well_rate_grid,
-                water_well_rate_grid=water_well_rate_grid,
-                pcow_grid=capillary_pressure_grids.oil_water_capillary_pressure,
-                pcgo_grid=capillary_pressure_grids.gas_oil_capillary_pressure,
-                dtype=dtype,
-                well_damping_factor=1.0,
-                phase_appearance_tolerance=phase_appearance_tolerance,
-                acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
-            )
-            # jacobian = assemble_jacobian_with_frozen_mobility(
+            # jacobian = assemble_jacobian(
             #     cell_dimension=cell_dimension,
             #     thickness_grid=thickness_grid,
             #     pressure_grid=pressure_grid,
+            #     elevation_grid=elevation_grid,
             #     oil_saturation_grid=oil_saturation_grid,
             #     gas_saturation_grid=gas_saturation_grid,
             #     water_saturation_grid=water_saturation_grid,
@@ -348,10 +320,40 @@ def evolve_fully_implicit(
             #     oil_well_rate_grid=oil_well_rate_grid,
             #     gas_well_rate_grid=gas_well_rate_grid,
             #     water_well_rate_grid=water_well_rate_grid,
+            #     pcow_grid=capillary_pressure_grids.oil_water_capillary_pressure,
+            #     pcgo_grid=capillary_pressure_grids.gas_oil_capillary_pressure,
             #     dtype=dtype,
             #     well_damping_factor=1.0,
             #     phase_appearance_tolerance=phase_appearance_tolerance,
+            #     acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
             # )
+            jacobian = assemble_jacobian_with_frozen_mobility(
+                cell_dimension=cell_dimension,
+                thickness_grid=thickness_grid,
+                pressure_grid=pressure_grid,
+                oil_saturation_grid=oil_saturation_grid,
+                gas_saturation_grid=gas_saturation_grid,
+                water_saturation_grid=water_saturation_grid,
+                time_step_size=time_step_in_days,
+                rock_properties=rock_properties,
+                fluid_properties=fluid_properties,
+                rock_fluid_properties=rock_fluid_properties,
+                oil_mobility_grid_x=oil_mobility_grid_x,
+                oil_mobility_grid_y=oil_mobility_grid_y,
+                oil_mobility_grid_z=oil_mobility_grid_z,
+                gas_mobility_grid_x=gas_mobility_grid_x,
+                gas_mobility_grid_y=gas_mobility_grid_y,
+                gas_mobility_grid_z=gas_mobility_grid_z,
+                water_mobility_grid_x=water_mobility_grid_x,
+                water_mobility_grid_y=water_mobility_grid_y,
+                water_mobility_grid_z=water_mobility_grid_z,
+                oil_well_rate_grid=oil_well_rate_grid,
+                gas_well_rate_grid=gas_well_rate_grid,
+                water_well_rate_grid=water_well_rate_grid,
+                dtype=dtype,
+                well_damping_factor=1.0,
+                phase_appearance_tolerance=phase_appearance_tolerance,
+            )
             cached_jacobian = jacobian
             # Reset reassembly flags, cached preconditioner and counters
             needs_reassembly = False
@@ -452,7 +454,7 @@ def evolve_fully_implicit(
             rock_properties=rock_properties,
             boundary_conditions=boundary_conditions,
             cell_dimension=cell_dimension,
-            grid_shape=pressure_grid.shape,
+            grid_shape=original_grid_shape,
             thickness_grid=thickness_grid,
             time=time_step * time_step_size,
         )

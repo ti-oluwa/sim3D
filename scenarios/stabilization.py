@@ -289,16 +289,17 @@ def _():
         fault = bores.vertical_sealing_fault(
             fault_id="F-2",
             orientation="y",
-            index=15,
-            y_range=(5, 25),  # Lateral extent
-            z_range=(0, 8),  # Vertical extent (shallow fault)
+            index=8,
+            y_range=(7, 9),  # Lateral extent
+            x_range=(2, 18),
+            z_range=(0, 6),  # Vertical extent (shallow fault)
         )
         model = bores.apply_fracture(model, fault)
 
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
             max_step_size=bores.Time(days=1.0),
-            min_step_size=bores.Time(hours=1.0),
+            min_step_size=bores.Time(minutes=1.0),
             simulation_time=bores.Time(days=30),  # 30 days
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
@@ -308,12 +309,10 @@ def _():
         config = bores.Config(
             scheme="impes",
             output_frequency=1,
-            miscibility_model="immiscible",
-            use_pseudo_pressure=True,
             max_iterations=500,
             iterative_solver="bicgstab",
-            preconditioner="ilu",
-            log_interval=2,
+            preconditioner="diagonal",
+            log_interval=5,
             pvt_tables=pvt_tables,
         )
         states = bores.run(model=model, timer=timer, wells=None, config=config)
@@ -340,10 +339,8 @@ def _(bores, main, stabilization_store):
         auto_replay=True,
     )
 
-    last_state = None
     with stream:
-        for state in stream:
-            last_state = state
+        last_state = stream.last()
     return (last_state,)
 
 

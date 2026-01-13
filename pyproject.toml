@@ -53,6 +53,12 @@ name = "numpy-mkl"
 url = "https://urob.github.io/numpy-mkl"
 explicit = true
 
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
 [tool.uv.sources]
 numpy = [
   { index = "numpy-mkl", marker = "sys_platform != 'darwin' and platform_machine == 'x86_64'" },

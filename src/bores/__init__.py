@@ -24,3 +24,6 @@ from .timing import *  # noqa
 from .config import *  # noqa
 from .pvt.tables import *  # noqa
 from .analyses import *  # noqa
+
+
+__version__ = "0.0.1a0"

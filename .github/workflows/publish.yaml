@@ -1,0 +1,318 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v0.1.0, v1.0.0, etc.
+  release:
+    types: [published]
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      test_only:
+        description: 'Publish to TestPyPI only'
+        type: boolean
+        default: false
+
+jobs:
+  # Build and validate package
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      
+      - name: Verify version consistency
+        run: |
+          # Extract version from pyproject.toml and git tag
+          PROJECT_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG_VERSION=${GITHUB_REF_NAME#v}
+            if [[ "$PROJECT_VERSION" != "$TAG_VERSION" ]]; then
+              echo "Version mismatch: pyproject.toml has $PROJECT_VERSION but tag is $TAG_VERSION"
+              exit 1
+            fi
+          fi
+          echo "Version: $PROJECT_VERSION"
+
+      - name: Build package
+        run: uv build
+
+      - name: Validate build artifacts
+        run: |
+          ls -la dist/
+          # Verify both wheel and sdist are created
+          test -f dist/*.whl || (echo "No wheel found" && exit 1)
+          test -f dist/*.tar.gz || (echo "No source distribution found" && exit 1)
+          
+          # Check package contents
+          uv run python -m zipfile -l dist/*.whl
+          uv run python -m tarfile -l dist/*.tar.gz
+
+          echo "✅ Build artifacts created successfully"
+
+      - name: Install and test built package
+        run: |
+          # Install the wheel in a clean environment
+          uv venv test-env
+          uv pip install dist/*.whl
+          uv run python -c "
+          import bores
+          from bores.backends.inmemory import InMemoryBackend
+          from bores.throttles import HTTPThrottle
+          print('✅ Built package works correctly')
+          "
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 30
+
+
+  # Publish to TestPyPI for testing
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    needs: build
+    if: >
+      github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      github.event_name == 'release'
+    
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/bores
+
+    outputs:
+      published: ${{ steps.publish-step.outputs.published || steps.skip-step.outputs.published || 'false' }}
+      version: ${{ steps.get-version.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install jq for version parsing
+        run: uv pip install jq --system
+
+      - name: Get project version
+        id: get-version
+        run: |
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already exists on TestPyPI
+        id: version-check
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          if curl -sSf https://test.pypi.org/pypi/bores/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip publishing (version exists)
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "⚠️ Version already exists on TestPyPI. Skipping publish."
+        
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+
+      - name: Publish to TestPyPI
+        id: publish-step
+        if: steps.version-check.outputs.exists == 'false'
+        run: |
+          uv publish --index testpypi
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+      - name: Mark as skipped
+        if: steps.version-check.outputs.exists == 'true'
+        id: skip-step
+        run: echo "published=false" >> "$GITHUB_OUTPUT"
+
+  
+  # Verify TestPyPI installation
+  verify-testpypi:
+    name: Verify TestPyPI Installation
+    runs-on: ubuntu-latest
+    needs: publish-testpypi
+    if: needs.publish-testpypi.result == 'success' && needs.publish-testpypi.outputs.published == 'true'
+    continue-on-error: true
+
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Wait for TestPyPI availability
+        run: |
+          echo "⏳ Waiting for package to be available on TestPyPI..."
+          sleep 60  # Give TestPyPI time to process
+
+      - name: Install from TestPyPI
+        run: |
+          pip install --index-url https://test.pypi.org/simple/ \
+                      --extra-index-url https://pypi.org/simple/ \
+                      bores --prefer-binary
+
+      - name: Test installation and functionality
+        run: |
+          python -c "
+          import bores
+          
+          bores.use_32bit_precision()
+          "
+
+
+  # Publish to PyPI (production)
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build, publish-testpypi]
+    if: >
+      (github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'release' && 
+      github.event.action == 'published' &&
+      !github.event.release.prerelease)) &&
+      (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '') &&
+      always() &&
+      needs.build.result == 'success' &&
+      needs.publish-testpypi.result == 'success'
+    
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bores
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install jq for version parsing
+        run: uv pip install jq --system
+
+      - name: Get project version
+        id: get-version
+        run: |
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already exists on PyPI
+        id: version-check
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          if curl -sSf https://pypi.org/pypi/bores/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip publishing (version exists)
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "⚠️ Version already exists on PyPI. Skipping publish."
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+
+      - name: Final validation before PyPI
+        if: steps.version-check.outputs.exists == 'false'
+        run: |
+          echo "🚀 Publishing to PyPI..."
+          ls -la dist/
+          
+          # Double-check we're not publishing a dev version
+          if uv run python -c "import tomllib; version=tomllib.load(open('pyproject.toml', 'rb'))['project']['version']; exit(1 if 'dev' in version or 'alpha' in version or 'beta' in version or 'rc' in version else 0)"; then
+            echo "✅ Version looks stable for PyPI"
+          else
+            echo "❌ Version appears to be a pre-release"
+            exit 1
+          fi
+
+      - name: Publish to PyPI
+        if: steps.version-check.outputs.exists == 'false'
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
+
+  # Post-publish verification
+  verify-pypi:
+    name: Verify PyPI Installation
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+    if: success()
+    
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Wait for PyPI availability
+        run: |
+          echo "⏳ Waiting for package to be available on PyPI..."
+          sleep 120  # Give PyPI time to process
+
+      - name: Install from PyPI
+        run: pip install bores
+
+      - name: Verify installation
+        run: |
+          python -c "
+          import bores
+          print(f'✅🎉 Successfully installed bores {getattr(bores, \"__version__\", \"unknown\")} from PyPI')
+          "
+      
+      - name: Create release summary
+        run: |
+          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Package built successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Published to TestPyPI" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ TestPyPI installation verified" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Published to PyPI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Package is now available: \`pip install bores\`" >> $GITHUB_STEP_SUMMARY

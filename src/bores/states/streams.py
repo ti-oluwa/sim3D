@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 class StreamProgress(typing.TypedDict):
     """Progress statistics for state streaming."""
 
-    num_yielded: int
-    num_saved: int
-    num_checkpoints: int
+    yield_count: int
+    saved_count: int
+    checkpoints_count: int
     batch_pending: int
     store_backend: typing.Optional[str]
-    memory_mb: float
+    memory_usage: float
 
 
-_STOP_IO_WORKER = object()
+_stop_io = object()
 
 
 class StateStream(typing.Generic[NDimension]):
@@ -113,24 +113,19 @@ class StateStream(typing.Generic[NDimension]):
 
     def __init__(
         self,
-        states: typing.Optional[
-            typing.Union[
-                typing.Generator[ModelState[NDimension]],
-                typing.Iterator[ModelState[NDimension]],
-            ]
-        ] = None,
+        states: typing.Optional[typing.Iterable[ModelState[NDimension]]] = None,
         store: typing.Optional[StateStore] = None,
         batch_size: int = 10,
         validate: bool = False,
         auto_save: bool = True,
-        auto_replay: bool = False,
+        auto_replay: bool = True,
         lazy_load: bool = True,
         save_predicate: typing.Optional[
             typing.Callable[[ModelState[NDimension]], bool]
         ] = None,
         checkpoint_interval: typing.Optional[int] = None,
         checkpoint_dir: typing.Optional[PathLike] = None,
-        max_batch_memory_mb: typing.Optional[float] = None,
+        max_batch_memory_usage: typing.Optional[float] = None,
         async_io: bool = False,
         max_queue_size: int = 50,
         io_thread_name: str = "state-io-worker",
@@ -145,7 +140,7 @@ class StateStream(typing.Generic[NDimension]):
         :param validate: Validate states before persisting (default: False)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
         :param auto_replay: If True, automatically replay from store when iterating after consumption.
-            If False, raises `StreamError` instead (default: False, explicit replay required)
+            If False, raises `StreamError` instead (default: True)
         :param lazy_load: When replaying from store, use lazy loading if supported (default: True)
         :param save_predicate: Optional function to filter which states to save.
             If provided, only states where save_predicate(state) returns True are saved.
@@ -153,9 +148,9 @@ class StateStream(typing.Generic[NDimension]):
         :param checkpoint_interval: Optional interval for checkpointing. If provided,
             creates a checkpoint every N states for crash recovery. Example: 100
         :param checkpoint_dir: Directory to save checkpoints. Required if `checkpoint_interval` is set.
-        :param max_batch_memory_mb: Maximum batch memory in MB before forcing flush.
+        :param max_batch_memory_usage: Maximum batch memory in MB before forcing flush.
             Estimated by sampling first state's memory footprint. Batch flushes when either
-            `batch_size` or `max_batch_memory_mb` threshold is reached. Example: 50.0 MB
+            `batch_size` or `max_batch_memory_usage` threshold is reached. Example: 50.0 MB
         :param async_io: Enable asynchronous I/O for non-blocking disk writes (default: False).
             When enabled, disk writes happen in a background thread, allowing simulation to continue.
             Provides 2-3x speedup when I/O is slower than simulation timesteps.
@@ -166,7 +161,7 @@ class StateStream(typing.Generic[NDimension]):
         :param queue_timeout: Timeout in seconds for queue operations (default: 1.0).
             Used for responsive shutdown and error checking.
         """
-        self.states = states
+        self.states = iter(states) if states is not None else None
         self.store = store
         self.batch_size = batch_size
         self.validate = validate
@@ -175,7 +170,7 @@ class StateStream(typing.Generic[NDimension]):
         self.lazy_load = lazy_load
         self.save_predicate = save_predicate
         self.checkpoint_interval = checkpoint_interval
-        self.max_batch_memory_mb = max_batch_memory_mb
+        self.max_batch_memory_usage = max_batch_memory_usage
 
         self.async_io = async_io
         self.max_queue_size = max_queue_size
@@ -196,9 +191,9 @@ class StateStream(typing.Generic[NDimension]):
                 logger.warning(
                     "`save_predicate` provided but no store configured. Predicate will be ignored."
                 )
-            if self.max_batch_memory_mb is not None:
+            if self.max_batch_memory_usage is not None:
                 logger.warning(
-                    "`max_batch_memory_mb` provided but no store configured. Memory-based flushing "
+                    "`max_batch_memory_usage` provided but no store configured. Memory-based flushing "
                     "will not occur without persistence."
                 )
             if self.async_io:
@@ -208,9 +203,9 @@ class StateStream(typing.Generic[NDimension]):
                 self.async_io = False
 
         self._batch: typing.List[ModelState[NDimension]] = []
-        self._num_yielded: int = 0
-        self._num_saved: int = 0
-        self._num_checkpoints: int = 0
+        self._yield_count: int = 0
+        self._saved_count: int = 0
+        self._checkpoints_count: int = 0
         self._started: bool = False
         self._consumed: bool = False
         self._state_size_mb: typing.Optional[float] = None
@@ -222,7 +217,7 @@ class StateStream(typing.Generic[NDimension]):
         self._io_thread: typing.Optional[threading.Thread] = None
         self._io_error: typing.Optional[Exception] = None
         self._shutdown_event: typing.Optional[threading.Event] = None
-        self._num_saved_lock = threading.Lock()  # Protects _num_saved in async mode
+        self._saved_count_lock = threading.Lock()  # Protects _saved_count in async mode
 
         if self.checkpoint_interval is not None:
             if self._checkpoint_dir is None:
@@ -283,7 +278,7 @@ class StateStream(typing.Generic[NDimension]):
                 try:
                     # Get batch from queue (timeout to check shutdown periodically)
                     item = self._io_queue.get(timeout=self.queue_timeout)
-                    if item is _STOP_IO_WORKER:
+                    if item is _stop_io:
                         logger.debug("I/O worker received shutdown signal")
                         self._io_queue.task_done()
                         break
@@ -298,12 +293,12 @@ class StateStream(typing.Generic[NDimension]):
                             exist_ok=True,
                             validate=self.validate,
                         )
-                        with self._num_saved_lock:
-                            self._num_saved += len(batch)
+                        with self._saved_count_lock:
+                            self._saved_count += len(batch)
                         del batch  # Free memory immediately
                         logger.debug(
                             f"I/O worker completed batch "
-                            f"(total saved: {self._num_saved})"
+                            f"(total saved: {self._saved_count})"
                         )
                     except Exception as exc:
                         logger.error(f"I/O worker error during write: {exc}")
@@ -353,7 +348,7 @@ class StateStream(typing.Generic[NDimension]):
 
         # Signal shutdown
         self._shutdown_event.set()
-        self._io_queue.put(_STOP_IO_WORKER)
+        self._io_queue.put(_stop_io)
         # Wait for thread to finish
         self._io_thread.join(timeout=30.0)
 
@@ -422,7 +417,7 @@ class StateStream(typing.Generic[NDimension]):
         if self.store is None:
             logger.info("No store provided, streaming without persistence")
             for state in self.states:
-                self._num_yielded += 1
+                self._yield_count += 1
                 yield state
             self._consumed = True
             return
@@ -433,7 +428,7 @@ class StateStream(typing.Generic[NDimension]):
         )
 
         for state in self.states:
-            self._num_yielded += 1
+            self._yield_count += 1
 
             # Check for I/O errors before yielding
             if self.async_io:
@@ -445,19 +440,19 @@ class StateStream(typing.Generic[NDimension]):
                 self._batch.append(state)
 
                 if self._should_flush():
-                    self.flush(block=False)  # Non-blocking async flush
+                    self.flush(block=False)
 
                 if self._should_checkpoint(state=state):
                     self._save_checkpoint(state=state)
 
         if self._batch and self.auto_save:
             logger.debug(f"Flushing final batch of {len(self._batch)} states")
-            self.flush(block=False)  # Non-blocking async flush
+            self.flush(block=False)
 
         # Mark the stream as consumed
         self._consumed = True
         logger.debug(
-            f"Completed stream: {self._num_yielded} yielded, {self._num_saved} saved"
+            f"Completed stream: {self._yield_count} yielded, {self._saved_count} saved"
         )
 
     def __enter__(self) -> Self:
@@ -509,12 +504,12 @@ class StateStream(typing.Generic[NDimension]):
 
         if exc_type is None:
             logger.info(
-                f"Stream complete: {self._num_saved} states saved, "
-                f"{self._num_checkpoints} checkpoints created."
+                f"Stream complete: {self._saved_count} states saved, "
+                f"{self._checkpoints_count} checkpoints created."
             )
         else:
             logger.error(
-                f"Stream interrupted after {self._num_saved} states have been saved: {exc_val}"
+                f"Stream interrupted after {self._saved_count} states have been saved: {exc_val}"
             )
 
     def collect(
@@ -596,6 +591,31 @@ class StateStream(typing.Generic[NDimension]):
             else:
                 yield state
 
+    def last(self) -> typing.Optional[ModelState[NDimension]]:
+        """
+        Get the last state from the stream.
+
+        Iterates through the entire stream and returns the final state.
+        Useful for quickly accessing the end result of a simulation.
+
+        :return: The last `ModelState` instance, or None if stream is empty
+        """
+        last_state: typing.Optional[ModelState[NDimension]] = None
+        logger.debug("Retrieving last state from stream")
+
+        iterator = iter(self)
+        while True:
+            try:
+                last_state = next(iterator)
+            except StopIteration:
+                break
+        
+        if last_state is not None:
+            logger.debug(f"Last state retrieved: step {last_state.step}")
+        else:
+            logger.debug("Stream is empty, no last state available")
+        return last_state
+
     def consume(self) -> None:
         """
         Consume the entire stream without yielding states to the caller.
@@ -629,7 +649,7 @@ class StateStream(typing.Generic[NDimension]):
         logger.debug("Consuming stream (no yield to caller)")
         for _ in self:
             pass  # Iterate through, triggering side effects but not yielding
-        logger.debug(f"Stream consumed: {self._num_yielded} states processed")
+        logger.debug(f"Stream consumed: {self._yield_count} states processed")
 
     def replay(self) -> typing.Iterator[ModelState[NDimension]]:
         """
@@ -640,8 +660,8 @@ class StateStream(typing.Generic[NDimension]):
             - Resuming from checkpoint
             - Debugging specific timesteps
 
-        Note: Replaying continues to increment `num_yielded` counter. If you replay
-        100 states after initially streaming 100 states, `num_yielded` will be 200.
+        Note: Replaying continues to increment `yield_count` counter. If you replay
+        100 states after initially streaming 100 states, `yield_count` will be 200.
         This tracks total states yielded across all operations.
 
         :return: Iterator over loaded ModelState instances
@@ -654,10 +674,10 @@ class StateStream(typing.Generic[NDimension]):
         logger.debug(f"Replaying states from {self.store}")
 
         for state in self.store.load(lazy=self.lazy_load, validate=self.validate):
-            self._num_yielded += 1
+            self._yield_count += 1
             yield state
 
-        logger.debug(f"Replay complete: {self._num_yielded} states loaded")
+        logger.debug(f"Replay complete: {self._yield_count} states loaded")
 
     def flush(self, block: bool = False) -> None:
         """
@@ -727,9 +747,9 @@ class StateStream(typing.Generic[NDimension]):
                     exist_ok=True,
                     validate=self.validate,
                 )
-                self._num_saved += batch_size
+                self._saved_count += batch_size
                 logger.debug(
-                    f"Flushed {batch_size} states (total saved: {self._num_saved})"
+                    f"Flushed {batch_size} states (total saved: {self._saved_count})"
                 )
             except Exception as exc:
                 logger.error(f"Failed to flush batch: {exc}")
@@ -805,14 +825,14 @@ class StateStream(typing.Generic[NDimension]):
         if len(self._batch) >= self.batch_size:
             return True
 
-        if self.max_batch_memory_mb is not None and self._batch:
+        if self.max_batch_memory_usage is not None and self._batch:
             state_size = self._estimate_state_size(self._batch[0])
-            batch_memory_mb = state_size * len(self._batch)
+            batch_memory_usage = state_size * len(self._batch)
 
-            if batch_memory_mb > self.max_batch_memory_mb:
+            if batch_memory_usage > self.max_batch_memory_usage:
                 logger.warning(
-                    f"Batch memory limit reached ({batch_memory_mb:.1f} MB > "
-                    f"{self.max_batch_memory_mb:.1f} MB) with {len(self._batch)} states, "
+                    f"Batch memory limit reached ({batch_memory_usage:.1f} MB > "
+                    f"{self.max_batch_memory_usage:.1f} MB) with {len(self._batch)} states, "
                     f"flushing early"
                 )
                 return True
@@ -849,7 +869,7 @@ class StateStream(typing.Generic[NDimension]):
             )
             checkpoint_store.dump(states=[state], exist_ok=True, validate=False)
 
-            self._num_checkpoints += 1
+            self._checkpoints_count += 1
             logger.info(
                 f"Created checkpoint at step {state.step} ({checkpoint_path.name})"
             )
@@ -932,48 +952,45 @@ class StateStream(typing.Generic[NDimension]):
         Get streaming progress statistics.
 
         :return: Dictionary with progress metrics including:
-            - num_yielded: Total states yielded
-            - num_saved: Total states saved to store
-            - num_checkpoints: Total checkpoints created
+            - yield_count: Total states yielded
+            - saved_count: Total states saved to store
+            - checkpoints_count: Total checkpoints created
             - batch_pending: States in current batch (not yet saved)
             - store_backend: Type of store being used (or None)
-            - memory_mb: Estimated batch memory in MB
+            - memory_usage: Estimated batch memory in MB
             - io_queue_size: Size of async I/O queue (if async_io enabled)
             - io_thread_alive: Whether I/O thread is running (if async_io enabled)
         """
         if self._batch and self._state_size_mb is not None:
-            batch_memory_mb = self._state_size_mb * len(self._batch)
+            batch_memory_usage = self._state_size_mb * len(self._batch)
         else:
-            batch_memory_mb = 0.0
+            batch_memory_usage = 0.0
 
-        progress_dict = StreamProgress(
-            {
-                "num_yielded": self._num_yielded,
-                "num_saved": self._num_saved,
-                "num_checkpoints": self._num_checkpoints,
-                "batch_pending": len(self._batch),
-                "store_backend": type(self.store).__name__ if self.store else None,
-                "memory_mb": batch_memory_mb,
-            }
+        progress = StreamProgress(
+            yield_count=self._yield_count,
+            saved_count=self._saved_count,
+            checkpoints_count=self._checkpoints_count,
+            batch_pending=len(self._batch),
+            store_backend=type(self.store).__name__ if self.store else None,
+            memory_usage=batch_memory_usage,
         )
 
         # Add async I/O specific stats
         if self.async_io and self._io_queue is not None:
-            progress_dict["io_queue_size"] = self._io_queue.qsize()  # type: ignore[typeddict-unknown-key]
-            progress_dict["io_thread_alive"] = (  # type: ignore[typeddict-unknown-key]
+            progress["io_queue_size"] = self._io_queue.qsize()  # type: ignore[typeddict-unknown-key]
+            progress["io_thread_alive"] = (  # type: ignore[typeddict-unknown-key]
                 self._io_thread.is_alive() if self._io_thread else False
             )
-
-        return progress_dict
+        return progress
 
     @property
-    def num_yielded(self) -> int:
+    def yield_count(self) -> int:
         """
         Total number of states yielded (including replays).
 
         :return: Count of yielded states
         """
-        return self._num_yielded
+        return self._yield_count
 
     @property
     def is_consumed(self) -> bool:
@@ -989,28 +1006,28 @@ class StateStream(typing.Generic[NDimension]):
         return self._consumed
 
     @property
-    def num_saved(self) -> int:
+    def saved_count(self) -> int:
         """
         Number of states saved to store so far.
 
         :return: Count of saved states
         """
-        return self._num_saved
+        return self._saved_count
 
     @property
-    def num_checkpoints(self) -> int:
+    def checkpoints_count(self) -> int:
         """
         Number of checkpoints created so far.
 
         :return: Count of checkpoints
         """
-        return self._num_checkpoints
+        return self._checkpoints_count
 
     def __repr__(self) -> str:
         store_info = f"store={self.store}" if self.store else "no store"
         io_mode = "async" if self.async_io else "sync"
         return (
             f"{self.__class__.__name__}({store_info}, {io_mode}, "
-            f"batch_size={self.batch_size}, yielded={self._num_yielded}, "
-            f"saved={self._num_saved})"
+            f"batch_size={self.batch_size}, yielded={self._yield_count}, "
+            f"saved={self._saved_count})"
         )
