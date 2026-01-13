@@ -4,17 +4,10 @@ from abc import ABC, abstractmethod
 import logging
 from os import PathLike
 from pathlib import Path
-import typing
 import sys
-from numcodecs import Blosc
+import typing
 
 import attrs
-import h5py
-import numpy as np
-import zarr
-from zarr.codecs import BloscCodec, BloscShuffle
-from zarr.storage import StoreLike
-
 from bores._precision import get_dtype
 from bores.errors import StorageError, ValidationError
 from bores.grids.base import (
@@ -33,9 +26,11 @@ from bores.models import (
 from bores.states.base import ModelState, validate_state
 from bores.timing import StepMetricsDict, TimerState
 from bores.utils import Lazy, load_pickle, save_as_pickle
-
-logger = logging.getLogger(__name__)
-
+import h5py
+from numcodecs import Blosc
+import numpy as np
+import zarr
+from zarr.storage import StoreLike
 
 __all__ = [
     "new_store",
@@ -47,6 +42,8 @@ __all__ = [
 ]
 
 IS_PYTHON_310_OR_LOWER = sys.version_info < (3, 11)
+
+logger = logging.getLogger(__name__)
 
 
 class StateStore(ABC):
@@ -271,7 +268,7 @@ class ZarrStore(StateStore):
 
     def __init__(
         self,
-        store: StoreLike,
+        store: typing.Union[StoreLike, PathLike, str],
         metadata_dir: PathLike,
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
         compression_level: int = 3,
@@ -297,6 +294,8 @@ class ZarrStore(StateStore):
                 shuffle=Blosc.BITSHUFFLE,
             )
         else:
+            from zarr.codecs import BloscCodec, BloscShuffle
+
             self.compressor = BloscCodec(
                 cname=compressor,
                 clevel=compression_level,
@@ -409,7 +408,7 @@ class ZarrStore(StateStore):
 
     def _create_dataset(
         self, group: zarr.Group, name: str, data: np.typing.NDArray
-    ) -> zarr.Array:
+    ) -> zarr.Dataset:
         """
         Helper to create compressed dataset.
 
@@ -418,10 +417,11 @@ class ZarrStore(StateStore):
         :param data: NumPy array data to store
         :return: Created Zarr array
         """
-        return group.create_array(
+        chunks = self._get_chunks(shape=data.shape)
+        return group.create_dataset(
             name=name,
             data=data,
-            chunks=self._get_chunks(shape=data.shape) or "auto",
+            chunks=chunks,
             compressors=[self.compressor],
             overwrite=True,
         )
@@ -447,7 +447,11 @@ class ZarrStore(StateStore):
         # Use 'a' (append) mode to reuse existing store, or 'w-' to fail if exists
         # This allows streaming to work properly without overwriting on each flush
         mode = "a" if exist_ok else "w-"
-        root = zarr.open_group(store=self.store, mode=mode, zarr_version=3)  # type: ignore
+        root = zarr.open_group(
+            store=self.store,  # type: ignore
+            mode=mode,
+            zarr_version=2,
+        )
 
         num_steps = 0
         dumped_metadata = False
@@ -691,7 +695,7 @@ class ZarrStore(StateStore):
                      Only applied when validate=True.
         :return: Generator yielding `ModelState` instances
         """
-        root = zarr.open_group(store=self.store, mode="r", zarr_version=3)
+        root = zarr.open_group(store=self.store, mode="r", zarr_version=2)
 
         # Load metadata once (time-invariant)
         metadata = self._load_metadata(lazy=lazy)
