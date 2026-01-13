@@ -3,6 +3,7 @@
 **3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework**
 
 > ⚠️ **Important Disclaimer**: BORES is designed for **educational, research, and prototyping purposes**. It is **not production-grade software** and should not be used for making critical business decisions, regulatory compliance, or field development planning. Results should be validated against established commercial simulators before any real-world application. Use at your own discretion.
+
 > **Documentation Notice**: Full API documentation is coming soon. In the meantime, this README provides an intuitive introduction through practical examples. For detailed API information, refer to the source code and docstrings.
 
 BORES is a reservoir engineering framework designed for 3D black-oil modelling and simulation of three-phase (oil, water, gas) flow in porous media built with Python. It provides a clean and modular API for building reservoir models, defining wells, defining fractures and faults, running simulations, and analyzing results. BORES APIs are also easily extensible for custom models and workflows, if you know what you are doing.
