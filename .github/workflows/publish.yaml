@@ -69,8 +69,8 @@ jobs:
           uv pip install dist/*.whl
           uv run python -c "
           import bores
-          from bores.backends.inmemory import InMemoryBackend
-          from bores.throttles import HTTPThrottle
+          
+          bores.use_64bit_precision()
           print('✅ Built package works correctly')
           "
       
