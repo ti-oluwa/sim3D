@@ -258,20 +258,6 @@ jobs:
           name: dist-${{ github.sha }}
           path: dist/
 
-      - name: Final validation before PyPI
-        if: steps.version-check.outputs.exists == 'false'
-        run: |
-          echo "🚀 Publishing to PyPI..."
-          ls -la dist/
-          
-          # Double-check we're not publishing a dev version
-          if uv run python -c "import tomllib; version=tomllib.load(open('pyproject.toml', 'rb'))['project']['version']; then
-            echo "✅ Version looks stable for PyPI"
-          else
-            echo "❌ Version appears to be a pre-release"
-            exit 1
-          fi
-
       - name: Publish to PyPI
         if: steps.version-check.outputs.exists == 'false'
         run: uv publish
