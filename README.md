@@ -36,9 +36,9 @@ BORES started as a final year project for my Bachelor's degree in Petroleum Engi
 ## Installation
 
 ```bash
-uv add bores
+uv add bores-framework
 
-pip install bores
+pip install bores-framework
 
 # or for development
 pip install -e .

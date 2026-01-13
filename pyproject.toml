@@ -1,5 +1,5 @@
 [project]
-name = "bores"
+name = "bores-framework"
 version = "0.0.1a0"
 description = "3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework (BORES)."
 authors = [

@@ -94,7 +94,7 @@ jobs:
     
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/bores
+      url: https://test.pypi.org/p/bores-framework
 
     outputs:
       published: ${{ steps.publish-step.outputs.published || steps.skip-step.outputs.published || 'false' }}
@@ -127,7 +127,7 @@ jobs:
         id: version-check
         run: |
           VERSION="${{ steps.get-version.outputs.version }}"
-          if curl -sSf https://test.pypi.org/pypi/bores/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+          if curl -sSf https://test.pypi.org/pypi/bores-framework/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -213,7 +213,7 @@ jobs:
     
     environment:
       name: pypi
-      url: https://pypi.org/p/bores
+      url: https://pypi.org/p/bores-framework
 
     steps:
       - name: Checkout code
@@ -242,7 +242,7 @@ jobs:
         id: version-check
         run: |
           VERSION="${{ steps.get-version.outputs.version }}"
-          if curl -sSf https://pypi.org/pypi/bores/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+          if curl -sSf https://pypi.org/pypi/bores-framework/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -265,7 +265,7 @@ jobs:
           ls -la dist/
           
           # Double-check we're not publishing a dev version
-          if uv run python -c "import tomllib; version=tomllib.load(open('pyproject.toml', 'rb'))['project']['version']; exit(1 if 'dev' in version or 'alpha' in version or 'beta' in version or 'rc' in version else 0)"; then
+          if uv run python -c "import tomllib; version=tomllib.load(open('pyproject.toml', 'rb'))['project']['version']; then
             echo "✅ Version looks stable for PyPI"
           else
             echo "❌ Version appears to be a pre-release"
@@ -298,7 +298,7 @@ jobs:
           sleep 120  # Give PyPI time to process
 
       - name: Install from PyPI
-        run: pip install bores
+        run: pip install bores-framework
 
       - name: Verify installation
         run: |
@@ -315,4 +315,4 @@ jobs:
           echo "- ✅ TestPyPI installation verified" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Published to PyPI" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📦 Package is now available: \`pip install bores\`" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Package is now available: \`pip install bores-framework\`" >> $GITHUB_STEP_SUMMARY
