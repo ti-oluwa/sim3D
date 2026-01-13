@@ -5,6 +5,8 @@ import logging
 from os import PathLike
 from pathlib import Path
 import typing
+import sys
+from numcodecs import Blosc
 
 import attrs
 import h5py
@@ -43,6 +45,8 @@ __all__ = [
     "HDF5Store",
     "NPZStore",
 ]
+
+IS_PYTHON_310_OR_LOWER = sys.version_info < (3, 11)
 
 
 class StateStore(ABC):
@@ -286,11 +290,18 @@ class ZarrStore(StateStore):
         self.store = store
         self.chunks = chunks
         self.metadata_dir = _validate_filepath(metadata_dir, is_directory=True)
-        self.compressor = BloscCodec(
-            cname=compressor,
-            clevel=compression_level,
-            shuffle=BloscShuffle.bitshuffle,  # Best for numerical data
-        )
+        if IS_PYTHON_310_OR_LOWER:
+            self.compressor = Blosc(
+                cname=compressor,
+                clevel=compression_level,
+                shuffle=Blosc.BITSHUFFLE,
+            )
+        else:
+            self.compressor = BloscCodec(
+                cname=compressor,
+                clevel=compression_level,
+                shuffle=BloscShuffle.bitshuffle,
+            )
 
     def _ensure_metadata_dir(self) -> Path:
         """Ensure metadata directory exists for pickled objects."""
@@ -1353,9 +1364,9 @@ class HDF5Store(StateStore):
                 step_group = f[key]  # type: ignore
                 step_key = key  # Capture for lazy closures
 
-                step = int(step_group.attrs["step"]) # type: ignore
-                step_size = float(step_group.attrs["step_size"]) # type: ignore
-                time = float(step_group.attrs["time"]) # type: ignore
+                step = int(step_group.attrs["step"])  # type: ignore
+                step_size = float(step_group.attrs["step_size"])  # type: ignore
+                time = float(step_group.attrs["time"])  # type: ignore
 
                 # Load timer state if present (always load eagerly as it's small)
                 timer_state: typing.Optional[TimerState] = None
