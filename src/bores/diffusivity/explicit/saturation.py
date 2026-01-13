@@ -321,7 +321,7 @@ def evolve_saturation_explicitly(
         Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
         Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
         Pore volume = {cell_pore_volume:.12f} ft³.
-        Consider reducing time step size from {time_step_size} seconds."
+        Consider reducing time step size from {time_step_size} seconds.
         """
         return EvolutionResult(
             success=False,
@@ -1463,7 +1463,7 @@ def evolve_miscible_saturation_explicitly(
         Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
         Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
         Pore volume = {cell_pore_volume:.12f} ft³.
-        Consider reducing time step size from {time_step_size} seconds."
+        Consider reducing time step size from {time_step_size} seconds.
         """
         return EvolutionResult(
             success=False,

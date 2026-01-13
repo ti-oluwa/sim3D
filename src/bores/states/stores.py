@@ -103,7 +103,7 @@ def state_store(
 
 
 def _validate_filepath(
-    filepath: PathLike,
+    filepath: typing.Union[PathLike, str],
     expected_extension: typing.Optional[str] = None,
     is_directory: bool = False,
 ) -> Path:
@@ -178,7 +178,7 @@ class PickleStore(StateStore):
 
     def __init__(
         self,
-        filepath: PathLike,
+        filepath: typing.Union[PathLike, str],
         compression: typing.Optional[typing.Literal["gzip", "lzma"]] = "gzip",
         compression_level: int = 5,
     ):
@@ -269,7 +269,7 @@ class ZarrStore(StateStore):
     def __init__(
         self,
         store: typing.Union[StoreLike, PathLike, str],
-        metadata_dir: PathLike,
+        metadata_dir: typing.Union[PathLike, str],
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
         compression_level: int = 3,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
@@ -978,8 +978,8 @@ class HDF5Store(StateStore):
 
     def __init__(
         self,
-        filepath: PathLike,
-        metadata_dir: typing.Optional[PathLike] = None,
+        filepath: typing.Union[PathLike, str],
+        metadata_dir: typing.Optional[typing.Union[PathLike, str]] = None,
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
         compression_opts: int = 3,
     ):
@@ -1701,7 +1701,9 @@ class NPZStore(StateStore):
     """
 
     def __init__(
-        self, filepath: PathLike, metadata_dir: typing.Optional[PathLike] = None
+        self,
+        filepath: typing.Union[PathLike, str],
+        metadata_dir: typing.Optional[typing.Union[PathLike, str]] = None,
     ):
         """
         Initialize the store
