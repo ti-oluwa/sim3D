@@ -3,12 +3,11 @@
 **3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework**
 
 > ⚠️ **Important Disclaimer**: BORES is designed for **educational, research, and prototyping purposes**. It is **not production-grade software** and should not be used for making critical business decisions, regulatory compliance, or field development planning. Results should be validated against established commercial simulators before any real-world application. Use at your own discretion.
-
-> 📚 **Documentation Notice**: Full API documentation is coming soon. In the meantime, this README provides an intuitive introduction through practical examples. For detailed API information, refer to the source code and docstrings.
+> **Documentation Notice**: Full API documentation is coming soon. In the meantime, this README provides an intuitive introduction through practical examples. For detailed API information, refer to the source code and docstrings.
 
 BORES is a reservoir engineering framework designed for 3D black-oil modelling and simulation of three-phase (oil, water, gas) flow in porous media built with Python. It provides a clean and modular API for building reservoir models, defining wells, defining fractures and faults, running simulations, and analyzing results. BORES APIs are also easily extensible for custom models and workflows, if you know what you are doing.
 
-BORES started as a final year project for my Bachelor's degree in Petroleum Engineering at the Federal University of Petroleum Resources, Effurun, Nigeria. Why write this when there are other commercial and open-source reservoir simulators like Eclipse, CMG, MRST, OpenPorousMedia, etc.? Well, Existing libraries are either closed-source, written in low-level languages (C/C++, Fortran), or have complex APIs with poor documentation that make prototyping and experimentation difficult. BORES aims to fill this gap by providing a simple, Pythonic interface for reservoir simulation that is easy to understand and extend. Simply put, this make thing more accessible to petroleum engineers and researchers who may not be expert programmers as Python is such a simple language to learn and use, and is widely adopted in the scientific computing community.
+BORES started as a final year project for my Bachelor's degree in Petroleum Engineering at the Federal University of Petroleum Resources, Effurun, Nigeria. Why write this when there are other commercial and open-source reservoir simulators like Eclipse, CMG, MRST, OpenPorousMedia, etc.? Well, Existing libraries are either closed-source, written in low-level languages (C/C++, Fortran), or have complex APIs with poor documentation that make prototyping and experimentation difficult. BORES aims to fill this gap by providing a simple, Pythonic interface for reservoir simulation that is easy to understand and extend. Simply put, this make things more accessible to petroleum engineers, students and researchers who may not be expert programmers as Python is such a simple language to learn and use, and is widely adopted in the scientific computing community.
 
 ## Table of Contents
 
@@ -27,6 +26,7 @@ BORES started as a final year project for my Bachelor's degree in Petroleum Engi
 - [Errors](#errors)
 - [Solvers](#solvers)
 - [Visualization](#visualization)
+- [Simulation Result Analysis](#simulation-result-analysis)
 - [Performance & Optimization](#performance--optimization)
 - [Troubleshooting & FAQ](#troubleshooting--faq)
 - [Contributing & Support](#contributing--support)
@@ -67,7 +67,9 @@ See the [Complete Example](#example-complete-simulation-workflow-on-a-heterogene
 
 BORES provides several utilities for building 3D grids with varying properties.
 
-### Basic Grid Construction
+### Basic Model Grid Parameters
+
+To define a reservoir model, you need to specify the grid dimensions and cell sizes:
 
 ```python
 import bores
@@ -107,12 +109,26 @@ thickness_grid = bores.layered_grid(
 
 ### Uniform Grids
 
-For constant properties across the entire grid:
+For constant properties across the entire grid, use `uniform_grid`:
 
 ```python
 temperature_grid = bores.uniform_grid(
     grid_shape=grid_shape, value=180.0  # °F
 )
+```
+
+### Fine Grained Grid Modification
+
+Grids are basically 3D NumPy arrays. You can modify them directly:
+
+```python
+# Create a uniform pressure grid
+pressure_grid = bores.uniform_grid(
+    grid_shape=grid_shape, value=2500.0  # psia
+)
+
+# Introduce a high-pressure anomaly in a sub-region
+pressure_grid[10:15, 5:10, 2:4] = 4000.0  # psia
 ```
 
 ### Depth Grids
@@ -126,7 +142,7 @@ depth_grid = bores.depth_grid(thickness_grid)  # Takes `thickness_grid` only
 
 ### Structural Dip
 
-Apply structural dip to your depth grid using azimuth convention:
+You can also apply structural dip to your depth grid using azimuth convention:
 
 ```python
 # Apply 3° dip toward East (azimuth 90°)
@@ -148,7 +164,9 @@ dipped_depth_grid = bores.apply_structural_dip(
 
 ### Saturation Distribution with Fluid Contacts
 
-Build realistic saturation distributions with oil-water and gas-oil contacts. **Note**: Requires residual saturation grids, not scalars:
+BORES provides utitlity for building realistic saturation distributions with oil-water and gas-oil contacts.
+
+> **Note**: Requires residual saturation grids, not scalars
 
 ```python
 # First create residual saturation grids
@@ -158,7 +176,7 @@ residual_oil_saturation_gas_grid = bores.uniform_grid(grid_shape, value=0.15)
 residual_gas_saturation_grid = bores.uniform_grid(grid_shape, value=0.05)
 
 # Build saturation grids with transition zones
-water_saturation, oil_saturation, gas_saturation = bores.build_saturation_grids(
+water_saturation_grid, oil_saturation_grid, gas_saturation_grid = bores.build_saturation_grids(
     depth_grid=dipped_depth_grid,
     gas_oil_contact=60.0,  # Depth below top of reservoir (ft)
     oil_water_contact=150.0,  # Depth below top of reservoir (ft)
@@ -176,7 +194,7 @@ water_saturation, oil_saturation, gas_saturation = bores.build_saturation_grids(
 
 ### Building the Reservoir Model
 
-The `reservoir_model` factory requires many parameters. Here's the structure (see [Complete Example](#example-complete-simulation-workflow-on-a-heterogeneous-reservoir-model) for a full working example):
+The `reservoir_model` factory takes the parameters required to build the model grids/properties and assemble them accordingly. Here's how to use it (see [Complete Example](#example-complete-simulation-workflow-on-a-heterogeneous-reservoir-model) for a full working example):
 
 ```python
 # First, create permeability structure for anisotropic permeability
@@ -217,9 +235,9 @@ model = bores.reservoir_model(
     absolute_permeability=absolute_permeability,
     porosity_grid=porosity_grid,
     temperature_grid=temperature_grid,
-    oil_saturation_grid=oil_saturation,
-    water_saturation_grid=water_saturation,
-    gas_saturation_grid=gas_saturation,
+    oil_saturation_grid=oil_saturation_grid,
+    water_saturation_grid=water_saturation_grid,
+    gas_saturation_grid=gas_saturation_grid,
     oil_viscosity_grid=oil_viscosity_grid,  # cP
     oil_compressibility_grid=oil_compressibility_grid,  # 1/psi
     oil_bubble_point_pressure_grid=oil_bubble_point_pressure_grid,  # psia
@@ -255,12 +273,17 @@ BORES supports two approaches for PVT (Pressure-Volume-Temperature) property cal
 
 PVT tables offer several advantages:
 
-- **Performance**: Interpolation is faster than evaluating complex correlations at each cell/timestep
+- **Performance**: Interpolation is generally faster than evaluating complex correlations at each cell/timestep
 - **Flexibility**: Can incorporate lab PVT data directly
 - **Consistency**: Ensures thermodynamic consistency through pre-computation
 - **Pseudo-pressure support**: Used in pre-computed gas pseudo-pressure tables for efficient gas well calculations
 
 ### Building PVT Tables
+
+BORES provides utilities to build PVT tables from specified pressure, temperature, and salinity ranges using built-in
+PVT correlations. The `build_pvt_table_data` function generates the necessary tables for oil, water, and gas phases.
+
+> PVT data calculated from correlations may not be accurate for all reservoir fluids. For best results, provide lab-measured PVT data when available. Again, the implementation here is not perfect yet. Provide feedback if you have any suggestions for improvement in future releases.
 
 ```python
 import bores
@@ -284,6 +307,8 @@ This builds tables for:
 
 ### Creating the `PVTTables` Object
 
+The `PVTTables` class encapsulates the PVT table data and provides the actually interpolation methods used during a simulation.
+
 ```python
 pvt_tables = bores.PVTTables(
     table_data=pvt_table_data,
@@ -292,6 +317,8 @@ pvt_tables = bores.PVTTables(
 ```
 
 ### Using PVT Tables in Config
+
+To use PVT tables in a simulation, pass the `PVTTables` object to the simulation run `Config`:
 
 ```python
 config = bores.Config(
@@ -307,7 +334,7 @@ The `PVTTables` object provides methods for querying properties:
 
 ```python
 # Single point query
-bo = pvt_tables.oil_formation_volume_factor(
+oil_formation_volume_factor = pvt_tables.oil_formation_volume_factor(
     pressure=2500.0,  # psia
     temperature=180.0,  # °F
     solution_gor=500.0,  # scf/STB
@@ -327,7 +354,7 @@ viscosity_grid = pvt_tables.oil_viscosity(
 
 ### `Timer` Configuration
 
-The `Timer` manages adaptive time-stepping with CFL-based control:
+The `Timer` manages adaptive time-stepping with CFL-based and iteration count aware control. This enables stable and efficient simulations with little to no user intervention and manual time tuning.
 
 ```python
 timer = bores.Timer(
@@ -350,7 +377,7 @@ timer = bores.Timer(
 )
 ```
 
-### The `Time` Helper
+### The `Time` utility
 
 `bores.Time()` converts human-readable time to seconds:
 
@@ -363,7 +390,7 @@ bores.Time(weeks=2, days=3, hours=6)     # Mix units freely
 
 ### Simulation Config
 
-The `Config` object controls simulation behavior:
+The `Config` object specifies parameters that control simulation behavior:
 
 ```python
 config = bores.Config(
@@ -396,18 +423,20 @@ config = bores.Config(
 
 ### Supported Schemes
 
+BORES currently supports the following simulation schemes:
+
 | Scheme       | Description                               | Stability         | Speed            |
 | ------------ | ----------------------------------------- | ----------------- | ---------------- |
 | `"impes"`    | Implicit Pressure, Explicit Saturation    | Moderate          | Fast             |
 | `"explicit"` | Fully explicit in pressure and saturation | Requires small Δt | Fastest per step |
 
-> **Note**: Fully implicit scheme (`"implicit"`) is planned but not yet implemented. The option may be added in future releases. I'll gladly accept contributions toward this feature too.
+> **Note**: Fully implicit scheme (`"implicit"`) is planned but not yet implemented due to its complexities. The option may be added in future releases. I'll gladly accept contributions toward this feature too.
 
 ---
 
 ## Precision Control
 
-BORES supports both 32-bit and 64-bit floating-point precision (mainly for memory and speed optimization). By default, BORES uses 32-bit (`np.float32`):
+BORES supports both 32-bit and 64-bit floating-point precision (mainly for memory and speed optimization). By default, BORES uses 32-bit float precision (`np.float32`):
 
 ```python
 import bores
@@ -478,7 +507,7 @@ density = fluid_props.oil_effective_density_grid
 
 ### State Streams
 
-For long simulations, use `StateStream` to process states incrementally and persist to storage. It provides substantial performance improvements by reducing memory usage and I/O overhead. It supports checkpointing and batch persistence.
+For long simulations, use `StateStream` to retrieve and process states incrementally and persist to storage. It provides substantial performance improvements by reducing memory usage and I/O overhead, if used properly. It also supports checkpointing and batch persistence.
 
 A checkpoint is a saved state of the simulation that allows resuming from that point in case of interruptions from errors or system failures.
 
@@ -507,24 +536,32 @@ with stream:
         # Process each state (optional)
         print(f"Step {state.step}: P_avg = {state.model.fluid_properties.pressure_grid.mean():.1f}")
     
-    # Or consume all at once
+    # Or just exhaust all at once with no state retrieval
     # stream.consume()
 
     # Or collect states from specific steps
     # selected_states = stream.collect(1, 5, 10, 20)
 
-    # Or collect states with a predicate. Can be computationally expensive.
+    # Or collect states with a predicate. Can be slightly computationally expensive that the former.
     # high_pressure_states = stream.collect(key=lambda s: s.model.fluid_properties.pressure_grid.mean() > 3000)
 ```
 
 ### State Stores
 
-BORES provides multiple storage backends:
+BORES provides multiple storage backends for persisting simulation states. Each backend is a subclass of `StateStore` and has been implemented as optimally as possible for performance and storage efficiency. Available stores include:
+
+- `ZarrStore` - Uses the Zarr format (recommended for large simulations). Best support for lazy loading.
+- `HDF5Store` - Uses HDF5 format (good for medium to large simulations). Lazy loading supported but less efficient than Zarr.
+- `PickleStore` - Uses Python's Pickle format (simple but not efficient for large datasets). No lazy loading.
+- `NPZStore` - Uses NumPy's NPZ compressed format (good for small to medium simulations). No lazy loading.
+
+Some stores support lazy loading, which allows loading only metadata initially and deferring grid data loading until accessed. This is particularly useful for large simulations where loading all data into memory at once is impractical.
+The stores also support compression to reduce disk space usage.
 
 ```python
 # Zarr (recommended for large simulations)
 zarr_store = bores.ZarrStore(
-    store=Path("./results/simulation.zarr"),
+    store=Path("./results/simulation.zarr"), # Supports any Zarr store (directory, zip, s3, gcs, etc.)
     metadata_dir=Path("./results/metadata/"),
     compression_level=3,  # Zlib compression level (0-9)
 )
@@ -572,7 +609,13 @@ model = last_state.model
 
 ## Wells
 
+BORES has a specialized API for defining and managing wells in reservoir simulations. It supports various well types, control strategies, and scheduling options.
+
 ### Production Wells
+
+Production wells can be configured with multi-phase rate control using adaptive bottom-hole pressure (BHP) control for oil, gas, and water phases. A single well can produce multiple phases simultaneously with independent rate targets and BHP limits.
+
+> Note that production rates are negative values (indicating a net removal of fluid) in BORES, while injection rates are positive values.
 
 ```python
 # Define production clamp (limits). Prevents positive rates as production rates are taken as negative.
@@ -588,7 +631,7 @@ control = bores.MultiPhaseRateControl(
         clamp=clamp,
     ),
     gas_control=bores.AdaptiveBHPRateControl(
-        target_rate=-500,      # Mscf/day
+        target_rate=-500,      # SCF/day
         target_phase="gas",
         bhp_limit=1200,
         clamp=clamp,
@@ -635,6 +678,8 @@ producer = bores.production_well(
 
 ### Injection Wells
 
+Injection wells can be configured similarly, with rate control for the injected phase. BORES supports various injected fluids, including water, gas, and miscible fluids like CO2.
+
 ```python
 # Injection clamp. Prevents negative rates as injection rates are positive.
 # Hence injection clamp prevents injection wells from producing fluids.
@@ -676,7 +721,15 @@ gas_injector_2 = gas_injector.duplicate(
 
 ### Well Events & Scheduling
 
-Schedule changes to wells during simulation:
+Schedule changes to wells during simulation using `WellEvent` objects. You can change well status, control strategies, well fluid and other parameters at specified simulation times using hooks and actions.
+
+There are several built-in hooks and actions for common well events:
+
+- `well_time_hook(time)` - Trigger event at specific simulation time, time step
+- `well_update_action(...)` - Update well parameters (e.g., `is_active`, `control`, etc.)
+
+You can write your hook and/or action if you need more complex scheduling logic. A hook is simply a callable that takes two parameters: `well: Well` and `state: ModelState`, and returns a boolean indicating whether to trigger the event.
+An action is the same, but performs the desired update on the well when triggered.
 
 ```python
 # Start producer inactive, activate after 100 days
@@ -695,7 +748,37 @@ producer.schedule_event(
 )
 ```
 
+To combine multiple hooks or actions, use `well_hooks` and `well_actions` utilities.
+
+```python
+# Change injection rate after 200 days or when average reservoir pressure drops below 2200 psia
+def pressure_drop_hook(well, state):
+    avg_pressure = state.model.fluid_properties.pressure_grid.mean()
+    return avg_pressure < 2200.0
+
+combined_hook = bores.well_hooks(
+    bores.well_time_hook(time=bores.Time(days=200)),
+    pressure_drop_hook,
+    on_any=True,  # Trigger if any hook returns True
+)
+gas_injector.schedule_event(
+    bores.WellEvent(
+        hook=combined_hook,
+        action=bores.well_update_action(
+            control=bores.AdaptiveBHPRateControl(
+                target_rate=2_000_000,  # Increase injection rate
+                target_phase="gas",
+                bhp_limit=3500,
+                clamp=injection_clamp,
+            ),
+        ),
+    )
+)
+```
+
 ### Combining Wells
+
+Each producer or injector cannot be added directly to the simulation. Instead, use `bores.wells_()` to create a `Wells` collection that can be passed to the simulation runner.
 
 ```python
 # Create wells collection
@@ -712,7 +795,44 @@ states = bores.run(model=model, timer=timer, wells=wells, config=config)
 
 ## Fractures
 
-BORES supports various fracture types for modeling faults and fracture networks:
+BORES supports various fracture types for modeling faults and fracture networks. Fractures can be sealing (reduced permeability/porosity) or conductive (enhanced permeability/porosity). Fractures can be vertical, inclined, normal, reverse, or damaged zones. The base API uses `Fracture` objects that can be applied to a `ReservoirModel` using `apply_fracture` or `apply_fractures` or passed to the `reservoir_model` factory during model creation.
+
+### The `Fracture` API
+
+The `Fracture` class represents a fracture or fault in the reservoir model. It contains properties such as orientation, location, permeability modification, and extent. You can create various fracture types using factory functions provided by BORES. Below is a simple example that demonstrates how to create a fracture using the core API, and then apply it to a reservoir model.
+
+```python
+import bores
+
+# Create a basic reservoir model first
+model = bores.reservoir_model(
+    grid_shape=(30, 20, 6),
+    cell_dimension=(100.0, 100.0),
+    # ... model parameters ...
+)
+# Define a fracture
+fracture = bores.Fracture(
+    id="F-1",
+    geometry=bores.FractureGeometry(
+        orientation="x",  # or "y" or "z"
+        x_range=(10, 10),  # Cell indices in x-direction (only cells a x-index 10)
+        y_range=(0, 19),   # Full extent in y-direction (all cells in y direction)
+        z_range=(0, 5),    # Full extent in z-direction (all layers)
+        slope=10.0,          # For inclined fractures (10:1 slope)
+        intercept=0.0,      # For inclined fractures (intercept at y=0)
+        geometric_throw=2,  # For faults with throw
+        displacement_range=(..., ...), # Optional explicit range of cells to displace
+    ),
+    permeability=10.0,  # Constant permeability in mD
+    permeability_multiplier=0.1,  # 10x reduction in permeability
+    porosity=0.15,          # New porosity in fracture zone
+    conductive=False,        # Sealing fracture
+)
+# Apply fracture to model
+model = bores.apply_fracture(model, fracture)
+```
+
+BORES provides several factory functions to create common fracture types easily. Below are examples of how to create and apply different fracture types.
 
 ### Vertical Sealing Fault
 
@@ -793,7 +913,7 @@ fault = bores.damage_zone_fault(
 ```python
 # High-permeability fracture corridor
 fracture_network = bores.conductive_fracture_network(
-    network_id="CFN-1",
+    fracture_id="CFN-1",
     orientation="x",
     cell_range=(10, 12),  # Multiple fracture planes
     permeability_multiplier=15.0,  # High conductivity
@@ -802,6 +922,8 @@ fracture_network = bores.conductive_fracture_network(
 
 ### Applying Fractures
 
+Again, to apply fractures to a reservoir model, use `apply_fracture` for single fractures or `apply_fractures` for multiple fractures.
+
 ```python
 # Apply single fracture
 model = bores.apply_fracture(model, fault)
@@ -809,6 +931,8 @@ model = bores.apply_fracture(model, fault)
 # Apply multiple fractures (using *args)
 model = bores.apply_fractures(model, fault1, fault2, fracture_network)
 ```
+
+> NOTE: The `Fracture` API is still immature especially for fractures with displacement/geometric throw so use with that in mind. Improvemnts to the API will be added in future releases. Feedback and contributions are welcome!
 
 ---
 
@@ -839,7 +963,7 @@ BORES provides both **analytical models** and **tables** for relative permeabili
 
 #### Brooks-Corey Three-Phase Model
 
-The most common model using Corey-type power-law functions:
+This is the most common model using Corey-type power-law functions:
 
 ```python
 relperm_model = bores.BrooksCoreyThreePhaseRelPermModel(
@@ -1142,6 +1266,8 @@ bores.Wettability.WATER_WET  # Same as WettabilityType.WATER_WET
 
 ### Complete Example: Lab Data to Simulation
 
+In this example, we define relative permeability and capillary pressure tables from lab-measured data, combine them into three-phase tables, and use them in a reservoir simulation.
+
 ```python
 import numpy as np
 import bores
@@ -1199,7 +1325,7 @@ model = bores.reservoir_model(
 
 ## Constants
 
-BORES also provides and uses physical constants and conversion factors with the context of a simulation run.
+BORES also provides and uses physical constants and conversion factors with the context of a simulation run. The constants are accessible via the `bores.c` object or by creating a `bores.Constants()` instance.
 
 ```python
 import bores
@@ -1250,6 +1376,23 @@ with my_constants():
     pass
 ```
 
+### Using Custom Constants for a Simulation Run
+
+Constant are modifiable per simulation run by passing a customized `Constants` instance to the `Config` object.
+
+```python
+custom_constants = bores.Constants()
+custom_constants.STANDARD_TEMPERATURE_IMPERIAL = 70.0  # °F
+custom_constants.STANDARD_PRESSURE_IMPERIAL = 70.0     # psia
+
+config = bores.Config(
+    scheme="impes",
+    # ... other config params ...
+    constants=custom_constants,  # Use custom constants
+)
+states = bores.run(model=model, timer=timer, wells=wells, config=config
+```
+
 ---
 
 ## Boundary Conditions
@@ -1292,7 +1435,7 @@ gradient = bores.LinearGradientBoundary(
 
 ### Applying Boundaries
 
-Boundary conditions are organized by property (pressure, saturation, etc.) using a conditions dictionary:
+Boundary conditions are organized by property (pressure, saturation, etc.) using a conditions dictionary. Boundary conditions for each property are created using `GridBoundaryCondition`, which accepts boundary conditions for each face of the grid. Boundary conditions not specified default to `NoFlowBoundary`. The properties mainly requiring boundary conditions are pressure and saturations (oil, gas, water).
 
 ```python
 # Create boundary conditions using `GridBoundaryCondition` for each property
@@ -1323,7 +1466,7 @@ model = bores.reservoir_model(
 )
 ```
 
-### GridBoundaryCondition Parameters
+### `GridBoundaryCondition` Parameters
 
 The `GridBoundaryCondition` accepts boundary conditions for each face:
 
@@ -1447,6 +1590,8 @@ bores.image_config(scale=3)  # Higher DPI for publication-quality
 
 ### Time-Series Plots
 
+For time-series/1D data, use `make_series_plot` to create line, scatter, and other supported plots.
+
 ```python
 import numpy as np
 
@@ -1471,6 +1616,8 @@ fig.show()
 ```
 
 ### Multi-Series Plots
+
+Plot multiple data series on the same plot:
 
 ```python
 # Multiple data series
@@ -1508,6 +1655,8 @@ combined.show()
 ```
 
 ### 3D Visualization
+
+For proper visualization of 3D reservoir data, use the `plotly3d` module. Supported plot types include volume rendering, isosurfaces, scatter plots, and cell block views.
 
 ```python
 from bores.visualization import plotly3d
@@ -1562,7 +1711,9 @@ fig = viz.make_plot(
 fig.show()
 ```
 
-### Model Analysis
+## Simulation Result Analysis
+
+After a simulation run, the captured states need to be analyzed to infer performance metrics like production rates, sweep efficiency, etc. BORES provides the `ModelAnalyst` class to facilitate common analysis tasks like production history, sweep efficiency, decline curve analysis, rate calculations and many more.
 
 Use `ModelAnalyst` for common analysis operations:
 
@@ -2200,7 +2351,7 @@ analyst = bores.ModelAnalyst(states)
 oil_cum = list(analyst.oil_production_history(interval=1, cumulative=True, from_step=1))
 print(f"Total oil produced: {oil_cum[-1][1]:.0f} STB")
 
-# Plot production history (collect states again for a separate analysis)
+# Plot pressure history (collect states again for a separate analysis)
 pressure_history = [(s.step, s.model.fluid_properties.pressure_grid.mean()) for s in states]
 fig = bores.make_series_plot(
     data={"Avg. Reservoir Pressure": np.array(pressure_history)},
