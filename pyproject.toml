@@ -1,6 +1,6 @@
 [project]
 name = "bores-framework"
-version = "0.0.1a1"
+version = "0.0.1b0"
 description = "3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework (BORES)."
 authors = [
     { name = "ti-oluwa", email = "tioluwa.dev@gmail.com" },
