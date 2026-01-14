@@ -210,7 +210,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/53/8d/94fade74736b4e94d
 
 [[package]]
 name = "bores-framework"
-version = "0.0.1a1"
+version = "0.0.1b0"
 source = { virtual = "." }
 dependencies = [
     { name = "attrs" },

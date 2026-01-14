@@ -29,6 +29,7 @@ class ExplicitPressureSolution:
     pressure_grid: ThreeDimensionalGrid
     max_cfl_encountered: float
     cfl_threshold: float
+    max_pressure_change: float
 
 
 def evolve_pressure_explicitly(
@@ -146,7 +147,7 @@ def evolve_pressure_explicitly(
         oil_mobility_grid_z=oil_mobility_grid_z,
         gas_mobility_grid_z=gas_mobility_grid_z,
     )
-    max_pressure_cfl = config.explicit_pressure_cfl_threshold
+    max_pressure_cfl = config.pressure_cfl_threshold
     if pressure_cfl > max_pressure_cfl:
         return EvolutionResult(
             success=False,
@@ -155,6 +156,7 @@ def evolve_pressure_explicitly(
                 pressure_grid=current_oil_pressure_grid.astype(dtype, copy=False),
                 max_cfl_encountered=pressure_cfl,
                 cfl_threshold=max_pressure_cfl,
+                max_pressure_change=0.0,
             ),
             message=f"Pressure evolution failed with CFL={pressure_cfl:.4f}.",
         )
@@ -235,6 +237,9 @@ def evolve_pressure_explicitly(
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
     )
+    max_pressure_change = np.max(
+        np.abs(updated_oil_pressure_grid - current_oil_pressure_grid)
+    )
     return EvolutionResult(
         success=True,
         scheme="explicit",
@@ -242,6 +247,7 @@ def evolve_pressure_explicitly(
             pressure_grid=updated_oil_pressure_grid.astype(dtype, copy=False),
             max_cfl_encountered=pressure_cfl,
             cfl_threshold=max_pressure_cfl,
+            max_pressure_change=max_pressure_change,
         ),
         message=f"Pressure evolution from time step {time_step} successful with CFL={pressure_cfl:.4f}.",
     )

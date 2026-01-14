@@ -286,15 +286,29 @@ class Timer:
     def reject_step(
         self,
         step_size: float,
+        *,
         aggressive: bool = False,
-        failure_severity: typing.Optional[float] = None,
+        max_cfl_encountered: typing.Optional[float] = None,
+        cfl_threshold: typing.Optional[float] = None,
+        newton_iterations: typing.Optional[int] = None,
+        max_saturation_change: typing.Optional[float] = None,
+        max_allowed_saturation_change: typing.Optional[float] = None,
+        max_pressure_change: typing.Optional[float] = None,
+        max_allowed_pressure_change: typing.Optional[float] = None,
     ) -> float:
         """
-        Registers a rejected time step proposal and computes an adjusted time step size.
+        Registers a rejected time step proposal and computes an intelligently adjusted time step size
+        based on the specific failure criteria encountered.
 
         :param step_size: The step size that was rejected.
-        :param aggressive: Whether to use aggressive backoff.
-        :param failure_severity: Optional severity metric (0-1), where 1.0 is catastrophic.
+        :param aggressive: Whether to use aggressive backoff (fallback if no specific info provided).
+        :param max_cfl_encountered: The maximum CFL number that caused rejection.
+        :param cfl_threshold: The CFL threshold that was exceeded.
+        :param newton_iterations: Number of Newton iterations attempted before failure.
+        :param max_saturation_change: The maximum saturation change encountered.
+        :param max_allowed_saturation_change: The allowed saturation change threshold.
+        :param max_pressure_change: The maximum pressure change encountered.
+        :param max_allowed_pressure_change: The allowed pressure change threshold.
         :return: The new/adjusted time step size in seconds.
         """
         if self.rejection_count >= self.max_rejects:
@@ -310,25 +324,25 @@ class Timer:
 
         # Record metrics
         metrics = StepMetrics(
-            step_number=self.next_step, step_size=step_size, success=False
+            step_number=self.next_step,
+            step_size=step_size,
+            cfl=max_cfl_encountered,
+            newton_iters=newton_iterations,
+            success=False,
         )
         self.recent_metrics.append(metrics)
 
-        # Determine backoff factor
-        if failure_severity is not None:
-            if failure_severity < 0.0 or failure_severity > 1.0:
-                raise ValidationError(
-                    "failure_severity must be in the range [0.0, 1.0]"
-                )
-
-            # Adaptive backoff based on severity
-            factor = 1.0 - (failure_severity * (1.0 - self.backoff_factor))
-            factor = max(factor, self.aggressive_backoff_factor)
-        else:
-            factor = (
-                self.aggressive_backoff_factor if aggressive else self.backoff_factor
-            )
-
+        # Compute backoff based on failure cause
+        factor = self._compute_backoff_factor(
+            max_cfl_encountered=max_cfl_encountered,
+            cfl_threshold=cfl_threshold,
+            newton_iterations=newton_iterations,
+            max_saturation_change=max_saturation_change,
+            max_allowed_saturation_change=max_allowed_saturation_change,
+            max_pressure_change=max_pressure_change,
+            max_allowed_pressure_change=max_allowed_pressure_change,
+            aggressive=aggressive,
+        )
         self.next_step_size *= factor
 
         # Warn when hitting minimum step size
@@ -359,16 +373,194 @@ class Timer:
 
         logger.debug(
             f"Time step of size {step_size} rejected for time step {self.next_step} "
-            f"at elapsed time {self.elapsed_time}. New size: {self.next_step_size}"
+            f"at elapsed time {self.elapsed_time}. Backoff factor: {factor:.3f}, "
+            f"New size: {self.next_step_size:.6e}"
         )
         return self.next_step_size
+
+    def _compute_backoff_factor(
+        self,
+        *,
+        max_cfl_encountered: typing.Optional[float] = None,
+        cfl_threshold: typing.Optional[float] = None,
+        newton_iterations: typing.Optional[int] = None,
+        max_saturation_change: typing.Optional[float] = None,
+        max_allowed_saturation_change: typing.Optional[float] = None,
+        max_pressure_change: typing.Optional[float] = None,
+        max_allowed_pressure_change: typing.Optional[float] = None,
+        aggressive: bool = False,
+    ) -> float:
+        """
+        Compute an intelligent backoff factor based on the specific failure criteria.
+
+        Returns a factor in (0, 1] to multiply the step size by.
+        Smaller factors mean more aggressive reduction.
+        """
+        factors = []
+
+        # CFL-based backoff
+        if max_cfl_encountered is not None and cfl_threshold is not None:
+            cfl_limit = cfl_threshold if cfl_threshold > 0 else self.max_cfl_number
+            if max_cfl_encountered > cfl_limit:
+                # Proportional backoff based on how much we exceeded the limit
+                overshoot_ratio = max_cfl_encountered / cfl_limit
+
+                if overshoot_ratio > 2.0:
+                    # Severe CFL violation
+                    cfl_factor = 0.3
+                    logger.debug(
+                        f"Severe CFL violation: {max_cfl_encountered:.3f} > {cfl_limit:.3f} (ratio: {overshoot_ratio:.4f})"
+                    )
+                elif overshoot_ratio > 1.5:
+                    # Moderate CFL violation
+                    cfl_factor = 0.5
+                    logger.debug(
+                        f"Moderate CFL violation: {max_cfl_encountered:.3f} > {cfl_limit:.3f} (ratio: {overshoot_ratio:.4f})"
+                    )
+                else:
+                    # Mild CFL violation - try to target the limit
+                    cfl_factor = (cfl_limit * 0.9) / max_cfl_encountered
+                    cfl_factor = max(cfl_factor, 0.6)  # Don't reduce too much
+                    logger.debug(
+                        f"Mild CFL violation: {max_cfl_encountered:.3f} > {cfl_limit:.3f} (ratio: {overshoot_ratio:.4f})"
+                    )
+
+                factors.append(cfl_factor)
+
+        # Saturation change backoff
+        if (
+            max_saturation_change is not None
+            and max_allowed_saturation_change is not None
+        ):
+            if max_saturation_change > max_allowed_saturation_change:
+                overshoot_ratio = max_saturation_change / max_allowed_saturation_change
+
+                if overshoot_ratio > 3.0:
+                    # Very large saturation changes - aggressive reduction
+                    sat_factor = 0.25
+                    logger.debug(
+                        f"Severe saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
+                    )
+                elif overshoot_ratio > 2.0:
+                    # Large saturation changes
+                    sat_factor = 0.4
+                    logger.debug(
+                        f"Large saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
+                    )
+                else:
+                    # Moderate overshoot - proportional reduction
+                    sat_factor = max_allowed_saturation_change / max_saturation_change
+                    sat_factor = max(sat_factor, 0.5)
+                    logger.debug(
+                        f"Moderate saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
+                    )
+
+                factors.append(sat_factor)
+
+        # Pressure change backoff
+        if max_pressure_change is not None and max_allowed_pressure_change is not None:
+            if max_pressure_change > max_allowed_pressure_change:
+                overshoot_ratio = max_pressure_change / max_allowed_pressure_change
+
+                if overshoot_ratio > 3.0:
+                    # Very large pressure changes
+                    pres_factor = 0.25
+                    logger.debug(
+                        f"Severe pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
+                    )
+                elif overshoot_ratio > 2.0:
+                    # Large pressure changes
+                    pres_factor = 0.4
+                    logger.debug(
+                        f"Large pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
+                    )
+                else:
+                    # Moderate overshoot
+                    pres_factor = max_allowed_pressure_change / max_pressure_change
+                    pres_factor = max(pres_factor, 0.5)
+                    logger.debug(
+                        f"Moderate pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
+                    )
+
+                factors.append(pres_factor)
+
+        # Newton iteration failure backoff
+        if newton_iterations is not None:
+            if newton_iterations > 20:
+                # Solver really struggling - aggressive reduction
+                newton_factor = 0.3
+                logger.debug(
+                    f"Newton solver struggling severely: {newton_iterations} iterations"
+                )
+                factors.append(newton_factor)
+            elif newton_iterations > 15:
+                # Solver struggling - moderate reduction
+                newton_factor = 0.5
+                logger.debug(
+                    f"Newton solver struggling: {newton_iterations} iterations"
+                )
+                factors.append(newton_factor)
+            elif newton_iterations > 10:
+                # Solver having some difficulty
+                newton_factor = 0.7
+                logger.debug(
+                    f"Newton solver having difficulty: {newton_iterations} iterations"
+                )
+                factors.append(newton_factor)
+
+        # If we have specific information, use the most conservative (smallest) factor
+        if factors:
+            final_factor = min(factors)
+            logger.debug(
+                f"Computed backoff factor: {final_factor:.3f} from {len(factors)} criteria"
+            )
+            return final_factor
+
+        # Fallback to original behavior if no specific information provided
+        logger.debug("No specific failure information provided, using fallback backoff")
+        return self.aggressive_backoff_factor if aggressive else self.backoff_factor
+
+    def is_acceptable(
+        self,
+        *,
+        max_cfl_encountered: typing.Optional[float] = None,
+        cfl_threshold: typing.Optional[float] = None,
+        max_saturation_change: typing.Optional[float] = None,
+        max_allowed_saturation_change: typing.Optional[float] = None,
+        max_pressure_change: typing.Optional[float] = None,
+        max_allowed_pressure_change: typing.Optional[float] = None,
+    ) -> bool:
+        cfl_limit = cfl_threshold if cfl_threshold is not None else self.max_cfl_number
+        if max_cfl_encountered is not None and max_cfl_encountered > cfl_limit:
+            return False
+
+        if (
+            max_saturation_change is not None
+            and max_allowed_saturation_change is not None
+            and max_saturation_change > max_allowed_saturation_change
+        ):
+            return False
+
+        if (
+            max_pressure_change is not None
+            and max_allowed_pressure_change is not None
+            and max_pressure_change > max_allowed_pressure_change
+        ):
+            return False
+
+        return True
 
     def accept_step(
         self,
         step_size: float,
+        *,
         max_cfl_encountered: typing.Optional[float] = None,
         cfl_threshold: typing.Optional[float] = None,
         newton_iterations: typing.Optional[int] = None,
+        max_saturation_change: typing.Optional[float] = None,
+        max_allowed_saturation_change: typing.Optional[float] = None,
+        max_pressure_change: typing.Optional[float] = None,
+        max_allowed_pressure_change: typing.Optional[float] = None,
     ) -> float:
         """
         Registers an accepted time step and computes the next time step size
@@ -378,6 +570,10 @@ class Timer:
         :param max_cfl_encountered: The maximum CFL number encountered during the step.
         :param cfl_threshold: The CFL threshold used during the step.
         :param newton_iterations: Number of Newton iterations taken (if applicable).
+        :param max_saturation_change: Maximum saturation change in the accepted step.
+        :param max_allowed_saturation_change: Maximum allowed saturation change threshold.
+        :param max_pressure_change: Maximum pressure change in the accepted step.
+        :param max_allowed_pressure_change: Maximum allowed pressure change threshold.
         :return: The next proposed time step size.
         """
         # Use small tolerance for floating point comparison as step sizes may slightly overshoot
@@ -409,6 +605,9 @@ class Timer:
         # Start with current step size as base
         dt = self.next_step_size
 
+        # Collect adjustment factors from various criteria
+        adjustment_factors = []
+
         # CFL-based adjustment with safety margin
         max_cfl = cfl_threshold if cfl_threshold is not None else self.max_cfl_number
         if max_cfl_encountered is not None and max_cfl_encountered > 0.0:
@@ -419,14 +618,143 @@ class Timer:
             cfl_ratio = min(cfl_ratio, self.max_growth_per_step)
 
             # Be more conservative if we were close to the limit
-            if max_cfl_encountered > 0.8 * max_cfl:
-                dt *= min(cfl_ratio, 1.0)  # Only decrease or maintain
+            proximity_to_limit = max_cfl_encountered / max_cfl
+            if proximity_to_limit > 0.9:
+                # Very close to limit, we only decrease or maintain
+                cfl_factor = min(cfl_ratio, 1.0)
+                logger.debug(
+                    f"CFL very close to limit ({proximity_to_limit:.2%}), conservative growth"
+                )
+            elif proximity_to_limit > 0.8:
+                # Close to limit, we need be cautious
+                cfl_factor = min(cfl_ratio, 1.1)
+                logger.debug(
+                    f"CFL close to limit ({proximity_to_limit:.2%}), cautious growth"
+                )
             else:
-                dt *= cfl_ratio
+                # Comfortable margin, we can allow normal growth
+                cfl_factor = cfl_ratio
+                logger.debug(
+                    f"CFL comfortable ({proximity_to_limit:.2%}), normal growth"
+                )
 
-        # Performance-based factor
+            adjustment_factors.append(("CFL", cfl_factor))
+
+        # Saturation change adjustment with intelligent scaling
+        if (
+            max_saturation_change is not None
+            and max_allowed_saturation_change is not None
+        ):
+            if max_saturation_change > 0.0:
+                sat_utilization = max_saturation_change / max_allowed_saturation_change
+
+                if sat_utilization > 0.95:
+                    # Very close to limit, reduce step size
+                    sat_factor = 0.85
+                    logger.debug(
+                        f"Saturation change very high ({sat_utilization:.2%}), reducing step"
+                    )
+                elif sat_utilization > 0.85:
+                    # Getting close, maintain or slightly reduce
+                    sat_factor = 0.95
+                    logger.debug(
+                        f"Saturation change high ({sat_utilization:.2%}), maintaining step"
+                    )
+                elif sat_utilization > 0.7:
+                    # Moderate usage, allow modest growth
+                    sat_factor = 1.05
+                    logger.debug(
+                        f"Saturation change moderate ({sat_utilization:.2%}), modest growth"
+                    )
+                elif sat_utilization < 0.3:
+                    # Very low usage, could grow more aggressively
+                    sat_factor = min(
+                        1.3, max_allowed_saturation_change / max_saturation_change * 0.8
+                    )
+                    logger.debug(
+                        f"Saturation change low ({sat_utilization:.2%}), allowing growth"
+                    )
+                else:
+                    # Normal range, proportional adjustment
+                    sat_factor = min(
+                        1.15,
+                        max_allowed_saturation_change / max_saturation_change * 0.9,
+                    )
+                    logger.debug(
+                        f"Saturation change normal ({sat_utilization:.2%}), proportional growth"
+                    )
+
+                adjustment_factors.append(("Saturation", sat_factor))
+
+        # Pressure change adjustment with intelligent scaling
+        if max_pressure_change is not None and max_allowed_pressure_change is not None:
+            if max_pressure_change > 0.0:
+                pres_utilization = max_pressure_change / max_allowed_pressure_change
+
+                if pres_utilization > 0.95:
+                    # Very close to limit, reduce step size
+                    pres_factor = 0.85
+                    logger.debug(
+                        f"Pressure change very high ({pres_utilization:.2%}), reducing step"
+                    )
+                elif pres_utilization > 0.85:
+                    # Getting close, maintain or slightly reduce
+                    pres_factor = 0.95
+                    logger.debug(
+                        f"Pressure change high ({pres_utilization:.2%}), maintaining step"
+                    )
+                elif pres_utilization > 0.7:
+                    # Moderate usage, allow modest growth
+                    pres_factor = 1.05
+                    logger.debug(
+                        f"Pressure change moderate ({pres_utilization:.2%}), modest growth"
+                    )
+                elif pres_utilization < 0.3:
+                    # Very low usage, could grow more aggressively
+                    pres_factor = min(
+                        1.3, max_allowed_pressure_change / max_pressure_change * 0.8
+                    )
+                    logger.debug(
+                        f"Pressure change low ({pres_utilization:.2%}), allowing growth"
+                    )
+                else:
+                    # Normal range, proportional adjustment
+                    pres_factor = min(
+                        1.15, max_allowed_pressure_change / max_pressure_change * 0.9
+                    )
+                    logger.debug(
+                        f"Pressure change normal ({pres_utilization:.2%}), proportional growth"
+                    )
+
+                adjustment_factors.append(("Pressure", pres_factor))
+
+        # Performance-based factor from historical trends
         performance_factor = self._compute_performance_factor()
-        dt *= performance_factor
+        if performance_factor < 1.0:
+            adjustment_factors.append(("Performance", performance_factor))
+            logger.debug(f"Performance trends suggest factor: {performance_factor:.3f}")
+
+        # Newton iteration-based adjustment
+        if newton_iterations is not None:
+            if newton_iterations > 10:
+                newton_factor = 0.7
+                logger.debug(
+                    f"High Newton iterations ({newton_iterations}), reducing step"
+                )
+                adjustment_factors.append(("Newton", newton_factor))
+            elif newton_iterations < 4 and self.steps_since_last_failure >= 3:
+                newton_factor = 1.2
+                logger.debug(
+                    f"Low Newton iterations ({newton_iterations}), allowing growth"
+                )
+                adjustment_factors.append(("Newton", newton_factor))
+
+        # Apply all adjustment factors
+        if adjustment_factors:
+            logger.debug(f"Applying {len(adjustment_factors)} adjustment factors:")
+            for name, factor in adjustment_factors:
+                logger.debug(f"  {name}: {factor:.3f}")
+                dt *= factor
 
         # Apply ramp-up factor (only after cooldown period)
         can_ramp_up = (
@@ -435,24 +763,40 @@ class Timer:
             and self.steps_since_last_failure >= self.growth_cooldown_steps
         )
         if can_ramp_up:
-            dt *= self.ramp_up_factor  # type: ignore
+            # Only apply ramp-up if we're not pushing any limits
+            limits_ok = True
+            if max_cfl_encountered is not None and max_cfl > 0:
+                limits_ok &= (max_cfl_encountered / max_cfl) < 0.7
+            if (
+                max_saturation_change is not None
+                and max_allowed_saturation_change is not None
+            ):
+                limits_ok &= (
+                    max_saturation_change / max_allowed_saturation_change
+                ) < 0.7
+            if (
+                max_pressure_change is not None
+                and max_allowed_pressure_change is not None
+            ):
+                limits_ok &= (max_pressure_change / max_allowed_pressure_change) < 0.7
 
-        # Newton iteration-based adjustment
-        if newton_iterations is not None:
-            if newton_iterations > 10:
-                dt *= 0.7
-            elif newton_iterations < 4 and self.steps_since_last_failure >= 3:
-                dt *= 1.2
+            if limits_ok:
+                dt *= self.ramp_up_factor  # type: ignore
+                logger.debug(f"Applying ramp-up factor: {self.ramp_up_factor}")
+            else:
+                logger.debug("Ramp-up suppressed: too close to limits")
 
         # Limit growth rate relative to current step
         max_allowed_growth = self.step_size * self.max_growth_per_step
-        dt = min(dt, max_allowed_growth)
+        if dt > max_allowed_growth:
+            logger.debug(f"Capping growth from {dt:.6e} to {max_allowed_growth:.6e}")
+            dt = max_allowed_growth
 
         # Check if we're approaching a previously failed step size
         if self._is_near_failed_size(dt):
             dt *= 0.8  # Be more conservative near failure zones
             logger.debug(
-                f"Step size {dt} is near a previously failed size, reducing conservatively"
+                f"Step size {dt:.6e} is near a previously failed size, reducing conservatively"
             )
 
         # Enforce absolute bounds
@@ -475,8 +819,8 @@ class Timer:
         self.rejection_count = 0
 
         logger.debug(
-            f"Time step of size {step_size} accepted for time step {self.step} "
-            f"at elapsed time {self.elapsed_time}. Next size: {self.next_step_size:.6f}"
+            f"Time step of size {step_size:.6e} accepted for time step {self.step} "
+            f"at elapsed time {self.elapsed_time:.4f}s. Next size: {self.next_step_size:.6e}"
         )
         return self.next_step_size
 
@@ -627,7 +971,7 @@ class Timer:
 
         logger.info(
             f"Timer state loaded: step {timer.step}, "
-            f"elapsed time {timer.elapsed_time:.2f}s, "
+            f"elapsed time {timer.elapsed_time:.4f}s, "
             f"step size {timer.step_size:.6f}s"
         )
         return timer

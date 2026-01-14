@@ -2,6 +2,7 @@ import functools
 import itertools
 import logging
 import typing
+import attrs
 
 import numba
 import numpy as np
@@ -34,6 +35,12 @@ from bores.wells import Wells
 logger = logging.getLogger(__name__)
 
 
+@attrs.frozen
+class ImplicitPressureSolution:
+    pressure_grid: ThreeDimensionalGrid
+    max_pressure_change: float
+
+
 def evolve_pressure_implicitly(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
@@ -46,7 +53,7 @@ def evolve_pressure_implicitly(
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     config: Config,
-) -> EvolutionResult[ThreeDimensionalGrid, None]:
+) -> EvolutionResult[ImplicitPressureSolution, None]:
     """
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
     three-phase flow system in a 3D reservoir.
@@ -226,7 +233,10 @@ def evolve_pressure_implicitly(
     except (SolverError, PreconditionerError) as exc:
         logger.error(f"Pressure solve failed at time step {time_step}: {exc}")
         return EvolutionResult(
-            value=current_oil_pressure_grid.astype(dtype, copy=False),
+            value=ImplicitPressureSolution(
+                pressure_grid=current_oil_pressure_grid.astype(dtype, copy=False),
+                max_pressure_change=0.0,  # No change since solve failed
+            ),
             success=False,
             scheme="implicit",
             message=str(exc),
@@ -234,14 +244,18 @@ def evolve_pressure_implicitly(
 
     # Map solution back to 3D grid
     new_pressure_grid = map_1D_solution_to_grid(
-        solution_1D=new_1D_pressure_grid, # type: ignore
+        solution_1D=new_1D_pressure_grid,  # type: ignore
         current_grid=current_oil_pressure_grid,
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
     )
+    max_pressure_change = np.max(np.abs(new_pressure_grid - current_oil_pressure_grid))
     return EvolutionResult(
-        value=new_pressure_grid.astype(dtype, copy=False),
+        value=ImplicitPressureSolution(
+            pressure_grid=new_pressure_grid.astype(dtype, copy=False),
+            max_pressure_change=max_pressure_change,
+        ),
         success=True,
         scheme="implicit",
         message=f"Implicit pressure evolution for time step {time_step} successful.",

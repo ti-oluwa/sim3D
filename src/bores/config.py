@@ -13,54 +13,7 @@ from bores.types import (
 )
 from bores.pvt.tables import PVTTables
 
-__all__ = ["Config", "DampingController"]
-
-
-@attrs.define
-class DampingController:
-    """
-    Adaptive controller for Newton damping factor used in Fully Implicit scheme.
-    """
-
-    initial_damping: float = 1.0
-    """Initial damping factor value."""
-    min_damping: float = 0.01
-    """Minimum allowable damping factor."""
-    max_damping: float = 1.0
-    """Maximum allowable damping factor."""
-    increase_factor: float = 1.2
-    """Factor to increase damping on successful steps."""
-    decrease_factor: float = 0.5
-    """Factor to decrease damping on unsuccessful/stagnant steps."""
-
-    damping: float = attrs.field(init=False, default=1.0)
-    """Current damping factor."""
-
-    def __attrs_post_init__(self):
-        self.damping = self.initial_damping
-
-    def reset(self):
-        """Resets the damping factor to its initial value."""
-        self.damping = self.initial_damping
-
-    def decrease(self):
-        """Decreases the damping factor."""
-        self.damping = max(self.damping * self.decrease_factor, self.min_damping)
-        return self.damping
-
-    def increase(self):
-        """Increases the damping factor."""
-        self.damping = min(self.damping * self.increase_factor, self.max_damping)
-        return self.damping
-
-    def set(self, value: float):
-        """Sets the damping factor to a specific value within bounds."""
-        self.damping = min(max(value, self.min_damping), self.max_damping)
-        return self.damping
-
-    def get(self):
-        """Gets the current applicable damping factor."""
-        return self.damping
+__all__ = ["Config"]
 
 
 @attrs.frozen
@@ -135,7 +88,7 @@ class Config:
     Lowering this value increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
     """
-    explicit_saturation_cfl_threshold: float = 0.6
+    saturation_cfl_threshold: float = 0.6
     """
     Maximum allowable saturation CFL number for the 'explicit' evolution scheme to ensure numerical stability.
 
@@ -144,7 +97,7 @@ class Config:
     Lowering this value increases stability but may require smaller time steps.
     Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
     """
-    explicit_pressure_cfl_threshold: float = 0.9
+    pressure_cfl_threshold: float = 0.9
     """
     Maximum allowable pressure CFL number for the 'explicit' evolution scheme to ensure numerical stability.
 
@@ -157,7 +110,7 @@ class Config:
     """Physical and conversion constants used in the simulation."""
     warn_well_anomalies: bool = True
     """Whether to warn about anomalous flow rates during the simulation."""
-    log_interval: int = attrs.field(default=5, validator=attrs.validators.ge(0))
+    log_interval: int = attrs.field(default=5, validator=attrs.validators.ge(0))  # type: ignore
     """Interval (in time steps) at which to log simulation progress."""
     preconditioner: typing.Optional[Preconditioner] = "ilu"
     """Preconditioner to use for iterative solvers."""
@@ -165,8 +118,9 @@ class Config:
         IterativeSolver, typing.Iterable[IterativeSolver]
     ] = "bicgstab"
     """Iterative solver(s) to use for solving linear systems."""
-    phase_appearance_tolerance: float = attrs.field(
-        default=1e-6, validator=attrs.validators.ge(0)
+    phase_appearance_tolerance: float = attrs.field(  # type: ignore
+        default=1e-6,
+        validator=attrs.validators.ge(0),
     )
     """
     Tolerance for determining phase appearance/disappearance based on saturation levels.
@@ -181,18 +135,71 @@ class Config:
     """Ratio to compute oil drainage residual from imbibition value during gas flooding."""
     residual_gas_drainage_ratio: float = 0.5
     """Ratio to compute gas drainage residual from imbibition value."""
-    damping_controller_factory: typing.Callable[[], DampingController] = (
-        DampingController
-    )
-    """Factory for creating the adaptive Newton damping factor controller in Fully Implicit scheme."""
-    max_jacobian_reuses: int = 3
-    """
-    Maximum number of time steps to reuse the cached Jacobian matrix in the Fully Implicit solver.
 
-    The fully implcit solver uses a quasi-Newton approach where the Jacobian matrix is reused
-    for multiple newton iterations to save computational cost, when certian criteria are met.
-    This parameter sets the maximum number of time steps the Jacobian can be reused before
-    it is recomputed.
+    max_oil_saturation_change: float = 0.5
     """
+    Maximum allowable oil saturation change (absolute, fractional) per time step.
+
+    Controls time step size by limiting saturation variations to prevent numerical
+    instabilities and maintain material balance accuracy. When exceeded, the time
+    step is reduced or rejected.
+    """
+    max_water_saturation_change: float = attrs.field(  # type: ignore
+        default=0.4, validator=attrs.validators.ge(0)
+    )
+    """
+    Maximum allowable water saturation change (absolute, fractional) per time step.
+
+    Controls time step size by limiting saturation variations to prevent numerical
+    instabilities and maintain material balance accuracy. When exceeded, the time
+    step is reduced or rejected.
+    """
+    max_gas_saturation_change: float = attrs.field(  # type: ignore
+        default=0.8, validator=attrs.validators.ge(0)
+    )
+    """
+    Maximum allowable gas saturation change (absolute, fractional) per time step.
+
+    Controls time step size by limiting saturation variations to prevent numerical
+    instabilities and maintain material balance accuracy. When exceeded, the time
+    step is reduced or rejected.
+    """
+    max_pressure_change: float = attrs.field(  # type: ignore
+        default=100.0, validator=attrs.validators.ge(0)
+    )
+    """
+    Maximum allowable pressure change (in psi) per time step.
+
+    Controls time step size by limiting pressure variations to maintain numerical stability
+    and physical accuracy. When exceeded, the time step is reduced or rejected.
+
+    Default: 100 psi (~7 bar). This is suitable for most field-scale simulations with typical
+    reservoir pressures of 1000-5000 psi.
+
+    Adjust based on simulation characteristics:
+
+    **Tighten to 50-75 psi when:**
+    - Simulating high-rate wells with large near-wellbore pressure gradients
+    - Reservoir pressure is low (<1000 psi) to maintain relative accuracy
+    - Using highly compressible fluids (gas reservoirs)
+    - Fine-grid simulations (<10m cells) where local variations are significant
+    - Observing pressure oscillations or convergence issues
+
+    **Relax to 150-300 psi when:**
+    - Depletion studies with slow, uniform pressure decline
+    - Field-scale models (>100m cells) where averaging reduces local variations
+    - Reservoir pressure is high (>5000 psi) making relative changes small
+    - Simulation is stable and material balance errors are acceptable
+    - Computational efficiency is critical and accuracy requirements are relaxed
+
+    **Guidelines by reservoir pressure:**
+    - Low pressure (<1000 psi): 25-50 psi (2.5-5% relative change)
+    - Moderate pressure (1000-3000 psi): 50-100 psi (2-5% relative change)
+    - High pressure (3000-6000 psi): 100-200 psi (2-4% relative change)
+    - Very high pressure (>6000 psi): 150-300 psi (2-5% relative change)
+
+    Note: Larger changes can cause density/viscosity jumps and well control issues.
+    """
+
     pvt_tables: typing.Optional[PVTTables] = None
     """PVT tables for fluid property lookups during the simulation."""

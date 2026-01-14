@@ -358,7 +358,7 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="volume",
+        plot_type="isosurface",
         width=720,
         height=460,
         opacity=0.67,
@@ -369,15 +369,15 @@ def _(bores, states, viz):
         show_wells=True,
         show_surface_marker=True,
         show_perforations=True,
-        isomin=0.2
+        # isomin=0.2
     )
 
-    property = "water-saturation"
+    property = "oil-density"
     figures = []
     timesteps = [4]
     for timestep in timesteps:
         figure = viz.make_plot(
-            states[timestep],
+            states[timestep].model,
             property=property,
             title=f"{property.strip('-').title()} Profile at Timestep {timestep}",
             **shared_kwargs,

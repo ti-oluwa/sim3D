@@ -1579,8 +1579,8 @@ config = bores.Config(
     scheme="explicit",
     
     # Separate CFL limits for pressure and saturation
-    explicit_pressure_cfl_threshold=0.9,
-    explicit_saturation_cfl_threshold=0.6,
+    pressure_cfl_threshold=0.9,
+    saturation_cfl_threshold=0.6,
 )
 ```
 
@@ -1821,8 +1821,8 @@ CFL = (velocity × Δt) / Δx ≤ CFL_max
 # Relax CFL constraints (use with caution!)
 config = bores.Config(
     impes_cfl_threshold=1.2,           # Default is 0.9
-    explicit_saturation_cfl_threshold=0.8,  # Default is 0.6
-    explicit_pressure_cfl_threshold=1.0,    # Default is 0.9
+    saturation_cfl_threshold=0.8,  # Default is 0.6
+    pressure_cfl_threshold=1.0,    # Default is 0.9
 )
 ```
 

@@ -75,6 +75,9 @@ class ExplicitSaturationSolution:
     gas_saturation_grid: ThreeDimensionalGrid
     max_cfl_encountered: float
     cfl_threshold: float
+    max_oil_saturation_change: float
+    max_water_saturation_change: float
+    max_gas_saturation_change: float
     solvent_concentration_grid: typing.Optional[ThreeDimensionalGrid] = None
 
 
@@ -170,7 +173,10 @@ def evolve_saturation_explicitly(
     # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
     # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
     # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
-    gravitational_constant = c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    gravitational_constant = (
+        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    )
     net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
         compute_net_phase_flux_contributions(
             oil_pressure_grid=oil_pressure_grid,
@@ -254,8 +260,17 @@ def evolve_saturation_explicitly(
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
-        cfl_threshold=config.explicit_saturation_cfl_threshold,
+        cfl_threshold=config.saturation_cfl_threshold,
         dtype=dtype,
+    )
+    max_oil_saturation_change = np.max(
+        np.abs(updated_oil_saturation_grid - current_oil_saturation_grid)
+    )
+    max_water_saturation_change = np.max(
+        np.abs(updated_water_saturation_grid - current_water_saturation_grid)
+    )
+    max_gas_saturation_change = np.max(
+        np.abs(updated_gas_saturation_grid - current_gas_saturation_grid)
     )
 
     # Check for CFL violations
@@ -317,25 +332,47 @@ def evolve_saturation_explicitly(
         water_volume = cell_pore_volume * water_saturation
         gas_volume = cell_pore_volume * gas_saturation
 
+        cell_oil_saturation_change = (
+            oil_saturation - updated_oil_saturation_grid[i, j, k]
+        )
+        cell_water_saturation_change = (
+            water_saturation - updated_water_saturation_grid[i, j, k]
+        )
+        cell_gas_saturation_change = (
+            gas_saturation - updated_gas_saturation_grid[i, j, k]
+        )
+
         msg = f"""
         CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}:
+
         Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}.
         Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day,
         Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day,
         Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day,
         Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
         Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
-        Pore volume = {cell_pore_volume:.12f} ft³.
+        Oil Saturation Change = {cell_oil_saturation_change}, Water Saturation Change = {cell_water_saturation_change},
+        Gas Saturation Change = {cell_gas_saturation_change}, Pore volume = {cell_pore_volume:.12f} ft³.
+
         Consider reducing time step size from {time_step_size} seconds.
         """
         return EvolutionResult(
             success=False,
             value=ExplicitSaturationSolution(
-                water_saturation_grid=updated_water_saturation_grid.astype(dtype, copy=False),
-                oil_saturation_grid=updated_oil_saturation_grid.astype(dtype, copy=False),
-                gas_saturation_grid=updated_gas_saturation_grid.astype(dtype, copy=False),
+                water_saturation_grid=updated_water_saturation_grid.astype(
+                    dtype, copy=False
+                ),
+                oil_saturation_grid=updated_oil_saturation_grid.astype(
+                    dtype, copy=False
+                ),
+                gas_saturation_grid=updated_gas_saturation_grid.astype(
+                    dtype, copy=False
+                ),
                 max_cfl_encountered=max_cfl_encountered,
                 cfl_threshold=cfl_threshold,
+                max_oil_saturation_change=max_oil_saturation_change,
+                max_water_saturation_change=max_water_saturation_change,
+                max_gas_saturation_change=max_gas_saturation_change,
             ),
             scheme="explicit",
             message=msg,
@@ -387,11 +424,16 @@ def evolve_saturation_explicitly(
     )
     return EvolutionResult(
         value=ExplicitSaturationSolution(
-            water_saturation_grid=updated_water_saturation_grid.astype(dtype, copy=False),
+            water_saturation_grid=updated_water_saturation_grid.astype(
+                dtype, copy=False
+            ),
             oil_saturation_grid=updated_oil_saturation_grid.astype(dtype, copy=False),
             gas_saturation_grid=updated_gas_saturation_grid.astype(dtype, copy=False),
             max_cfl_encountered=max_cfl_encountered,
             cfl_threshold=cfl_threshold,
+            max_oil_saturation_change=max_oil_saturation_change,
+            max_water_saturation_change=max_water_saturation_change,
+            max_gas_saturation_change=max_gas_saturation_change,
         ),
         scheme="explicit",
         success=True,
@@ -493,18 +535,14 @@ def compute_phase_fluxes_from_neighbour(
     # v_x = λ_x * ∆P / Δx
     # For water: v_w = λ_w * [(P_oil - P_cow) + (upwind_ρ_water * g * Δz)] / ΔL
     water_gravity_potential = (
-        upwind_water_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_water_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total water phase potential
     water_potential_difference = water_pressure_difference + water_gravity_potential
 
     # For oil: v_o = λ_o * [(P_oil) + (upwind_ρ_oil * g * Δz)] / ΔL
     oil_gravity_potential = (
-        upwind_oil_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_oil_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total oil phase potential
     oil_potential_difference = oil_pressure_difference + oil_gravity_potential
@@ -512,9 +550,7 @@ def compute_phase_fluxes_from_neighbour(
     # For gas: v_g = λ_g * ∆P / ΔL
     # v_g = λ_g * [(P_oil + P_go) - (P_cog + P_gas) + (upwind_ρ_gas * g * Δz)] / ΔL
     gas_gravity_potential = (
-        upwind_gas_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_gas_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total gas phase potential
     gas_potential_difference = gas_pressure_difference + gas_gravity_potential
@@ -1338,7 +1374,10 @@ def evolve_miscible_saturation_explicitly(
     # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
     # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
     # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
-    gravitational_constant = c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    gravitational_constant = (
+        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    )
     (
         net_water_flux_grid,
         net_oil_flux_grid,
@@ -1407,7 +1446,7 @@ def evolve_miscible_saturation_explicitly(
     )
 
     # Apply saturation and solvent concentration updates
-    cfl_threshold = config.explicit_saturation_cfl_threshold
+    cfl_threshold = config.saturation_cfl_threshold
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
     (
         updated_water_saturation_grid,
@@ -1435,6 +1474,15 @@ def evolve_miscible_saturation_explicitly(
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
         cfl_threshold=cfl_threshold,
+    )
+    max_oil_saturation_change = np.max(
+        np.abs(updated_oil_saturation_grid - current_oil_saturation_grid)
+    )
+    max_water_saturation_change = np.max(
+        np.abs(updated_water_saturation_grid - current_water_saturation_grid)
+    )
+    max_gas_saturation_change = np.max(
+        np.abs(updated_gas_saturation_grid - current_gas_saturation_grid)
     )
 
     # Check for CFL violation
@@ -1493,26 +1541,50 @@ def evolve_miscible_saturation_explicitly(
         total_inflow = total_water_inflow + total_oil_inflow + total_gas_inflow
         total_outflow = total_water_outflow + total_oil_outflow + total_gas_outflow
 
+        cell_oil_saturation_change = (
+            oil_saturation - updated_oil_saturation_grid[i, j, k]
+        )
+        cell_water_saturation_change = (
+            water_saturation - updated_water_saturation_grid[i, j, k]
+        )
+        cell_gas_saturation_change = (
+            gas_saturation - updated_gas_saturation_grid[i, j, k]
+        )
+
         msg = f"""
         CFL condition violated at cell ({i}, {j}, {k}) at timestep {time_step}:
+
         Max CFL number {max_cfl_encountered:.4f} exceeds limit {cfl_threshold:.4f}.
         Water Inflow = {total_water_inflow:.12f} ft³/day, Water Outflow = {total_water_outflow:.12f} ft³/day,
         Oil Inflow = {total_oil_inflow:.12f} ft³/day, Oil Outflow = {total_oil_outflow:.12f} ft³/day,
         Gas Inflow = {total_gas_inflow:.12f} ft³/day, Gas Outflow = {total_gas_outflow:.12f} ft³/day,
         Oil Volume = {oil_volume:.12f} ft³, Water Volume = {water_volume:.12f} ft³, Gas Volume = {gas_volume:.12f} ft³,
         Total Inflow = {total_inflow:.12f} ft³/day, Total Outflow = {total_outflow:.12f} ft³/day,
-        Pore volume = {cell_pore_volume:.12f} ft³.
+        Oil Saturation Change = {cell_oil_saturation_change}, Water Saturation Change = {cell_water_saturation_change},
+        Gas Saturation Change = {cell_gas_saturation_change}, Pore volume = {cell_pore_volume:.12f} ft³.
+
         Consider reducing time step size from {time_step_size} seconds.
         """
         return EvolutionResult(
             success=False,
             value=ExplicitSaturationSolution(
-                water_saturation_grid=updated_water_saturation_grid.astype(dtype, copy=False),
-                oil_saturation_grid=updated_oil_saturation_grid.astype(dtype, copy=False),
-                gas_saturation_grid=updated_gas_saturation_grid.astype(dtype, copy=False),
-                solvent_concentration_grid=updated_solvent_concentration_grid.astype(dtype, copy=False),
+                water_saturation_grid=updated_water_saturation_grid.astype(
+                    dtype, copy=False
+                ),
+                oil_saturation_grid=updated_oil_saturation_grid.astype(
+                    dtype, copy=False
+                ),
+                gas_saturation_grid=updated_gas_saturation_grid.astype(
+                    dtype, copy=False
+                ),
+                solvent_concentration_grid=updated_solvent_concentration_grid.astype(
+                    dtype, copy=False
+                ),
                 max_cfl_encountered=max_cfl_encountered,
                 cfl_threshold=cfl_threshold,
+                max_oil_saturation_change=max_oil_saturation_change,
+                max_water_saturation_change=max_water_saturation_change,
+                max_gas_saturation_change=max_gas_saturation_change,
             ),
             scheme="explicit",
             message=msg,
@@ -1564,12 +1636,19 @@ def evolve_miscible_saturation_explicitly(
     max_cfl_encountered = cfl_violation_info[4]
     return EvolutionResult(
         value=ExplicitSaturationSolution(
-            water_saturation_grid=updated_water_saturation_grid.astype(dtype, copy=False),
+            water_saturation_grid=updated_water_saturation_grid.astype(
+                dtype, copy=False
+            ),
             oil_saturation_grid=updated_oil_saturation_grid.astype(dtype, copy=False),
             gas_saturation_grid=updated_gas_saturation_grid.astype(dtype, copy=False),
-            solvent_concentration_grid=updated_solvent_concentration_grid.astype(dtype, copy=False),
+            solvent_concentration_grid=updated_solvent_concentration_grid.astype(
+                dtype, copy=False
+            ),
             max_cfl_encountered=max_cfl_encountered,
             cfl_threshold=cfl_threshold,
+            max_oil_saturation_change=max_oil_saturation_change,
+            max_water_saturation_change=max_water_saturation_change,
+            max_gas_saturation_change=max_gas_saturation_change,
         ),
         scheme="explicit",
         success=True,
@@ -1678,23 +1757,17 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
 
     # Darcy velocities with gravity
     water_gravity_potential = (
-        upwind_water_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_water_density * gravitational_constant * elevation_difference
     ) / 144.0
     water_potential_difference = water_pressure_difference + water_gravity_potential
 
     oil_gravity_potential = (
-        upwind_oil_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_oil_density * gravitational_constant * elevation_difference
     ) / 144.0
     oil_potential_difference = oil_pressure_difference + oil_gravity_potential
 
     gas_gravity_potential = (
-        upwind_gas_density
-        * gravitational_constant
-        * elevation_difference
+        upwind_gas_density * gravitational_constant * elevation_difference
     ) / 144.0
     gas_potential_difference = gas_pressure_difference + gas_gravity_potential
 
