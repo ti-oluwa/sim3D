@@ -525,7 +525,7 @@ store = bores.ZarrStore(
 stream = bores.StateStream(
     bores.run(model=model, timer=timer, wells=wells, config=config),
     store=store,
-    async_io=True, # Prevent state persistence I/O operations from block stream
+    async_io=True, # Prevent state persistence I/O operations from blocking stream
     batch_size=50,  # Persist every 50 states
     checkpoint_interval=200,  # Checkpoint every 200 steps
     checkpoint_dir=Path("./results/checkpoints/"),

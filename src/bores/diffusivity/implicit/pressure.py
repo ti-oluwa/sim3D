@@ -83,6 +83,7 @@ def evolve_pressure_implicitly(
     # Determine grid dimensions and cell sizes
     cell_count_x, cell_count_y, cell_count_z = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
+    dtype = get_dtype()
 
     # Compute total fluid system compressibility for each cell
     total_fluid_compressibility_grid = build_total_fluid_compressibility_grid(
@@ -93,7 +94,9 @@ def evolve_pressure_implicitly(
         gas_saturation_grid=current_gas_saturation_grid,
         gas_compressibility_grid=gas_compressibility_grid,
     )
-    total_compressibility_grid = total_fluid_compressibility_grid + rock_compressibility
+    total_compressibility_grid = np.add(
+        total_fluid_compressibility_grid, rock_compressibility, dtype=dtype
+    )
     # Clamp the compressibility within range
     total_compressibility_grid = config.total_compressibility_range.clip(
         total_compressibility_grid
@@ -128,16 +131,15 @@ def evolve_pressure_implicitly(
 
     # Initialize sparse coefficient matrix and RHS vector
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
-    dtype = get_dtype()
     A = lil_matrix((interior_cell_count, interior_cell_count), dtype=dtype)
     b = np.zeros(interior_cell_count, dtype=dtype, order="C")
 
-    # FIRST PASS: Initialize accumulation terms for all cells
+    # Initialize accumulation terms for all cells
     add_accumulation_terms(
         A=A,
         b=b,
         porosity_grid=porosity_grid,
-        total_compressibility_grid=total_compressibility_grid,
+        total_compressibility_grid=total_compressibility_grid,  # type: ignore
         thickness_grid=thickness_grid,
         current_oil_pressure_grid=current_oil_pressure_grid,
         cell_size_x=cell_size_x,
@@ -148,7 +150,15 @@ def evolve_pressure_implicitly(
         cell_count_z=cell_count_z,
         dtype=dtype,
     )
-    # SECOND PASS: Add face transmissibilities and fluxes
+    # Add face transmissibilities and fluxes
+    # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
+    # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
+    # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
+    # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
+    gravitational_constant = (
+        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    )
     add_face_transmissibilities_and_fluxes(
         A=A,
         b=b,
@@ -173,10 +183,10 @@ def evolve_pressure_implicitly(
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
         cell_count_z=cell_count_z,
-        acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
+        gravitational_constant=gravitational_constant,
         dtype=dtype,
     )
-    # THIRD PASS: Compute well flow rates and add to RHS using extracted function
+    # Compute well flow rates and add to RHS using extracted function
     add_well_contributions(
         A=A,
         b=b,
@@ -224,7 +234,7 @@ def evolve_pressure_implicitly(
 
     # Map solution back to 3D grid
     new_pressure_grid = map_1D_solution_to_grid(
-        solution_1D=new_1D_pressure_grid,
+        solution_1D=new_1D_pressure_grid, # type: ignore
         current_grid=current_oil_pressure_grid,
         cell_count_x=cell_count_x,
         cell_count_y=cell_count_y,
@@ -424,7 +434,7 @@ def compute_face_transmissibility_arrays(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -458,7 +468,7 @@ def compute_face_transmissibility_arrays(
     :param water_density_grid: Water density grid (lb/ft^3)
     :param gas_density_grid: Gas density grid (lb/ft^3)
     :param elevation_grid: Cell elevation grid (ft)
-    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s^2)
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm)
     :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (rows, cols, off_diag_values, diagonal_additions, rhs_additions)
         - rows: Row indices for off-diagonal entries
@@ -508,7 +518,11 @@ def compute_face_transmissibility_arrays(
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    geometric_factor = cell_size_y * cell_thickness / cell_size_x
+                    neighbour_thickness = thickness_grid[ni, nj, nk]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_y * harmonic_thickness / cell_size_x
 
                     harmonic_mobility, cap_flux, grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
@@ -523,7 +537,7 @@ def compute_face_transmissibility_arrays(
                             water_density_grid=water_density_grid,
                             gas_density_grid=gas_density_grid,
                             elevation_grid=elevation_grid,
-                            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                            gravitational_constant=gravitational_constant,
                         )
                     )
 
@@ -560,7 +574,11 @@ def compute_face_transmissibility_arrays(
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    geometric_factor = cell_size_x * cell_thickness / cell_size_y
+                    neighbour_thickness = thickness_grid[ni, nj, nk]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_x * harmonic_thickness / cell_size_y
 
                     harmonic_mobility, cap_flux, grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
@@ -575,7 +593,7 @@ def compute_face_transmissibility_arrays(
                             water_density_grid=water_density_grid,
                             gas_density_grid=gas_density_grid,
                             elevation_grid=elevation_grid,
-                            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                            gravitational_constant=gravitational_constant,
                         )
                     )
 
@@ -608,7 +626,11 @@ def compute_face_transmissibility_arrays(
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    geometric_factor = cell_size_x * cell_size_y / cell_thickness
+                    neighbour_thickness = thickness_grid[ni, nj, nk]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_x * cell_size_y / harmonic_thickness
 
                     harmonic_mobility, cap_flux, grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
@@ -623,7 +645,7 @@ def compute_face_transmissibility_arrays(
                             water_density_grid=water_density_grid,
                             gas_density_grid=gas_density_grid,
                             elevation_grid=elevation_grid,
-                            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                            gravitational_constant=gravitational_constant,
                         )
                     )
 
@@ -677,7 +699,7 @@ def add_face_transmissibilities_and_fluxes(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[lil_matrix, np.ndarray]:
     """
@@ -706,7 +728,7 @@ def add_face_transmissibilities_and_fluxes(
     :param water_density_grid: Water density grid (lb/ft³)
     :param gas_density_grid: Gas density grid (lb/ft³)
     :param elevation_grid: Elevation grid (ft)
-    :param acceleration_due_to_gravity_ft_per_s2: Gravitational acceleration (ft/s²)
+    :param gravitational_constant: Gravitational constant (lbf/lbm)
     :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (A, b) with face contributions added (same objects passed in, modified in place)
     """
@@ -734,7 +756,7 @@ def add_face_transmissibilities_and_fluxes(
             water_density_grid=water_density_grid,
             gas_density_grid=gas_density_grid,
             elevation_grid=elevation_grid,
-            acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+            gravitational_constant=gravitational_constant,
             dtype=dtype,
         )
     )
@@ -997,7 +1019,7 @@ def compute_pseudo_fluxes_from_neighbour(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
 ) -> typing.Tuple[float, float, float]:
     """
     Computes and returns a tuple of the total harmonic mobility of the phases, the capillary pseudo flux,
@@ -1082,19 +1104,13 @@ def compute_pseudo_fluxes_from_neighbour(
 
     # Calculate the phase gravity potentials (hydrostatic/gravity head)
     water_gravity_potential = (
-        harmonic_water_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_water_density * gravitational_constant * elevation_difference
     ) / 144.0
     oil_gravity_potential = (
-        harmonic_oil_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_oil_density * gravitational_constant * elevation_difference
     ) / 144.0
     gas_gravity_potential = (
-        harmonic_gas_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_gas_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Total gravity pseudo flux (ft²/day)
     water_gravity_pseudo_flux = water_harmonic_mobility * water_gravity_potential

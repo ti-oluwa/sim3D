@@ -623,7 +623,6 @@ def solve_linear_system(
 
 """
 Guidelines for Selecting Iterative Solvers and Preconditioners
-==============================================================
 
 This guide explains how to choose the most appropriate combination of
 iterative solver(s) and preconditioner(s) for large 3D, three-phase,
@@ -639,9 +638,7 @@ built-in solvers and preconditioners, provide custom factory functions, or
 override default keyword arguments. The guidance below describes how each
 choice affects performance.
 
----------------------------------------------------------------------------
-1. Recommended Default Combination (Best Overall for Reservoir Simulation)
----------------------------------------------------------------------------
+1. Recommended Default Combination (Best Overall for Reservoir Simulation especially Fully-Implicit simulations)
 
     solver="lgmres"
     preconditioner="cpr"
@@ -660,9 +657,8 @@ Memory cost:
     • Moderate to high (AMG hierarchy + ILU factors).
     • Recommended for full-scale 3D implicit simulations.
 
----------------------------------------------------------------------------
+
 2. When Memory is Limited (Prefer Low-Memory Configuration)
----------------------------------------------------------------------------
 
 Use:
 
@@ -682,9 +678,8 @@ Tradeoffs:
 Memory footprint:
     • Low to moderate.
 
----------------------------------------------------------------------------
+
 3. Extremely Memory-Constrained Environments (Minimal Footprint)
----------------------------------------------------------------------------
 
 Use:
 
@@ -704,9 +699,8 @@ Important:
 Memory:
     • Very low.
 
----------------------------------------------------------------------------
+
 4. High-Accuracy, Difficult Jacobians (Most Robust Configuration)
----------------------------------------------------------------------------
 
 Use:
 
@@ -723,9 +717,8 @@ Tradeoffs:
     • Highest memory usage of all combinations.
     • GMRES basis growth increases memory as iterations increase.
 
----------------------------------------------------------------------------
+
 5. Using Custom Factories or Override Keyword Arguments
----------------------------------------------------------------------------
 
 All built-in preconditioners (`ilu`, `amg`, `cpr`, `diagonal`) accept user-supplied
 factory functions or dictionaries of keyword arguments.
@@ -764,21 +757,20 @@ Examples:
 General rules for custom tuning:
 
     • AMG:
-        - Increase max_coarse to reduce memory but increase iteration count.
+        - Increase `max_coarse` to reduce memory but increase iteration count.
         - Increase presmoother/postsmoother sweeps for stiffer systems.
         - Use smoothed aggregation (default) for multiphase problems.
 
     • ILU:
-        - Lower drop_tol → more accurate, more memory, faster convergence.
-        - Higher fill_factor → larger ILU factors, higher memory.
+        - Lower `drop_tol` → more accurate, more memory, faster convergence.
+        - Higher `fill_factor` → larger ILU factors, higher memory.
 
     • CPR:
         - If CPR fails, reduce ILU strength or give AMG more smoothing.
         - If CPR is slow, the pressure block or transmissibility assembly may be stiff.
 
----------------------------------------------------------------------------
+
 6. Selecting a Sequence of Solvers
----------------------------------------------------------------------------
 
 The `solver=` argument also accepts a list:
 
@@ -794,9 +786,8 @@ Typical low-memory sequence:
 
     solver=["bicgstab", "tfqmr"]
 
----------------------------------------------------------------------------
+
 7. Direct Solver Fallback
----------------------------------------------------------------------------
 
 Enable only for debugging or tiny models:
 
@@ -806,9 +797,7 @@ This will use `spsolve` only if all iterative solvers fail.
 
 Never enable on large 3D grids (memory explosion).
 
----------------------------------------------------------------------------
 8. Summary Table: Best → Least Favorable
----------------------------------------------------------------------------
 
     Highest convergence speed:
         CPR + LGMRES  >  CPR + GMRES  >  ILU + BiCGSTAB > ILU + TFQMR
@@ -821,8 +810,6 @@ Never enable on large 3D grids (memory explosion).
 
     Best overall default for users:
         solver="lgmres", preconditioner="cpr"
-
----------------------------------------------------------------------------
 
 This guide is meant to give intuitive decision rules for users modifying
 solver strategies, tuning preconditioner strength, or supplying their

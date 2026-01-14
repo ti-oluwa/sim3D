@@ -264,7 +264,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         state = self._states.get(step, None)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"Time step {step} not found. Available time steps: "
                 f"{self._sorted_steps}"
             )
@@ -570,7 +570,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} not available. Returning 0.0 for oil in place."
             )
             return 0.0
@@ -607,7 +607,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} not available. Returning 0.0 for gas in place."
             )
             return 0.0
@@ -644,7 +644,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} not available. Returning 0.0 for water in place."
             )
             return 0.0
@@ -1885,7 +1885,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} is not available. Returning zero production rates."
             )
             return InstantaneousRates(
@@ -1973,7 +1973,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} is not available. Returning zero injection rates."
             )
             return InstantaneousRates(
@@ -2088,7 +2088,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         state = self.get_state(step)
         initial_state = self.get_state(self._min_step)
         if state is None or initial_state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} or initial state (step {self._min_step}) is not available. Returning zero material balance analysis."
             )
             return MaterialBalanceAnalysis(
@@ -2306,10 +2306,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
         state = self.get_state(step)
         initial_state = self.get_state(self._min_step)
         if state is None or initial_state is None:
-            logger.warning(
-                "State at time step %s or initial state (step %s) is not available. Returning zeros.",
-                step,
-                self._min_step,
+            logger.debug(
+                f"State at time step {step} or initial state (step {self._min_step}) is not available. Returning zeros.",
             )
             return SweepEfficiencyAnalysis(
                 volumetric_sweep_efficiency=0.0,
@@ -2518,7 +2516,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} is not available. Defaulting to 'vogel' IPR method."
             )
             return "vogel"
@@ -2820,7 +2818,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} is not available. Returning zero VRR."
             )
             return 0.0
@@ -3662,7 +3660,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         state = self.get_state(step)
         if state is None:
-            logger.warning(
+            logger.debug(
                 f"State at time step {step} not available for mobility ratio calculation. "
                 "Returning inf."
             )

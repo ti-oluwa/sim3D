@@ -3,9 +3,6 @@ import logging
 import typing
 
 import attrs
-import numba
-import numpy as np
-
 from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
@@ -17,6 +14,7 @@ from bores.diffusivity.base import (
 )
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.models import FluidProperties, RockProperties
+from bores.pvt.core import compute_harmonic_mean
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,
@@ -26,6 +24,8 @@ from bores.types import (
 )
 from bores.utils import clip
 from bores.wells import Wells
+import numba
+import numpy as np
 
 __all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation_explicitly"]
 
@@ -166,6 +166,11 @@ def evolve_saturation_explicitly(
     dtype = get_dtype()
 
     # Compute net flux contributions
+    # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
+    # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
+    # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
+    # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
+    gravitational_constant = c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
         compute_net_phase_flux_contributions(
             oil_pressure_grid=oil_pressure_grid,
@@ -190,7 +195,7 @@ def evolve_saturation_explicitly(
             water_density_grid=water_density_grid,
             gas_density_grid=gas_density_grid,
             elevation_grid=elevation_grid,
-            acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
+            gravitational_constant=gravitational_constant,
             dtype=dtype,
         )
     )
@@ -419,7 +424,7 @@ def compute_phase_fluxes_from_neighbour(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
 ) -> typing.Tuple[float, float, float]:
     """
     Compute volumetric fluxes for water, oil, and gas phases between a cell and its neighbour.
@@ -438,7 +443,7 @@ def compute_phase_fluxes_from_neighbour(
     :param water_density_grid: 3D grid of water densities (lb/ft³).
     :param gas_density_grid: 3D grid of gas densities (lb/ft³).
     :param elevation_grid: 3D grid of cell elevations (ft).
-    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²).
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :return: Tuple of volumetric fluxes (water_flux, oil_flux, gas_flux) in ft³/day.
     """
     # Calculate pressure differences relative to current cell (Neighbour - Current)
@@ -489,7 +494,7 @@ def compute_phase_fluxes_from_neighbour(
     # For water: v_w = λ_w * [(P_oil - P_cow) + (upwind_ρ_water * g * Δz)] / ΔL
     water_gravity_potential = (
         upwind_water_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     # Calculate the total water phase potential
@@ -498,7 +503,7 @@ def compute_phase_fluxes_from_neighbour(
     # For oil: v_o = λ_o * [(P_oil) + (upwind_ρ_oil * g * Δz)] / ΔL
     oil_gravity_potential = (
         upwind_oil_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     # Calculate the total oil phase potential
@@ -508,7 +513,7 @@ def compute_phase_fluxes_from_neighbour(
     # v_g = λ_g * [(P_oil + P_go) - (P_cog + P_gas) + (upwind_ρ_gas * g * Δz)] / ΔL
     gas_gravity_potential = (
         upwind_gas_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     # Calculate the total gas phase potential
@@ -569,7 +574,7 @@ def compute_net_phase_flux_contributions(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
@@ -595,9 +600,9 @@ def compute_net_phase_flux_contributions(
     :param gas_oil_capillary_pressure_grid: 3D grid of gas-oil capillary pressures (psi).
     :param oil_density_grid: 3D grid of oil densities (lb/ft³).
     :param water_density_grid: 3D grid of water densities (lb/ft³).
-    :param gas_density_grid: 3D grid of gas densities (lb/ft³
+    :param gas_density_grid: 3D grid of gas densities (lb/ft³).
     :param elevation_grid: 3D grid of cell elevations (ft).
-    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²).
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :param dtype: Numpy data type for computations.
     :return: (net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid) (ft³/day)
     """
@@ -624,14 +629,18 @@ def compute_net_phase_flux_contributions(
                 net_gas_flux = 0.0
 
                 # X-direction fluxes (East and West neighbors)
-                flow_area_x = cell_size_y * cell_thickness
                 flow_length_x = cell_size_x
 
                 # East neighbor (i+1, j, k)
+                east_neighbour_thickness = thickness_grid[i + 1, j, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, east_neighbour_thickness
+                )
+                east_flow_area = cell_size_y * harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i + 1, j, k),
-                    flow_area=flow_area_x,
+                    flow_area=east_flow_area,
                     flow_length=flow_length_x,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_x,
@@ -643,17 +652,22 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
                 net_gas_flux += gas_flux
 
                 # West neighbor (i-1, j, k)
+                west_neighbour_thickness = thickness_grid[i - 1, j, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, west_neighbour_thickness
+                )
+                west_flow_area = cell_size_y * harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i - 1, j, k),
-                    flow_area=flow_area_x,
+                    flow_area=west_flow_area,
                     flow_length=flow_length_x,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_x,
@@ -665,21 +679,25 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
                 net_gas_flux += gas_flux
 
                 # Y-direction fluxes (North and South neighbors)
-                flow_area_y = cell_size_x * cell_thickness
                 flow_length_y = cell_size_y
 
                 # North neighbor (i, j-1, k)
+                north_neighbour_thickness = thickness_grid[i, j - 1, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, north_neighbour_thickness
+                )
+                north_flow_area = cell_size_x * harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i, j - 1, k),
-                    flow_area=flow_area_y,
+                    flow_area=north_flow_area,
                     flow_length=flow_length_y,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_y,
@@ -691,17 +709,22 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
                 net_gas_flux += gas_flux
 
                 # South neighbor (i, j+1, k)
+                south_neighbour_thickness = thickness_grid[i, j + 1, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, south_neighbour_thickness
+                )
+                south_flow_area = cell_size_x * harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i, j + 1, k),
-                    flow_area=flow_area_y,
+                    flow_area=south_flow_area,
                     flow_length=flow_length_y,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_y,
@@ -713,7 +736,7 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
@@ -721,14 +744,20 @@ def compute_net_phase_flux_contributions(
 
                 # Z-direction fluxes (Top and Bottom neighbors)
                 flow_area_z = cell_size_x * cell_size_y
-                flow_length_z = cell_thickness
 
                 # Top neighbor (i, j, k-1)
+                top_neighbour_thickness = thickness_grid[i, j, k - 1]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, top_neighbour_thickness
+                )
+                # Note: For vertical flow, the flow area is simply the cell cross-sectional area
+                # But the flow length is the harmonic mean of the two cell thicknesses
+                top_flow_length = harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i, j, k - 1),
                     flow_area=flow_area_z,
-                    flow_length=flow_length_z,
+                    flow_length=top_flow_length,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_z,
                     oil_mobility_grid=oil_mobility_grid_z,
@@ -739,18 +768,23 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
                 net_gas_flux += gas_flux
 
                 # Bottom neighbor (i, j, k+1)
+                bottom_neighbour_thickness = thickness_grid[i, j, k + 1]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, bottom_neighbour_thickness
+                )
+                bottom_flow_length = harmonic_thickness
                 water_flux, oil_flux, gas_flux = compute_phase_fluxes_from_neighbour(
                     cell_indices=(i, j, k),
                     neighbour_indices=(i, j, k + 1),
                     flow_area=flow_area_z,
-                    flow_length=flow_length_z,
+                    flow_length=bottom_flow_length,
                     oil_pressure_grid=oil_pressure_grid,
                     water_mobility_grid=water_mobility_grid_z,
                     oil_mobility_grid=oil_mobility_grid_z,
@@ -761,7 +795,7 @@ def compute_net_phase_flux_contributions(
                     water_density_grid=water_density_grid,
                     gas_density_grid=gas_density_grid,
                     elevation_grid=elevation_grid,
-                    acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                    gravitational_constant=gravitational_constant,
                 )
                 net_water_flux += water_flux
                 net_oil_flux += oil_flux
@@ -1300,6 +1334,11 @@ def evolve_miscible_saturation_explicitly(
     )
 
     # Compute net flux contributions for all cells
+    # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
+    # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
+    # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
+    # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
+    gravitational_constant = c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2 / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     (
         net_water_flux_grid,
         net_oil_flux_grid,
@@ -1329,7 +1368,7 @@ def evolve_miscible_saturation_explicitly(
         water_density_grid=water_density_grid,
         gas_density_grid=gas_density_grid,
         elevation_grid=elevation_grid,
-        acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
+        gravitational_constant=gravitational_constant,
         dtype=dtype,
     )
 
@@ -1564,7 +1603,7 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
 ) -> typing.Tuple[float, float, float, float]:  # water, oil, gas, solvent_in_oil
     """
     Compute phase volumetric fluxes including solvent concentration transport.
@@ -1587,7 +1626,7 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
     :param water_density_grid: 3D grid of water densities (lb/ft³).
     :param gas_density_grid: 3D grid of gas densities (lb/ft³).
     :param elevation_grid: 3D grid of cell elevations (ft).
-    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²).
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :return: Tuple of (water_flux, oil_flux, gas_flux, solvent_flux_in_oil)
         1. water_flux: Volumetric flux of water (ft³/day).
         2. oil_flux: Volumetric flux of oil (ft³/day).
@@ -1640,21 +1679,21 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
     # Darcy velocities with gravity
     water_gravity_potential = (
         upwind_water_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     water_potential_difference = water_pressure_difference + water_gravity_potential
 
     oil_gravity_potential = (
         upwind_oil_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     oil_potential_difference = oil_pressure_difference + oil_gravity_potential
 
     gas_gravity_potential = (
         upwind_gas_density
-        * acceleration_due_to_gravity_ft_per_s2
+        * gravitational_constant
         * elevation_difference
     ) / 144.0
     gas_potential_difference = gas_pressure_difference + gas_gravity_potential
@@ -1722,7 +1761,7 @@ def compute_net_phase_and_solvent_flux_contributions(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[
     ThreeDimensionalGrid,
@@ -1756,7 +1795,7 @@ def compute_net_phase_and_solvent_flux_contributions(
     :param water_density_grid: 3D grid of water densities (lb/ft³).
     :param gas_density_grid: 3D grid of gas densities (lb/ft³
     :param elevation_grid: 3D grid of cell elevations (ft).
-    :param acceleration_due_to_gravity_ft_per_s2: Acceleration due to gravity (ft/s²).
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :param dtype: Numpy data type for computations.
     :return: Tuple of net flux grids:
         1. net_water_flux_grid: 3D grid of net water fluxes (ft³/day).
@@ -1791,15 +1830,19 @@ def compute_net_phase_and_solvent_flux_contributions(
                 net_solvent_flux = 0.0
 
                 # X-direction fluxes (East and West neighbors)
-                flow_area_x = cell_size_y * cell_thickness
                 flow_length_x = cell_size_x
 
                 # East neighbor (i+1, j, k)
+                east_neighbour_thickness = thickness_grid[i + 1, j, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, east_neighbour_thickness
+                )
+                east_flow_area = cell_size_y * harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i + 1, j, k),
-                        flow_area=flow_area_x,
+                        flow_area=east_flow_area,
                         flow_length=flow_length_x,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_x,
@@ -1812,7 +1855,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux
@@ -1821,11 +1864,16 @@ def compute_net_phase_and_solvent_flux_contributions(
                 net_solvent_flux += solvent_flux
 
                 # West neighbor (i-1, j, k)
+                west_neighbour_thickness = thickness_grid[i - 1, j, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, west_neighbour_thickness
+                )
+                west_flow_area = cell_size_y * harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i - 1, j, k),
-                        flow_area=flow_area_x,
+                        flow_area=west_flow_area,
                         flow_length=flow_length_x,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_x,
@@ -1838,7 +1886,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux
@@ -1847,15 +1895,19 @@ def compute_net_phase_and_solvent_flux_contributions(
                 net_solvent_flux += solvent_flux
 
                 # Y-direction fluxes (North and South neighbors)
-                flow_area_y = cell_size_x * cell_thickness
                 flow_length_y = cell_size_y
 
                 # North neighbor (i, j-1, k)
+                north_neighbour_thickness = thickness_grid[i, j - 1, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, north_neighbour_thickness
+                )
+                north_flow_area = cell_size_x * harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, j - 1, k),
-                        flow_area=flow_area_y,
+                        flow_area=north_flow_area,
                         flow_length=flow_length_y,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_y,
@@ -1868,7 +1920,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux
@@ -1877,11 +1929,16 @@ def compute_net_phase_and_solvent_flux_contributions(
                 net_solvent_flux += solvent_flux
 
                 # South neighbor (i, j+1, k)
+                south_neighbour_thickness = thickness_grid[i, j + 1, k]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, south_neighbour_thickness
+                )
+                south_flow_area = cell_size_x * harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, j + 1, k),
-                        flow_area=flow_area_y,
+                        flow_area=south_flow_area,
                         flow_length=flow_length_y,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_y,
@@ -1894,7 +1951,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux
@@ -1904,15 +1961,22 @@ def compute_net_phase_and_solvent_flux_contributions(
 
                 # Z-direction fluxes (Top and Bottom neighbors)
                 flow_area_z = cell_size_x * cell_size_y
-                flow_length_z = cell_thickness
+
+                # Note: For vertical flow, the flow area is simply the cell cross-sectional area
+                # But the flow length is the harmonic mean of the two cell thicknesses
 
                 # Top neighbor (i, j, k-1)
+                top_neighbour_thickness = thickness_grid[i, j, k - 1]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, top_neighbour_thickness
+                )
+                top_flow_length = harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, j, k - 1),
                         flow_area=flow_area_z,
-                        flow_length=flow_length_z,
+                        flow_length=top_flow_length,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_z,
                         oil_mobility_grid=oil_mobility_grid_z,
@@ -1924,7 +1988,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux
@@ -1933,12 +1997,17 @@ def compute_net_phase_and_solvent_flux_contributions(
                 net_solvent_flux += solvent_flux
 
                 # Bottom neighbor (i, j, k+1)
+                bottom_neighbour_thickness = thickness_grid[i, j, k + 1]
+                harmonic_thickness = compute_harmonic_mean(
+                    cell_thickness, bottom_neighbour_thickness
+                )
+                bottom_flow_length = harmonic_thickness
                 water_flux, oil_flux, gas_flux, solvent_flux = (
                     compute_phase_and_solvent_fluxes_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, j, k + 1),
                         flow_area=flow_area_z,
-                        flow_length=flow_length_z,
+                        flow_length=bottom_flow_length,
                         oil_pressure_grid=oil_pressure_grid,
                         water_mobility_grid=water_mobility_grid_z,
                         oil_mobility_grid=oil_mobility_grid_z,
@@ -1950,7 +2019,7 @@ def compute_net_phase_and_solvent_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
                 )
                 net_water_flux += water_flux

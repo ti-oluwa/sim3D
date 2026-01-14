@@ -430,6 +430,11 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Standard acceleration due to gravity",
         unit="ft/day²",
     ),
+    "GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2": Constant(
+        value=32.174,
+        description="Gravitational constant in lbm·ft/(lbf·s²). Conversion factor from pound-force to pound-mass or vice versa under Earth's gravity.",
+        unit="lbm·ft/(lbf·s²)",
+    ),
     # Reservoir Fluid Defaults
     "RESERVOIR_OIL_NAME": Constant(
         value="n-Dodecane",
@@ -468,7 +473,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="psi",
     ),
     "GAS_PSEUDO_PRESSURE_POINTS": Constant(
-        value=200,
+        value=100,
         description="Number of points to compute when generating gas pseudo-pressure table internally",
         unit="points",
     ),

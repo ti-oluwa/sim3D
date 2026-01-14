@@ -82,6 +82,7 @@ def evolve_pressure_explicitly(
     # Determine grid dimensions and cell sizes
     cell_count_x, cell_count_y, cell_count_z = current_oil_pressure_grid.shape
     cell_size_x, cell_size_y = cell_dimension
+    dtype = get_dtype()
 
     # Compute total fluid system compressibility for each cell
     total_fluid_compressibility_grid = build_total_fluid_compressibility_grid(
@@ -93,7 +94,9 @@ def evolve_pressure_explicitly(
         gas_compressibility_grid=gas_compressibility_grid,
     )
     # Total compressibility (psi⁻¹) = fluid compressibility + rock compressibility
-    total_compressibility_grid = total_fluid_compressibility_grid + rock_compressibility
+    total_compressibility_grid = np.add(
+        total_fluid_compressibility_grid, rock_compressibility, dtype=dtype
+    )
     # Clamp the compressibility within range
     total_compressibility_grid = config.total_compressibility_range.clip(
         total_compressibility_grid
@@ -125,13 +128,11 @@ def evolve_pressure_explicitly(
         (water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z),
     ) = mobility_grids
 
-    dtype = get_dtype()
-
     # Compute CFL number for this time step
     pressure_cfl = compute_pressure_cfl_number(
         time_step_size_in_days=time_step_size_in_days,
         porosity_grid=porosity_grid,
-        total_compressibility_grid=total_compressibility_grid,
+        total_compressibility_grid=total_compressibility_grid,  # type: ignore
         thickness_grid=thickness_grid,
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
@@ -159,6 +160,14 @@ def evolve_pressure_explicitly(
         )
 
     # Compute net flux contributions from neighbors
+    # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
+    # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
+    # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
+    # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
+    gravitational_constant = (
+        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
+    )
     net_flux_grid = compute_net_flux_contributions(
         current_oil_pressure_grid=current_oil_pressure_grid,
         cell_count_x=cell_count_x,
@@ -182,7 +191,7 @@ def evolve_pressure_explicitly(
         water_density_grid=water_density_grid,
         gas_density_grid=gas_density_grid,
         elevation_grid=elevation_grid,
-        acceleration_due_to_gravity_ft_per_s2=c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2,
+        gravitational_constant=gravitational_constant,
         dtype=dtype,
     )
 
@@ -221,7 +230,7 @@ def evolve_pressure_explicitly(
         cell_count_z=cell_count_z,
         thickness_grid=thickness_grid,
         porosity_grid=porosity_grid,
-        total_compressibility_grid=total_compressibility_grid,
+        total_compressibility_grid=total_compressibility_grid,  # type: ignore
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
@@ -345,7 +354,7 @@ def compute_pseudo_flux_from_neighbour(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
 ) -> float:
     """
     Computes the total "pseudo" volumetric flux from a neighbour cell into the current cell
@@ -377,6 +386,7 @@ def compute_pseudo_flux_from_neighbour(
     :param water_density_grid: N-Dimensional numpy array representing the water phase density grid (lb/ft³).
     :param gas_density_grid: N-Dimensional numpy array representing the gas phase density grid (lb/ft³).
     :param elevation_grid: N-Dimensional numpy array representing the thickness of each cell in the reservoir (ft).
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :return: Total pseudo volumetric flux from neighbour to current cell (ft²/day).
     """
     # Calculate pressure differences relative to current cell (Neighbour - Current)
@@ -436,9 +446,7 @@ def compute_pseudo_flux_from_neighbour(
     # q = λ * (∆P + Gravity Potential) (ft³/day)
     # Calculate the water gravity potential (hydrostatic/gravity head)
     water_gravity_potential = (
-        harmonic_water_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_water_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total water phase potential
     water_potential_difference = water_pressure_difference + water_gravity_potential
@@ -448,9 +456,7 @@ def compute_pseudo_flux_from_neighbour(
     # For Oil:
     # Calculate the oil gravity potential (gravity head)
     oil_gravity_potential = (
-        harmonic_oil_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_oil_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total oil phase potential
     oil_potential_difference = oil_pressure_difference + oil_gravity_potential
@@ -461,9 +467,7 @@ def compute_pseudo_flux_from_neighbour(
     # q = λ * ∆P (ft²/day)
     # Calculate the gas gravity potential (gravity head)
     gas_gravity_potential = (
-        harmonic_gas_density
-        * acceleration_due_to_gravity_ft_per_s2
-        * elevation_difference
+        harmonic_gas_density * gravitational_constant * elevation_difference
     ) / 144.0
     # Calculate the total gas phase potential
     gas_potential_difference = gas_pressure_difference + gas_gravity_potential
@@ -503,7 +507,7 @@ def compute_net_flux_contributions(
     water_density_grid: ThreeDimensionalGrid,
     gas_density_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
-    acceleration_due_to_gravity_ft_per_s2: float,
+    gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> ThreeDimensionalGrid:
     """
@@ -535,7 +539,7 @@ def compute_net_flux_contributions(
     :param water_density_grid: Water density grid (lb/ft³)
     :param gas_density_grid: Gas density grid (lb/ft³)
     :param elevation_grid: Elevation grid (ft)
-    :param acceleration_due_to_gravity_ft_per_s2: Gravitational acceleration (ft/s²)
+    :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm)
     :param dtype: NumPy dtype for array allocation (np.float32 or np.float64)
     :return: 3D grid of net volumetric fluxes (ft³/day), positive = flow into cell
     """
@@ -548,8 +552,12 @@ def compute_net_flux_contributions(
                 net_flux = 0.0
 
                 # X-direction neighbors (i+1 and i-1)
-                geometric_factor_x = cell_size_y * cell_thickness / cell_size_x
                 for ni in (i + 1, i - 1):
+                    neighbour_thickness = thickness_grid[ni, j, k]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_y * harmonic_thickness / cell_size_x
                     flux = compute_pseudo_flux_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(ni, j, k),
@@ -563,13 +571,17 @@ def compute_net_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
-                    net_flux += flux * geometric_factor_x
+                    net_flux += flux * geometric_factor
 
                 # Y-direction neighbors (j+1 and j-1)
-                geometric_factor_y = cell_size_x * cell_thickness / cell_size_y
                 for nj in (j + 1, j - 1):
+                    neighbour_thickness = thickness_grid[i, nj, k]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_x * harmonic_thickness / cell_size_y
                     flux = compute_pseudo_flux_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, nj, k),
@@ -583,13 +595,17 @@ def compute_net_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
-                    net_flux += flux * geometric_factor_y
+                    net_flux += flux * geometric_factor
 
                 # Z-direction neighbors (k+1 and k-1)
-                geometric_factor_z = cell_size_x * cell_size_y / cell_thickness
                 for nk in (k + 1, k - 1):
+                    neighbour_thickness = thickness_grid[i, j, nk]
+                    harmonic_thickness = compute_harmonic_mean(
+                        cell_thickness, neighbour_thickness
+                    )
+                    geometric_factor = cell_size_x * cell_size_y / harmonic_thickness
                     flux = compute_pseudo_flux_from_neighbour(
                         cell_indices=(i, j, k),
                         neighbour_indices=(i, j, nk),
@@ -603,9 +619,9 @@ def compute_net_flux_contributions(
                         water_density_grid=water_density_grid,
                         gas_density_grid=gas_density_grid,
                         elevation_grid=elevation_grid,
-                        acceleration_due_to_gravity_ft_per_s2=acceleration_due_to_gravity_ft_per_s2,
+                        gravitational_constant=gravitational_constant,
                     )
-                    net_flux += flux * geometric_factor_z
+                    net_flux += flux * geometric_factor
 
                 flux_grid[i, j, k] = net_flux
 

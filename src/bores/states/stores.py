@@ -1,4 +1,4 @@
-"""State storage classes for reservoir simulation states."""
+"""State storage backends for reservoir simulation states."""
 
 from abc import ABC, abstractmethod
 import logging
@@ -422,7 +422,7 @@ class ZarrStore(StateStore):
             name=name,
             data=data,
             chunks=chunks,
-            compressors=[self.compressor],
+            compressor=self.compressor,
             overwrite=True,
         )
 
