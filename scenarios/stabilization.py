@@ -22,10 +22,7 @@ def _():
 
     def main():
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
-        grid_shape = typing.cast(
-            bores.ThreeDimensions,
-            (20, 20, 10),  # 30x30 cells, 10 layers
-        )
+        grid_shape = (20, 20, 10)  # 30x30 cells, 10 layers
         dip_angle = 2.0
         dip_azimuth = 90.0
 
@@ -301,7 +298,6 @@ def _():
             max_step_size=bores.Time(days=3.0),
             min_step_size=bores.Time(minutes=10.0),
             simulation_time=bores.Time(days=30),  # 30 days
-            max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
@@ -311,7 +307,7 @@ def _():
             output_frequency=1,
             max_iterations=500,
             iterative_solver="bicgstab",
-            preconditioner="amg",
+            preconditioner="ilu",
             log_interval=5,
             pvt_tables=pvt_tables,
         )
@@ -331,13 +327,7 @@ def _(Path, bores):
 
 @app.cell
 def _(bores, main, stabilization_store):
-    stream = bores.StateStream(
-        main(),
-        store=stabilization_store,
-        # checkpoint_interval=10,
-        # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
-        auto_replay=True,
-    )
+    stream = bores.StateStream(main(), store=stabilization_store)
 
     with stream:
         last_state = stream.last()

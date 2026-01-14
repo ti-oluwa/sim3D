@@ -499,7 +499,7 @@ class ReservoirModel(typing.Generic[NDimension]):
             "rock_properties": attrs.asdict(self.rock_properties),
             "rock_fluid_properties": attrs.asdict(self.rock_fluid_properties),
             "saturation_history": attrs.asdict(self.saturation_history),
-            "boundary_conditions": attrs.asdict(self.boundary_conditions),
+            "boundary_conditions": self.boundary_conditions,
             "dip_angle": self.dip_angle,
             "dip_azimuth": self.dip_azimuth,
         }

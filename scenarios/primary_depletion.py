@@ -107,10 +107,9 @@ def _():
         )
         config = bores.Config(
             scheme="impes",
-            output_frequency=28,
+            output_frequency=1,
             miscibility_model="immiscible",
             use_pseudo_pressure=True,
-            log_interval=5,
             iterative_solver="bicgstab",
             preconditioner="ilu",
             pvt_tables=pvt_tables,
@@ -132,13 +131,8 @@ def _(Path, bores):
 
 @app.cell
 def _(bores, depletion_store, main):
-    stream = bores.StateStream(
-        main(),
-        store=depletion_store,
-        batch_size=50,
-        # checkpoint_interval=20,
-        # checkpoint_dir=Path.cwd() / "scenarios/states/checkpoints",
-    )
+    stream = bores.StateStream(main(), store=depletion_store, batch_size=50)
+
     last_state = None
     with stream:
         for state in stream:

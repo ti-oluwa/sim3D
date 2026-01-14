@@ -888,11 +888,11 @@ class BrooksCoreyThreePhaseRelPermModel:
     residual_gas_saturation: typing.Optional[float] = None
     """(Default) Residual gas saturation (Sgr)."""
     water_exponent: float = 2.0
-    """Corey exponent for water relative permeability."""
+    """Corey exponent for water relative permeability. Higher values make the curve steeper."""
     oil_exponent: float = 2.0
-    """Corey exponent for oil relative permeability (affects Stone I blending)."""
+    """Corey exponent for oil relative permeability (affects Stone I blending). Higher values make the curve steeper."""
     gas_exponent: float = 2.0
-    """Corey exponent for gas relative permeability."""
+    """Corey exponent for gas relative permeability. Higher values make the curve steeper."""
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (water-wet or oil-wet)."""
     mixing_rule: MixingRule = stone_II_rule

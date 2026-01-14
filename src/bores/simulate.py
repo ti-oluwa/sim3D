@@ -1235,8 +1235,7 @@ def run(
 
                 # IF THE STEP WAS SUCCESSFUL, ACCEPT THAT STEP PROPOSAL
                 if result.success:
-                    # Now we can accept the proposed time step size
-                    # and we now agree that this is a new step
+                    # Now we can accept the proposed time step size and we now agree that this is a new step
                     logger.debug(f"Time step {new_step} completed successfully.")
                     timer.accept_step(step_size=step_size, **result.timer_kwargs)
                     if config.log_interval:
@@ -1250,8 +1249,8 @@ def run(
                         )
                 else:
                     # REJECT AND ADJUST THE TIME STEP SIZE AND RETRY
-                    logger.warning(
-                        f"Time step {new_step} failed. Retrying with smaller step size."
+                    logger.debug(
+                        f"Time step {new_step} failed with step size {step_size}. Retrying with smaller step size."
                     )
                     try:
                         timer.reject_step(

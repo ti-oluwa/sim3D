@@ -155,7 +155,7 @@ class Config:
     step is reduced or rejected.
     """
     max_gas_saturation_change: float = attrs.field(  # type: ignore
-        default=0.8, validator=attrs.validators.ge(0)
+        default=0.7, validator=attrs.validators.ge(0)
     )
     """
     Maximum allowable gas saturation change (absolute, fractional) per time step.

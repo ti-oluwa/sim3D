@@ -184,7 +184,7 @@ class Timer:
         """
         Checks if the simulation has reached its end criteria.
 
-        If True, simulation has reached it ends.
+        If True, simulation has reached it end.
         """
         # Use small tolerance for floating-point comparison
         if self.elapsed_time >= self.simulation_time - 1e-9:
