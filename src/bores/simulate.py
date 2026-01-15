@@ -942,7 +942,6 @@ def run(
     grid_shape = model.grid_shape
     has_wells = wells.exists()
     output_frequency = config.output_frequency
-    convergence_tolerance = config.convergence_tolerance
     scheme = config.scheme
     miscibility_model = config.miscibility_model
 
@@ -951,7 +950,6 @@ def run(
     logger.debug(f"Evolution scheme: {scheme}")
     logger.debug(f"Total simulation time: {timer.simulation_time} seconds")
     logger.debug(f"Output frequency: every {output_frequency} steps")
-    logger.debug(f"Convergence tolerance: {convergence_tolerance}")
     logger.debug(f"Has wells: {has_wells}")
     if has_wells:
         logger.debug("Checking well locations against grid shape")

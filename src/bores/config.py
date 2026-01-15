@@ -5,7 +5,7 @@ import attrs
 from bores.constants import Constants
 from bores.types import (
     EvolutionScheme,
-    IterativeSolver,
+    Solver,
     MiscibilityModel,
     Preconditioner,
     Range,
@@ -20,10 +20,14 @@ __all__ = ["Config"]
 class Config:
     """Simulation run configuration and parameters."""
 
-    convergence_tolerance: float = attrs.field(
+    pressure_convergence_tolerance: float = attrs.field(
         default=1e-6, validator=attrs.validators.le(1e-2)
     )
-    """Convergence tolerance for iterative solvers (default is 1e-6)."""
+    """Relative convergence tolerance for pressure solvers (default is 1e-6)."""
+    saturation_convergence_tolerance: float = attrs.field(
+        default=1e-4, validator=attrs.validators.le(1e-2)
+    )
+    """Relative convergence tolerance for saturation solvers (default is 1e-4). Transport matrix tend to be more well conditioned."""
     max_iterations: int = attrs.field(
         default=250,
         validator=attrs.validators.and_(
@@ -31,7 +35,7 @@ class Config:
         ),
     )
     """
-    Maximum number of iterations allowed per time step for iterative solvers.
+    Maximum number of iterations allowed per time step for all iterative solvers.
     
     Capped at 500 to prevent excessive computation time in case of non-convergence.
     If the solver does not converge within this limit, the matrix is most likely
@@ -76,18 +80,11 @@ class Config:
     """
     disable_capillary_effects: bool = False
     """Whether to include capillary pressure effects in the simulation."""
-    disable_structural_dip: bool = attrs.field(default=False)
+    disable_structural_dip: bool = False
     """Whether to disable structural dip effects in reservoir modeling/simulation."""
     miscibility_model: MiscibilityModel = "immiscible"
     """Miscibility model: 'immiscible', 'todd_longstaff'"""
-    impes_cfl_threshold: float = 0.9
-    """Maximum allowable CFL number for the 'impes' evolution scheme to ensure numerical stability.
 
-    Typically kept below 1.0 to prevent instability in explicit pressure updates.
-
-    Lowering this value increases stability but may require smaller time steps.
-    Raising them can improve performance but risks instability. Use with caution and monitor simulation behavior.
-    """
     saturation_cfl_threshold: float = 0.6
     """
     Maximum allowable saturation CFL number for the 'explicit' evolution scheme to ensure numerical stability.
@@ -112,12 +109,12 @@ class Config:
     """Whether to warn about anomalous flow rates during the simulation."""
     log_interval: int = attrs.field(default=5, validator=attrs.validators.ge(0))  # type: ignore
     """Interval (in time steps) at which to log simulation progress."""
-    preconditioner: typing.Optional[Preconditioner] = "ilu"
-    """Preconditioner to use for iterative solvers."""
-    iterative_solver: typing.Union[
-        IterativeSolver, typing.Iterable[IterativeSolver]
-    ] = "bicgstab"
-    """Iterative solver(s) to use for solving linear systems."""
+    pressure_solver: typing.Union[Solver, typing.Iterable[Solver]] = "bicgstab"
+    """Pressure matrix system solver(s) (can be a list of solver to use in sequence) to use for solving linear systems."""
+    saturation_solver: typing.Union[Solver, typing.Iterable[Solver]] = "bicgstab"
+    """Saturation matrix system solver(s) (can be a list of solver to use in sequence) to use for solving linear systems."""
+    pressure_preconditioner: typing.Optional[Preconditioner] = "ilu"
+    """Preconditioner to use for pressure solvers."""
     phase_appearance_tolerance: float = attrs.field(  # type: ignore
         default=1e-6,
         validator=attrs.validators.ge(0),

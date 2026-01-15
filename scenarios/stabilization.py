@@ -306,7 +306,7 @@ def _():
             scheme="impes",
             output_frequency=1,
             max_iterations=500,
-            iterative_solver="bicgstab",
+            pressure_solver="bicgstab",
             preconditioner="ilu",
             log_interval=5,
             pvt_tables=pvt_tables,

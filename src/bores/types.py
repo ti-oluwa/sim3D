@@ -32,8 +32,8 @@ __all__ = [
     "Wettability",
     "WettabilityType",
     "Preconditioner",
-    "IterativeSolver",
-    "IterativeSolverFunc",
+    "Solver",
+    "SolverFunc",
     "Range",
     "RelativeMobilityRange",
 ]
@@ -139,10 +139,12 @@ Preconditioner = typing.Union[
     LinearOperator, PreconditionerStr, PreconditionerFactory, str
 ]
 
-IterativeSolverStr = typing.Literal["gmres", "lgmres", "bicgstab", "tfqmr"]
+SolverStr = typing.Literal[
+    "gmres", "lgmres", "bicgstab", "tfqmr", "cg", "cgs", "direct"
+]
 
 
-class IterativeSolverFunc(typing.Protocol):
+class SolverFunc(typing.Protocol):
     """
     Protocol for an iterative solver function.
     """
@@ -161,7 +163,7 @@ class IterativeSolverFunc(typing.Protocol):
     ) -> np.typing.NDArray: ...
 
 
-IterativeSolver = typing.Union[IterativeSolverFunc, IterativeSolverStr, str]
+Solver = typing.Union[SolverFunc, SolverStr, str]
 
 
 class MixingRule(typing.Protocol):

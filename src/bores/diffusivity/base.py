@@ -11,6 +11,8 @@ from scipy.sparse import csr_array, csr_matrix, diags, isspmatrix_csr
 from scipy.sparse.linalg import (
     LinearOperator,
     bicgstab,
+    cg,
+    cgs,
     gmres,
     lgmres,
     spilu,
@@ -18,15 +20,15 @@ from scipy.sparse.linalg import (
     tfqmr,
 )
 
-from bores.errors import SolverError, PreconditionerError
+from bores.errors import PreconditionerError, SolverError
 from bores.types import (
-    IterativeSolver,
-    IterativeSolverFunc,
     Preconditioner,
-    T,
     PreconditionerFactory,
-    ThreeDimensions,
+    Solver,
+    SolverFunc,
+    T,
     ThreeDimensionalGrid,
+    ThreeDimensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -298,7 +300,7 @@ def compute_mobility_grids(
     x_mobilities = (water_mobility_grid_x, oil_mobility_grid_x, gas_mobility_grid_x)
     y_mobilities = (water_mobility_grid_y, oil_mobility_grid_y, gas_mobility_grid_y)
     z_mobilities = (water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z)
-    return (x_mobilities, y_mobilities, z_mobilities)
+    return (x_mobilities, y_mobilities, z_mobilities)  # type: ignore[return-value]
 
 
 def build_amg_preconditioner(
@@ -475,19 +477,38 @@ def build_cpr_preconditioner(
     return LinearOperator(shape=A_csr.shape, matvec=matvec)  # type: ignore[arg-type]
 
 
-__preconditioner_factories = {
+def _spsolve(
+    A: typing.Any,
+    b: typing.Any,
+    x0: typing.Optional[typing.Any],
+    *,
+    rtol: float,
+    atol: float,
+    maxiter: typing.Optional[int],
+    M: typing.Optional[typing.Any],
+    callback: typing.Optional[typing.Callable[[np.typing.NDArray], None]],
+) -> np.typing.NDArray:
+    return spsolve(A, b), 0  # type: ignore[return-value]
+
+
+_lgmres = functools.partial(lgmres, inner_m=50, outer_k=5)
+
+
+_preconditioner_factories = {
     "cpr": build_cpr_preconditioner,
     "amg": build_amg_preconditioner,
     "ilu": build_ilu_preconditioner,
     "diagonal": build_diagonal_preconditioner,
 }
 
-_lgmres = functools.partial(lgmres, inner_m=50, outer_k=5)
-__iterative_solvers = {
+_solvers = {
     "lgmres": _lgmres,
     "bicgstab": bicgstab,
     "tfqmr": tfqmr,
     "gmres": gmres,
+    "cg": cg,
+    "cgs": cgs,
+    "direct": _spsolve,
 }
 
 
@@ -498,8 +519,8 @@ def _get_preconditioner(
     if isinstance(preconditioner, (type(None), LinearOperator)):
         return preconditioner
     elif isinstance(preconditioner, str):
-        if preconditioner in __preconditioner_factories:
-            preconditioner_factory = __preconditioner_factories[preconditioner]
+        if preconditioner in _preconditioner_factories:
+            preconditioner_factory = _preconditioner_factories[preconditioner]
             M = preconditioner_factory(A_csr)
             return M
         else:
@@ -512,11 +533,11 @@ def _get_preconditioner(
 
 
 def _get_solver_funcs(
-    solver: typing.Union[IterativeSolver, typing.Iterable[IterativeSolver]],
-) -> typing.List[IterativeSolverFunc]:
+    solver: typing.Union[Solver, typing.Iterable[Solver]],
+) -> typing.List[SolverFunc]:
     if isinstance(solver, str):
-        if solver in __iterative_solvers:
-            solver_func = __iterative_solvers[solver]
+        if solver in _solvers:
+            solver_func = _solvers[solver]
             if isinstance(solver_func, (list, tuple)):
                 return list(solver_func)  # type: ignore[return-value]
             return [solver_func]
@@ -524,8 +545,8 @@ def _get_solver_funcs(
     elif isinstance(solver, (list, tuple, set)):
         solver_funcs = []
         for s in solver:
-            if isinstance(s, str) and s in __iterative_solvers:
-                solver_funcs.append(__iterative_solvers[s])
+            if isinstance(s, str) and s in _solvers:
+                solver_funcs.append(_solvers[s])
             elif callable(s):
                 solver_funcs.append(s)
             else:
@@ -540,14 +561,12 @@ def solve_linear_system(
     max_iterations: int,
     rtol: typing.Optional[float] = None,
     atol: typing.Optional[float] = None,
-    solver: typing.Union[
-        IterativeSolver, typing.Iterable[IterativeSolver]
-    ] = "bicgstab",
+    solver: typing.Union[Solver, typing.Iterable[Solver]] = "bicgstab",
     preconditioner: typing.Optional[Preconditioner] = "ilu",
     fallback_to_direct: bool = False,
 ) -> typing.Tuple[np.typing.NDArray, typing.Optional[LinearOperator]]:
     """
-    Solves the linear system A·x = b using an iterative solver with a fallback strategy.
+    Solves the linear system A·x = b using an (iterative) solver with a fallback strategy.
 
     The function first attempts to solve the system using the BiCGSTAB method, which is
     generally efficient for large, sparse, non-symmetric systems. If BiCGSTAB fails to
@@ -560,7 +579,7 @@ def solve_linear_system(
     :param A: Coefficient matrix in CSR format.
     :param b: Right-hand side vector.
     :param max_iterations: Maximum number of iterations for each solver.
-    :param solver: Iterative solver or sequence of solvers to use ("bicgstab", "gmres", "lgmres", "tfqmr"), or custom callable(s).
+    :param solver: (Iterative) solver or sequence of solvers to use ("bicgstab", "gmres", "lgmres", "tfqmr"), or custom callable(s).
         If a sequence is provided, solvers will be tried in order until one converges.
     :param preconditioner: Type of preconditioner to use ("ilu", "amg", "diagonal"), or None.
         Can also be a preconditioner factory function, that takes A and returns a preconditioner.
@@ -572,10 +591,16 @@ def solve_linear_system(
     :return: A tuple (x, M) where x is the solution vector and M is the preconditioner used,
     :raises RuntimeError: If both solvers fail to converge.
     """
-    try:
-        M = _get_preconditioner(A_csr, preconditioner)
-    except Exception as exc:
-        raise PreconditionerError(f"Error building preconditioner: {exc}") from exc
+    solver_funcs = _get_solver_funcs(solver)
+    is_direct = _spsolve in solver_funcs
+    if is_direct:
+        # No need to build preconditioner for direct solver
+        M = None
+    else:
+        try:
+            M = _get_preconditioner(A_csr, preconditioner)
+        except Exception as exc:
+            raise PreconditionerError(f"Error building preconditioner: {exc}") from exc
 
     b_norm = np.linalg.norm(b)
     # Too strict
@@ -584,7 +609,6 @@ def solve_linear_system(
     # atol = atol if atol is not None else float(max(1e-8, 20 * epsilon * b_norm))
     rtol = rtol if rtol is not None else 1e-6
     atol = atol if atol is not None else float(max(1e-8, 1e-6 * b_norm))
-    solver_funcs = _get_solver_funcs(solver)
 
     for solver_func in solver_funcs:
         x, info = solver_func(
@@ -604,9 +628,9 @@ def solve_linear_system(
                 f"Solver {solver_func!r} failed to converge within {max_iterations} iterations. Info: {info}"
             )
 
-    if not fallback_to_direct:
+    if not fallback_to_direct or is_direct:
         raise SolverError(
-            f"All iterative solvers failed to converge within {max_iterations} iterations."
+            f"All solvers failed to converge within {max_iterations} iterations."
         )
 
     logger.info("Falling back to direct solver (spsolve).")
@@ -619,199 +643,3 @@ def solve_linear_system(
         ) from exc
 
     return np.ascontiguousarray(x), None  # type: ignore[return-value]
-
-
-"""
-Guidelines for Selecting Iterative Solvers and Preconditioners
-
-This guide explains how to choose the most appropriate combination of
-iterative solver(s) and preconditioner(s) for large 3D, three-phase,
-fully-implicit or IMPES reservoir simulations. The goal is to balance:
-
-    • Convergence robustness  
-    • Runtime speed  
-    • Memory usage  
-    • Ability to customize components and keyword arguments  
-
-The solver stack in this module is intentionally flexible: users can select
-built-in solvers and preconditioners, provide custom factory functions, or
-override default keyword arguments. The guidance below describes how each
-choice affects performance.
-
-1. Recommended Default Combination (Best Overall for Reservoir Simulation especially Fully-Implicit simulations)
-
-    solver="lgmres"
-    preconditioner="cpr"
-
-Use this if you do not have a strict memory constraint.
-
-Why this is optimal:
-    • CPR isolates the pressure block and solves it with AMG, capturing
-      long-range pressure coupling very efficiently.
-    • ILU smoothing removes high-frequency saturation/phase-coupling errors.
-    • LGMRES handles the mildly non-symmetric structure of the Jacobian
-      better than GMRES and can recover from stagnation.
-    • Convergence is fastest on most three-phase, highly-coupled systems.
-
-Memory cost:
-    • Moderate to high (AMG hierarchy + ILU factors).
-    • Recommended for full-scale 3D implicit simulations.
-
-
-2. When Memory is Limited (Prefer Low-Memory Configuration)
-
-Use:
-
-    solver="bicgstab"
-    preconditioner="ilu"
-
-Why:
-    • BiCGSTAB has low memory overhead compared to GMRES/LGMRES
-      (no Krylov basis storage).
-    • ILU requires significantly less memory than AMG or CPR.
-    • Convergence is generally good for mildly stiff Jacobians.
-
-Tradeoffs:
-    • More sensitive to non-symmetric or strongly coupled Jacobians.
-    • May require reducing timestep if convergence deteriorates.
-
-Memory footprint:
-    • Low to moderate.
-
-
-3. Extremely Memory-Constrained Environments (Minimal Footprint)
-
-Use:
-
-    solver="tfqmr"
-    preconditioner="diagonal"
-
-Why:
-    • TFQMR has near-minimal memory usage.
-    • Diagonal preconditioning is essentially free to build.
-
-Important:
-    • Convergence will be slow.
-    • Only recommended for academic testing or very small models.
-    • Not recommended for fully implicit multiphase simulations with strong
-      coupling, gravity, or capillarity.
-
-Memory:
-    • Very low.
-
-
-4. High-Accuracy, Difficult Jacobians (Most Robust Configuration)
-
-Use:
-
-    solver=["gmres", "lgmres"]
-    preconditioner="cpr"
-
-Why:
-    • GMRES handles highly non-symmetric systems extremely well.
-    • LGMRES is a fallback when GMRES stagnates.
-    • CPR gives the best robustness for stiff systems (tight permeability
-      contrast, high viscosity ratio, strong gravity).
-
-Tradeoffs:
-    • Highest memory usage of all combinations.
-    • GMRES basis growth increases memory as iterations increase.
-
-
-5. Using Custom Factories or Override Keyword Arguments
-
-All built-in preconditioners (`ilu`, `amg`, `cpr`, `diagonal`) accept user-supplied
-factory functions or dictionaries of keyword arguments.
-
-Examples:
-
-    # Custom ILU with tighter fill
-    solve_linear_system(
-        A_csr, b,
-        solver="bicgstab",
-        preconditioner=lambda A: build_ilu_preconditioner(
-            A, drop_tol=1e-6, fill_factor=20
-        ),
-    )
-
-    # Adjust AMG coarsening parameters
-    solve_linear_system(
-        A_csr, b,
-        solver="lgmres",
-        preconditioner=lambda A: build_amg_preconditioner(
-            A, max_coarse=300, presmoother=("gauss_seidel", 2)
-        ),
-    )
-
-    # Full custom CPR with overridden AMG+ILU kwargs
-    solve_linear_system(
-        A_csr, b,
-        solver="lgmres",
-        preconditioner=lambda A: build_cpr_preconditioner(
-            A,
-            amg_kwargs={"max_coarse": 300, "presmoother": ("gauss_seidel", 2)},
-            ilu_kwargs={"drop_tol": 1e-5, "fill_factor": 8},
-        )
-    )
-
-General rules for custom tuning:
-
-    • AMG:
-        - Increase `max_coarse` to reduce memory but increase iteration count.
-        - Increase presmoother/postsmoother sweeps for stiffer systems.
-        - Use smoothed aggregation (default) for multiphase problems.
-
-    • ILU:
-        - Lower `drop_tol` → more accurate, more memory, faster convergence.
-        - Higher `fill_factor` → larger ILU factors, higher memory.
-
-    • CPR:
-        - If CPR fails, reduce ILU strength or give AMG more smoothing.
-        - If CPR is slow, the pressure block or transmissibility assembly may be stiff.
-
-
-6. Selecting a Sequence of Solvers
-
-The `solver=` argument also accepts a list:
-
-    solver=["bicgstab", "lgmres"]
-
-The solver is tried in order. If one fails to converge, the next is attempted.
-
-Typical robust sequence:
-
-    solver=["lgmres", "bicgstab"]
-
-Typical low-memory sequence:
-
-    solver=["bicgstab", "tfqmr"]
-
-
-7. Direct Solver Fallback
-
-Enable only for debugging or tiny models:
-
-    fallback_to_direct=True
-
-This will use `spsolve` only if all iterative solvers fail.
-
-Never enable on large 3D grids (memory explosion).
-
-8. Summary Table: Best → Least Favorable
-
-    Highest convergence speed:
-        CPR + LGMRES  >  CPR + GMRES  >  ILU + BiCGSTAB > ILU + TFQMR
-
-    Lowest memory:
-        Diagonal + TFQMR  <  ILU + BiCGSTAB  < CPR + LGMRES
-
-    Most robust for real reservoir engineering:
-        CPR + LGMRES
-
-    Best overall default for users:
-        solver="lgmres", preconditioner="cpr"
-
-This guide is meant to give intuitive decision rules for users modifying
-solver strategies, tuning preconditioner strength, or supplying their
-own factory functions to meet memory, robustness, or speed requirements.
-"""

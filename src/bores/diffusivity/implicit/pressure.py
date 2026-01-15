@@ -225,9 +225,10 @@ def evolve_pressure_implicitly(
         new_1D_pressure_grid, _ = solve_linear_system(
             A_csr=A.tocsr(),
             b=b,
+            rtol=config.pressure_convergence_tolerance,
             max_iterations=config.max_iterations,
-            solver=config.iterative_solver,
-            preconditioner=config.preconditioner,
+            solver=config.pressure_solver,
+            preconditioner=config.pressure_preconditioner,
             fallback_to_direct=True,
         )
     except (SolverError, PreconditionerError) as exc:

@@ -151,7 +151,7 @@ def _():
             output_frequency=1,
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
-            iterative_solver="bicgstab",
+            pressure_solver="bicgstab",
             preconditioner="ilu",
             pvt_tables=pvt_tables,
         )

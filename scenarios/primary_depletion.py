@@ -84,7 +84,7 @@ def _():
             initial_step_size=bores.Time(hours=20),
             max_step_size=bores.Time(days=5),
             min_step_size=bores.Time(minutes=10.0),
-            simulation_time=bores.Time(days=bores.c.DAYS_PER_YEAR * 5),  # 5 years
+            simulation_time=bores.Time(days=10),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -102,17 +102,16 @@ def _():
             reservoir_gas="methane",
         )
         pvt_tables = bores.PVTTables(
-            table_data=pvt_table_data,
-            interpolation_method="linear",
+            table_data=pvt_table_data, interpolation_method="linear"
         )
         config = bores.Config(
             scheme="impes",
             output_frequency=1,
             miscibility_model="immiscible",
-            use_pseudo_pressure=True,
-            iterative_solver="bicgstab",
-            preconditioner="ilu",
+            pressure_solver="direct",
+            pressure_preconditioner="ilu",
             pvt_tables=pvt_tables,
+            max_gas_saturation_change=0.85,
         )
         states = bores.run(model=model, timer=timer, wells=wells, config=config)
         return states

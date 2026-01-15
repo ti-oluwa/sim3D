@@ -20,7 +20,7 @@ class PreconditionerError(BORESError):
 
 
 class SolverError(BORESError):
-    """Raised when a solver fails to converge within the specified iterations."""
+    """Raised when a solver fails to solve the given matrix system either due to convergence or other issues."""
 
     pass
 

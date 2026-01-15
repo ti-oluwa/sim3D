@@ -18,7 +18,8 @@ def _():
         filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
         metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
     )
-    states = list(depletion_store.load(validate=False, lazy=False))
+    stream = bores.StateStream(store=depletion_store, lazy_load=False, validate=False)
+    states = list(stream)
     return bores, itertools, np, states
 
 
@@ -654,14 +655,14 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="scatter_3d",
+        plot_type="isosurface",
         width=960,
         height=600,
         opacity=0.67,
         # labels=labels,
         aspect_mode="data",
         z_scale=3.0,
-        marker_size=12,
+        marker_size=6,
         show_wells=True,
         show_surface_marker=True,
         show_perforations=True,
@@ -672,7 +673,7 @@ def _(bores, states, viz):
         # cmax=2.0,
     )
 
-    property = "oil-pressure"
+    property = "oil-saturation"
     figures = []
     timesteps = [0, 14]
     for timestep in timesteps:
@@ -691,6 +692,11 @@ def _(bores, states, viz):
         #     figure.show()
     else:
         figures[0].show()
+    return
+
+
+@app.cell
+def _():
     return
 
 

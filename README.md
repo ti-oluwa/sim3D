@@ -410,11 +410,12 @@ config = bores.Config(
     
     # Numerical options
     capillary_strength_factor=1.0,   # Scale capillary effects (0-1)
-    convergence_tolerance=1e-6,      # Solver tolerance
+    pressure_convergence_tolerance=1e-6,      # Pressure solver tolerance
+    saturation_convergence_tolerance=1e-4,    # Saturation solver tolerance
     max_iterations=250,              # Max solver iterations
     
     # Solver selection
-    iterative_solver="bicgstab",     # BiCGSTAB, LGMRES, etc.
+    pressure_solver="bicgstab",     # BiCGSTAB, LGMRES, etc.
     preconditioner="ilu",            # ILU preconditioning, can be AMG, Diagonal, CPR, or None
     
     # PVT tables (if using)
@@ -1515,7 +1516,6 @@ from bores.errors import SolverError, StopSimulation
 
 config = bores.Config(
     scheme="impes",
-    convergence_tolerance=1e-6,
     max_iterations=250,
 )
 
@@ -1529,7 +1529,7 @@ for _ in range(3):  # Retry up to 3 times
         # Try with relaxed settings
         config = bores.Config(
             scheme="impes",
-            convergence_tolerance=1e-4,  # Relax tolerance
+            pressure_convergence_tolerance=1e-4,  # Relax tolerance
             max_iterations=500,
         )
     except StopSimulation:
@@ -1557,18 +1557,16 @@ config = bores.Config(
     scheme="impes",
     
     # Iterative solver options
-    iterative_solver="bicgstab",  # BiCGSTAB (recommended)
-    # or: "lgmres", "gmres", "tfqmr"
+    pressure_solver="bicgstab",  # BiCGSTAB (recommended)
+    # or: "lgmres", "gmres", "tfqmr", "cg", "cgs", "direct"
     
     preconditioner="ilu",  # ILU (recommended)
     # or: "diagonal", "ilu", "amg", "cpr", None
     
     # Convergence settings
-    convergence_tolerance=1e-6,
+    pressure_convergence_tolerance=1e-6,
+    saturation_convergence_tolerance=1e-4,
     max_iterations=250,
-    
-    # CFL control (internal)
-    impes_cfl_threshold=0.9,
 )
 ```
 
@@ -1820,7 +1818,6 @@ CFL = (velocity × Δt) / Δx ≤ CFL_max
 ```python
 # Relax CFL constraints (use with caution!)
 config = bores.Config(
-    impes_cfl_threshold=1.2,           # Default is 0.9
     saturation_cfl_threshold=0.8,  # Default is 0.6
     pressure_cfl_threshold=1.0,    # Default is 0.9
 )
@@ -2330,7 +2327,7 @@ config = bores.Config(
     miscibility_model="immiscible",
     use_pseudo_pressure=True,
     max_iterations=500,
-    iterative_solver="bicgstab",
+    pressure_solver="bicgstab",
     preconditioner="ilu",
     pvt_tables=pvt_tables,
 )
