@@ -23,7 +23,7 @@ from bores.errors import SolverError, PreconditionerError
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
-from bores.pvt.core import compute_harmonic_mean
+from bores.correlations.core import compute_harmonic_mean
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,

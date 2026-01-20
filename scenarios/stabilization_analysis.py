@@ -16,7 +16,6 @@ def _():
 
     store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
-        metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata/",
     )
     stream = bores.StateStream(
         store=store,
@@ -358,8 +357,8 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="scatter_3d",
-        width=720,
+        plot_type="isosurface",
+        width=960,
         height=460,
         opacity=0.67,
         labels=labels,
@@ -369,10 +368,10 @@ def _(bores, states, viz):
         show_wells=True,
         show_surface_marker=True,
         show_perforations=True,
-        # isomin=0.2
+        # isomin=0.05
     )
 
-    property = "oil-saturation"
+    property = "residual-oil-saturation-gas"
     figures = []
     timesteps = [40]
     for timestep in timesteps:

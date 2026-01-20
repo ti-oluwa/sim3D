@@ -12,7 +12,7 @@ from bores.cells import CellFilter, Cells
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.grids.base import uniform_grid
-from bores.pvt.arrays import compute_hydrocarbon_in_place
+from bores.correlations.arrays import compute_hydrocarbon_in_place
 from bores.states import ModelState
 from bores.types import NDimension
 from bores.utils import clip

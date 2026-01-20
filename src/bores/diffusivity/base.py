@@ -20,7 +20,7 @@ from scipy.sparse.linalg import (
     tfqmr,
 )
 
-from bores.errors import PreconditionerError, SolverError
+from bores.errors import PreconditionerError, SolverError, ValidationError
 from bores.types import (
     Preconditioner,
     PreconditionerFactory,
@@ -173,7 +173,7 @@ def to_1D_index_interior_only(
     )
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, inline="always")
 def from_1D_index_interior_only(
     idx: int,
     cell_count_x: int,
@@ -400,7 +400,7 @@ def build_cpr_preconditioner(
     :param ilu_kwargs: Keyword arguments for `scipy.sparse.linalg.spilu`.
     :return: A SciPy `LinearOperator` implementing the CPR preconditioner M such that
         x = M @ r approximately solves J^{-1} r.
-    :raises ValueError: If no pressure DOFs are found.
+    :raises ValidationError: If no pressure DOFs are found.
     :raises RuntimeError: If AMG or ILU construction fails.
 
     Notes
@@ -428,7 +428,7 @@ def build_cpr_preconditioner(
         dtype=np.int64,
     )
     if pressure_dof_indices.size == 0:
-        raise ValueError(
+        raise ValidationError(
             "No pressure DOFs found. Check `n_variables_per_cell` or `pressure_variable_index`."
         )
 
@@ -516,6 +516,14 @@ def _get_preconditioner(
     A_csr: typing.Union[csr_array, csr_matrix],
     preconditioner: typing.Optional[Preconditioner],
 ) -> typing.Optional[LinearOperator]:
+    """
+    Get or build a preconditioner based on the specification.
+
+    :param A_csr: The coefficient matrix in CSR format.
+    :param preconditioner: Preconditioner specification as a string, callable, or None
+    :return: A SciPy `LinearOperator` representing the preconditioner, or None.
+    :raises ValidationError: If the preconditioner type is unknown.
+    """
     if isinstance(preconditioner, (type(None), LinearOperator)):
         return preconditioner
     elif isinstance(preconditioner, str):
@@ -524,7 +532,7 @@ def _get_preconditioner(
             M = preconditioner_factory(A_csr)
             return M
         else:
-            raise ValueError(f"Unknown preconditioner type: {preconditioner!r}")
+            raise ValidationError(f"Unknown preconditioner type: {preconditioner!r}")
     elif callable(preconditioner):
         preconditioner_factory = typing.cast(PreconditionerFactory, preconditioner)
         M = preconditioner_factory(A_csr)
@@ -535,13 +543,23 @@ def _get_preconditioner(
 def _get_solver_funcs(
     solver: typing.Union[Solver, typing.Iterable[Solver]],
 ) -> typing.List[SolverFunc]:
+    """
+    Get solver functions from a solver specification.
+
+    :param solver: Solver specification as a string or sequence of strings/callables.
+    :return: List of solver functions corresponding to the specification.
+    :raises ValidationError: If any solver type is unknown.
+    :raises TypeError: If the solver specification is of an invalid type.
+    """
     if isinstance(solver, str):
         if solver in _solvers:
             solver_func = _solvers[solver]
             if isinstance(solver_func, (list, tuple)):
                 return list(solver_func)  # type: ignore[return-value]
             return [solver_func]
-        raise ValueError(f"Unknown solver type: {solver!r}")
+        raise ValidationError(f"Unknown solver type: {solver!r}")
+    elif callable(solver):
+        return [solver]  # type: ignore[return-value]
     elif isinstance(solver, (list, tuple, set)):
         solver_funcs = []
         for s in solver:
@@ -550,9 +568,9 @@ def _get_solver_funcs(
             elif callable(s):
                 solver_funcs.append(s)
             else:
-                raise ValueError(f"Unknown solver type in sequence: {s!r}")
+                raise ValidationError(f"Unknown solver type in sequence: {s!r}")
         return solver_funcs
-    raise TypeError("solver must be a string or a sequence of strings.")
+    raise TypeError("solver must be a string, callable, or a sequence of strings.")
 
 
 def solve_linear_system(

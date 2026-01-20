@@ -25,6 +25,8 @@ from bores.timing import TimerState
 from bores.types import NDimension, T
 from bores.utils import Lazy, LazyField
 from bores.wells.base import Wells
+from bores.serialization import Serializable
+from bores._precision import get_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,23 @@ __all__ = ["ModelState", "validate_state"]
 _Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
 
 
-class ModelState(typing.Generic[NDimension]):
+class ModelState(
+    typing.Generic[NDimension],
+    Serializable,
+    fields={
+        "step": int,
+        "step_size": float,
+        "time": float,
+        "model": ReservoirModel,
+        "wells": Wells,
+        "injection": RateGrids,
+        "production": RateGrids,
+        "relative_permeabilities": RelPermGrids,
+        "relative_mobilities": RelativeMobilityGrids,
+        "capillary_pressures": CapillaryPressureGrids,
+        "timer_state": typing.Optional[TimerState],
+    },
+):
     """
     The state of the reservoir model at a specific time step during a simulation.
     """
@@ -94,24 +112,6 @@ class ModelState(typing.Generic[NDimension]):
         )
         self.timer_state = timer_state
 
-    def asdict(self) -> typing.Dict[str, typing.Any]:
-        """
-        Get a dictionary representation of the model state.
-        """
-        return {
-            "step": self.step,
-            "step_size": self.step_size,
-            "time": self.time,
-            "model": self.model,
-            "wells": self.wells,
-            "injection": self.injection,
-            "production": self.production,
-            "relative_permeabilities": self.relative_permeabilities,
-            "relative_mobilities": self.relative_mobilities,
-            "capillary_pressures": self.capillary_pressures,
-            "timer_state": self.timer_state,
-        }
-
     @functools.cache
     def wells_exists(self) -> bool:
         """Check if there are any wells in this state."""
@@ -129,12 +129,15 @@ def _validate_and_coerce_array(
             f"{field_name} has shape {grid.shape}, expected {model_shape}."
         )
     if dtype_target is not None and np.issubdtype(grid.dtype, np.floating):
-        return grid.astype(dtype_target, copy=False)
-    return grid
+        grid = grid.astype(dtype_target, copy=False, order="C")
+    return np.ascontiguousarray(grid)
 
 
 def validate_state(
-    state: ModelState[NDimension], dtype: typing.Optional[np.typing.DTypeLike] = None
+    state: ModelState[NDimension],
+    dtype: typing.Optional[
+        typing.Union[np.typing.DTypeLike, typing.Literal["global"]]
+    ] = None,
 ) -> ModelState[NDimension]:
     """
     Validate state grids have matching shapes and optionally coerce to specified dtype.
@@ -158,6 +161,9 @@ def validate_state(
         raise ValidationError(
             f"Thickness grid has shape {thickness_grid.shape}, expected {model_shape}."
         )
+
+    if dtype == "global":
+        dtype = get_dtype()
 
     # Validate and coerce fluid properties
     if dtype is not None:
@@ -405,7 +411,6 @@ def validate_state(
             thickness_grid=thickness_grid,
             fluid_properties=fluid_properties,  # type: ignore
             rock_properties=rock_properties,  # type: ignore
-            rock_fluid_properties=model.rock_fluid_properties,
             saturation_history=saturation_history,
             boundary_conditions=model.boundary_conditions,  # type: ignore
             dip_angle=model.dip_angle,

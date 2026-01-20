@@ -1,10 +1,10 @@
-from bores._precision import get_dtype
 import logging
 import typing
 
-import numpy as np
 import numba
+import numpy as np
 
+from bores._precision import get_dtype
 from bores.errors import ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
@@ -17,13 +17,9 @@ from bores.grids.pvt import (
     build_three_phase_relative_mobilities_grids,
     build_three_phase_relative_permeabilities_grids,
 )
-from bores.types import (
-    CapillaryPressureTable,
-    NDimensionalGrid,
-    RelativeMobilityRange,
-    RelativePermeabilityTable,
-    ThreeDimensions,
-)
+from bores.tables.rock_fluid import CapillaryPressureTable, RelativePermeabilityTable
+from bores.types import NDimensionalGrid, RelativeMobilityRange, ThreeDimensions
+
 
 logger = logging.getLogger(__name__)
 

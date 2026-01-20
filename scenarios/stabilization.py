@@ -11,14 +11,11 @@ def _():
     from pathlib import Path
     import numpy as np
     import bores
-    import os
-
 
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
-
 
     def main():
         cell_dimension = (100.0, 100.0)  # 100ft x 100ft cells
@@ -57,8 +54,7 @@ def _():
         # Bubble point pressure slightly below initial pressure (undersaturated oil)
         oil_bubble_point_pressure_grid = bores.layered_grid(
             grid_shape=grid_shape,
-            layer_values=layer_pressures
-            - 400.0,  # 400 psi below formation pressure
+            layer_values=layer_pressures - 400.0,  # 400 psi below formation pressure
             orientation=bores.Orientation.Z,
         )
 
@@ -112,8 +108,7 @@ def _():
             bores.build_saturation_grids(
                 depth_grid=depth_grid,
                 gas_oil_contact=goc_depth - reservoir_top_depth,  # 50 ft below top
-                oil_water_contact=owc_depth
-                - reservoir_top_depth,  # 150 ft below top
+                oil_water_contact=owc_depth - reservoir_top_depth,  # 150 ft below top
                 connate_water_saturation_grid=connate_water_saturation_grid,
                 residual_oil_saturation_water_grid=residual_oil_saturation_water_grid,
                 residual_oil_saturation_gas_grid=residual_oil_saturation_gas_grid,
@@ -274,9 +269,6 @@ def _():
             connate_water_saturation_grid=connate_water_saturation_grid,
             residual_gas_saturation_grid=residual_gas_saturation_grid,
             net_to_gross_ratio_grid=net_to_gross_grid,
-            boundary_conditions=boundary_conditions,
-            relative_permeability_table=relative_permeability_table,  # type: ignore
-            capillary_pressure_table=capillary_pressure_table,  # type: ignore
             reservoir_gas="methane",
             dip_angle=dip_angle,
             dip_azimuth=dip_azimuth,
@@ -295,23 +287,31 @@ def _():
 
         timer = bores.Timer(
             initial_step_size=bores.Time(hours=4.5),
-            max_step_size=bores.Time(days=3.0),
+            max_step_size=bores.Time(days=5.0),
             min_step_size=bores.Time(minutes=10.0),
             simulation_time=bores.Time(days=30),  # 30 days
             ramp_up_factor=1.2,
             backoff_factor=0.5,
             aggressive_backoff_factor=0.25,
         )
+        rock_fluid_tables = bores.RockFluidTables(
+            relative_permeability_table=relative_permeability_table,
+            capillary_pressure_table=capillary_pressure_table,
+        )
         config = bores.Config(
+            timer=timer,
+            rock_fluid_tables=rock_fluid_tables,
             scheme="impes",
             output_frequency=1,
-            max_iterations=500,
+            max_iterations=200,
             pressure_solver="bicgstab",
-            preconditioner="ilu",
+            pressure_preconditioner="ilu",
             log_interval=5,
             pvt_tables=pvt_tables,
+            wells=None,
+            boundary_conditions=boundary_conditions,
         )
-        states = bores.run(model=model, timer=timer, wells=None, config=config)
+        states = bores.run(model=model, config=config)
         return states
     return Path, bores, main
 
@@ -320,7 +320,7 @@ def _():
 def _(Path, bores):
     stabilization_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilization.zarr",
-        metadata_dir=Path.cwd() / "scenarios/states/stabilization_metadata",
+        group_name_gen=bores.state_group_name_gen,
     )
     return (stabilization_store,)
 
@@ -338,9 +338,10 @@ def _(bores, main, stabilization_store):
 def _(Path, bores, last_state):
     stabilized_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilized.zarr",
-        metadata_dir=Path.cwd() / "scenarios/states/stabilized_metadata",
     )
+    # stabilized_store_1 = bores.JSONStore(Path.cwd() / "scenarios/states/stabilized.json")
     stabilized_store.dump([last_state])
+    # stabilized_store_1.dump([last_state], validator=bores.validate_state)
     return
 
 

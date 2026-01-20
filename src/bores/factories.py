@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 
-from bores.boundary_conditions import BoundaryConditions, GridBoundaryCondition
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.fractures import Fracture, apply_fractures
@@ -31,25 +30,18 @@ from bores.grids.pvt import (
 from bores.models import (
     FluidProperties,
     ReservoirModel,
-    RockFluidProperties,
     RockPermeability,
     RockProperties,
     SaturationHistory,
 )
-from bores.pvt.arrays import compute_gas_to_oil_ratio_standing
-from bores.pvt.core import (
+from bores.correlations.arrays import compute_gas_to_oil_ratio_standing
+from bores.correlations.core import (
     compute_gas_gravity,
     validate_input_pressure,
     validate_input_temperature,
 )
-from bores.pvt.tables import PVTTables
-from bores.types import (
-    CapillaryPressureTable,
-    NDimension,
-    NDimensionalGrid,
-    RelativePermeabilityTable,
-    WellLocation,
-)
+from bores.tables.pvt import PVTTables
+from bores.types import Coordinates, NDimension, NDimensionalGrid
 from bores.wells import (
     InjectedFluid,
     InjectionWell,
@@ -189,8 +181,6 @@ def reservoir_model(
     residual_gas_saturation_grid: NDimensionalGrid[NDimension],
     irreducible_water_saturation_grid: NDimensionalGrid[NDimension],
     connate_water_saturation_grid: NDimensionalGrid[NDimension],
-    relative_permeability_table: RelativePermeabilityTable,
-    capillary_pressure_table: CapillaryPressureTable,
     oil_specific_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_gravity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     gas_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
@@ -224,7 +214,6 @@ def reservoir_model(
     solvent_concentration_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_effective_viscosity_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
     oil_effective_density_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
-    boundary_conditions: typing.Optional[BoundaryConditions] = None,
     saturation_history: typing.Optional[SaturationHistory[NDimension]] = None,
     fractures: typing.Optional[typing.Iterable[Fracture]] = None,
     dip_angle: float = 0.0,
@@ -282,19 +271,18 @@ def reservoir_model(
     :param water_salinity_grid: Water salinity grid (ppm), optional.
     :param solvent_concentration_grid: Solvent concentration in oil phase (0=pure oil, 1=pure solvent), optional.
     :param oil_effective_viscosity_grid: Effective oil-solvent mixture viscosity using miscible model (e.g Todd Longstaff) (cP), optional.
-    :param boundary_conditions: Boundary conditions for the model, optional. Defaults to no-flow conditions.
     :param fractures: Iterable of fractures to be applied to the reservoir model, optional.
     :param reservoir_gas: Name of the reservoir gas, defaults to `RESERVOIR_GAS_NAME`. Can also be the name of the gas injected into the reservoir.
     :param pvt_tables: PVT tables for fluid properties, optional.
     :return: The constructed N-Dimensional reservoir model with fluid and rock properties.
     """
-    if not 1 <= len(grid_shape) <= 3:
+    if not 2 <= len(grid_shape) <= 3:
         raise ValidationError(
-            "`grid_shape` must be a tuple of one to three integers (rows, columns, [depth])."
+            "`grid_shape` must be a tuple of two to three integers (rows, columns, [depth])."
         )
     if len(cell_dimension) < 2:
         raise ValidationError(
-            "`cell_dimension` must be a tuple of two floats (cell width, cell height)."
+            "`cell_dimension` must be a tuple of two floats [cell width (dx), cell length (dy)]."
         )
 
     validate_input_pressure(pressure_grid)
@@ -754,25 +742,12 @@ def reservoir_model(
         irreducible_water_saturation_grid=irreducible_water_saturation_grid,
         connate_water_saturation_grid=connate_water_saturation_grid,
     )
-    rock_fluid_properties = RockFluidProperties(
-        relative_permeability_table=relative_permeability_table,
-        capillary_pressure_table=capillary_pressure_table,
-    )
 
     if saturation_history is None:
         # Just store the initial saturations as the max saturations
         saturation_history = SaturationHistory.from_initial_saturations(
             water_saturation_grid=water_saturation_grid.copy(),
             gas_saturation_grid=gas_saturation_grid.copy(),
-        )
-    if boundary_conditions is None:
-        boundary_conditions = BoundaryConditions(
-            conditions={
-                "pressure": GridBoundaryCondition(),
-                "oil_saturation": GridBoundaryCondition(),
-                "gas_saturation": GridBoundaryCondition(),
-                "water_saturation": GridBoundaryCondition(),
-            }
         )
 
     model = ReservoirModel(
@@ -781,9 +756,7 @@ def reservoir_model(
         thickness_grid=thickness_grid,
         fluid_properties=fluid_properties,
         rock_properties=rock_properties,
-        rock_fluid_properties=rock_fluid_properties,
         saturation_history=saturation_history,
-        boundary_conditions=boundary_conditions,
         dip_angle=dip_angle,
         dip_azimuth=dip_azimuth,
     )
@@ -794,12 +767,12 @@ def reservoir_model(
 
 def injection_well(
     well_name: str,
-    perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
+    perforating_intervals: typing.Sequence[typing.Tuple[Coordinates, Coordinates]],
     radius: float,
     control: WellControl,
     injected_fluid: InjectedFluid,
     **kwargs: typing.Any,
-) -> InjectionWell[WellLocation]:
+) -> InjectionWell[Coordinates]:
     """
     Constructs an injection well with the given parameters.
 
@@ -823,13 +796,13 @@ def injection_well(
 
 def production_well(
     well_name: str,
-    perforating_intervals: typing.Sequence[typing.Tuple[WellLocation, WellLocation]],
+    perforating_intervals: typing.Sequence[typing.Tuple[Coordinates, Coordinates]],
     radius: float,
     control: WellControl,
     produced_fluids: typing.Sequence[ProducedFluid],
     skin_factor: float = 0.0,
     **kwargs: typing.Any,
-) -> ProductionWell[WellLocation]:
+) -> ProductionWell[Coordinates]:
     """
     Constructs a production well with the given parameters.
 
@@ -856,10 +829,10 @@ def production_well(
 
 
 def wells_(
-    injectors: typing.Optional[typing.Sequence[InjectionWell[WellLocation]]] = None,
-    producers: typing.Optional[typing.Sequence[ProductionWell[WellLocation]]] = None,
+    injectors: typing.Optional[typing.Sequence[InjectionWell[Coordinates]]] = None,
+    producers: typing.Optional[typing.Sequence[ProductionWell[Coordinates]]] = None,
     **kwargs: typing.Any,
-) -> Wells[WellLocation]:
+) -> Wells[Coordinates]:
     """
     Constructs a ``Wells`` instance containing both injection and production wells.
 

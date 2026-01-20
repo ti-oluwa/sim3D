@@ -8,8 +8,7 @@ import numba
 import numpy as np
 
 from bores.constants import c
-from bores.errors import ComputationError, ValidationError
-from bores.pvt.core import (
+from bores.correlations.core import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
     compute_gas_density,
@@ -22,12 +21,14 @@ from bores.pvt.core import (
     compute_water_viscosity,
     fahrenheit_to_rankine,
 )
-from bores.types import FluidPhase, Orientation, ThreeDimensions, TwoDimensions
-from bores.pvt.tables import (
+from bores.errors import ComputationError, ValidationError
+from bores.serialization import Serializable
+from bores.tables.pseudo_pressure import (
     GasPseudoPressureTable,
-    PVTTables,
     build_gas_pseudo_pressure_table,
 )
+from bores.tables.pvt import PVTTables
+from bores.types import FluidPhase, Orientation, ThreeDimensions, TwoDimensions
 
 logger = logging.getLogger(__name__)
 
@@ -511,8 +512,8 @@ def _build_table_interpolator(
     return _interpolator
 
 
-@attrs.frozen
-class WellFluid:
+@attrs.frozen()
+class WellFluid(Serializable):
     """Base class for fluid properties in wells."""
 
     name: str
@@ -682,7 +683,7 @@ class WellFluid:
         )
 
 
-@attrs.frozen
+@attrs.frozen()
 class InjectedFluid(WellFluid):
     """Properties of the fluid being injected into or produced by a well."""
 
@@ -895,8 +896,8 @@ class InjectedFluid(WellFluid):
         )
 
 
-@attrs.frozen
-class ProducedFluid(WellFluid):
+@attrs.frozen()
+class ProducedFluid(WellFluid):  # type: ignore[attr-defined]
     """Properties of the fluid being produced by a well."""
 
     pass

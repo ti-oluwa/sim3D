@@ -449,7 +449,7 @@ def linear_interpolation_rule(
     return np.where(total_displacing > 0.0, result, np.maximum(kro_w, kro_g))
 
 
-@attrs.frozen
+@attrs.frozen()
 class TwoPhaseRelPermTable:
     """
     Two-phase relative permeability lookup table.
@@ -580,7 +580,7 @@ class TwoPhaseRelPermTable:
         return kr_wetting, kr_non_wetting
 
 
-@attrs.frozen
+@attrs.frozen()
 class ThreePhaseRelPermTable:
     """
     Three-phase relative permeability lookup table, with mixing rules.
@@ -800,7 +800,9 @@ def compute_corey_three_phase_relative_permeabilities(
         effective_water_saturation = np.where(
             movable_water_range <= 1e-6,
             np.zeros_like(sw),
-            np.clip((sw - irreducible_water_saturation) / movable_water_range, 0.0, 1.0)
+            np.clip(
+                (sw - irreducible_water_saturation) / movable_water_range, 0.0, 1.0
+            ),
         )
         krw = effective_water_saturation**water_exponent
 
@@ -809,7 +811,7 @@ def compute_corey_three_phase_relative_permeabilities(
         effective_gas_saturation = np.where(
             movable_gas_range <= 1e-6,
             np.zeros_like(sg),
-            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0)
+            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0),
         )
         krg = effective_gas_saturation**gas_exponent
 
@@ -835,7 +837,7 @@ def compute_corey_three_phase_relative_permeabilities(
         effective_oil_saturation = np.where(
             movable_oil_range <= 1e-6,
             np.zeros_like(so),
-            np.clip((so - min_residual) / movable_oil_range, 0.0, 1.0)
+            np.clip((so - min_residual) / movable_oil_range, 0.0, 1.0),
         )
         kro = effective_oil_saturation**oil_exponent
 
@@ -844,7 +846,7 @@ def compute_corey_three_phase_relative_permeabilities(
         effective_gas_saturation = np.where(
             movable_gas_range <= 1e-6,
             np.zeros_like(sg),
-            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0)
+            np.clip((sg - residual_gas_saturation) / movable_gas_range, 0.0, 1.0),
         )
         krg = effective_gas_saturation**gas_exponent
 
@@ -868,7 +870,7 @@ def compute_corey_three_phase_relative_permeabilities(
     return krw, kro, krg  # type: ignore[return-value]
 
 
-@attrs.frozen
+@attrs.frozen()
 class BrooksCoreyThreePhaseRelPermModel:
     """
     Brooks-Corey-type three-phase relative permeability model.
@@ -888,11 +890,23 @@ class BrooksCoreyThreePhaseRelPermModel:
     residual_gas_saturation: typing.Optional[float] = None
     """(Default) Residual gas saturation (Sgr)."""
     water_exponent: float = 2.0
-    """Corey exponent for water relative permeability. Higher values make the curve steeper."""
+    """
+    Corey exponent for water relative permeability. 
+    
+    Higher values make the curve steeper. Meaning slower krw increase with saturation.
+    """
     oil_exponent: float = 2.0
-    """Corey exponent for oil relative permeability (affects Stone I blending). Higher values make the curve steeper."""
+    """
+    Corey exponent for oil relative permeability (affects Stone I blending). 
+    
+    Higher values make the curve steeper. Meaning slower kro increase with saturation.
+    """
     gas_exponent: float = 2.0
-    """Corey exponent for gas relative permeability. Higher values make the curve steeper."""
+    """
+    Corey exponent for gas relative permeability. Higher values make the curve steeper. 
+    
+    Meaning slower krg increase with saturation.
+    """
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (water-wet or oil-wet)."""
     mixing_rule: MixingRule = stone_II_rule

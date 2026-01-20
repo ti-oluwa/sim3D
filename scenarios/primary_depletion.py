@@ -10,20 +10,16 @@ def _():
     from pathlib import Path
     import numpy as np
     import bores
-    import os
 
     logging.basicConfig(level=logging.INFO)
 
     np.set_printoptions(threshold=np.inf)  # type: ignore
-    bores.use_32bit_precision()
     stabilized_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/stabilized.zarr",
-        metadata_dir=Path.cwd() / "scenarios/states/stabilized_metadata/",
     )
 
-
     def main():
-        state = list(stabilized_store.load(validate=False))[0]
+        state = list(stabilized_store.load(bores.ModelState, lazy=False))[-1]
         model = state.model
         del state
 
@@ -33,19 +29,19 @@ def _():
             oil_control=bores.AdaptiveBHPRateControl(
                 target_rate=-100,
                 target_phase="oil",
-                bhp_limit=1200,
+                bhp_limit=800,
                 clamp=clamp,
             ),
             gas_control=bores.AdaptiveBHPRateControl(
                 target_rate=-500,
                 target_phase="gas",
-                bhp_limit=1200,
+                bhp_limit=800,
                 clamp=clamp,
             ),
             water_control=bores.AdaptiveBHPRateControl(
                 target_rate=-10,
                 target_phase="water",
-                bhp_limit=1200,
+                bhp_limit=800,
                 clamp=clamp,
             ),
         )
@@ -84,7 +80,7 @@ def _():
             initial_step_size=bores.Time(hours=20),
             max_step_size=bores.Time(days=5),
             min_step_size=bores.Time(minutes=10.0),
-            simulation_time=bores.Time(days=10),  # 5 years
+            simulation_time=bores.Time(days=2 * bores.c.DAYS_PER_YEAR),  # 5 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -104,26 +100,56 @@ def _():
         pvt_tables = bores.PVTTables(
             table_data=pvt_table_data, interpolation_method="linear"
         )
+        del pvt_table_data
+
+        # RelPerm table
+        relative_permeability_table = bores.BrooksCoreyThreePhaseRelPermModel(
+            irreducible_water_saturation=0.15,
+            residual_oil_saturation_gas=0.15,
+            residual_oil_saturation_water=0.25,
+            residual_gas_saturation=0.045,
+            wettability=bores.WettabilityType.WATER_WET,
+            water_exponent=2.0,
+            oil_exponent=2.0,
+            gas_exponent=2.0,
+            mixing_rule=bores.eclipse_rule,
+        )
+
+        # Capillary pressure table
+        capillary_pressure_table = bores.BrooksCoreyCapillaryPressureModel(
+            oil_water_entry_pressure_water_wet=2.0,
+            oil_water_pore_size_distribution_index_water_wet=2.0,
+            gas_oil_entry_pressure=2.8,
+            gas_oil_pore_size_distribution_index=2.0,
+            wettability=bores.Wettability.WATER_WET,
+        )
+        rock_fluid_tables = bores.RockFluidTables(
+            relative_permeability_table=relative_permeability_table,
+            capillary_pressure_table=capillary_pressure_table,
+        )
+
         config = bores.Config(
+            timer=timer,
+            rock_fluid_tables=rock_fluid_tables,
+            wells=wells,
             scheme="impes",
             output_frequency=1,
             miscibility_model="immiscible",
-            pressure_solver="direct",
+            pressure_solver="bicgstab",
             pressure_preconditioner="ilu",
             pvt_tables=pvt_tables,
             max_gas_saturation_change=0.85,
         )
-        states = bores.run(model=model, timer=timer, wells=wells, config=config)
+        states = bores.run(model=model, config=config)
         return states
     return Path, bores, main
 
 
 @app.cell
 def _(Path, bores):
-
     depletion_store = bores.HDF5Store(
         filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
-        metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
+        group_name_gen=bores.state_group_name_gen,
     )
     return (depletion_store,)
 
@@ -132,10 +158,8 @@ def _(Path, bores):
 def _(bores, depletion_store, main):
     stream = bores.StateStream(main(), store=depletion_store, batch_size=50)
 
-    last_state = None
     with stream:
-        for state in stream:
-            last_state = state
+        last_state = stream.last()
     return (last_state,)
 
 
@@ -143,8 +167,7 @@ def _(bores, depletion_store, main):
 def _(Path, bores, last_state):
     # Dump last state for use in EOR in next stages
     depleted_store = bores.ZarrStore(
-        store=Path.cwd() / "scenarios/states/primary_depleted.zarr",
-        metadata_dir=Path.cwd() / "scenarios/states/primary_depleted_metadata/",
+        store=Path.cwd() / "scenarios/states/primary_depleted.zarr"
     )
     depleted_store.dump([last_state], validate=False)
     return

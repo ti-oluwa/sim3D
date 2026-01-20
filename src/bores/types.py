@@ -12,7 +12,7 @@ from bores.errors import ValidationError
 
 __all__ = [
     "NDimension",
-    "WellLocation",
+    "Coordinates",
     "ThreeDimensions",
     "TwoDimensions",
     "OneDimension",
@@ -49,7 +49,7 @@ ActionFunc = typing.Callable[[S, T], None]
 """A function that takes two arguments of types S and T and returns None."""
 
 NDimension = typing.TypeVar("NDimension", bound=typing.Tuple[int, ...])
-WellLocation = typing.TypeVar("WellLocation", bound=typing.Tuple[int, ...])
+Coordinates = typing.TypeVar("Coordinates", bound=typing.Tuple[int, ...])
 
 ThreeDimensions: TypeAlias = typing.Tuple[int, int, int]
 """3D indices"""
@@ -218,40 +218,6 @@ class WettabilityType(str, enum.Enum):
 
 
 Wettability = WettabilityType  # Alias for backward compatibility
-
-
-@typing.runtime_checkable
-class RelativePermeabilityTable(typing.Protocol):
-    """
-    Protocol for a relative permeability table that computes
-    relative permeabilities based on fluid saturations.
-    """
-
-    def __call__(self, **kwargs: typing.Any) -> RelativePermeabilities:
-        """
-        Computes relative permeabilities based on fluid saturations.
-
-        :param kwargs: Additional parameters for the relative permeability function.
-        :return: A dictionary containing relative permeabilities for water, oil, and gas phases.
-        """
-        ...
-
-
-@typing.runtime_checkable
-class CapillaryPressureTable(typing.Protocol):
-    """
-    Protocol for a capillary pressure table that computes
-    capillary pressures based on fluid saturations.
-    """
-
-    def __call__(self, **kwargs: typing.Any) -> CapillaryPressures:
-        """
-        Computes capillary pressures based on fluid saturations.
-
-        :param kwargs: Saturation parameters (water_saturation, oil_saturation, gas_saturation).
-        :return: A dictionary containing capillary pressures for oil-water and gas-oil systems.
-        """
-        ...
 
 
 @attrs.frozen(slots=True)

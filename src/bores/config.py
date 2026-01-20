@@ -2,24 +2,42 @@ import typing
 
 import attrs
 
+from bores.boundary_conditions import BoundaryConditions
 from bores.constants import Constants
+from bores.tables.pvt import PVTTables
+from bores.tables.rock_fluid import RockFluidTables
+from bores.timing import Timer
 from bores.types import (
     EvolutionScheme,
-    Solver,
     MiscibilityModel,
     Preconditioner,
     Range,
     RelativeMobilityRange,
+    Solver,
+    ThreeDimensions,
 )
-from bores.pvt.tables import PVTTables
+from bores.wells import WellSchedules, Wells
+
 
 __all__ = ["Config"]
 
 
-@attrs.frozen
+@attrs.frozen()
 class Config:
     """Simulation run configuration and parameters."""
 
+    timer: Timer
+    """Simulation time manager to control time steps and simulation time."""
+    rock_fluid_tables: RockFluidTables
+    """Rock and fluid property tables for the simulation."""
+    wells: typing.Optional[Wells[ThreeDimensions]] = None
+    """Well configuration for the simulation."""
+    well_schedules: typing.Optional[WellSchedules[ThreeDimensions]] = None
+    """Well schedules for dynamic well control during the simulation."""
+    boundary_conditions: typing.Optional[BoundaryConditions[ThreeDimensions]] = None
+    """Boundary conditions for the simulation."""
+    pvt_tables: typing.Optional[PVTTables] = None
+    """PVT tables for fluid property lookups during the simulation."""
     pressure_convergence_tolerance: float = attrs.field(
         default=1e-6, validator=attrs.validators.le(1e-2)
     )
@@ -152,7 +170,7 @@ class Config:
     step is reduced or rejected.
     """
     max_gas_saturation_change: float = attrs.field(  # type: ignore
-        default=0.7, validator=attrs.validators.ge(0)
+        default=0.85, validator=attrs.validators.ge(0)
     )
     """
     Maximum allowable gas saturation change (absolute, fractional) per time step.
@@ -198,5 +216,3 @@ class Config:
     Note: Larger changes can cause density/viscosity jumps and well control issues.
     """
 
-    pvt_tables: typing.Optional[PVTTables] = None
-    """PVT tables for fluid property lookups during the simulation."""

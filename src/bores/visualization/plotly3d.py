@@ -4,12 +4,12 @@ Plotly-based 3D Visualization Suite for Reservoir Simulation Data and Results.
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from enum import Enum
 import itertools
 import logging
 import typing
 
+import attrs
 import numpy as np
 import plotly.graph_objects as go
 from typing_extensions import TypedDict, Unpack
@@ -28,7 +28,7 @@ from bores.types import (
 )
 from bores.visualization.base import (
     ColorScheme,
-    PropertyMetadata,
+    PropertyMeta,
     PropertyRegistry,
     property_registry,
 )
@@ -152,7 +152,7 @@ DEFAULT_LIGHTING = Lighting(
 )
 
 
-@dataclass(frozen=True)
+@attrs.frozen
 class PlotConfig:
     """Configuration for 3D plots."""
 
@@ -182,9 +182,7 @@ class PlotConfig:
     """Whether to display 3D axes labels and grid lines. Helps with spatial orientation
     and coordinate reference."""
 
-    camera_position: CameraPosition = field(
-        default_factory=lambda: DEFAULT_CAMERA_POSITION
-    )
+    camera_position: CameraPosition = DEFAULT_CAMERA_POSITION
     """3D camera position and orientation. If None, uses default isometric view.
     Dict should contain 'eye', 'center', and 'up' keys with x,y,z coordinates."""
 
@@ -207,8 +205,8 @@ class PlotConfig:
     """Whether to apply data-driven opacity scaling for better depth perception.
     Higher data values become more opaque, lower values more transparent."""
 
-    opacity_scale_values: typing.Sequence[typing.Sequence[float]] = field(
-        default_factory=lambda: DEFAULT_OPACITY_SCALE_VALUES
+    opacity_scale_values: typing.Sequence[typing.Sequence[float]] = (
+        DEFAULT_OPACITY_SCALE_VALUES
     )
     """Custom opacity scaling values for volume rendering. List of [data_fraction, opacity] pairs.
     If None, uses default scaling optimized for reservoir data visualization.
@@ -221,7 +219,7 @@ class PlotConfig:
     - "data": Automatic scaling based on data extents.
     - "auto": Automatic aspect ratio adjustment."""
 
-    lighting: Lighting = field(default_factory=lambda: DEFAULT_LIGHTING)
+    lighting: Lighting = DEFAULT_LIGHTING
     """Lighting configuration for 3D plots. Controls how light interacts with surfaces,
 
     including ambient, diffuse, and specular reflections, roughness, and fresnel effects.
@@ -243,7 +241,7 @@ class PlotConfig:
     Useful for clean visualizations without text annotations."""
 
 
-@dataclass(frozen=True)
+@attrs.frozen
 class LabelCoordinate:
     """Represents a 3D position for placing labels."""
 
@@ -315,7 +313,7 @@ class LabelFormatValues(TypedDict):
     unit: typing.Optional[str]
 
 
-@dataclass(slots=True)
+@attrs.frozen
 class Label:
     """
     A flexible label that can be positioned in 3D space on a 3D grid and extract data dynamically.
@@ -353,7 +351,7 @@ class Label:
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        metadata: typing.Optional[PropertyMetadata] = None,
+        metadata: typing.Optional[PropertyMeta] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
     ) -> str:
         """
@@ -425,7 +423,7 @@ class Label:
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        metadata: typing.Optional[PropertyMetadata] = None,
+        metadata: typing.Optional[PropertyMeta] = None,
         format_kwargs: typing.Optional[typing.Dict[str, typing.Any]] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
     ) -> typing.Dict[str, typing.Any]:
@@ -621,7 +619,7 @@ class Labels:
     def as_annotations(
         self,
         data_grid: typing.Optional[ThreeDimensionalGrid] = None,
-        metadata: typing.Optional[PropertyMetadata] = None,
+        metadata: typing.Optional[PropertyMeta] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
@@ -844,7 +842,7 @@ class BaseRenderer(ABC):
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> go.Figure:
@@ -865,7 +863,7 @@ class BaseRenderer(ABC):
         return ColorScheme(color_scheme).value
 
     @staticmethod
-    def format_value(value: float, metadata: PropertyMetadata) -> str:
+    def format_value(value: float, metadata: PropertyMeta) -> str:
         """
         Format a value for display with appropriate precision and scientific notation.
 
@@ -991,7 +989,7 @@ class BaseRenderer(ABC):
     def normalize_data(
         self,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         normalize_range: bool = False,
     ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid]:
         """
@@ -1155,7 +1153,7 @@ class BaseRenderer(ABC):
             typing.Union["Labels", typing.Iterable["Label"]]
         ] = None,
         data: typing.Optional[ThreeDimensionalGrid] = None,
-        metadata: typing.Optional[PropertyMetadata] = None,
+        metadata: typing.Optional[PropertyMeta] = None,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
@@ -1973,7 +1971,7 @@ class VolumeRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         surface_count: int = 50,
@@ -2238,7 +2236,7 @@ class VolumeRenderer(BaseRenderer):
     def update_layout(
         self,
         figure: go.Figure,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_title: str = "X Index",
         y_title: str = "Y Index",
         z_title: str = "Z Index",
@@ -2290,7 +2288,7 @@ class IsosurfaceRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         isomin: typing.Optional[float] = None,
@@ -2549,7 +2547,7 @@ class IsosurfaceRenderer(BaseRenderer):
     def update_layout(
         self,
         figure: go.Figure,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_title: str = "X Index",
         y_title: str = "Y Index",
         z_title: str = "Z Index",
@@ -2615,7 +2613,7 @@ class CellBlockRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         cell_dimension: typing.Tuple[float, float],
         depth_grid: ThreeDimensionalGrid,
         cmin: typing.Optional[float] = None,
@@ -3085,7 +3083,7 @@ class CellBlockRenderer(BaseRenderer):
     def update_layout(
         self,
         figure: go.Figure,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_title: str = "X Distance (ft)",
         y_title: str = "Y Distance (ft)",
         z_title: str = "Z Distance (ft)",
@@ -3140,7 +3138,7 @@ class Scatter3DRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: ThreeDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
         depth_grid: typing.Optional[ThreeDimensionalGrid] = None,
         threshold: float = 0.0,
@@ -3409,7 +3407,7 @@ class Scatter3DRenderer(BaseRenderer):
     def update_layout(
         self,
         figure: go.Figure,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_title: str = "X Cell Index",
         y_title: str = "Y Cell Index",
         z_title: str = "Z Cell Index",
@@ -3609,7 +3607,7 @@ class DataVisualizer:
             z_slice_obj,
         )
 
-    def _get_property_data(
+    def _get_data(
         self,
         source: typing.Union[ModelState[ThreeDimensions], ReservoirModel],
         name: str,
@@ -3618,7 +3616,7 @@ class DataVisualizer:
         Get property data from model state.
 
         :param source: The model or model state containing reservoir model
-        :param name: Name of the property to extract as defined by the `PropertyMetadata.name`
+        :param name: Name of the property to extract as defined by the `PropertyMeta.name`
         :return: A three-dimensional numpy array containing the state data
         :raises AttributeError: If property is not found in reservoir model properties
         :raises TypeError: If property is not a numpy array
@@ -3632,20 +3630,16 @@ class DataVisualizer:
             name = name.removeprefix("model.")
             source_type = "reservoir model"
 
-        state = source.asdict()
+        state = source
         name_parts = name.split(".")
         data = None
         if len(name_parts) == 1:
-            data = state.get(name_parts[0], _missing)
+            data = getattr(state, name_parts[0], _missing)
         else:
             # Nested property access (e.g., "permeability.x")
             data = state
             for part in name_parts:
-                if isinstance(data, Mapping):
-                    value = data.get(part, _missing)
-                else:
-                    value = getattr(data, part, _missing)
-
+                value = getattr(data, part, _missing)
                 if value is not _missing:
                     data = value
                     continue
@@ -3665,7 +3659,7 @@ class DataVisualizer:
     def get_title(
         self,
         plot_type: PlotType,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         custom_title: typing.Optional[str] = None,
     ) -> str:
         """
@@ -3797,7 +3791,7 @@ class DataVisualizer:
                 )
 
             metadata = self.registry[property]
-            data = self._get_property_data(source, metadata.name)  # type: ignore
+            data = self._get_data(source, metadata.name)  # type: ignore
 
             # Get original cell dimensions and depth grid from model
             if is_model_state:
@@ -3815,7 +3809,7 @@ class DataVisualizer:
                 metadata = self.registry[property]
             else:
                 # Create generic metadata for raw grid data
-                metadata = PropertyMetadata(
+                metadata = PropertyMeta(
                     name=property or "data",
                     display_name=property or "Data",
                     unit="",
@@ -4006,7 +4000,7 @@ class DataVisualizer:
             if property is not None and property in self.registry:
                 metadata = self.registry[property]
             else:
-                metadata = PropertyMetadata(
+                metadata = PropertyMeta(
                     name=property or "data",
                     display_name=property or "Data",
                     unit="",
@@ -4019,7 +4013,7 @@ class DataVisualizer:
             # Add cmin/cmax to kwargs for consistent color mapping across frames
             if is_model_state_sequence or is_model_sequence:
                 data_list: typing.List[ThreeDimensionalGrid] = [
-                    self._get_property_data(source, metadata.name)  # type: ignore[arg-type]
+                    self._get_data(source, metadata.name)  # type: ignore[arg-type]
                     for source in sequence
                 ]
             else:

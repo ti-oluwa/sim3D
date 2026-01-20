@@ -14,10 +14,10 @@ from plotly.subplots import make_subplots
 
 from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
-from bores.visualization.base import ColorScheme, PropertyMetadata
+from bores.visualization.base import ColorScheme, PropertyMeta
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen
 class PlotConfig:
     """Configuration for 2D plots."""
 
@@ -147,7 +147,7 @@ class BaseRenderer(ABC):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -172,7 +172,7 @@ class BaseRenderer(ABC):
     def normalize_data(
         self,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         normalize_range: bool = True,
     ) -> typing.Tuple[TwoDimensionalGrid, TwoDimensionalGrid]:
         """
@@ -214,7 +214,7 @@ class BaseRenderer(ABC):
         return ColorScheme(self.config.color_scheme).value or "viridis"
 
     def format_value(
-        self, value: float, metadata: PropertyMetadata, precision: int = 3
+        self, value: float, metadata: PropertyMeta, precision: int = 3
     ) -> str:
         """
         Format a data value for display.
@@ -254,7 +254,7 @@ class HeatmapRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -366,7 +366,7 @@ class ContourRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -474,7 +474,7 @@ class ScatterRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -593,7 +593,7 @@ class LineRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -726,7 +726,7 @@ class SurfaceRenderer(BaseRenderer):
         self,
         figure: go.Figure,
         data: TwoDimensionalGrid,
-        metadata: PropertyMetadata,
+        metadata: PropertyMeta,
         x_coords: typing.Optional[np.ndarray] = None,
         y_coords: typing.Optional[np.ndarray] = None,
         x_label: str = "X",
@@ -895,7 +895,7 @@ class DataVisualizer:
         self,
         data: typing.Union[TwoDimensionalGrid, np.typing.NDArray[np.floating]],
         plot_type: typing.Union[PlotType, str] = PlotType.HEATMAP,
-        metadata: typing.Optional[PropertyMetadata] = None,
+        metadata: typing.Optional[PropertyMeta] = None,
         figure: typing.Optional[go.Figure] = None,
         title: typing.Optional[str] = None,
         x_coords: typing.Optional[np.typing.NDArray] = None,
@@ -936,7 +936,7 @@ class DataVisualizer:
 
         # Create default metadata if not provided
         if metadata is None:
-            metadata = PropertyMetadata(
+            metadata = PropertyMeta(
                 name="data",
                 display_name="Data",
                 unit="",
@@ -989,7 +989,7 @@ class DataVisualizer:
         plot_types: typing.Union[
             PlotType, str, typing.Sequence[typing.Union[PlotType, str]]
         ],
-        metadata_list: typing.Optional[typing.Sequence[PropertyMetadata]] = None,
+        metadata_list: typing.Optional[typing.Sequence[PropertyMeta]] = None,
         titles: typing.Optional[typing.Sequence[str]] = None,
         rows: int = 1,
         cols: int = 1,
@@ -1080,7 +1080,7 @@ class DataVisualizer:
             metadata = (
                 metadata_list[idx]
                 if metadata_list
-                else PropertyMetadata(
+                else PropertyMeta(
                     name=f"data_{idx}",
                     display_name=f"Data {idx}",
                     unit="",

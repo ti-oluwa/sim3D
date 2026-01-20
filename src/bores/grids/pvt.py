@@ -3,12 +3,11 @@
 import itertools
 import typing
 
-import numpy as np
 import numba
+import numpy as np
 from numpy.typing import DTypeLike
 
-from bores.grids.base import build_uniform_grid
-from bores.pvt.arrays import (
+from bores.correlations.arrays import (
     compute_fluid_compressibility,
     compute_fluid_density,
     compute_fluid_viscosity,
@@ -40,13 +39,9 @@ from bores.pvt.arrays import (
     compute_water_viscosity,
     estimate_solution_gor,
 )
-from bores.types import (
-    CapillaryPressureTable,
-    FloatOrArray,
-    NDimension,
-    NDimensionalGrid,
-    RelativePermeabilityTable,
-)
+from bores.grids.base import build_uniform_grid
+from bores.tables.rock_fluid import CapillaryPressureTable, RelativePermeabilityTable
+from bores.types import FloatOrArray, NDimension, NDimensionalGrid
 
 __all__ = [
     "build_fluid_viscosity_grid",
@@ -703,7 +698,7 @@ def build_estimated_solution_gas_to_oil_ratio_grid(
     Example:
     ```python
     import numpy as np
-    
+
     pressures = np.linspace(500, 5000, 50)
     temperatures = np.linspace(100, 250, 30)
     p_grid, t_grid = np.meshgrid(pressures, temperatures, indexing='ij')

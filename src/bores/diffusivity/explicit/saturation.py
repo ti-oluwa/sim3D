@@ -14,7 +14,7 @@ from bores.diffusivity.base import (
 )
 from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
 from bores.models import FluidProperties, RockProperties
-from bores.pvt.core import compute_harmonic_mean
+from bores.correlations.core import compute_harmonic_mean
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,

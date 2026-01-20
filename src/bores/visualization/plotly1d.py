@@ -23,7 +23,7 @@ SeriesData = typing.Union[
 ]
 
 
-@attrs.define(slots=True, frozen=True)
+@attrs.frozen
 class PlotConfig:
     """Configuration for 1D plots."""
 

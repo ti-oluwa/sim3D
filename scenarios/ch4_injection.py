@@ -22,7 +22,6 @@ def _():
         metadata_dir=Path.cwd() / "scenarios/states/primary_depleted_metadata/",
     )
 
-
     def main():
         # Load last model state of primary depletion
         state = list(depleted_store.load(validate=True))[0]
@@ -114,12 +113,16 @@ def _():
             skin_factor=2.5,
             is_active=False,
         )
-        producer.schedule_event(
-            bores.WellEvent(
-                hook=bores.well_time_hook(time_step=100),
-                action=bores.well_update_action(is_active=True),
-            )
+
+        # We use a well schedule to activate the producer after some time
+        well_schedule = bores.WellSchedule()
+        well_schedule["open_well"] = bores.WellEvent(
+            hook=bores.well_time_hook(time_step=100),
+            action=bores.well_update_action(is_active=True),
         )
+        well_schedules = bores.WellSchedules()
+        well_schedules[producer.name] = well_schedule
+
         producers = [producer]
 
         wells = bores.wells_(injectors=injectors, producers=producers)
@@ -139,8 +142,15 @@ def _():
             miscibility_model="todd_longstaff",
             use_pseudo_pressure=True,
         )
-        states = bores.run(model=model, timer=timer, wells=wells, config=config)
+        states = bores.run(
+            model=model,
+            timer=timer,
+            wells=wells,
+            well_schedules=well_schedules,
+            config=config,
+        )
         return states
+
     return Path, bores, main
 
 

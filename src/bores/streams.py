@@ -13,12 +13,12 @@ import numpy as np
 from typing_extensions import Self
 
 from bores.errors import StreamError
-from bores.states import ModelState
-from bores.states.stores import StateStore, PickleStore
+from bores.states import ModelState, validate_state
+from bores.stores import DataStore, PickleStore
 from bores.types import NDimension
 
 
-__all__ = ["StateStream", "StreamProgress"]
+__all__ = ["StateStream", "StreamProgress", "state_group_name_gen"]
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,12 @@ class StreamProgress(typing.TypedDict):
     memory_usage: float
 
 
-_stop_io = object()
+_stop_io = object()  # Sentinel for stopping I/O thread
+
+
+def state_group_name_gen(idx: int, state: ModelState[NDimension]) -> str:
+    """Generate group name for a state based on index and step number."""
+    return f"step_{state.step:08d}_idx_{idx:06d}"
 
 
 class StateStream(typing.Generic[NDimension]):
@@ -91,7 +96,7 @@ class StateStream(typing.Generic[NDimension]):
         analyze_state(state)
     ```
 
-    Example (Async I/O - High Performance):
+    Example Usage (Async I/O):
     ```python
     stream = StateStream(
         states=run_simulation(...),
@@ -114,7 +119,7 @@ class StateStream(typing.Generic[NDimension]):
     def __init__(
         self,
         states: typing.Optional[typing.Iterable[ModelState[NDimension]]] = None,
-        store: typing.Optional[StateStore] = None,
+        store: typing.Optional[DataStore[ModelState[NDimension]]] = None,
         batch_size: int = 10,
         validate: bool = False,
         auto_save: bool = True,
@@ -135,7 +140,8 @@ class StateStream(typing.Generic[NDimension]):
         Initialize state stream.
 
         :param states: Generator or iterator of `ModelState` instances
-        :param store: Optional `StateStore` for persistence. If None, states only yielded (no persistence)
+        :param store: Optional `DataStore` for persistence. If None, states only yielded (no persistence).
+            The data store must support appending new states. that is, `store.supports_append` must be True.
         :param batch_size: Number of states to accumulate before flushing to disk (default: 10)
         :param validate: Validate states before persisting (default: False)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
@@ -201,6 +207,12 @@ class StateStream(typing.Generic[NDimension]):
                     "`async_io=True` but no store provided. Async I/O disabled."
                 )
                 self.async_io = False
+
+        if store is not None and not store.supports_append:
+            raise StreamError(
+                f"Provided store {store} does not support appending new states. "
+                "stream requires a store that supports appending."
+            )
 
         self._batch: typing.List[ModelState[NDimension]] = []
         self._yield_count: int = 0
@@ -289,9 +301,9 @@ class StateStream(typing.Generic[NDimension]):
 
                     try:
                         self.store.dump(
-                            states=batch,
+                            batch,
                             exist_ok=True,
-                            validate=self.validate,
+                            validator=validate_state if self.validate else None,
                         )
                         with self._saved_count_lock:
                             self._saved_count += len(batch)
@@ -609,7 +621,7 @@ class StateStream(typing.Generic[NDimension]):
                 last_state = next(iterator)
             except StopIteration:
                 break
-        
+
         if last_state is not None:
             logger.debug(f"Last state retrieved: step {last_state.step}")
         else:
@@ -673,7 +685,11 @@ class StateStream(typing.Generic[NDimension]):
 
         logger.debug(f"Replaying states from {self.store}")
 
-        for state in self.store.load(lazy=self.lazy_load, validate=self.validate):
+        for state in self.store.load(
+            ModelState,
+            lazy=self.lazy_load,
+            validate=validate_state if self.validate else None,
+        ):
             self._yield_count += 1
             yield state
 
@@ -743,9 +759,9 @@ class StateStream(typing.Generic[NDimension]):
 
             try:
                 self.store.dump(
-                    states=self._batch,
+                    self._batch,
                     exist_ok=True,
-                    validate=self.validate,
+                    validator=validate_state if self.validate else None,
                 )
                 self._saved_count += batch_size
                 logger.debug(
@@ -867,7 +883,7 @@ class StateStream(typing.Generic[NDimension]):
             checkpoint_store = PickleStore(
                 filepath=checkpoint_path, compression="lzma", compression_level=8
             )
-            checkpoint_store.dump(states=[state], exist_ok=True, validate=False)
+            checkpoint_store.dump([state], exist_ok=True, validator=None)
 
             self._checkpoints_count += 1
             logger.info(
@@ -894,7 +910,7 @@ class StateStream(typing.Generic[NDimension]):
             raise FileNotFoundError(f"Checkpoint not found for step {step}")
 
         checkpoint_store = PickleStore(filepath=checkpoint_path)
-        state = next(checkpoint_store.load(validate=False), None)
+        state = next(checkpoint_store.load(ModelState, validator=None), None)
         if state is None:
             raise StreamError(f"Checkpoint file is empty: {checkpoint_path}")
 
@@ -917,7 +933,7 @@ class StateStream(typing.Generic[NDimension]):
         )
         for checkpoint_path in checkpoint_files:
             checkpoint_store = PickleStore(filepath=checkpoint_path)
-            state = next(checkpoint_store.load(validate=False), None)
+            state = next(checkpoint_store.load(ModelState, validator=None), None)
             if state is not None:
                 yield state
             else:

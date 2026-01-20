@@ -97,7 +97,7 @@ class StepMetrics:
     success: bool = True
 
 
-@attrs.define
+@attrs.define()
 class Timer:
     """
     Simulation time manager for smart and adaptive time stepping.

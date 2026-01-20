@@ -854,7 +854,7 @@ class FluxBoundary(typing.Generic[NDimension]):
         - Negative flux = flow OUT OF the domain (production)
 
         Note: In this codebase, k=0 is the TOP (shallowest) layer, and k increases
-        downward. So Z_PLUS (top) corresponds to k=0, and Z_MINUS (bottom) to k=-1.
+        downward. So `Z_PLUS` (top) corresponds to k=0, and `Z_MINUS` (bottom) to k=-1.
         """
         if metadata is None or metadata.cell_dimension is None:
             raise ValidationError(
@@ -1146,7 +1146,7 @@ NeumannBoundary = FluxBoundary
 """Alias for `FluxBoundary` representing Neumann boundary conditions (flux-based)."""
 
 
-@attrs.frozen
+@attrs.frozen()
 class GridBoundaryCondition(typing.Generic[NDimension]):
     """
     Container for defining boundary conditions for a grid.
@@ -1409,8 +1409,6 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
 
     def __deepcopy__(self, memo):
         """
-        Custom deep copy implementation for better control.
-
         Ensures the factory and all boundary conditions are properly copied.
         """
         # Create new instance without calling __init__ yet

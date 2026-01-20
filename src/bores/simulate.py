@@ -3,12 +3,17 @@
 import copy
 import logging
 import typing
+import warnings
 
 import attrs
 import numpy as np
 
 from bores._precision import get_dtype
-from bores.boundary_conditions import default_bc
+from bores.boundary_conditions import (
+    BoundaryConditions,
+    GridBoundaryCondition,
+    default_bc,
+)
 from bores.config import Config
 from bores.constants import c
 from bores.diffusivity import (
@@ -41,7 +46,6 @@ from bores.models import (
     SaturationHistory,
 )
 from bores.states import ModelState
-from bores.timing import Timer
 from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
 from bores.utils import clip
 from bores.wells import Wells
@@ -913,10 +917,7 @@ def log_progress(
 
 
 def run(
-    model: ReservoirModel[ThreeDimensions],
-    timer: Timer,
-    wells: typing.Optional[Wells[ThreeDimensions]] = None,
-    config: typing.Optional[Config] = None,
+    model: ReservoirModel[ThreeDimensions], config: Config
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     """
     Run a simulation on a 3D static reservoir model and wells.
@@ -925,20 +926,32 @@ def run(
     3D simulations are computationally intensive and may require significant memory and processing power.
 
     :param model: The reservoir model containing grid, rock, and fluid properties.
-    :param timer: The time manager for controlling simulation time steps.
-    :param wells: The wells configuration for the simulation.
     :param config: Simulation run configuration and parameters.
     :yield: Yields the model state at specified output intervals.
     """
-    if config is None:
-        config = Config()
+    rock_fluid_tables = config.rock_fluid_tables
+    boundary_conditions = config.boundary_conditions
+    timer = config.timer
+    wells = config.wells
+    well_schedules = config.well_schedules
+
     if wells is None:
+        logger.debug("No wells provided, proceeding with no-well simulation.")
         wells = Wells()
 
-    logger.info("Starting simulation workflow...")
+    if boundary_conditions is None:
+        logger.debug("No boundary conditions provided, applying no-flow boundaries.")
+        boundary_conditions = BoundaryConditions(
+            conditions={
+                "pressure": GridBoundaryCondition(),
+                "oil_saturation": GridBoundaryCondition(),
+                "gas_saturation": GridBoundaryCondition(),
+                "water_saturation": GridBoundaryCondition(),
+            }
+        )
 
+    logger.info("Starting simulation workflow...")
     cell_dimension = model.cell_dimension
-    boundary_conditions = model.boundary_conditions
     grid_shape = model.grid_shape
     has_wells = wells.exists()
     output_frequency = config.output_frequency
@@ -963,7 +976,6 @@ def run(
         # Ensure ghost cells mirror neighbour values by default
         padded_fluid_properties = model.fluid_properties.pad(pad_width=1)
         padded_rock_properties = model.rock_properties.pad(pad_width=1)
-        rock_fluid_properties = model.rock_fluid_properties
         padded_saturation_history = model.saturation_history.pad(pad_width=1)
         thickness_grid = model.thickness_grid
         padded_thickness_grid = pad_grid(thickness_grid, pad_width=1)
@@ -1018,8 +1030,8 @@ def run(
         padded_water_viscosity_grid = padded_fluid_properties.water_viscosity_grid
         padded_oil_viscosity_grid = padded_fluid_properties.oil_effective_viscosity_grid
         padded_gas_viscosity_grid = padded_fluid_properties.gas_viscosity_grid
-        relative_permeability_table = rock_fluid_properties.relative_permeability_table
-        capillary_pressure_table = rock_fluid_properties.capillary_pressure_table
+        relative_permeability_table = rock_fluid_tables.relative_permeability_table
+        capillary_pressure_table = rock_fluid_tables.capillary_pressure_table
         (
             padded_relperm_grids,
             padded_relative_mobility_grids,
@@ -1092,11 +1104,11 @@ def run(
                 f"Attempting time step {new_step} with size {step_size} seconds..."
             )
             try:
-                if has_wells:
+                if has_wells and well_schedules is not None:
                     logger.debug(
                         f"Updating wells configuration for time step {new_step}"
                     )
-                    wells.evolve(state)
+                    well_schedules.apply(wells, state)
                     logger.debug("Wells updated.")
 
                 if new_step > 1:
@@ -1189,7 +1201,7 @@ def run(
                     )
 
                 if scheme == "implicit":
-                    logger.warning(
+                    warnings.warn(
                         "Implicit scheme selected but not yet supported. Falling back to IMPES scheme.",
                         UserWarning,
                     )

@@ -6,7 +6,6 @@ import attrs
 import numpy as np
 from typing_extensions import Self
 
-from bores.boundary_conditions import BoundaryConditions
 from bores.errors import ValidationError
 from bores.grids.base import (
     PadMixin,
@@ -15,13 +14,9 @@ from bores.grids.base import (
     build_elevation_grid,
 )
 from bores.types import T
-from bores.types import (
-    CapillaryPressureTable,
-    NDimension,
-    NDimensionalGrid,
-    RelativePermeabilityTable,
-)
+from bores.types import NDimension, NDimensionalGrid
 from bores.utils import Lazy, LazyField
+from bores.serialization import Serializable
 
 
 __all__ = [
@@ -34,7 +29,7 @@ __all__ = [
 
 
 @attrs.frozen(slots=True)
-class FluidProperties(PadMixin[NDimension]):
+class FluidProperties(PadMixin[NDimension], Serializable):
     """
     Fluid properties of a reservoir model.
 
@@ -146,7 +141,7 @@ class FluidProperties(PadMixin[NDimension]):
 
     This will be same as `oil_density_grid` for immiscible flow.
     """
-    reservoir_gas: str = "Methane"
+    reservoir_gas: str = "methane"
     """Name of the reservoir gas (e.g., Methane, Ethane, CO2, N2). Can also be the name of the gas injected into the reservoir."""
 
     def get_paddable_fields(self) -> typing.Iterable[typing.Any]:
@@ -159,7 +154,7 @@ class FluidProperties(PadMixin[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class RockPermeability(PadMixin[NDimension]):
+class RockPermeability(PadMixin[NDimension], Serializable):
     """
     Rock permeability in the reservoir, in milliDarcy (mD).
 
@@ -185,7 +180,7 @@ class RockPermeability(PadMixin[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class RockProperties(PadMixin[NDimension]):
+class RockProperties(PadMixin[NDimension], Serializable):
     """
     Rock properties of a reservoir model.
 
@@ -250,20 +245,7 @@ class RockProperties(PadMixin[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class RockFluidProperties:
-    """
-    Combined rock and fluid properties of a reservoir model.
-    These properties include both rock and fluid characteristics necessary for reservoir simulation.
-    """
-
-    relative_permeability_table: RelativePermeabilityTable
-    """Callable that evaluates the relative permeability curves based on fluid saturations."""
-    capillary_pressure_table: CapillaryPressureTable
-    """Callable that evaluates the capillary pressure curves based on fluid saturations."""
-
-
-@attrs.frozen
-class SaturationHistory(PadMixin[NDimension]):
+class SaturationHistory(PadMixin[NDimension], Serializable):
     """
     Tracks historical maximum saturations and displacement regimes in the reservoir.
     """
@@ -308,19 +290,28 @@ class SaturationHistory(PadMixin[NDimension]):
 _Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
 
 
-class ReservoirModel(typing.Generic[NDimension]):
+class ReservoirModel(
+    typing.Generic[NDimension],
+    Serializable,
+    fields={
+        "grid_shape": tuple,
+        "cell_dimension": tuple,
+        "thickness_grid": np.ndarray,
+        "fluid_properties": FluidProperties,
+        "rock_properties": RockProperties,
+        "saturation_history": SaturationHistory,
+        "dip_angle": float,
+        "dip_azimuth": float,
+    },
+):
     """Models a reservoir in N-dimensional space for simulation."""
 
     fluid_properties = LazyField[FluidProperties[NDimension]]()
     """Fluid properties of the reservoir model."""
     rock_properties = LazyField[RockProperties[NDimension]]()
     """Rock properties of the reservoir model."""
-    rock_fluid_properties = LazyField[RockFluidProperties]()
-    """Rock-fluid properties of the reservoir model."""
     saturation_history = LazyField[SaturationHistory[NDimension]]()
     """Tracks historical maximum saturations and displacement regimes in the reservoir."""
-    boundary_conditions = LazyField[BoundaryConditions[NDimension]]()
-    """Boundary conditions for the simulation (e.g., no-flow, constant pressure)."""
 
     def __init__(
         self,
@@ -329,11 +320,7 @@ class ReservoirModel(typing.Generic[NDimension]):
         thickness_grid: NDimensionalGrid[NDimension],
         fluid_properties: _Lazy[FluidProperties[NDimension]],
         rock_properties: _Lazy[RockProperties[NDimension]],
-        rock_fluid_properties: _Lazy[RockFluidProperties],
         saturation_history: _Lazy[SaturationHistory[NDimension]],
-        boundary_conditions: typing.Optional[
-            _Lazy[BoundaryConditions[NDimension]]
-        ] = None,
         dip_angle: float = 0.0,
         dip_azimuth: float = 0.0,
     ) -> None:
@@ -344,10 +331,8 @@ class ReservoirModel(typing.Generic[NDimension]):
         :param cell_dimension: Size of each cell in the grid (cell_size_x, cell_size_y) in ft
         :param thickness_grid: N-dimensional numpy array representing the thickness of each cell in the reservoir (ft)
         :param fluid_properties: Fluid properties or lazy loader for fluid properties
-        :param rock_properties: Rock properties or lazy loader for rock properties
         :param rock_fluid_properties: Rock-fluid properties or lazy loader
         :param saturation_history: Saturation history or lazy loader
-        :param boundary_conditions: Boundary conditions or lazy loader for boundary conditions
         :param dip_angle: Dip angle of the reservoir in degrees (0 = horizontal, 90 = vertical)
         :param dip_azimuth: Dip azimuth of the reservoir in degrees (0 = North, 90 = East, 180 = South, 270 = West)
         """
@@ -367,17 +352,8 @@ class ReservoirModel(typing.Generic[NDimension]):
             FluidProperties[NDimension], fluid_properties
         )
         self.rock_properties = typing.cast(RockProperties[NDimension], rock_properties)
-        self.rock_fluid_properties = typing.cast(
-            RockFluidProperties, rock_fluid_properties
-        )
         self.saturation_history = typing.cast(
             SaturationHistory[NDimension], saturation_history
-        )
-        self.boundary_conditions = typing.cast(
-            BoundaryConditions[NDimension],
-            boundary_conditions
-            if boundary_conditions is not None
-            else BoundaryConditions(),
         )
         self.dip_angle = dip_angle
         self.dip_azimuth = dip_azimuth
@@ -409,9 +385,7 @@ class ReservoirModel(typing.Generic[NDimension]):
             "thickness_grid": self.thickness_grid,
             "fluid_properties": self.fluid_properties,
             "rock_properties": self.rock_properties,
-            "rock_fluid_properties": self.rock_fluid_properties,
             "saturation_history": self.saturation_history,
-            "boundary_conditions": self.boundary_conditions,
             "dip_angle": self.dip_angle,
             "dip_azimuth": self.dip_azimuth,
         }
@@ -484,22 +458,3 @@ class ReservoirModel(typing.Generic[NDimension]):
             dip_angle=self.dip_angle,
             dip_azimuth=self.dip_azimuth,
         )
-
-    def asdict(self) -> typing.Dict[str, typing.Any]:
-        """
-        Convert the `ReservoirModel` instance to a dictionary representation.
-
-        :return: Dictionary representation of the `ReservoirModel` instance.
-        """
-        return {
-            "grid_shape": self.grid_shape,
-            "cell_dimension": self.cell_dimension,
-            "thickness_grid": self.thickness_grid,
-            "fluid_properties": attrs.asdict(self.fluid_properties),
-            "rock_properties": attrs.asdict(self.rock_properties),
-            "rock_fluid_properties": attrs.asdict(self.rock_fluid_properties),
-            "saturation_history": attrs.asdict(self.saturation_history),
-            "boundary_conditions": self.boundary_conditions,
-            "dip_angle": self.dip_angle,
-            "dip_azimuth": self.dip_azimuth,
-        }

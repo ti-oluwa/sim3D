@@ -2,14 +2,16 @@
 
 import logging
 import typing
+import pickle
+import base64
 
 import attrs
 import numba
 
 from bores.constants import c
 from bores.errors import ValidationError
-from bores.pvt.core import compute_gas_compressibility_factor
-from bores.pvt.tables import PVTTables
+from bores.correlations.core import compute_gas_compressibility_factor
+from bores.tables.pvt import PVTTables
 from bores.types import FluidPhase
 from bores.wells.core import (
     WellFluid,
@@ -18,6 +20,7 @@ from bores.wells.core import (
     compute_required_bhp_for_gas_rate,
     compute_required_bhp_for_oil_rate,
 )
+from bores.serialization import Serializable
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +75,15 @@ class RateClamp(typing.Protocol):
         ...
 
 
-@typing.runtime_checkable
-class WellControl(typing.Protocol[WellFluidT_con]):
+class WellControl(typing.Generic[WellFluidT_con], Serializable):
     """
-    Protocol for well control implementations.
+    Base class for well control implementations.
 
-    Defines the interface for computing flow rates under different control schemes.
+    Interface for computing flow rates and bottom-hole pressures
+    under different control strategies.
     """
+
+    __abstract_serializable__ = True
 
     def get_flow_rate(
         self,
@@ -108,7 +113,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The flow rate in (bbl/day or ft³/day). Positive for injection, negative for production.
         """
-        ...
+        raise NotImplementedError
 
     def get_bottom_hole_pressure(
         self,
@@ -144,7 +149,7 @@ class WellControl(typing.Protocol[WellFluidT_con]):
         :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Effective bottom-hole pressure (psi)
         """
-        ...
+        raise NotImplementedError
 
 
 def _should_return_zero(
@@ -292,7 +297,7 @@ def _compute_required_bhp(
 
 
 @attrs.frozen
-class ProductionClamp:
+class ProductionClamp(Serializable):
     """Clamp condition for production wells."""
 
     value: float = 0.0
@@ -315,7 +320,7 @@ class ProductionClamp:
 
 
 @attrs.frozen
-class InjectionClamp:
+class InjectionClamp(Serializable):
     """Clamp condition for injection wells."""
 
     value: float = 0.0
@@ -337,8 +342,46 @@ class InjectionClamp:
         return None
 
 
+def _clamp_serializer(
+    obj: typing.Any, recurse: bool = True
+) -> typing.Dict[str, typing.Any]:
+    """Serializer for `RateClamp` implementations."""
+    if isinstance(obj, ProductionClamp):
+        return {"type": "production_clamp", "value": obj.dump(recurse)}
+    elif isinstance(obj, InjectionClamp):
+        return {"type": "injection_clamp", "value": obj.dump(recurse)}
+
+    # Pickle serialize
+    dump_bytes = pickle.dumps(obj)
+    dump = base64.urlsafe_b64encode(dump_bytes).decode("utf-8")
+    return {"type": "pickled", "value": dump}
+
+
+def _clamp_deserializer(data: typing.Dict[str, typing.Any]) -> typing.Any:
+    """Deserializer for `RateClamp` implementations."""
+    clamp_type = data.get("type")
+    if clamp_type == "production_clamp":
+        return ProductionClamp.load(data)
+    elif clamp_type == "injection_clamp":
+        return InjectionClamp.load(data)
+    elif clamp_type == "pickled" and "value" in data:
+        dump = data["value"]
+        dump_bytes = base64.urlsafe_b64decode(dump.encode("utf-8"))
+        obj = pickle.loads(dump_bytes)
+        return obj
+    raise ValidationError(f"Unknown `RateClamp` type: {clamp_type}")
+
+
+_clamp_serializers = {"clamp": _clamp_serializer}
+_clamp_deserializers = {"clamp": _clamp_deserializer}
+
+
 @attrs.frozen
-class BHPControl(typing.Generic[WellFluidT_con]):
+class BHPControl(
+    WellControl[WellFluidT_con],
+    serializers=_clamp_serializers,
+    deserializers=_clamp_deserializers,
+):
     """
     Bottom Hole Pressure (BHP) control.
 
@@ -487,7 +530,11 @@ class BHPControl(typing.Generic[WellFluidT_con]):
 
 
 @attrs.frozen
-class ConstantRateControl(typing.Generic[WellFluidT_con]):
+class ConstantRateControl(
+    WellControl[WellFluidT_con],
+    serializers=_clamp_serializers,
+    deserializers=_clamp_deserializers,
+):
     """
     Constant rate control.
 
@@ -732,7 +779,11 @@ class ConstantRateControl(typing.Generic[WellFluidT_con]):
 
 
 @attrs.frozen
-class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
+class AdaptiveBHPRateControl(
+    WellControl[WellFluidT_con],
+    serializers=_clamp_serializers,
+    deserializers=_clamp_deserializers,
+):
     """
     Adaptive control that switches between rate and BHP control.
 
@@ -957,8 +1008,8 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
                 fluid_compressibility=fluid_compressibility,
                 pvt_tables=pvt_tables,
             )
-        except (ValueError, ZeroDivisionError) as e:
-            logger.debug(f"Cannot achieve rate mode: {e}. Using BHP mode.")
+        except (ValueError, ZeroDivisionError) as exc:
+            logger.debug(f"Cannot achieve rate mode: {exc}. Using BHP mode.")
             return (
                 _apply_clamp(
                     pressure=pressure,
@@ -1017,8 +1068,8 @@ class AdaptiveBHPRateControl(typing.Generic[WellFluidT_con]):
         return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.bhp_limit:.6f} psi)"
 
 
-@attrs.frozen
-class MultiPhaseRateControl:
+@attrs.frozen()
+class MultiPhaseRateControl(WellControl):
     """
     Multi-phase rate control for wells.
 

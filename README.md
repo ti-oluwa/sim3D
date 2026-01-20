@@ -66,7 +66,7 @@ See the [Complete Example](#example-complete-simulation-workflow-on-a-heterogene
 
 ## Static Grid/Model Building
 
-BORES provides several utilities for building 3D grids with varying properties.
+BORES provides several utilities for building 3D matrix grids with varying properties.
 
 ### Basic Model Grid Parameters
 
@@ -550,7 +550,7 @@ with stream:
 
 ### State Stores
 
-BORES provides multiple storage backends for persisting simulation states. Each backend is a subclass of `StateStore` and has been implemented as optimally as possible for performance and storage efficiency. Available stores include:
+BORES provides multiple storage backends for persisting simulation states. Each backend is a subclass of `DataStore` and has been implemented as optimally as possible for performance and storage efficiency. Available stores include:
 
 - `ZarrStore` - Uses the Zarr format (recommended for large simulations). Best support for lazy loading.
 - `HDF5Store` - Uses HDF5 format (good for medium to large simulations). Lazy loading supported but less efficient than Zarr.
@@ -1840,7 +1840,7 @@ With 20+ property grids, state history storage, and solver matrices, memory can 
 **Tips for reducing memory:**
 
 - Use 32-bit precision: `bores.use_32bit_precision()` (halves grid memory usage)
-- Use `StateStream` with a `StateStore` to persist states to disk instead of holding in memory. Most stores also support lazy loading, so use that when analyzing results.
+- Use `StateStream` with a `DataStore` to persist states to disk instead of holding in memory. Most stores also support lazy loading, so use that when analyzing results.
 - Increase `output_frequency` in `Config` to store fewer states
 - Use coarser grids during prototyping, then refine
 
@@ -2009,7 +2009,8 @@ For detailed API information beyond this README:
    - `bores/factories.py` — Main factory functions (`reservoir_model`, `production_well`, etc.)
    - `bores/grids/` — Grid construction utilities
    - `bores/wells/` — Well models and controls
-   - `bores/pvt/` — PVT correlations and tables
+   - `bores/correlations/` — PVT correlations
+   - `bores/tables/` - PVT and other property tables
    - `bores/relperm.py` — Relative permeability models
    - `bores/capillary_pressures.py` — Capillary pressure models
    - `bores/fractures.py` — Fracture and fault models

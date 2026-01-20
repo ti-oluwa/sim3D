@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 
-@attrs.frozen
+@attrs.frozen()
 class TwoPhaseCapillaryPressureTable:
     """
     Two-phase capillary pressure lookup table.
@@ -119,7 +119,7 @@ class TwoPhaseCapillaryPressureTable:
         return self.get_capillary_pressure(wetting_phase_saturation)
 
 
-@attrs.frozen
+@attrs.frozen()
 class ThreePhaseCapillaryPressureTable:
     """
     Three-phase capillary pressure lookup table.
@@ -381,7 +381,7 @@ def compute_brooks_corey_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen
+@attrs.frozen()
 class BrooksCoreyCapillaryPressureModel:
     """
     Brooks-Corey capillary pressure model for three-phase systems.
@@ -690,7 +690,7 @@ def compute_van_genuchten_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen
+@attrs.frozen()
 class VanGenuchtenCapillaryPressureModel:
     """
     van Genuchten capillary pressure model for three-phase systems.
@@ -1007,7 +1007,7 @@ def compute_leverett_j_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen
+@attrs.frozen()
 class LeverettJCapillaryPressureModel:
     """
     Leverett J-function capillary pressure model for three-phase systems.

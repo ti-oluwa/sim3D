@@ -10,7 +10,7 @@ from scipy.optimize import brentq
 
 from bores.constants import c
 from bores.errors import ComputationError, ValidationError
-from bores.pvt.core import (
+from bores.correlations.core import (
     HENRY_COEFFICIENTS,
     SETSCHENOW_CONSTANTS,
     _get_gas_symbol,

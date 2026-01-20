@@ -1,3 +1,4 @@
+from bores.serialization import Serializable
 import typing
 
 import attrs
@@ -598,7 +599,7 @@ def flatten_multilayer_grid_to_surface(
 
     elif callable(strategy):
         # Apply function along z axis: shape → (nx, ny)
-        return np.apply_along_axis(strategy, axis=2, arr=multilayer_grid)
+        return np.apply_along_axis(strategy, axis=2, arr=multilayer_grid)  # type: ignore
 
     raise ValidationError(f"Unsupported flatten strategy: {strategy}")
 
@@ -725,7 +726,7 @@ class PadMixin(typing.Generic[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class RelPermGrids(PadMixin[NDimension]):  # type: ignore[override]
+class RelPermGrids(PadMixin[NDimension], Serializable):  # type: ignore[override]
     """
     Wrapper for n-dimensional grids representing relative permeabilities
     for different fluid phases (oil, water, gas).
@@ -764,7 +765,7 @@ class RelPermGrids(PadMixin[NDimension]):  # type: ignore[override]
 
 
 @attrs.frozen(slots=True)
-class RelativeMobilityGrids(PadMixin[NDimension]):
+class RelativeMobilityGrids(PadMixin[NDimension], Serializable):
     """
     Wrapper for n-dimensional grids representing relative mobilities
     for different fluid phases (oil, water, gas).
@@ -799,7 +800,7 @@ class RelativeMobilityGrids(PadMixin[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class CapillaryPressureGrids(PadMixin[NDimension]):
+class CapillaryPressureGrids(PadMixin[NDimension], Serializable):
     """
     Wrapper for n-dimensional grids representing capillary pressures
     for different fluid phases (oil-water, oil-gas).
@@ -830,7 +831,7 @@ class CapillaryPressureGrids(PadMixin[NDimension]):
 
 
 @attrs.frozen(slots=True)
-class RateGrids(PadMixin[NDimension]):
+class RateGrids(PadMixin[NDimension], Serializable):
     """
     Wrapper for n-dimensional grids representing fluid flow rates (oil, water, gas).
     """

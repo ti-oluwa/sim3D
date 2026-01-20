@@ -1,6 +1,6 @@
-from bores.pvt.tables import PVTTables
-import attrs
 import typing
+
+import attrs
 import numpy as np
 
 from bores._precision import get_dtype
@@ -26,10 +26,11 @@ from bores.grids.pvt import (
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from bores.models import FluidProperties, SaturationHistory, RockProperties
+from bores.grids.rock_fluid import build_effective_residual_saturation_grids
+from bores.models import FluidProperties, RockProperties, SaturationHistory
+from bores.tables.pvt import PVTTables
 from bores.types import MiscibilityModel, NDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
-from bores.grids.rock_fluid import build_effective_residual_saturation_grids
 
 
 def update_pvt_grids(

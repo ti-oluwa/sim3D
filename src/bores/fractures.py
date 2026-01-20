@@ -445,7 +445,7 @@ class FractureDefaults:
         return dtype(np.mean(valid_data))  # type: ignore
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen()
 class FractureGeometry:
     """
     Fracture geometry specification.
@@ -637,7 +637,7 @@ class FractureGeometry:
             return self.z_range
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen()
 class Fracture:
     """
     Configuration for applying fractures to reservoir models.
@@ -789,8 +789,7 @@ def apply_fracture(
     Apply a single fracture to a reservoir model.
 
     This function modifies transmissibilities, rock properties, and geometry
-    based on the fracture configuration. The input model is not modified;
-    a new model instance is returned.
+    based on the fracture configuration. The input model is not modified inplace.
 
     :param model: Input reservoir model to modify
     :param fracture: Fracture configuration defining geometry and properties
@@ -1287,7 +1286,7 @@ def _apply_geometric_throw(
     return new_model
 
 
-@attrs.frozen(slots=True)
+@attrs.frozen()
 class DisplacementContext:
     """
     Context object that handles block-based displacement for all grids.
