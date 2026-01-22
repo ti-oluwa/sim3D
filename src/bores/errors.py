@@ -59,3 +59,21 @@ class StreamError(BORESError):
     """Raised when there is an error related to streaming operations."""
 
     pass
+
+
+class SerializableError(BORESError):
+    """Raised for errors related to the `Serializable` API."""
+
+    pass
+
+
+class SerializationError(SerializableError):
+    """Raised for errors related to serialization of objects."""
+
+    pass
+
+
+class DeserializationError(SerializableError):
+    """Raised for errors related to deserialization of objects."""
+
+    pass

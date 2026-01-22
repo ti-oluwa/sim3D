@@ -5,11 +5,12 @@ import typing
 
 from cachetools import LFUCache
 import numpy as np
-from scipy.integrate import quad
+from scipy.integrate import cumulative_trapezoid, quad
 
 from bores._precision import get_dtype
 from bores.constants import c
 from bores.errors import ValidationError
+from bores.types import FloatOrArray
 
 
 logger = logging.getLogger(__name__)
@@ -155,19 +156,208 @@ def compute_gas_pseudo_pressure(
     return float(result)
 
 
+def _supports_vectorization(
+    z_factor_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    viscosity_func: typing.Callable[[FloatOrArray], FloatOrArray],
+) -> bool:
+    """
+    Check if both z_factor and viscosity functions support vectorized operations.
+
+    :param z_factor_func: Z-factor function
+    :param viscosity_func: Viscosity function
+    :return: True if both functions support arrays
+    """
+    z_supports = getattr(z_factor_func, "_supports_arrays", False)
+    mu_supports = getattr(viscosity_func, "_supports_arrays", False)
+    return z_supports and mu_supports
+
+
+def _build_pseudo_pressure_table_vectorized(
+    pressures: np.typing.NDArray,
+    z_factor_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    viscosity_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    reference_pressure: float,
+    dtype: typing.Optional[np.typing.DTypeLike] = None,
+) -> np.typing.NDArray:
+    """
+    Build entire pseudo-pressure table using vectorized operations.
+
+    This is much faster than computing each point individually because:
+    - Single vectorized call to Z(P_array) and μ(P_array)
+    - Vectorized integration using cumulative_trapezoid
+    - No threading overhead needed
+
+    :param pressures: Array of pressure points
+    :param z_factor_func: Vectorized Z-factor function
+    :param viscosity_func: Vectorized viscosity function
+    :param reference_pressure: Reference pressure
+    :return: Array of pseudo-pressures
+    """
+    # Clamp pressures
+    p_clamped = np.maximum(pressures, 1.0)
+
+    # Single vectorized call for all pressures
+    Z_array = np.asarray(z_factor_func(p_clamped))
+    mu_array = np.asarray(viscosity_func(p_clamped))
+
+    # Validate shapes
+    if Z_array.shape != pressures.shape or mu_array.shape != pressures.shape:
+        raise ValueError(
+            f"Shape mismatch: P={pressures.shape}, Z={Z_array.shape}, μ={mu_array.shape}"
+        )
+
+    # Handle invalid values
+    invalid_Z = (Z_array <= 0) | ~np.isfinite(Z_array)
+    invalid_mu = (mu_array <= 0) | ~np.isfinite(mu_array)
+
+    if np.any(invalid_Z):
+        logger.warning(f"Clamping {np.sum(invalid_Z)} invalid Z-factor values")
+        Z_array = np.maximum(Z_array, 0.01)
+
+    if np.any(invalid_mu):
+        logger.warning(f"Clamping {np.sum(invalid_mu)} invalid viscosity values")
+        mu_array = np.maximum(mu_array, 0.001)
+
+    # Compute integrand: 2*P / (μ*Z)
+    integrand_array = 2.0 * p_clamped / (mu_array * Z_array)
+
+    # Handle invalid integrand values
+    invalid = ~np.isfinite(integrand_array) | (integrand_array < 0)
+    if np.any(invalid):
+        logger.warning(f"Setting {np.sum(invalid)} invalid integrand values to zero")
+        integrand_array = np.where(invalid, 0.0, integrand_array)
+
+    # Cumulative integration from reference pressure
+    # Find index closest to reference pressure
+    ref_idx = np.searchsorted(pressures, reference_pressure)
+
+    if ref_idx == 0:
+        # Reference is at or below minimum, hence we integrate forward only
+        pseudo_pressures = cumulative_trapezoid(integrand_array, pressures, initial=0.0)
+    elif ref_idx >= len(pressures):
+        # Reference is at or above maximum, hence we integrate backward only
+        pseudo_pressures = -cumulative_trapezoid(
+            integrand_array[::-1], pressures[::-1], initial=0.0
+        )[::-1]
+    else:
+        # Reference is in the middle so we integrate both directions
+        # Backward from ref to start
+        backward = -cumulative_trapezoid(
+            integrand_array[: ref_idx + 1][::-1],
+            pressures[: ref_idx + 1][::-1],
+            initial=0.0,
+        )[::-1]
+
+        # Forward from ref to end
+        forward = cumulative_trapezoid(
+            integrand_array[ref_idx:], pressures[ref_idx:], initial=0.0
+        )
+        # Then we combine
+        pseudo_pressures = np.concatenate([backward[:-1], forward])
+
+    return np.ascontiguousarray(pseudo_pressures, dtype=dtype)
+
+
+def _build_pseudo_pressure_table_scalar(
+    pressures: np.typing.NDArray,
+    z_factor_func: typing.Callable[[float], float],
+    viscosity_func: typing.Callable[[float], float],
+    reference_pressure: float,
+    max_workers: int,
+    dtype: typing.Optional[np.typing.DTypeLike] = None,
+) -> np.typing.NDArray:
+    """
+    Build pseudo-pressure table using threaded scalar computation.
+
+    Uses `ThreadPoolExecutor` to parallelize individual integrations.
+
+    :param pressures: Array of pressure points
+    :param z_factor_func: Z-factor function
+    :param viscosity_func: Viscosity function
+    :param reference_pressure: Reference pressure
+    :param max_workers: Maximum number of threads to use
+    :return: Array of pseudo-pressures
+    """
+
+    def _compute(pressure: float) -> float:
+        return compute_gas_pseudo_pressure(
+            pressure=pressure,
+            z_factor_func=z_factor_func,
+            viscosity_func=viscosity_func,
+            reference_pressure=reference_pressure,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        pseudo_pressures = list(executor.map(_compute, pressures))
+
+    return np.ascontiguousarray(pseudo_pressures, dtype=dtype)
+
+
+def build_pseudo_pressure_table(
+    pressures: np.typing.NDArray,
+    z_factor_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    viscosity_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    reference_pressure: float,
+    dtype: typing.Optional[np.typing.DTypeLike] = None,
+) -> np.typing.NDArray:
+    """
+    Build pseudo-pressure table with automatic vectorization detection.
+
+    If both z_factor_func and viscosity_func have `_supports_arrays=True`,
+    uses fast vectorized computation. Otherwise uses threaded scalar computation.
+
+    :param pressures: Array of pressure points
+    :param z_factor_func: Z-factor function
+    :param viscosity_func: Viscosity function
+    :param reference_pressure: Reference pressure
+    :return: Array of pseudo-pressures
+    """
+    points = len(pressures)
+    if _supports_vectorization(z_factor_func, viscosity_func):
+        logger.debug(
+            f"Building pseudo-pressure table using vectorized computation ({points} points)..."
+        )
+        try:
+            return _build_pseudo_pressure_table_vectorized(
+                pressures=pressures,
+                z_factor_func=z_factor_func,
+                viscosity_func=viscosity_func,
+                reference_pressure=reference_pressure,
+                dtype=dtype,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Vectorized computation failed: {exc}, falling back to threaded scalar",
+                exc_info=True,
+            )
+
+    logger.debug(
+        f"Building pseudo-pressure table using threaded scalar computation ({points} points)..."
+    )
+    max_workers = min(8, points // 50 + 1)
+    return _build_pseudo_pressure_table_scalar(
+        pressures=pressures,
+        z_factor_func=z_factor_func,  # type: ignore[arg-type]
+        viscosity_func=viscosity_func,  # type: ignore[arg-type]
+        reference_pressure=reference_pressure,
+        max_workers=max_workers,
+        dtype=dtype,
+    )
+
+
 class GasPseudoPressureTable:
     """
     Pre-computed gas pseudo-pressure table for fast lookup during simulation.
 
-    Uses np.interp for fast linear interpolation.
+    Uses `np.interp` for fast linear interpolation.
     Supports both forward (pressure → pseudo-pressure) and inverse (pseudo-pressure → pressure)
     interpolation.
     """
 
     def __init__(
         self,
-        z_factor_func: typing.Callable[[float], float],
-        viscosity_func: typing.Callable[[float], float],
+        z_factor_func: typing.Callable[[FloatOrArray], FloatOrArray],
+        viscosity_func: typing.Callable[[FloatOrArray], FloatOrArray],
         pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
         points: typing.Optional[int] = None,
         reference_pressure: typing.Optional[float] = None,
@@ -197,31 +387,20 @@ class GasPseudoPressureTable:
             c.MAX_VALID_PRESSURE,
         )
         points = typing.cast(int, points or c.GAS_PSEUDO_PRESSURE_POINTS)
+        dtype = get_dtype()
         self.pressures = np.logspace(
-            np.log10(min_pressure), np.log10(max_pressure), points
+            np.log10(min_pressure), np.log10(max_pressure), points, dtype=dtype
         )
 
         # Compute pseudo-pressure at each point
         logger.info(f"Building pseudo-pressure table with {points} points...")
-
-        def _compute(pressure: float) -> float:
-            """Compute pseudo-pressure for a single pressure point."""
-            return compute_gas_pseudo_pressure(
-                pressure=pressure,
-                z_factor_func=z_factor_func,
-                viscosity_func=viscosity_func,
-                reference_pressure=self.reference_pressure,
-            )
-
-        # Use thread pool for parallel computation (I/O bound due to scipy.integrate.quad)
-        # Each integration is independent, so embarrassingly parallel
-        max_workers = min(8, points // 50 + 1)  # Scale workers with problem size
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            self.pseudo_pressures = np.array(
-                list(executor.map(_compute, self.pressures)), dtype=get_dtype()
-            )
-
-        logger.debug("Pseudo-pressure table computation complete.")
+        self.pseudo_pressures = build_pseudo_pressure_table(
+            pressures=self.pressures,
+            z_factor_func=self.z_factor_func,
+            viscosity_func=self.viscosity_func,
+            reference_pressure=self.reference_pressure,
+            dtype=dtype,
+        )
         logger.info(
             f"Pseudo-pressure table built: P ∈ [{min_pressure:.4f}, {max_pressure:.4f}] psi"
         )
@@ -291,7 +470,7 @@ class GasPseudoPressureTable:
             Z = max(Z, 0.01) if np.isfinite(Z) else 1.0
             mu = max(mu, 0.001) if np.isfinite(mu) else 0.01
 
-        return 2.0 * pressure / (mu * Z)
+        return 2.0 * pressure / (mu * Z)  # type: ignore[return-value]
 
 
 _PSEUDO_PRESSURE_TABLE_CACHE: LFUCache[typing.Hashable, GasPseudoPressureTable] = (
@@ -299,13 +478,13 @@ _PSEUDO_PRESSURE_TABLE_CACHE: LFUCache[typing.Hashable, GasPseudoPressureTable] 
 )
 """Global cache for pseudo-pressure tables"""
 
-_PSEUDO_PRESSURE_CACHE_LOCK = threading.Lock()
+_pseudo_pressure_cache_lock = threading.Lock()
 """Thread-safe lock for pseudo-pressure table cache access"""
 
 
 def build_gas_pseudo_pressure_table(
-    z_factor_func: typing.Callable[[float], float],
-    viscosity_func: typing.Callable[[float], float],
+    z_factor_func: typing.Callable[[FloatOrArray], FloatOrArray],
+    viscosity_func: typing.Callable[[FloatOrArray], FloatOrArray],
     reference_pressure: typing.Optional[float] = None,
     pressure_range: typing.Optional[typing.Tuple[float, float]] = None,
     points: typing.Optional[int] = None,
@@ -368,12 +547,12 @@ def build_gas_pseudo_pressure_table(
     """
     # Check cache if key provided
     if cache_key is not None:
-        with _PSEUDO_PRESSURE_CACHE_LOCK:
+        with _pseudo_pressure_cache_lock:
             if cache_key in _PSEUDO_PRESSURE_TABLE_CACHE:
                 logger.debug(f"Using cached pseudo-pressure table for key: {cache_key}")
                 return _PSEUDO_PRESSURE_TABLE_CACHE[cache_key]
 
-    # Build new table (outside lock to avoid blocking other threads)
+    # Build new table outside lock to avoid blocking other threads
     logger.debug(f"Building new pseudo-pressure table for key: {cache_key}")
     table = GasPseudoPressureTable(
         z_factor_func=z_factor_func,
@@ -385,7 +564,7 @@ def build_gas_pseudo_pressure_table(
 
     # Cache if key provided
     if cache_key is not None:
-        with _PSEUDO_PRESSURE_CACHE_LOCK:
+        with _pseudo_pressure_cache_lock:
             # Double-check in case another thread built it while we were working
             if cache_key not in _PSEUDO_PRESSURE_TABLE_CACHE:
                 _PSEUDO_PRESSURE_TABLE_CACHE[cache_key] = table
@@ -401,7 +580,7 @@ def build_gas_pseudo_pressure_table(
 def clear_pseudo_pressure_table_cache() -> None:
     """Clear the global pseudo-pressure table cache to free memory."""
     global _PSEUDO_PRESSURE_TABLE_CACHE
-    with _PSEUDO_PRESSURE_CACHE_LOCK:
+    with _pseudo_pressure_cache_lock:
         cache_size = len(_PSEUDO_PRESSURE_TABLE_CACHE)
         _PSEUDO_PRESSURE_TABLE_CACHE.clear()
     logger.info(f"Cleared {cache_size} cached pseudo-pressure tables")
@@ -409,7 +588,7 @@ def clear_pseudo_pressure_table_cache() -> None:
 
 def get_pseudo_pressure_table_cache_info() -> typing.Dict[str, typing.Any]:
     """Get information about the current cache state."""
-    with _PSEUDO_PRESSURE_CACHE_LOCK:
+    with _pseudo_pressure_cache_lock:
         return {
             "cache_size": len(_PSEUDO_PRESSURE_TABLE_CACHE),
             "cached_keys": list(_PSEUDO_PRESSURE_TABLE_CACHE.keys()),

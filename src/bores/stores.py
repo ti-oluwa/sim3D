@@ -1,7 +1,8 @@
-"""State storage backends for reservoir simulation states."""
+"""State storage backends."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+import functools
 import logging
 from os import PathLike
 from pathlib import Path
@@ -13,6 +14,7 @@ import h5py
 from numcodecs import Blosc
 import numpy as np
 import orjson
+from typing_extensions import ParamSpec
 import zarr
 from zarr.storage import StoreLike
 
@@ -20,9 +22,10 @@ from bores.errors import StorageError, ValidationError
 from bores.serialization import SerializableT
 from bores.utils import Lazy, load_pickle, save_as_pickle
 
+
 __all__ = [
     "new_store",
-    "store",
+    "storage_backend",
     "ZarrStore",
     "PickleStore",
     "HDF5Store",
@@ -52,11 +55,11 @@ class DataStore(typing.Generic[SerializableT], ABC):
 StoreT = typing.TypeVar("StoreT", bound=DataStore)
 DataValidator = typing.Callable[[SerializableT], SerializableT]
 
-_DATA_STORE_TYPES: typing.Dict[str, typing.Type[DataStore]] = {}
+_STORAGE_BACKENDS: typing.Dict[str, typing.Type[DataStore]] = {}
 
 
 @typing.overload
-def store(
+def storage_backend(
     name: str,
     store_cls: typing.Type[StoreT],
 ) -> None:
@@ -65,14 +68,14 @@ def store(
 
 
 @typing.overload
-def store(
+def storage_backend(
     name: str,
 ) -> typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]:
     """Register a data store class with a given name."""
     ...
 
 
-def store(
+def storage_backend(
     name: str,
     store_cls: typing.Optional[typing.Type[StoreT]] = None,
 ) -> typing.Union[None, typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]]:
@@ -87,11 +90,11 @@ def store(
     """
 
     def _decorator(store_cls: typing.Type[StoreT]) -> typing.Type[StoreT]:
-        _DATA_STORE_TYPES[name] = store_cls
+        _STORAGE_BACKENDS[name] = store_cls
         return store_cls
 
     if store_cls is not None:
-        _DATA_STORE_TYPES[name] = store_cls
+        _STORAGE_BACKENDS[name] = store_cls
         return
     return _decorator
 
@@ -154,12 +157,159 @@ def _validate_filepath(
     return path
 
 
-@store("pickle")
+P = ParamSpec("P")
+R = typing.TypeVar("R")
+
+
+def _raise_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+    """
+    Wraps a function to raise StorageError on exceptions.
+
+    :param func: Function to wrap
+    """
+
+    @functools.wraps(func)
+    def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            raise StorageError(exc) from exc
+
+    return _wrapper
+
+
+# Sentinel for None values to avoid object dtype issues
+_NONE_SENTINEL = "__NONE_SENTINEL__"
+
+
+def _is_none_sentinel(value: typing.Any) -> bool:
+    """Check if value is the None sentinel."""
+    return isinstance(value, str) and value == _NONE_SENTINEL
+
+
+def _sequence_to_ndarray(value: Sequence, path: str) -> np.typing.NDArray:
+    """
+    Convert a (possibly nested) sequence into a NumPy array
+    that is safe for HDF5/Zarr storage.
+
+    Raises if the sequence would produce dtype=object.
+    """
+    if not value:
+        # Empty to int8 empty array (safe default)
+        return np.empty((0,), dtype=np.int8)
+
+    # Check for mappings (should be stored as groups)
+    if any(isinstance(v, Mapping) for v in value):
+        raise TypeError(
+            f"Sequence of mappings must be stored as groups, not datasets: {path}"
+        )
+
+    # Nested sequences
+    if isinstance(value[0], Sequence) and not isinstance(value[0], (str, bytes)):
+        arrays = [_sequence_to_ndarray(v, path) for v in value]
+        try:
+            arr = np.stack(arrays)
+        except ValueError as exc:
+            raise TypeError(f"Inconsistent nested sequence shapes at {path}") from exc
+        return arr
+
+    # Flat bool (check before numeric since bool is subclass of int)
+    if all(isinstance(v, (bool, np.bool_)) for v in value):
+        return np.asarray(value, dtype=bool)
+
+    # Flat integer (pure int, no floats)
+    if all(
+        isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
+        for v in value
+    ):
+        return np.asarray(value)  # Preserves int32/int64 based on values
+
+    # Flat numeric (mixed int/float or pure float)
+    if all(isinstance(v, (int, float, np.integer, np.floating)) for v in value):
+        return np.asarray(value)  # Preserves dtype (float32/float64 based on input)
+
+    # Flat strings (including None sentinels)
+    if all(isinstance(v, str) for v in value):
+        # For HDF5
+        if hasattr(h5py, "string_dtype"):
+            dtype = h5py.string_dtype(encoding="utf-8")
+            return np.asarray(value, dtype=dtype)
+        # For Zarr (doesn't have string_dtype)
+        return np.asarray(value, dtype="U")
+
+    raise TypeError(
+        f"Unsupported or mixed sequence contents at {path}: "
+        f"{set(type(v).__name__ for v in value)}"
+    )
+
+
+def _normalize_for_storage(value: typing.Any) -> typing.Any:
+    """Normalize Python values for storage (replace None with sentinel)."""
+    if value is None:
+        return _NONE_SENTINEL
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, np.ndarray)
+    ):
+        return [_normalize_for_storage(v) for v in value]
+    elif isinstance(value, Mapping):
+        return {k: _normalize_for_storage(v) for k, v in value.items()}
+    return value
+
+
+def _denormalize_from_storage(value: typing.Any) -> typing.Any:
+    """Denormalize values from storage (replace sentinel with None)."""
+    if _is_none_sentinel(value):
+        return None
+    elif isinstance(value, list):
+        return [_denormalize_from_storage(v) for v in value]
+    elif isinstance(value, dict):
+        return {k: _denormalize_from_storage(v) for k, v in value.items()}
+    return value
+
+
+def _normalize_loaded_value(value: typing.Any) -> typing.Any:
+    """Normalize values loaded from HDF5/Zarr datasets."""
+    if isinstance(value, np.ndarray):
+        # String arrays
+        if value.dtype.kind in ("U", "S", "O"):
+            result = value.astype(str).tolist()
+            return _denormalize_from_storage(result)
+        # Numeric arrays
+        return value
+    return _denormalize_from_storage(value)
+
+
+def _normalize_loaded_mapping_sequence(value: typing.Any) -> typing.Any:
+    """
+    Detect if a loaded mapping represents a sequence and convert it back.
+
+    Groups with numeric string keys "0", "1", "2", ... are sequences.
+    """
+    if (
+        isinstance(value, dict)
+        and value
+        and all(isinstance(k, str) and k.isdigit() for k in value.keys())
+    ):
+        # Reconstruct list in order
+        max_idx = max(int(k) for k in value.keys())
+        result = []
+        for i in range(max_idx + 1):
+            key = str(i)
+            if key in value:
+                result.append(value[key])
+            else:
+                # Missing index - shouldn't happen but handle gracefully
+                result.append(None)
+        return result
+    return value
+
+
+@storage_backend("pickle")
 class PickleStore(DataStore[SerializableT]):
     """
     Pickle-based storage.
 
-    Python-native, simple, easy to use store.
+    Python-native, simple, easy to use store. Does not support appending.
     """
 
     supports_append: bool = False
@@ -183,6 +333,7 @@ class PickleStore(DataStore[SerializableT]):
         self.compression = compression
         self.compression_level = compression_level
 
+    @_raise_storage_error
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
@@ -211,6 +362,7 @@ class PickleStore(DataStore[SerializableT]):
         )
         return
 
+    @_raise_storage_error
     def load(  # type: ignore[override]
         self,
         typ: typing.Type[SerializableT],
@@ -244,10 +396,10 @@ class PickleStore(DataStore[SerializableT]):
         return f"{self.__class__.__name__}(filepath={self.filepath}, compression={self.compression})"
 
 
-@store("zarr")
+@storage_backend("zarr")
 class ZarrStore(DataStore[SerializableT]):
     """
-    Zarr-based storage with hybrid array/pickle approach.
+    Zarr-based storage.
 
     Fast, efficient compression with lazy loading.
     Best for large 3D numpy arrays.
@@ -356,24 +508,63 @@ class ZarrStore(DataStore[SerializableT]):
         self, group: zarr.Group, data: typing.Mapping[str, typing.Any]
     ) -> None:
         """
-        Write data to a Zarr group.
+        Write data to a Zarr group with nested structure support.
 
         :param group: Zarr group to write data to
-        :param data: Dictionary of data arrays to write
+        :param data: Dictionary of data to write
         """
         for key, value in data.items():
-            if isinstance(value, np.ndarray):
-                self._create_dataset(group=group, name=key, data=value)
-            elif isinstance(value, Mapping):
+            # Normalize values
+            value = _normalize_for_storage(value)
+
+            # Mapping to subgroup
+            if isinstance(value, Mapping):
                 sub_group = group.require_group(name=key)
                 self._write_data(group=sub_group, data=value)
+
+            # NumPy array to dataset
+            elif isinstance(value, np.ndarray):
+                if value.dtype == object:
+                    raise TypeError(
+                        f"Zarr cannot store object-dtype arrays: {group.name}/{key}"
+                    )
+                self._create_dataset(group=group, name=key, data=value)
+
+            # Python scalars to attributes
             elif isinstance(value, (np.integer, np.floating)):
                 group.attrs[key] = value.item()
             elif isinstance(value, np.bool_):
                 group.attrs[key] = bool(value)
+
+            # Sequence to dataset or subgroup (depending on contents)
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                # Empty sequence
+                if not value:
+                    self._create_dataset(
+                        group=group, name=key, data=np.empty((0,), dtype=np.int8)
+                    )
+                    continue
+
+                # Sequence of mappings to subgroup with indexed keys
+                if isinstance(value[0], Mapping):
+                    seq_group = group.require_group(key)
+                    for i, item in enumerate(value):
+                        item_group = seq_group.require_group(str(i))
+                        self._write_data(group=item_group, data=item)
+                    continue
+
+                # Other sequences to dataset
+                array = _sequence_to_ndarray(
+                    value=value,
+                    path=f"{group.name}/{key}",
+                )
+                self._create_dataset(group=group, name=key, data=array)
+
+            # Simple scalars to attributes
             else:
                 group.attrs[key] = value
 
+    @_raise_storage_error
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
@@ -396,7 +587,7 @@ class ZarrStore(DataStore[SerializableT]):
             mode=mode,
             zarr_version=2,
         )
-        
+
         count = 0
         for idx, item in enumerate(data):
             if validator is not None:
@@ -419,29 +610,38 @@ class ZarrStore(DataStore[SerializableT]):
         self, group: zarr.Group, lazy: bool = False
     ) -> typing.Dict[str, typing.Any]:
         """
-        Load data from a Zarr group.
+        Load data from a Zarr group with nested structure support.
 
         :param group: Zarr group to load data from
         :param lazy: If True, returns Lazy objects that defer loading until accessed
         :return: Dictionary of loaded data
         """
         data: typing.Dict[str, typing.Any] = {}
+
+        # Load datasets
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
             if lazy:
-                data[key] = Lazy.defer(lambda arr=array: arr[:])  # type: ignore
+                data[key] = Lazy.defer(  # type: ignore
+                    lambda arr=array: _normalize_loaded_value(arr[:])
+                )
             else:
-                data[key] = array[:]  # type: ignore
+                data[key] = _normalize_loaded_value(array[:])  # type: ignore
 
+        # Load subgroups
         for key in group.group_keys():  # type: ignore
             sub_group = typing.cast(zarr.Group, group[key])  # type: ignore
-            data[key] = self._load_data(group=sub_group, lazy=lazy)
+            loaded = self._load_data(group=sub_group, lazy=lazy)
+            # Check if subgroup represents a sequence
+            data[key] = _normalize_loaded_mapping_sequence(loaded)
 
+        # Load attributes
         for attr_name in group.attrs.keys():
-            data[attr_name] = group.attrs[attr_name]
+            data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
 
         return data
 
+    @_raise_storage_error
     def load(  # type: ignore[override]
         self,
         typ: typing.Type[SerializableT],
@@ -470,10 +670,10 @@ class ZarrStore(DataStore[SerializableT]):
         return f"{self.__class__.__name__}(store={self.store}, compressor={self.compressor.cname})"
 
 
-@store("hdf5")
+@storage_backend("hdf5")
 class HDF5Store(DataStore[SerializableT]):
     """
-    HDF5-based storage with hybrid array/pickle approach.
+    HDF5-based storage.
 
     Industry standard, good compression, wide tool support.
     Slightly slower than Zarr for many small writes.
@@ -533,28 +733,68 @@ class HDF5Store(DataStore[SerializableT]):
             chunks=True,
         )
 
-    def _write_data(
-        self, group: h5py.Group, data: typing.Mapping[str, typing.Any]
-    ) -> None:
+    def _write_data(self, group: h5py.Group, data: Mapping[str, typing.Any]) -> None:
         """
-        Write data to an HDF5 group.
+        Write data to an HDF5 group with nested structure support.
 
-        :param group: HDF5 group to write data to
-        :param data: Dictionary of data arrays to write
+        Rules:
+        - Mappings to subgroups (recursive)
+        - Scalars to attributes
+        - Sequences/arrays to datasets (never attributes)
+        - None values to sentinel string
         """
         for key, value in data.items():
-            if isinstance(value, np.ndarray):
-                self._create_dataset(group=group, name=key, data=value)
-            elif isinstance(value, Mapping):
+            # Normalize None values
+            value = _normalize_for_storage(value)
+
+            # Mapping to subgroup
+            if isinstance(value, Mapping):
                 sub_group = group.require_group(name=key)
                 self._write_data(group=sub_group, data=value)
+
+            # NumPy array to dataset
+            elif isinstance(value, np.ndarray):
+                if value.dtype == object:
+                    raise TypeError(
+                        f"HDF5 cannot store object-dtype arrays: {group.name}/{key}"
+                    )
+                self._create_dataset(group=group, name=key, data=value)
+
+            # Python scalars to attributes
             elif isinstance(value, (np.integer, np.floating)):
                 group.attrs[key] = value.item()
             elif isinstance(value, np.bool_):
                 group.attrs[key] = bool(value)
+
+            # Sequence to dataset or subgroup (depending on contents)
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                # Empty sequence
+                if not value:
+                    self._create_dataset(
+                        group=group, name=key, data=np.empty((0,), dtype=np.int8)
+                    )
+                    continue
+
+                # Sequence of mappings to subgroup with indexed keys
+                if isinstance(value[0], Mapping):
+                    seq_group = group.require_group(key)
+                    for i, item in enumerate(value):
+                        item_group = seq_group.require_group(str(i))
+                        self._write_data(group=item_group, data=item)
+                    continue
+
+                # Other sequences to dataset
+                array = _sequence_to_ndarray(
+                    value=value,
+                    path=f"{group.name}/{key}",
+                )
+                self._create_dataset(group=group, name=key, data=array)
+
+            # Simple scalars to attributes
             else:
                 group.attrs[key] = value
 
+    @_raise_storage_error
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
@@ -592,26 +832,33 @@ class HDF5Store(DataStore[SerializableT]):
 
     def _load_data(self, group: h5py.Group) -> typing.Dict[str, typing.Any]:
         """
-        Load data from an HDF5 group.
+        Load data from an HDF5 group with nested structure support.
 
         :param group: HDF5 group to load data from
         :return: Dictionary of loaded data
         """
         data: typing.Dict[str, typing.Any] = {}
+
+        # Load datasets
         for key in group.keys():
             item = group[key]
             if isinstance(item, h5py.Dataset):
-                data[key] = item[:]  # type: ignore
+                data[key] = _normalize_loaded_value(item[:])  # type: ignore
             elif isinstance(item, h5py.Group):
-                data[key] = self._load_data(group=item)
+                loaded = self._load_data(group=item)
+                # Check if subgroup represents a sequence
+                data[key] = _normalize_loaded_mapping_sequence(loaded)
+
+        # Load attributes
         for attr_name in group.attrs.keys():
-            data[attr_name] = group.attrs[attr_name]
+            data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
+
         return data
 
+    @_raise_storage_error
     def load(  # type: ignore[override]
         self,
         typ: typing.Type[SerializableT],
-        lazy: bool = False,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
         **kwargs: typing.Any,
     ) -> typing.Generator[SerializableT, None, None]:
@@ -619,7 +866,6 @@ class HDF5Store(DataStore[SerializableT]):
         Load data instances from HDF5 format.
 
         :param typ: Type of the serializable objects to load
-        :param lazy: If True, returns Lazy objects that defer loading until accessed
         :param validator: Optional callable to validate/transform each item after loading
         :return: Generator yielding instances of the specified type
         """
@@ -645,7 +891,7 @@ class HDF5Store(DataStore[SerializableT]):
         )
 
 
-@store("json")
+@storage_backend("json")
 class JSONStore(DataStore[SerializableT]):
     supports_append: bool = False
 
@@ -661,6 +907,7 @@ class JSONStore(DataStore[SerializableT]):
         """
         self.filepath = _validate_filepath(filepath, expected_extension=".json")
 
+    @_raise_storage_error
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
@@ -689,6 +936,7 @@ class JSONStore(DataStore[SerializableT]):
             )
         return
 
+    @_raise_storage_error
     def load(  # type: ignore[override]
         self,
         typ: typing.Type[SerializableT],
@@ -735,10 +983,10 @@ def new_store(
     loaded = list(store.load())
     ```
     """
-    if backend not in _DATA_STORE_TYPES:
+    if backend not in _STORAGE_BACKENDS:
         raise ValidationError(
-            f"Unknown backend: {backend}. Choose from {list(_DATA_STORE_TYPES.keys())}"
+            f"Unknown backend: {backend}. Choose from {list(_STORAGE_BACKENDS.keys())}"
         )
 
-    store_class = _DATA_STORE_TYPES[backend]
+    store_class = _STORAGE_BACKENDS[backend]
     return store_class(*args, **kwargs)

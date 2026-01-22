@@ -122,14 +122,14 @@ def _validate_and_coerce_array(
     model_shape: tuple[int, ...],
     grid: np.ndarray,
     field_name: str,
-    dtype_target: typing.Optional[np.typing.DTypeLike],
+    dtype: typing.Optional[np.typing.DTypeLike],
 ) -> np.ndarray:
     if grid.shape != model_shape:
         raise ValidationError(
             f"{field_name} has shape {grid.shape}, expected {model_shape}."
         )
-    if dtype_target is not None and np.issubdtype(grid.dtype, np.floating):
-        grid = grid.astype(dtype_target, copy=False, order="C")
+    if dtype is not None and np.issubdtype(grid.dtype, np.floating):
+        grid = grid.astype(dtype, copy=False, order="C")
     return np.ascontiguousarray(grid)
 
 
@@ -175,7 +175,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Fluid property grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 fluid_dict[field.name] = value
@@ -201,7 +201,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Rock property grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             elif field.name == "absolute_permeability":
                 perm = value
@@ -210,19 +210,19 @@ def validate_state(
                         model_shape=model_shape,
                         grid=perm.x,
                         field_name="Rock permeability x",
-                        dtype_target=dtype,
+                        dtype=dtype,
                     ),
                     y=_validate_and_coerce_array(
                         model_shape=model_shape,
                         grid=perm.y,
                         field_name="Rock permeability y",
-                        dtype_target=dtype,
+                        dtype=dtype,
                     ),
                     z=_validate_and_coerce_array(
                         model_shape=model_shape,
                         grid=perm.z,
                         field_name="Rock permeability z",
-                        dtype_target=dtype,
+                        dtype=dtype,
                     ),
                 )
             else:
@@ -249,7 +249,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Injection rate grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 injection_dict[field.name] = value
@@ -275,7 +275,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Production rate grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 production_dict[field.name] = value
@@ -301,7 +301,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Relative mobility grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 mobility_dict[field.name] = value
@@ -327,7 +327,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Relative permeability grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 relperm_dict[field.name] = value
@@ -353,7 +353,7 @@ def validate_state(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Capillary pressure grid {field.name}",
-                    dtype_target=dtype,
+                    dtype=dtype,
                 )
             else:
                 capillary_dict[field.name] = value
@@ -375,7 +375,7 @@ def validate_state(
             model_shape=model_shape,
             grid=thickness_grid,
             field_name="Thickness grid",
-            dtype_target=dtype,
+            dtype=dtype,
         )
         sat_hist = model.saturation_history
         saturation_history = SaturationHistory(
@@ -383,25 +383,25 @@ def validate_state(
                 model_shape=model_shape,
                 grid=sat_hist.max_water_saturation_grid,
                 field_name="Max water saturation grid",
-                dtype_target=dtype,
+                dtype=dtype,
             ),
             max_gas_saturation_grid=_validate_and_coerce_array(
                 model_shape=model_shape,
                 grid=sat_hist.max_gas_saturation_grid,
                 field_name="Max gas saturation grid",
-                dtype_target=dtype,
+                dtype=dtype,
             ),
             water_imbibition_flag_grid=_validate_and_coerce_array(
                 model_shape=model_shape,
                 grid=sat_hist.water_imbibition_flag_grid,
                 field_name="Water imbibition flag grid",
-                dtype_target=dtype,
+                dtype=dtype,
             ),
             gas_imbibition_flag_grid=_validate_and_coerce_array(
                 model_shape=model_shape,
                 grid=sat_hist.gas_imbibition_flag_grid,
                 field_name="Gas imbibition flag grid",
-                dtype_target=dtype,
+                dtype=dtype,
             ),
         )
         # Reconstruct model and model state with coerced data

@@ -8,6 +8,11 @@ import numba
 import numpy as np
 
 from bores.constants import c
+from bores.correlations.arrays import (
+    compute_gas_compressibility_factor as compute_gas_compressibility_factor_vectorized,
+    compute_gas_density as compute_gas_density_vectorized,
+    compute_gas_viscosity as compute_gas_viscosity_vectorized,
+)
 from bores.correlations.core import (
     compute_gas_compressibility,
     compute_gas_compressibility_factor,
@@ -28,7 +33,13 @@ from bores.tables.pseudo_pressure import (
     build_gas_pseudo_pressure_table,
 )
 from bores.tables.pvt import PVTTables
-from bores.types import FluidPhase, Orientation, ThreeDimensions, TwoDimensions
+from bores.types import (
+    FloatOrArray,
+    FluidPhase,
+    Orientation,
+    ThreeDimensions,
+    TwoDimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -493,11 +504,17 @@ def compute_required_bhp_for_gas_rate(
 
 
 def _build_table_interpolator(
-    pvt_tables: PVTTables, property_name: str, temperature: float
+    pvt_tables: PVTTables, property_name: str, temperature: FloatOrArray
 ):
-    """Build a 1D interpolator for a given property at fixed temperature."""
+    """
+    Build a 1D interpolator for a given property at given temperature(s).
 
-    def _interpolator(pressure: float) -> float:
+    :param pvt_tables: PVT tables containing the property data.
+    :param property_name: Name of the property to interpolate (e.g., "gas_compressibility_factor").
+    :param temperature: Temperature(s) at which to interpolate the property.
+    """
+
+    def _interpolator(pressure: FloatOrArray) -> FloatOrArray:
         # Clamp pressure to table bounds
         result = pvt_tables.pt_interpolate(
             name=property_name, pressure=pressure, temperature=temperature
@@ -507,12 +524,14 @@ def _build_table_interpolator(
             raise ComputationError(
                 f"Result cannot be None ensure PVT table contains {property_name!r} interpolator. Use `table.exists({property_name!r})`"
             )
-        return typing.cast(float, result)
+        return result
 
+    _interpolator._supports_arrays = True  # type: ignore
+    _interpolator.__name__ = f"{property_name}_interpolator"
     return _interpolator
 
 
-@attrs.frozen()
+@attrs.frozen
 class WellFluid(Serializable):
     """Base class for fluid properties in wells."""
 
@@ -628,13 +647,13 @@ class WellFluid(Serializable):
 
         if pvt_tables is not None:
             if pvt_tables.exists("gas_compressibility_factor"):
-                z_factor_func = _build_table_interpolator(
+                z_factor_func = _build_table_interpolator(  # type: ignore
                     pvt_tables=pvt_tables,
                     property_name="gas_compressibility_factor",
                     temperature=temperature,
                 )
             if pvt_tables.exists("gas_viscosity"):
-                viscosity_func = _build_table_interpolator(
+                viscosity_func = _build_table_interpolator(  # type: ignore
                     pvt_tables=pvt_tables,
                     property_name="gas_viscosity",
                     temperature=temperature,
@@ -642,26 +661,35 @@ class WellFluid(Serializable):
 
         if z_factor_func is None:
 
-            def z_factor_func(pressure: float) -> float:
-                return compute_gas_compressibility_factor(
+            def z_factor_func(pressure: np.typing.NDArray) -> np.typing.NDArray:
+                temperature_array = np.full_like(pressure, temperature)
+                specific_gravity_array = np.full_like(pressure, self.specific_gravity)
+                return compute_gas_compressibility_factor_vectorized(
                     pressure=pressure,
-                    temperature=temperature,
-                    gas_gravity=self.specific_gravity,
+                    temperature=temperature_array,
+                    gas_gravity=specific_gravity_array,
                 )
+
+            z_factor_func._supports_arrays = True  # type: ignore
 
         if viscosity_func is None:
 
-            def viscosity_func(pressure: float) -> float:
-                return compute_gas_viscosity(
-                    temperature=temperature,
-                    gas_density=compute_gas_density(
-                        pressure=pressure,
-                        temperature=temperature,
-                        gas_gravity=self.specific_gravity,
-                        gas_compressibility_factor=z_factor_func(pressure),
-                    ),
+            def viscosity_func(pressure: np.typing.NDArray) -> np.typing.NDArray:
+                temperature_array = np.full_like(pressure, temperature)
+                specific_gravity_array = np.full_like(pressure, self.specific_gravity)
+                gas_density = compute_gas_density_vectorized(
+                    pressure=pressure,
+                    temperature=temperature_array,
+                    gas_gravity=specific_gravity_array,
+                    gas_compressibility_factor=z_factor_func(pressure),
+                )
+                return compute_gas_viscosity_vectorized(
+                    temperature=temperature_array,
+                    gas_density=gas_density,
                     gas_molecular_weight=self.molecular_weight,
                 )
+
+            viscosity_func._supports_arrays = True  # type: ignore
 
         cache_key = None
         if use_cache:
@@ -674,8 +702,8 @@ class WellFluid(Serializable):
             )
 
         return build_gas_pseudo_pressure_table(
-            z_factor_func=z_factor_func,
-            viscosity_func=viscosity_func,
+            z_factor_func=z_factor_func,  # type: ignore[arg-type]
+            viscosity_func=viscosity_func,  # type: ignore[arg-type]
             reference_pressure=reference_pressure,
             pressure_range=pressure_range,
             points=points,

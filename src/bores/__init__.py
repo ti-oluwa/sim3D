@@ -25,5 +25,7 @@ from .analyses import *  # noqa
 from .stores import *  # noqa
 from .streams import *  # noqa
 
+use_32bit_precision()  # noqa
+
 
 __version__ = "0.0.1"

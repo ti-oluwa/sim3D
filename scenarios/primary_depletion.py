@@ -156,7 +156,7 @@ def _(Path, bores):
 
 @app.cell
 def _(bores, depletion_store, main):
-    stream = bores.StateStream(main(), store=depletion_store, batch_size=50)
+    stream = bores.StateStream(main(), store=depletion_store, batch_size=10)
 
     with stream:
         last_state = stream.last()
@@ -169,7 +169,7 @@ def _(Path, bores, last_state):
     depleted_store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/states/primary_depleted.zarr"
     )
-    depleted_store.dump([last_state], validate=False)
+    depleted_store.dump([last_state])
     return
 
 

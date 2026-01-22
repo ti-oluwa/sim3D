@@ -16,9 +16,8 @@ def _():
 
     depletion_store = bores.HDF5Store(
         filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
-        metadata_dir=Path.cwd() / "scenarios/states/primary_depletion_metadata/",
     )
-    stream = bores.StateStream(store=depletion_store, lazy_load=True, validate=False)
+    stream = bores.StateStream(store=depletion_store, validate=False)
     states = list(stream)
     return bores, itertools, np, states
 

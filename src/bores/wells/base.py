@@ -2,6 +2,7 @@
 
 import itertools
 import logging
+import threading
 import typing
 
 import attrs
@@ -9,7 +10,12 @@ import numpy as np
 from typing_extensions import Self
 
 from bores.errors import ValidationError
-from bores.serialization import Serializable
+from bores.serialization import (
+    Serializable,
+    make_registry_deserializer,
+    make_registry_serializer,
+    make_serializable_type_registrar,
+)
 from bores.tables.pvt import PVTTables
 from bores.types import Coordinates, Orientation, ThreeDimensions, TwoDimensions
 from bores.wells.controls import WellControl
@@ -26,7 +32,16 @@ from bores.wells.core import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["InjectionWell", "ProductionWell", "Wells"]
+__all__ = [
+    "Well",
+    "InjectionWell",
+    "ProductionWell",
+    "Wells",
+    "register_well_type",
+    "new_well_type",
+    "serialize_well",
+    "deserialize_well",
+]
 
 
 @attrs.define(hash=True)
@@ -291,6 +306,30 @@ class Well(typing.Generic[Coordinates, WellFluidT], Serializable):
 WellT = typing.TypeVar("WellT", bound=Well)
 
 
+_SUPPORTED_WELL_TYPES = {}
+
+register_well_type = make_serializable_type_registrar(
+    base_cls=Well,
+    registry=_SUPPORTED_WELL_TYPES,
+    lock=threading.Lock(),
+    key_attr="__type__",
+    allow_override=False,
+)
+"""Decorator to register a new well type."""
+new_well_type = register_well_type  # Alias for clarity
+
+serialize_well = make_registry_serializer(
+    base_cls=Well,
+    registry=_SUPPORTED_WELL_TYPES,
+    key_attr="__type__",
+)
+deserialize_well = make_registry_deserializer(
+    base_cls=Well,
+    registry=_SUPPORTED_WELL_TYPES,
+)
+
+
+@register_well_type
 @attrs.define(hash=True)
 class InjectionWell(Well[Coordinates, InjectedFluid]):
     """
@@ -298,6 +337,8 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
 
     This well injects fluids into the reservoir.
     """
+
+    __type__ = "injection_well"
 
     injected_fluid: typing.Optional[InjectedFluid] = None
     """Properties of the fluid being injected into the well."""
@@ -341,6 +382,7 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
         )
 
 
+@register_well_type
 @attrs.define(hash=True)
 class ProductionWell(Well[Coordinates, ProducedFluid]):
     """
@@ -348,6 +390,8 @@ class ProductionWell(Well[Coordinates, ProducedFluid]):
 
     This well produces fluids from the reservoir.
     """
+
+    __type__ = "production_well"
 
     produced_fluids: typing.Sequence[ProducedFluid] = attrs.field(factory=list)
     """List of fluids produced by the well. This can include multiple phases (e.g., oil, gas, water)."""
@@ -473,6 +517,31 @@ class _WellsProxy(typing.Generic[Coordinates, WellT]):
         self.wells_map[location] = well
 
 
+# Serialize /deserialize list of wells as dictionaries of well name to well object
+def _serialize_wells(
+    wells: typing.Sequence[WellT], recurse: bool = True
+) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
+    """Serialize a list of wells to a dictionary."""
+    return {well.name: serialize_well(well, recurse) for well in wells}
+
+
+def _deserialize_wells(
+    data: typing.Dict[str, typing.Dict[str, typing.Any]],
+) -> typing.List[Well]:
+    """Deserialize a dictionary of wells to a list."""
+    return [deserialize_well(item) for item in data.values()]
+
+
+_wells_serializers = {
+    "injection_wells": _serialize_wells,
+    "production_wells": _serialize_wells,
+}
+_wells_deserializers = {
+    "injection_wells": _deserialize_wells,
+    "production_wells": _deserialize_wells,
+}
+
+
 @attrs.frozen
 class Wells(
     typing.Generic[Coordinates],
@@ -481,6 +550,8 @@ class Wells(
         "injection_wells": typing.Sequence[InjectionWell],
         "production_wells": typing.Sequence[ProductionWell],
     },
+    serializers=_wells_serializers,
+    deserializers=_wells_deserializers,
 ):
     """
     Models a collection of injection and production wells in the reservoir model.

@@ -220,7 +220,7 @@ def _():
         boundary_conditions = bores.BoundaryConditions(
             conditions={
                 "pressure": bores.GridBoundaryCondition(
-                    bottom=bores.ConstantBoundary(4600),  # Aquifer pressure
+                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
                 ),
             }
         )

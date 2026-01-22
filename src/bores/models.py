@@ -35,7 +35,8 @@ class FluidProperties(PadMixin[NDimension], Serializable):
 
     Some of these properties are liable to change over time due to flow.
 
-    Changing properties include:
+    Varying properties include:
+    
     - Pressure
     - Temperature
     - Oil saturation

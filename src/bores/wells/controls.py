@@ -1,16 +1,21 @@
 """Well control mechanisms for reservoir simulation."""
 
 import logging
+import threading
 import typing
-import pickle
-import base64
 
 import attrs
 import numba
 
 from bores.constants import c
-from bores.errors import ValidationError
 from bores.correlations.core import compute_gas_compressibility_factor
+from bores.errors import ValidationError
+from bores.serialization import (
+    Serializable,
+    make_registry_deserializer,
+    make_registry_serializer,
+    make_serializable_type_registrar,
+)
 from bores.tables.pvt import PVTTables
 from bores.types import FluidPhase
 from bores.wells.core import (
@@ -20,7 +25,6 @@ from bores.wells.core import (
     compute_required_bhp_for_gas_rate,
     compute_required_bhp_for_oil_rate,
 )
-from bores.serialization import Serializable
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +37,173 @@ __all__ = [
     "ConstantRateControl",
     "AdaptiveBHPRateControl",
     "MultiPhaseRateControl",
+    "register_well_control_type",
+    "new_well_control_type",
+    "register_rate_clamp_type",
+    "new_rate_clamp_type",
+    "rate_clamp_serializer",
+    "rate_clamp_deserializer",
+    "well_control_serializer",
+    "well_control_deserializer",
 ]
 
 
 WellFluidT_con = typing.TypeVar("WellFluidT_con", bound=WellFluid, contravariant=True)
 
 
-@typing.runtime_checkable
-class RateClamp(typing.Protocol):
+def _should_return_zero(
+    fluid: typing.Optional[WellFluid],
+    phase_mobility: float,
+    is_active: bool,
+) -> bool:
+    """Check if well should return zero flow rate."""
+    return fluid is None or phase_mobility <= 0.0 or not is_active
+
+
+def _setup_gas_pseudo_pressure(
+    fluid: WellFluid,
+    pressure: float,
+    temperature: float,
+    use_pseudo_pressure: bool,
+    pvt_tables: typing.Optional[PVTTables] = None,
+) -> typing.Tuple[bool, typing.Optional[typing.Any]]:
     """
-    Protocol for a flow rate clamp.
+    Setup pseudo-pressure table for gas wells if needed.
+
+    :return: Tuple of (use_pseudo_pressure, pseudo_pressure_table)
+    """
+    if not use_pseudo_pressure or pressure <= c.GAS_PSEUDO_PRESSURE_THRESHOLD:
+        return False, None
+
+    pseudo_pressure_table = fluid.get_pseudo_pressure_table(
+        temperature=temperature,
+        points=c.GAS_PSEUDO_PRESSURE_POINTS,
+        pvt_tables=pvt_tables,
+    )
+    return True, pseudo_pressure_table
+
+
+@numba.njit(cache=True)
+def _compute_avg_z_factor(
+    pressure: float,
+    temperature: float,
+    gas_gravity: float,
+    bottom_hole_pressure: typing.Optional[float] = None,
+) -> float:
+    """
+    Compute average gas compressibility factor.
+
+    :param bottom_hole_pressure: If provided, uses average of reservoir and BHP.
+        Otherwise uses reservoir pressure.
+    """
+    if bottom_hole_pressure is not None:
+        avg_pressure = (pressure + bottom_hole_pressure) * 0.5
+    else:
+        avg_pressure = pressure
+    return compute_gas_compressibility_factor(
+        pressure=avg_pressure,
+        temperature=temperature,
+        gas_gravity=gas_gravity,
+    )
+
+
+def _apply_clamp(
+    pressure: float,
+    control_type: str,
+    rate: typing.Optional[float] = None,
+    bhp: typing.Optional[float] = None,
+    clamp: typing.Optional["RateClamp"] = None,
+) -> typing.Optional[float]:
+    """
+    Apply clamping condition if provided.
+
+    :return: Clamped rate/bhp if clamp condition is met, None if not clamped (caller should return original rate)
+    """
+    if clamp is not None:
+        if rate is not None:
+            clamped_rate = clamp.clamp_rate(rate, pressure)
+            if clamped_rate is not None:
+                logger.debug(
+                    f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
+                    f"({control_type}, pressure={pressure:.3f} psi)"
+                )
+                return clamped_rate
+        elif bhp is not None:
+            clamped_bhp = clamp.clamp_bhp(bhp, pressure)
+            if clamped_bhp is not None:
+                logger.debug(
+                    f"Clamping BHP {bhp:.6f} to {clamped_bhp:.6f} "
+                    f"({control_type}, pressure={pressure:.3f} psi)"
+                )
+                return clamped_bhp
+    return None
+
+
+def _compute_required_bhp(
+    target_rate: float,
+    fluid: WellFluid,
+    well_index: float,
+    pressure: float,
+    temperature: float,
+    phase_mobility: float,
+    use_pseudo_pressure: bool,
+    formation_volume_factor: float,
+    fluid_compressibility: typing.Optional[float],
+    pvt_tables: typing.Optional[PVTTables] = None,
+) -> float:
+    """
+    Compute required BHP to achieve target rate.
+
+    :return: Required bottom hole pressure (psi)
+    :raises ValidationError: If computation is not possible (e.g., zero mobility)
+    :raises ZeroDivisionError: If rate equation has numerical issues
+    """
+    if fluid.phase == FluidPhase.GAS:
+        # Setup pseudo-pressure if needed
+        use_pp, pp_table = _setup_gas_pseudo_pressure(
+            fluid=fluid,
+            pressure=pressure,
+            temperature=temperature,
+            use_pseudo_pressure=use_pseudo_pressure,
+            pvt_tables=pvt_tables,
+        )
+
+        # Compute Z-factor using reservoir pressure as initial estimate
+        avg_z = _compute_avg_z_factor(
+            pressure=pressure,
+            temperature=temperature,
+            gas_gravity=fluid.specific_gravity,
+        )
+        return compute_required_bhp_for_gas_rate(
+            target_rate=target_rate,
+            well_index=well_index,
+            pressure=pressure,
+            temperature=temperature,
+            phase_mobility=phase_mobility,
+            average_compressibility_factor=avg_z,
+            use_pseudo_pressure=use_pp,
+            pseudo_pressure_table=pp_table,
+            formation_volume_factor=formation_volume_factor,
+        )
+    # For oil/water
+    return compute_required_bhp_for_oil_rate(
+        target_rate=target_rate,
+        well_index=well_index,
+        pressure=pressure,
+        phase_mobility=phase_mobility,
+        fluid_compressibility=fluid_compressibility,
+    )
+
+
+class RateClamp(Serializable):
+    """
+    Base class for a well rate clamp.
 
     Determines when a computed flow rate or BHP should be clamped
     to prevent unphysical scenarios (e.g., production during injection).
     """
+
+    __abstract_serializable__ = True
 
     def clamp_rate(
         self, rate: float, pressure: float, **kwargs
@@ -59,7 +216,7 @@ class RateClamp(typing.Protocol):
         :param kwargs: Additional context for clamping decision.
         :return: The clamped flow rate if clamping condition is met, else None.
         """
-        ...
+        raise NotImplementedError
 
     def clamp_bhp(
         self, bottom_hole_pressure: float, pressure: float, **kwargs
@@ -72,10 +229,43 @@ class RateClamp(typing.Protocol):
         :param kwargs: Additional context for clamping decision.
         :return: The clamped bottom-hole pressure if clamping condition is met, else None.
         """
-        ...
+        raise NotImplementedError
 
 
-class WellControl(typing.Generic[WellFluidT_con], Serializable):
+_SUPPORTED_CLAMP_TYPES: typing.Dict[str, typing.Type["RateClamp"]] = {}
+
+register_rate_clamp_type = make_serializable_type_registrar(
+    base_cls=RateClamp,
+    registry=_SUPPORTED_CLAMP_TYPES,
+    lock=threading.Lock(),
+    key_attr="__type__",
+    allow_override=False,
+)
+"""Decorator to register a new rate clamp type."""
+new_rate_clamp_type = register_rate_clamp_type  # Alias for clarity
+
+rate_clamp_serializer = make_registry_serializer(
+    base_cls=RateClamp,
+    registry=_SUPPORTED_CLAMP_TYPES,
+    key_attr="__type__",
+)
+rate_clamp_deserializer = make_registry_deserializer(
+    base_cls=RateClamp,
+    registry=_SUPPORTED_CLAMP_TYPES,
+)
+
+# Add clamp serializers/deserializers to base well control so all subclasses automatically inherit them
+# and know how to properly serialize/deserialize clamp conditions
+_clamp_serializers = {"clamp": rate_clamp_serializer}
+_clamp_deserializers = {"clamp": rate_clamp_deserializer}
+
+
+class WellControl(
+    typing.Generic[WellFluidT_con],
+    Serializable,
+    serializers=_clamp_serializers,
+    deserializers=_clamp_deserializers,
+):
     """
     Base class for well control implementations.
 
@@ -152,153 +342,35 @@ class WellControl(typing.Generic[WellFluidT_con], Serializable):
         raise NotImplementedError
 
 
-def _should_return_zero(
-    fluid: typing.Optional[WellFluid],
-    phase_mobility: float,
-    is_active: bool,
-) -> bool:
-    """Check if well should return zero flow rate."""
-    return fluid is None or phase_mobility <= 0.0 or not is_active
+_SUPPORTED_CONTROL_TYPES: typing.Dict[str, typing.Type["WellControl"]] = {}
+
+register_well_control_type = make_serializable_type_registrar(
+    base_cls=WellControl,
+    registry=_SUPPORTED_CONTROL_TYPES,
+    lock=threading.Lock(),
+    key_attr="__type__",
+    allow_override=False,
+)
+"""Decorator to register a new well control type."""
+new_well_control_type = register_well_control_type  # Alias for clarity
+
+well_control_serializer = make_registry_serializer(
+    base_cls=WellControl,
+    registry=_SUPPORTED_CONTROL_TYPES,
+    key_attr="__type__",
+)
+well_control_deserializer = make_registry_deserializer(
+    base_cls=WellControl,
+    registry=_SUPPORTED_CONTROL_TYPES,
+)
 
 
-def _setup_gas_pseudo_pressure(
-    fluid: WellFluid,
-    pressure: float,
-    temperature: float,
-    use_pseudo_pressure: bool,
-    pvt_tables: typing.Optional[PVTTables] = None,
-) -> typing.Tuple[bool, typing.Optional[typing.Any]]:
-    """
-    Setup pseudo-pressure table for gas wells if needed.
-
-    :return: Tuple of (use_pseudo_pressure, pseudo_pressure_table)
-    """
-    if not use_pseudo_pressure or pressure <= c.GAS_PSEUDO_PRESSURE_THRESHOLD:
-        return False, None
-
-    pseudo_pressure_table = fluid.get_pseudo_pressure_table(
-        temperature=temperature,
-        points=c.GAS_PSEUDO_PRESSURE_POINTS,
-        pvt_tables=pvt_tables,
-    )
-    return True, pseudo_pressure_table
-
-
-@numba.njit(cache=True)
-def _compute_avg_z_factor(
-    pressure: float,
-    temperature: float,
-    gas_gravity: float,
-    bottom_hole_pressure: typing.Optional[float] = None,
-) -> float:
-    """
-    Compute average gas compressibility factor.
-
-    :param bottom_hole_pressure: If provided, uses average of reservoir and BHP.
-        Otherwise uses reservoir pressure.
-    """
-    if bottom_hole_pressure is not None:
-        avg_pressure = (pressure + bottom_hole_pressure) * 0.5
-    else:
-        avg_pressure = pressure
-    return compute_gas_compressibility_factor(
-        pressure=avg_pressure,
-        temperature=temperature,
-        gas_gravity=gas_gravity,
-    )
-
-
-def _apply_clamp(
-    pressure: float,
-    control_name: str,
-    rate: typing.Optional[float] = None,
-    bhp: typing.Optional[float] = None,
-    clamp: typing.Optional["RateClamp"] = None,
-) -> typing.Optional[float]:
-    """
-    Apply clamping condition if provided.
-
-    :return: Clamped rate/bhp if clamp condition is met, None if not clamped (caller should return original rate)
-    """
-    if clamp is not None:
-        if rate is not None:
-            clamped_rate = clamp.clamp_rate(rate, pressure)
-            if clamped_rate is not None:
-                logger.debug(
-                    f"Clamping rate {rate:.6f} to {clamped_rate:.6f} "
-                    f"({control_name}, pressure={pressure:.3f} psi)"
-                )
-                return clamped_rate
-        elif bhp is not None:
-            clamped_bhp = clamp.clamp_bhp(bhp, pressure)
-            if clamped_bhp is not None:
-                logger.debug(
-                    f"Clamping BHP {bhp:.6f} to {clamped_bhp:.6f} "
-                    f"({control_name}, pressure={pressure:.3f} psi)"
-                )
-                return clamped_bhp
-    return None
-
-
-def _compute_required_bhp(
-    target_rate: float,
-    fluid: WellFluid,
-    well_index: float,
-    pressure: float,
-    temperature: float,
-    phase_mobility: float,
-    use_pseudo_pressure: bool,
-    formation_volume_factor: float,
-    fluid_compressibility: typing.Optional[float],
-    pvt_tables: typing.Optional[PVTTables] = None,
-) -> float:
-    """
-    Compute required BHP to achieve target rate.
-
-    :return: Required bottom hole pressure (psi)
-    :raises ValidationError: If computation is not possible (e.g., zero mobility)
-    :raises ZeroDivisionError: If rate equation has numerical issues
-    """
-    if fluid.phase == FluidPhase.GAS:
-        # Setup pseudo-pressure if needed
-        use_pp, pp_table = _setup_gas_pseudo_pressure(
-            fluid=fluid,
-            pressure=pressure,
-            temperature=temperature,
-            use_pseudo_pressure=use_pseudo_pressure,
-            pvt_tables=pvt_tables,
-        )
-
-        # Compute Z-factor using reservoir pressure as initial estimate
-        avg_z = _compute_avg_z_factor(
-            pressure=pressure,
-            temperature=temperature,
-            gas_gravity=fluid.specific_gravity,
-        )
-        return compute_required_bhp_for_gas_rate(
-            target_rate=target_rate,
-            well_index=well_index,
-            pressure=pressure,
-            temperature=temperature,
-            phase_mobility=phase_mobility,
-            average_compressibility_factor=avg_z,
-            use_pseudo_pressure=use_pp,
-            pseudo_pressure_table=pp_table,
-            formation_volume_factor=formation_volume_factor,
-        )
-    # For oil/water
-    return compute_required_bhp_for_oil_rate(
-        target_rate=target_rate,
-        well_index=well_index,
-        pressure=pressure,
-        phase_mobility=phase_mobility,
-        fluid_compressibility=fluid_compressibility,
-    )
-
-
+@register_rate_clamp_type
 @attrs.frozen
-class ProductionClamp(Serializable):
+class ProductionClamp(RateClamp):
     """Clamp condition for production wells."""
+
+    __type__ = "production_clamp"
 
     value: float = 0.0
     """Clamp value to return when condition is met."""
@@ -319,9 +391,12 @@ class ProductionClamp(Serializable):
         return None
 
 
+@register_rate_clamp_type
 @attrs.frozen
-class InjectionClamp(Serializable):
+class InjectionClamp(RateClamp):
     """Clamp condition for injection wells."""
+
+    __type__ = "injection_clamp"
 
     value: float = 0.0
     """Clamp value to return when condition is met."""
@@ -342,52 +417,17 @@ class InjectionClamp(Serializable):
         return None
 
 
-def _clamp_serializer(
-    obj: typing.Any, recurse: bool = True
-) -> typing.Dict[str, typing.Any]:
-    """Serializer for `RateClamp` implementations."""
-    if isinstance(obj, ProductionClamp):
-        return {"type": "production_clamp", "value": obj.dump(recurse)}
-    elif isinstance(obj, InjectionClamp):
-        return {"type": "injection_clamp", "value": obj.dump(recurse)}
-
-    # Pickle serialize
-    dump_bytes = pickle.dumps(obj)
-    dump = base64.urlsafe_b64encode(dump_bytes).decode("utf-8")
-    return {"type": "pickled", "value": dump}
-
-
-def _clamp_deserializer(data: typing.Dict[str, typing.Any]) -> typing.Any:
-    """Deserializer for `RateClamp` implementations."""
-    clamp_type = data.get("type")
-    if clamp_type == "production_clamp":
-        return ProductionClamp.load(data)
-    elif clamp_type == "injection_clamp":
-        return InjectionClamp.load(data)
-    elif clamp_type == "pickled" and "value" in data:
-        dump = data["value"]
-        dump_bytes = base64.urlsafe_b64decode(dump.encode("utf-8"))
-        obj = pickle.loads(dump_bytes)
-        return obj
-    raise ValidationError(f"Unknown `RateClamp` type: {clamp_type}")
-
-
-_clamp_serializers = {"clamp": _clamp_serializer}
-_clamp_deserializers = {"clamp": _clamp_deserializer}
-
-
+@register_well_control_type
 @attrs.frozen
-class BHPControl(
-    WellControl[WellFluidT_con],
-    serializers=_clamp_serializers,
-    deserializers=_clamp_deserializers,
-):
+class BHPControl(WellControl[WellFluidT_con]):
     """
     Bottom Hole Pressure (BHP) control.
 
     Computes flow rate based on pressure differential between reservoir and
     wellbore using Darcy's law. This is the traditional well control method.
     """
+
+    __type__ = "bhp_control"
 
     bhp: float = attrs.field(validator=attrs.validators.gt(0))
     """Well bottom-hole flowing pressure in psi."""
@@ -475,7 +515,7 @@ class BHPControl(
             rate=rate,
             clamp=self.clamp,
             pressure=pressure,
-            control_name="BHP control",
+            control_type="BHP control",
         )
         return clamped if clamped is not None else rate
 
@@ -517,7 +557,7 @@ class BHPControl(
         return (
             _apply_clamp(
                 pressure=pressure,
-                control_name="BHP control",
+                control_type="BHP control",
                 clamp=self.clamp,
                 bhp=bhp,
             )
@@ -529,18 +569,17 @@ class BHPControl(
         return f"BHP Control (BHP={self.bhp:.6f} psi)"
 
 
+@register_well_control_type
 @attrs.frozen
-class ConstantRateControl(
-    WellControl[WellFluidT_con],
-    serializers=_clamp_serializers,
-    deserializers=_clamp_deserializers,
-):
+class ConstantRateControl(WellControl[WellFluidT_con]):
     """
     Constant rate control.
 
     Maintains a target flow rate regardless of reservoir pressure,
     as long as the pressure constraint is satisfied.
     """
+
+    __type__ = "constant_rate_control"
 
     target_rate: float
     """Target flow rate (STB/day or SCF/day). Positive for injection, negative for production."""
@@ -559,7 +598,7 @@ class ConstantRateControl(
         """Validate control parameters."""
         if self.target_rate == 0.0:
             raise ValidationError(
-                "Target rate cannot be zero. Use `well.shut_in()` instead."
+                "Target rate cannot be zero. Use `well.shut_in` instead."
             )
         if self.bhp_limit is not None and self.bhp_limit <= 0.0:
             raise ValidationError("Minimum bottom hole pressure must be positive.")
@@ -649,7 +688,7 @@ class ConstantRateControl(
             rate=target_rate,
             clamp=self.clamp,
             pressure=pressure,
-            control_name="constant rate control",
+            control_type="constant rate control",
         )
         return clamped if clamped is not None else target_rate
 
@@ -712,7 +751,7 @@ class ConstantRateControl(
             return (
                 _apply_clamp(
                     pressure=pressure,
-                    control_name="constant rate control",
+                    control_type="constant rate control",
                     clamp=self.clamp,
                     bhp=pressure,
                 )
@@ -745,7 +784,7 @@ class ConstantRateControl(
         return (
             _apply_clamp(
                 pressure=pressure,
-                control_name="constant rate control",
+                control_type="constant rate control",
                 clamp=self.clamp,
                 bhp=bhp,
             )
@@ -778,12 +817,9 @@ class ConstantRateControl(
         return f"Constant Rate Control (Rate={self.target_rate:.6f})"
 
 
+@register_well_control_type
 @attrs.frozen
-class AdaptiveBHPRateControl(
-    WellControl[WellFluidT_con],
-    serializers=_clamp_serializers,
-    deserializers=_clamp_deserializers,
-):
+class AdaptiveBHPRateControl(WellControl[WellFluidT_con]):
     """
     Adaptive control that switches between rate and BHP control.
 
@@ -791,6 +827,8 @@ class AdaptiveBHPRateControl(
     to BHP control. This prevents excessive pressure drawdown while maintaining
     target production/injection when feasible.
     """
+
+    __type__ = "adaptive_bhp_rate_control"
 
     target_rate: float
     """Target flow rate (STB/day or SCF/day). Positive for injection, negative for production."""
@@ -809,7 +847,7 @@ class AdaptiveBHPRateControl(
         """Validate control parameters."""
         if self.target_rate == 0.0:
             raise ValidationError(
-                "Target rate cannot be zero. Use `well.shut_in()` instead."
+                "Target rate cannot be zero. Use `well.shut_in` instead."
             )
         if self.bhp_limit <= 0.0:
             raise ValidationError("Minimum bottom hole pressure must be positive.")
@@ -894,7 +932,7 @@ class AdaptiveBHPRateControl(
                     rate=target_rate,
                     clamp=self.clamp,
                     pressure=pressure,
-                    control_name="adaptive control - rate mode",
+                    control_type="adaptive control - rate mode",
                 )
                 if clamped is not None:
                     return clamped
@@ -951,7 +989,7 @@ class AdaptiveBHPRateControl(
             rate=rate,
             clamp=self.clamp,
             pressure=pressure,
-            control_name="adaptive control - BHP mode",
+            control_type="adaptive control - BHP mode",
         )
         return clamped if clamped is not None else rate
 
@@ -1013,7 +1051,7 @@ class AdaptiveBHPRateControl(
             return (
                 _apply_clamp(
                     pressure=pressure,
-                    control_name="adaptive control - BHP mode",
+                    control_type="adaptive control - BHP mode",
                     clamp=self.clamp,
                     bhp=bhp_limit,
                 )
@@ -1036,7 +1074,7 @@ class AdaptiveBHPRateControl(
         return (
             _apply_clamp(
                 pressure=pressure,
-                control_name="adaptive control",
+                control_type="adaptive control",
                 clamp=self.clamp,
                 bhp=bhp,
             )
@@ -1068,13 +1106,32 @@ class AdaptiveBHPRateControl(
         return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.bhp_limit:.6f} psi)"
 
 
-@attrs.frozen()
-class MultiPhaseRateControl(WellControl):
+_control_serializers = {
+    "oil_control": well_control_serializer,
+    "gas_control": well_control_serializer,
+    "water_control": well_control_serializer,
+}
+_control_deserializers = {
+    "oil_control": well_control_deserializer,
+    "gas_control": well_control_deserializer,
+    "water_control": well_control_deserializer,
+}
+
+
+@register_well_control_type
+@attrs.frozen
+class MultiPhaseRateControl(
+    WellControl,
+    serializers=_control_serializers,
+    deserializers=_control_deserializers,
+):
     """
     Multi-phase rate control for wells.
 
     Defines separate rate controls for oil, gas, and water phases.
     """
+
+    __type__ = "multi_phase_rate_control"
 
     oil_control: WellControl
     """Oil phase well control. Ensure that this is intended for oil phase."""
