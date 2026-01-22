@@ -9,6 +9,7 @@ import attrs
 from typing_extensions import Self
 
 from bores.errors import TimingError, ValidationError
+from bores.serialization import Serializable
 
 __all__ = ["Time", "Timer", "TimerState", "StepMetricsDict"]
 
@@ -97,8 +98,8 @@ class StepMetrics:
     success: bool = True
 
 
-@attrs.define()
-class Timer:
+@attrs.define
+class Timer(Serializable):
     """
     Simulation time manager for smart and adaptive time stepping.
     """
@@ -975,3 +976,10 @@ class Timer:
             f"step size {timer.step_size:.6f}s"
         )
         return timer
+
+    def __dump__(self) -> TimerState:
+        return self.dump_state()
+
+    @classmethod
+    def __load__(cls, state: TimerState) -> Self:
+        return cls.load_state(state)

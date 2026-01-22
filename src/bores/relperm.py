@@ -1,5 +1,6 @@
 """Relative permeability models and mixing rules for multiphase flow simulations."""
 
+import threading
 import typing
 
 import attrs
@@ -8,16 +9,21 @@ import numpy as np
 import numpy.typing as npt
 
 from bores.errors import ValidationError
+from bores.serialization import Serializable
 from bores.types import (
     FloatOrArray,
     FluidPhase,
     MixingRule,
     RelativePermeabilities,
+    T,
     WettabilityType,
 )
 
 
 __all__ = [
+    "mixing_rule",
+    "mixing_rule_serializer",
+    "mixing_rule_deserializer",
     "TwoPhaseRelPermTable",
     "ThreePhaseRelPermTable",
     "min_rule",
@@ -59,6 +65,108 @@ Comparison of common three-phase relative permeability mixing rules:
 """
 
 
+_MIXING_RULES: typing.Dict[str, MixingRule] = {}
+_MIXING_RULE_SERIALIZERS: typing.Dict[
+    MixingRule, typing.Callable[[MixingRule, bool], typing.Any]
+] = {}
+_MIXING_RULE_DESERIALIZERS: typing.Dict[
+    str, typing.Callable[[typing.Any], MixingRule]
+] = {}
+_lock = threading.Lock()
+
+
+@typing.overload
+def mixing_rule(func: MixingRule) -> MixingRule: ...
+
+
+@typing.overload
+def mixing_rule(
+    func: None = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+    serializer: typing.Optional[typing.Callable[[MixingRule, bool], T]] = None,
+    deserializer: typing.Optional[typing.Callable[[T], MixingRule]] = None,
+) -> typing.Callable[[MixingRule], MixingRule]: ...
+
+
+def mixing_rule(
+    func: typing.Optional[MixingRule] = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+    serializer: typing.Optional[typing.Callable[[MixingRule, bool], T]] = None,
+    deserializer: typing.Optional[typing.Callable[[T], MixingRule]] = None,
+) -> typing.Union[MixingRule, typing.Callable[[MixingRule], MixingRule]]:
+    """
+    Decorator to register a mixing rule function.
+
+    :param func: Mixing rule function to register.
+    :param name: Optional name to register the function under.
+    :param override: Whether to override an existing registration with the same name.
+        If `False` (default), raises an error on name conflicts.
+    :param serializer: Optional function to serialize the mixing rule.
+        This is especially useful for parameterized mixing rules.
+    :param deserializer: Optional function to deserialize the mixing rule.
+        This is especially useful for parameterized mixing rules.
+    :return: The original function.
+    """
+
+    def decorator(func: MixingRule) -> MixingRule:
+        rule_name = name or func.__name__  # type: ignore[attr-defined]
+        with _lock:
+            if rule_name in _MIXING_RULES and not override:
+                raise ValidationError(
+                    f"Mixing rule '{rule_name}' is already registered."
+                )
+
+            _MIXING_RULES[rule_name] = func
+            if serializer is not None:
+                _MIXING_RULE_SERIALIZERS[func] = serializer
+            if deserializer is not None:
+                _MIXING_RULE_DESERIALIZERS[rule_name] = deserializer
+        return func
+
+    if func is None:
+        return decorator
+    return decorator(func)
+
+
+def mixing_rule_serializer(rule: MixingRule, recurse: bool = True) -> str:
+    """
+    Serialize a mixing rule function to its registered name.
+
+    :param rule: Mixing rule function.
+    :return: Registered name of the mixing rule.
+    """
+    with _lock:
+        if rule in _MIXING_RULE_SERIALIZERS:
+            return _MIXING_RULE_SERIALIZERS[rule](rule, recurse)
+
+        for name, registered_rule in _MIXING_RULES.items():
+            if registered_rule == rule:
+                return name
+    raise ValidationError(
+        f"Mixing rule {rule!r} is not registered. Use `@mixing_rule` to register."
+    )
+
+
+def mixing_rule_deserializer(name: str) -> MixingRule:
+    """
+    Deserialize a mixing rule function from its registered name.
+
+    :param name: Registered name of the mixing rule.
+    :return: Mixing rule function.
+    """
+    with _lock:
+        if name in _MIXING_RULE_DESERIALIZERS:
+            return _MIXING_RULE_DESERIALIZERS[name](name)
+        elif name in _MIXING_RULES:
+            return _MIXING_RULES[name]
+    raise ValidationError(
+        f"Mixing rule '{name}' is not registered. Use `@mixing_rule` to register."
+    )
+
+
+@mixing_rule
 @numba.njit(cache=True)
 def min_rule(
     kro_w: FloatOrArray,
@@ -74,6 +182,7 @@ def min_rule(
     return np.minimum(kro_w, kro_g)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def stone_I_rule(
     kro_w: FloatOrArray,
@@ -92,6 +201,7 @@ def stone_I_rule(
     return np.where((kro_w <= 0.0) & (kro_g <= 0.0), 0.0, result)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def stone_II_rule(
     kro_w: FloatOrArray,
@@ -117,6 +227,7 @@ def stone_II_rule(
     return term_1 + term_2
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def arithmetic_mean_rule(
     kro_w: FloatOrArray,
@@ -138,6 +249,7 @@ def arithmetic_mean_rule(
     return (kro_w + kro_g) / 2.0
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def geometric_mean_rule(
     kro_w: FloatOrArray,
@@ -159,6 +271,7 @@ def geometric_mean_rule(
     return np.sqrt(kro_w * kro_g)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def harmonic_mean_rule(
     kro_w: FloatOrArray,
@@ -182,6 +295,7 @@ def harmonic_mean_rule(
     return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def saturation_weighted_interpolation_rule(
     kro_w: FloatOrArray,
@@ -215,6 +329,7 @@ def saturation_weighted_interpolation_rule(
     return np.where(total_displacing_phase > 0.0, result, np.maximum(kro_w, kro_g))
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def baker_linear_rule(
     kro_w: FloatOrArray,
@@ -245,6 +360,7 @@ def baker_linear_rule(
     return np.where(total_sat > 0.0, result, 0.0)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def blunt_rule(
     kro_w: FloatOrArray,
@@ -268,6 +384,7 @@ def blunt_rule(
     return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def hustad_hansen_rule(
     kro_w: FloatOrArray,
@@ -310,6 +427,24 @@ def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
     :return: A mixing rule function implementing the Aziz-Settari correlation.
     """
 
+    def aziz_settari_serializer(
+        rule: MixingRule, recurse: bool = True
+    ) -> typing.Dict[str, float]:
+        return {
+            "a": a,
+            "b": b,
+        }
+
+    def aziz_settari_deserializer(data: typing.Dict[str, float]) -> MixingRule:
+        if not isinstance(data, dict) or "a" not in data or "b" not in data:
+            raise ValidationError("Invalid data for Aziz-Settari deserialization.")
+        return aziz_settari_rule(a=data["a"], b=data["b"])
+
+    @mixing_rule(
+        name=f"aziz_settari(a={a},b={b})",
+        serializer=aziz_settari_serializer,
+        deserializer=aziz_settari_deserializer,
+    )
     @numba.njit(cache=True)
     def _rule(
         kro_w: FloatOrArray,
@@ -322,9 +457,11 @@ def aziz_settari_rule(a: float = 0.5, b: float = 0.5) -> MixingRule:
         # Return 0 if either kro_w or kro_g is zero
         return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
+    _rule.__name__ = f"aziz_settari_rule(a={a},b={b})"  # type: ignore[attr-defined]
     return _rule
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def eclipse_rule(
     kro_w: FloatOrArray,
@@ -361,6 +498,7 @@ def eclipse_rule(
     return np.where(total_mobile > 0.0, result, 0.0)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def max_rule(
     kro_w: FloatOrArray,
@@ -382,6 +520,7 @@ def max_rule(
     return np.maximum(kro_w, kro_g)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def product_saturation_weighted_rule(
     kro_w: FloatOrArray,
@@ -415,6 +554,7 @@ def product_saturation_weighted_rule(
     return np.where((oil_saturation > 0.0) & (total_sat > 0.0), result, 0.0)
 
 
+@mixing_rule
 @numba.njit(cache=True)
 def linear_interpolation_rule(
     kro_w: FloatOrArray,
@@ -449,8 +589,8 @@ def linear_interpolation_rule(
     return np.where(total_displacing > 0.0, result, np.maximum(kro_w, kro_g))
 
 
-@attrs.frozen()
-class TwoPhaseRelPermTable:
+@attrs.frozen
+class TwoPhaseRelPermTable(Serializable):
     """
     Two-phase relative permeability lookup table.
 
@@ -580,8 +720,12 @@ class TwoPhaseRelPermTable:
         return kr_wetting, kr_non_wetting
 
 
-@attrs.frozen()
-class ThreePhaseRelPermTable:
+@attrs.frozen
+class ThreePhaseRelPermTable(
+    Serializable,
+    serializers={"mixing_rule": mixing_rule_serializer},
+    deserializers={"mixing_rule": mixing_rule_deserializer},
+):
     """
     Three-phase relative permeability lookup table, with mixing rules.
 
@@ -870,8 +1014,12 @@ def compute_corey_three_phase_relative_permeabilities(
     return krw, kro, krg  # type: ignore[return-value]
 
 
-@attrs.frozen()
-class BrooksCoreyThreePhaseRelPermModel:
+@attrs.frozen
+class BrooksCoreyThreePhaseRelPermModel(
+    Serializable,
+    serializable_serializers={"mixing_rule": mixing_rule_serializer},
+    deserializers={"mixing_rule": mixing_rule_deserializer},
+):
     """
     Brooks-Corey-type three-phase relative permeability model.
 

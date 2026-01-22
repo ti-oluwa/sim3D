@@ -39,8 +39,7 @@ __all__ = [
     "InjectionWell",
     "ProductionWell",
     "Wells",
-    "register_well_type",
-    "new_well_type",
+    "well_type",
     "serialize_well",
     "deserialize_well",
 ]
@@ -311,7 +310,7 @@ WellT = typing.TypeVar("WellT", bound=Well)
 
 _SUPPORTED_WELL_TYPES = {}
 
-register_well_type = make_serializable_type_registrar(
+well_type = make_serializable_type_registrar(
     base_cls=Well,
     registry=_SUPPORTED_WELL_TYPES,
     lock=threading.Lock(),
@@ -322,7 +321,6 @@ register_well_type = make_serializable_type_registrar(
     auto_register_deserializer=False,
 )
 """Decorator to register a new well type."""
-new_well_type = register_well_type  # Alias for clarity
 
 # Build and register serializers/deserializers for Well base class
 serialize_well = make_registry_serializer(
@@ -344,7 +342,7 @@ register_type_deserializer(
 )
 
 
-@register_well_type
+@well_type
 @attrs.define(hash=True)
 class InjectionWell(Well[Coordinates, InjectedFluid]):
     """
@@ -397,7 +395,7 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
         )
 
 
-@register_well_type
+@well_type
 @attrs.define(hash=True)
 class ProductionWell(Well[Coordinates, ProducedFluid]):
     """

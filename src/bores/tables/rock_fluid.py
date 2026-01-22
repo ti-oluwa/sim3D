@@ -3,6 +3,7 @@ import typing
 import attrs
 
 from bores.types import CapillaryPressures, RelativePermeabilities
+from bores.serialization import Serializable
 
 
 __all__ = ["RelativePermeabilityTable", "CapillaryPressureTable", "RockFluidTables"]
@@ -15,7 +16,9 @@ class RelativePermeabilityTable(typing.Protocol):
     relative permeabilities based on fluid saturations.
     """
 
-    def __call__(self, *args, **kwargs: typing.Any) -> RelativePermeabilities:
+    def __call__(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> RelativePermeabilities:
         """
         Computes relative permeabilities based on fluid saturations.
 
@@ -32,7 +35,7 @@ class CapillaryPressureTable(typing.Protocol):
     capillary pressures based on fluid saturations.
     """
 
-    def __call__(self, *args, **kwargs: typing.Any) -> CapillaryPressures:
+    def __call__(self, *args: typing.Any, **kwargs: typing.Any) -> CapillaryPressures:
         """
         Computes capillary pressures based on fluid saturations.
 
@@ -42,8 +45,8 @@ class CapillaryPressureTable(typing.Protocol):
         ...
 
 
-@attrs.frozen()
-class RockFluidTables:
+@attrs.frozen
+class RockFluidTables(Serializable):
     """
     Tables defining rock-fluid interactions in the reservoir.
     """

@@ -3,7 +3,8 @@ import typing
 import attrs
 
 from bores.boundary_conditions import BoundaryConditions
-from bores.constants import Constants
+from bores.constants import Constant, Constants
+from bores.serialization import Serializable
 from bores.tables.pvt import PVTTables
 from bores.tables.rock_fluid import RockFluidTables
 from bores.timing import Timer
@@ -22,8 +23,25 @@ from bores.wells import WellSchedules, Wells
 __all__ = ["Config"]
 
 
-@attrs.frozen()
-class Config:
+def _constants_serializer(constants: Constants, recurse: bool = True) -> dict:
+    """Serialize Constants object to a dictionary."""
+    return {name: value.dump(recurse) for name, value in constants.items()}
+
+
+def _constants_deserializer(data: dict) -> Constants:
+    """Deserialize dictionary to a Constants object."""
+    constants_dict = {name: Constant.load(value) for name, value in data.items()}
+    return Constants(_store=constants_dict)
+
+
+@attrs.define
+class Config(
+    Serializable,
+    load_exclude={"pvt_tables"},
+    dump_exclude={"pvt_tables"},
+    serializers={"constants": _constants_serializer},
+    deserializers={"constants": _constants_deserializer},
+):
     """Simulation run configuration and parameters."""
 
     timer: Timer
@@ -215,4 +233,3 @@ class Config:
 
     Note: Larger changes can cause density/viscosity jumps and well control issues.
     """
-

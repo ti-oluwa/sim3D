@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 
 from bores.errors import ValidationError
+from bores.serialization import Serializable
 from bores.types import CapillaryPressures, FloatOrArray, FluidPhase, WettabilityType
 
 
@@ -22,8 +23,8 @@ __all__ = [
 ]
 
 
-@attrs.frozen()
-class TwoPhaseCapillaryPressureTable:
+@attrs.frozen
+class TwoPhaseCapillaryPressureTable(Serializable):
     """
     Two-phase capillary pressure lookup table.
 
@@ -37,11 +38,9 @@ class TwoPhaseCapillaryPressureTable:
     """The first fluid phase (typically the wetting phase), e.g., 'water' or 'oil'."""
     non_wetting_phase: FluidPhase
     """The second fluid phase (typically the non-wetting phase), e.g., 'oil' or 'gas'."""
-    wetting_phase_saturation: npt.NDArray[np.floating] = attrs.field(
-        converter=np.asarray
-    )
+    wetting_phase_saturation: npt.NDArray = attrs.field(converter=np.asarray)
     """The saturation values for the wetting phase (phase1), ranging from 0 to 1."""
-    capillary_pressure: npt.NDArray[np.floating] = attrs.field(converter=np.asarray)
+    capillary_pressure: npt.NDArray = attrs.field(converter=np.asarray)
     """Capillary pressure values (Pc = P_non-wetting - P_wetting) corresponding to saturations."""
 
     def __attrs_post_init__(self) -> None:
@@ -119,8 +118,8 @@ class TwoPhaseCapillaryPressureTable:
         return self.get_capillary_pressure(wetting_phase_saturation)
 
 
-@attrs.frozen()
-class ThreePhaseCapillaryPressureTable:
+@attrs.frozen
+class ThreePhaseCapillaryPressureTable(Serializable):
     """
     Three-phase capillary pressure lookup table.
 
@@ -381,8 +380,8 @@ def compute_brooks_corey_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen()
-class BrooksCoreyCapillaryPressureModel:
+@attrs.frozen
+class BrooksCoreyCapillaryPressureModel(Serializable):
     """
     Brooks-Corey capillary pressure model for three-phase systems.
 
@@ -690,8 +689,8 @@ def compute_van_genuchten_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen()
-class VanGenuchtenCapillaryPressureModel:
+@attrs.frozen
+class VanGenuchtenCapillaryPressureModel(Serializable):
     """
     van Genuchten capillary pressure model for three-phase systems.
 
@@ -1007,8 +1006,8 @@ def compute_leverett_j_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
-@attrs.frozen()
-class LeverettJCapillaryPressureModel:
+@attrs.frozen
+class LeverettJCapillaryPressureModel(Serializable):
     """
     Leverett J-function capillary pressure model for three-phase systems.
 

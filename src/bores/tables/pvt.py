@@ -7,6 +7,7 @@ from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator, inte
 
 from bores._precision import get_dtype
 from bores.constants import c
+from bores.correlations.core import compute_gas_gravity, compute_oil_api_gravity
 from bores.errors import ValidationError
 from bores.grids.pvt import (
     build_estimated_solution_gas_to_oil_ratio_grid,
@@ -31,7 +32,7 @@ from bores.grids.pvt import (
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from bores.correlations.core import compute_gas_gravity, compute_oil_api_gravity
+from bores.serialization import Serializable
 from bores.types import (
     NDimensionalGrid,
     OneDimensionalGrid,
@@ -48,8 +49,8 @@ InterpolationMethod = typing.Literal["linear", "cubic"]
 _INTERPOLATION_DEGREES = {"linear": 1, "cubic": 3}
 
 
-@attrs.frozen()
-class PVTTableData:
+@attrs.frozen
+class PVTTableData(Serializable):
     """
     Raw PVT table data for serialization, inspection, and interpolator building.
 

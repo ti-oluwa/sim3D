@@ -8,6 +8,7 @@ from scipy.sparse.linalg import LinearOperator
 from typing_extensions import TypeAlias, TypedDict
 
 from bores.errors import ValidationError
+from bores.serialization import Serializable
 
 
 __all__ = [
@@ -71,7 +72,7 @@ OneDimensionalGrid = NDimensionalGrid[OneDimension]
 """1D grid type for simulation data, represented as a 1D NumPy array of floats"""
 
 
-class Orientation(enum.Enum):
+class Orientation(str, enum.Enum):
     """
     Enum representing directional orientation in a 2D/3D simulation.
     """
@@ -81,13 +82,19 @@ class Orientation(enum.Enum):
     Z = "z"
     UNSET = "unset"
 
+    def __str__(self) -> str:
+        return self.value
 
-class FluidPhase(enum.Enum):
+
+class FluidPhase(str, enum.Enum):
     """Enum representing the phase of the fluid in the reservoir."""
 
     WATER = "water"
     GAS = "gas"
     OIL = "oil"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 WellFluidType = typing.Literal["water", "oil", "gas"]
@@ -217,12 +224,15 @@ class WettabilityType(str, enum.Enum):
     OIL_WET = "oil_wet"
     MIXED_WET = "mixed_wet"
 
+    def __str__(self) -> str:
+        return self.value
+
 
 Wettability = WettabilityType  # Alias for backward compatibility
 
 
-@attrs.frozen(slots=True)
-class Range:
+@attrs.frozen
+class Range(Serializable):
     """
     Class representing minimum and maximum values.
     """

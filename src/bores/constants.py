@@ -5,12 +5,14 @@ import typing
 
 import attrs
 
+from bores.serialization import Serializable
+
 
 __all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
 
 
 @attrs.frozen(slots=True)
-class Constant:
+class Constant(Serializable):
     """
     A constant value with optional description and metadata.
 
@@ -500,7 +502,10 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
 }
 
 
-class Constants:
+class Constants(
+    Serializable,
+    fields={"_store": typing.Dict[str, Constant]},
+):
     """
     Physical constants and conversion factors used in reservoir simulations.
 
@@ -516,9 +521,24 @@ class Constants:
         instance._store = {}
         return instance
 
-    def __init__(self) -> None:
-        """Initialize the constants store with default values."""
-        for name, value in DEFAULT_CONSTANTS.items():
+    def __init__(
+        self,
+        defaults: typing.Optional[typing.Dict[str, typing.Any]] = None,
+        _store=None,
+    ) -> None:
+        """
+        Initialize the constants store with default values.
+
+        :param defaults: Optional dictionary of default constants to initialize with.
+            If None, uses the predefined DEFAULT_CONSTANTS.
+        :param _store: Internal use only. If provided, uses this dictionary as the store directly.
+        """
+        if _store is not None:
+            self._store = _store
+            return
+
+        defaults = defaults or DEFAULT_CONSTANTS
+        for name, value in defaults.items():
             if isinstance(value, Constant):
                 self._store[name] = value
             else:
@@ -614,6 +634,13 @@ class Constants:
         :return: True if the constant exists, False otherwise
         """
         return name in self._store
+
+    def __iter__(self) -> typing.Iterator[str]:
+        """Iterate over constant names.
+
+        :return: Iterator over constant names
+        """
+        return iter(self._store)
 
     def keys(self) -> typing.KeysView[str]:
         """Get all constant names.

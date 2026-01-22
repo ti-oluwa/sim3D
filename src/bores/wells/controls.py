@@ -32,10 +32,8 @@ __all__ = [
     "ConstantRateControl",
     "AdaptiveBHPRateControl",
     "MultiPhaseRateControl",
-    "register_well_control_type",
-    "new_well_control_type",
-    "register_rate_clamp_type",
-    "new_rate_clamp_type",
+    "well_control",
+    "rate_clamp",
 ]
 
 
@@ -225,7 +223,7 @@ class RateClamp(Serializable):
 
 _SUPPORTED_CLAMP_TYPES: typing.Dict[str, typing.Type["RateClamp"]] = {}
 
-register_rate_clamp_type = make_serializable_type_registrar(
+rate_clamp = make_serializable_type_registrar(
     base_cls=RateClamp,
     registry=_SUPPORTED_CLAMP_TYPES,
     lock=threading.Lock(),
@@ -235,7 +233,6 @@ register_rate_clamp_type = make_serializable_type_registrar(
     auto_register_deserializer=True,
 )
 """Decorator to register a new rate clamp type."""
-new_rate_clamp_type = register_rate_clamp_type  # Alias for clarity
 
 
 class WellControl(typing.Generic[WellFluidT_con], Serializable):
@@ -317,7 +314,7 @@ class WellControl(typing.Generic[WellFluidT_con], Serializable):
 
 _SUPPORTED_CONTROL_TYPES: typing.Dict[str, typing.Type["WellControl"]] = {}
 
-register_well_control_type = make_serializable_type_registrar(
+well_control = make_serializable_type_registrar(
     base_cls=WellControl,
     registry=_SUPPORTED_CONTROL_TYPES,
     lock=threading.Lock(),
@@ -327,10 +324,9 @@ register_well_control_type = make_serializable_type_registrar(
     auto_register_deserializer=True,
 )
 """Decorator to register a new well control type."""
-new_well_control_type = register_well_control_type  # Alias for clarity
 
 
-@register_rate_clamp_type
+@rate_clamp
 @attrs.frozen
 class ProductionClamp(RateClamp):
     """Clamp condition for production wells."""
@@ -356,7 +352,7 @@ class ProductionClamp(RateClamp):
         return None
 
 
-@register_rate_clamp_type
+@rate_clamp
 @attrs.frozen
 class InjectionClamp(RateClamp):
     """Clamp condition for injection wells."""
@@ -382,7 +378,7 @@ class InjectionClamp(RateClamp):
         return None
 
 
-@register_well_control_type
+@well_control
 @attrs.frozen
 class BHPControl(WellControl[WellFluidT_con]):
     """
@@ -534,7 +530,7 @@ class BHPControl(WellControl[WellFluidT_con]):
         return f"BHP Control (BHP={self.bhp:.6f} psi)"
 
 
-@register_well_control_type
+@well_control
 @attrs.frozen
 class ConstantRateControl(WellControl[WellFluidT_con]):
     """
@@ -782,7 +778,7 @@ class ConstantRateControl(WellControl[WellFluidT_con]):
         return f"Constant Rate Control (Rate={self.target_rate:.6f})"
 
 
-@register_well_control_type
+@well_control
 @attrs.frozen
 class AdaptiveBHPRateControl(WellControl[WellFluidT_con]):
     """
@@ -1071,25 +1067,9 @@ class AdaptiveBHPRateControl(WellControl[WellFluidT_con]):
         return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.bhp_limit:.6f} psi)"
 
 
-# _control_serializers = {
-#     "oil_control": well_control_serializer,
-#     "gas_control": well_control_serializer,
-#     "water_control": well_control_serializer,
-# }
-# _control_deserializers = {
-#     "oil_control": well_control_deserializer,
-#     "gas_control": well_control_deserializer,
-#     "water_control": well_control_deserializer,
-# }
-
-
-@register_well_control_type
+@well_control
 @attrs.frozen
-class MultiPhaseRateControl(
-    WellControl,
-    # serializers=_control_serializers,
-    # deserializers=_control_deserializers,
-):
+class MultiPhaseRateControl(WellControl):
     """
     Multi-phase rate control for wells.
 

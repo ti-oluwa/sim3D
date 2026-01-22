@@ -206,22 +206,20 @@ class SerializableMeta(type):
         if "__dump__" not in namespace or getattr(
             namespace["__dump__"], "__is_placeholder__", False
         ):
-            dumper = cls._build_default_dumper(
+            cls.__dump__ = cls._build_default_dumper(
                 fields=all_fields,
                 exclude=dump_exclude,
                 serializers=all_serializers,
             )
-            cls.__dump__ = dumper
 
         if "__load__" not in namespace or getattr(
             namespace["__load__"], "__is_placeholder__", False
         ):
-            loader = cls._build_default_loader(
+            cls.__load__ = cls._build_default_loader(
                 fields=all_fields,
                 exclude=load_exclude,
                 deserializers=all_deserializers,
             )
-            cls.__load__ = loader
 
         cls.__serializable_fields__ = all_fields
         cls.__serializable_serializers__ = all_serializers
@@ -571,7 +569,7 @@ def make_serializable_type_registrar(
     :return: A decorator to register `Serializable` subclasses.
     """
     if not key_attr:
-        raise ValueError("`key_attr` must be a non-empty string.")
+        raise ValidationError("`key_attr` must be a non-empty string.")
 
     lock = lock or threading.Lock()
 
@@ -702,3 +700,4 @@ def register_type_deserializer(
     """Register a global type deserializer for a specific type."""
     with _type_deserializers_lock:
         _TYPE_DESERIALIZERS[typ] = deserializer
+
