@@ -10,12 +10,7 @@ import numba
 from bores.constants import c
 from bores.correlations.core import compute_gas_compressibility_factor
 from bores.errors import ValidationError
-from bores.serialization import (
-    Serializable,
-    make_registry_deserializer,
-    make_registry_serializer,
-    make_serializable_type_registrar,
-)
+from bores.serialization import Serializable, make_serializable_type_registrar
 from bores.tables.pvt import PVTTables
 from bores.types import FluidPhase
 from bores.wells.core import (
@@ -41,10 +36,6 @@ __all__ = [
     "new_well_control_type",
     "register_rate_clamp_type",
     "new_rate_clamp_type",
-    "rate_clamp_serializer",
-    "rate_clamp_deserializer",
-    "well_control_serializer",
-    "well_control_deserializer",
 ]
 
 
@@ -240,32 +231,14 @@ register_rate_clamp_type = make_serializable_type_registrar(
     lock=threading.Lock(),
     key_attr="__type__",
     allow_override=False,
+    auto_register_serializer=True,
+    auto_register_deserializer=True,
 )
 """Decorator to register a new rate clamp type."""
 new_rate_clamp_type = register_rate_clamp_type  # Alias for clarity
 
-rate_clamp_serializer = make_registry_serializer(
-    base_cls=RateClamp,
-    registry=_SUPPORTED_CLAMP_TYPES,
-    key_attr="__type__",
-)
-rate_clamp_deserializer = make_registry_deserializer(
-    base_cls=RateClamp,
-    registry=_SUPPORTED_CLAMP_TYPES,
-)
 
-# Add clamp serializers/deserializers to base well control so all subclasses automatically inherit them
-# and know how to properly serialize/deserialize clamp conditions
-_clamp_serializers = {"clamp": rate_clamp_serializer}
-_clamp_deserializers = {"clamp": rate_clamp_deserializer}
-
-
-class WellControl(
-    typing.Generic[WellFluidT_con],
-    Serializable,
-    serializers=_clamp_serializers,
-    deserializers=_clamp_deserializers,
-):
+class WellControl(typing.Generic[WellFluidT_con], Serializable):
     """
     Base class for well control implementations.
 
@@ -350,19 +323,11 @@ register_well_control_type = make_serializable_type_registrar(
     lock=threading.Lock(),
     key_attr="__type__",
     allow_override=False,
+    auto_register_serializer=True,
+    auto_register_deserializer=True,
 )
 """Decorator to register a new well control type."""
 new_well_control_type = register_well_control_type  # Alias for clarity
-
-well_control_serializer = make_registry_serializer(
-    base_cls=WellControl,
-    registry=_SUPPORTED_CONTROL_TYPES,
-    key_attr="__type__",
-)
-well_control_deserializer = make_registry_deserializer(
-    base_cls=WellControl,
-    registry=_SUPPORTED_CONTROL_TYPES,
-)
 
 
 @register_rate_clamp_type
@@ -1106,24 +1071,24 @@ class AdaptiveBHPRateControl(WellControl[WellFluidT_con]):
         return f"Adaptive BHP/Rate Control (Rate={self.target_rate:.6f}, Min BHP={self.bhp_limit:.6f} psi)"
 
 
-_control_serializers = {
-    "oil_control": well_control_serializer,
-    "gas_control": well_control_serializer,
-    "water_control": well_control_serializer,
-}
-_control_deserializers = {
-    "oil_control": well_control_deserializer,
-    "gas_control": well_control_deserializer,
-    "water_control": well_control_deserializer,
-}
+# _control_serializers = {
+#     "oil_control": well_control_serializer,
+#     "gas_control": well_control_serializer,
+#     "water_control": well_control_serializer,
+# }
+# _control_deserializers = {
+#     "oil_control": well_control_deserializer,
+#     "gas_control": well_control_deserializer,
+#     "water_control": well_control_deserializer,
+# }
 
 
 @register_well_control_type
 @attrs.frozen
 class MultiPhaseRateControl(
     WellControl,
-    serializers=_control_serializers,
-    deserializers=_control_deserializers,
+    # serializers=_control_serializers,
+    # deserializers=_control_deserializers,
 ):
     """
     Multi-phase rate control for wells.

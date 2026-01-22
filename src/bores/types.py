@@ -79,6 +79,7 @@ class Orientation(enum.Enum):
     X = "x"
     Y = "y"
     Z = "z"
+    UNSET = "unset"
 
 
 class FluidPhase(enum.Enum):

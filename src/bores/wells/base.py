@@ -15,6 +15,8 @@ from bores.serialization import (
     make_registry_deserializer,
     make_registry_serializer,
     make_serializable_type_registrar,
+    register_type_serializer,
+    register_type_deserializer,
 )
 from bores.tables.pvt import PVTTables
 from bores.types import Coordinates, Orientation, ThreeDimensions, TwoDimensions
@@ -58,14 +60,15 @@ class Well(typing.Generic[Coordinates, WellFluidT], Serializable):
     """Control strategy for the well (e.g., rate control, pressure control)."""
     skin_factor: float = 0.0
     """Skin factor for the well, affecting flow performance."""
-    orientation: Orientation = attrs.field(init=False, default=Orientation.Z)
+    orientation: Orientation = attrs.field(default=Orientation.UNSET)
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
 
     def __attrs_post_init__(self) -> None:
         """Ensure the well has a valid orientation."""
-        self.orientation = self.get_orientation()
+        if self.orientation == Orientation.UNSET:
+            self.orientation = self.get_orientation()
 
     @property
     def is_shut_in(self) -> bool:
@@ -314,18 +317,30 @@ register_well_type = make_serializable_type_registrar(
     lock=threading.Lock(),
     key_attr="__type__",
     allow_override=False,
+    # Do not register serializers/deserializers for the base Well class yet
+    auto_register_serializer=False,
+    auto_register_deserializer=False,
 )
 """Decorator to register a new well type."""
 new_well_type = register_well_type  # Alias for clarity
 
+# Build and register serializers/deserializers for Well base class
 serialize_well = make_registry_serializer(
     base_cls=Well,
     registry=_SUPPORTED_WELL_TYPES,
     key_attr="__type__",
 )
+register_type_serializer(
+    typ=Well,
+    serializer=serialize_well,
+)
 deserialize_well = make_registry_deserializer(
     base_cls=Well,
     registry=_SUPPORTED_WELL_TYPES,
+)
+register_type_deserializer(
+    typ=Well,
+    deserializer=deserialize_well,
 )
 
 
@@ -445,7 +460,7 @@ def _expand_interval(
             )
         )
     else:
-        raise ValidationError("Invalid well orientation")
+        raise ValidationError(f"Invalid well orientation {orientation!r}")
 
     return typing.cast(typing.List[Coordinates], locations)
 
