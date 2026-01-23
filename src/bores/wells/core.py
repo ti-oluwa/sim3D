@@ -147,7 +147,7 @@ def compute_3D_effective_drainage_radius(
             (delta_x**2 + delta_y**2) / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
         )
     else:
-        raise ValidationError("Invalid well orientation")
+        raise ValidationError(f"Invalid well orientation {well_orientation}")
 
     return effective_drainage_radius
 
@@ -190,7 +190,7 @@ def compute_2D_effective_drainage_radius(
             / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
         )
     else:
-        raise ValidationError("Invalid well orientation")
+        raise ValidationError(f"Invalid well orientation {well_orientation}")
     return effective_drainage_radius
 
 
@@ -924,7 +924,7 @@ class InjectedFluid(WellFluid):
         )
 
 
-@attrs.frozen()
+@attrs.frozen
 class ProducedFluid(WellFluid):  # type: ignore[attr-defined]
     """Properties of the fluid being produced by a well."""
 

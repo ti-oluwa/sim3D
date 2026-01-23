@@ -11,13 +11,13 @@ from typing_extensions import Self
 
 from bores.errors import ValidationError
 from bores.serialization import (
-    Serializable,
     make_registry_deserializer,
     make_registry_serializer,
     make_serializable_type_registrar,
-    register_type_serializer,
     register_type_deserializer,
+    register_type_serializer,
 )
+from bores.stores import StoreSerializable
 from bores.tables.pvt import PVTTables
 from bores.types import Coordinates, Orientation, ThreeDimensions, TwoDimensions
 from bores.wells.controls import WellControl
@@ -30,7 +30,6 @@ from bores.wells.core import (
     compute_effective_permeability_for_well,
     compute_well_index,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ __all__ = [
 
 
 @attrs.define(hash=True)
-class Well(typing.Generic[Coordinates, WellFluidT], Serializable):
+class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
     """Models a well in the reservoir model."""
 
     name: str
@@ -59,7 +58,9 @@ class Well(typing.Generic[Coordinates, WellFluidT], Serializable):
     """Control strategy for the well (e.g., rate control, pressure control)."""
     skin_factor: float = 0.0
     """Skin factor for the well, affecting flow performance."""
-    orientation: Orientation = attrs.field(default=Orientation.UNSET)
+    orientation: Orientation = attrs.field(
+        default=Orientation.UNSET, converter=Orientation
+    )
     """Orientation of the well, indicating its dominant direction in the reservoir grid."""
     is_active: bool = True
     """Indicates whether the well is active or not. Set to False if the well is shut in or inactive."""
@@ -315,7 +316,7 @@ well_type = make_serializable_type_registrar(
     registry=_SUPPORTED_WELL_TYPES,
     lock=threading.Lock(),
     key_attr="__type__",
-    allow_override=False,
+    override=False,
     # Do not register serializers/deserializers for the base Well class yet
     auto_register_serializer=False,
     auto_register_deserializer=False,
@@ -558,7 +559,7 @@ _wells_deserializers = {
 @attrs.frozen
 class Wells(
     typing.Generic[Coordinates],
-    Serializable,
+    StoreSerializable,
     fields={
         "injection_wells": typing.Sequence[InjectionWell],
         "production_wells": typing.Sequence[ProductionWell],

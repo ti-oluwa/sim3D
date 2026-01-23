@@ -32,7 +32,7 @@ from bores.grids.pvt import (
     build_water_formation_volume_factor_grid,
     build_water_viscosity_grid,
 )
-from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 from bores.types import (
     NDimensionalGrid,
     OneDimensionalGrid,
@@ -50,7 +50,7 @@ _INTERPOLATION_DEGREES = {"linear": 1, "cubic": 3}
 
 
 @attrs.frozen
-class PVTTableData(Serializable):
+class PVTTableData(StoreSerializable):
     """
     Raw PVT table data for serialization, inspection, and interpolator building.
 

@@ -10,6 +10,7 @@ import numpy.typing as npt
 
 from bores.errors import ValidationError
 from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 from bores.types import (
     FloatOrArray,
     FluidPhase,
@@ -24,6 +25,8 @@ __all__ = [
     "mixing_rule",
     "mixing_rule_serializer",
     "mixing_rule_deserializer",
+    "list_mixing_rules",
+    "get_mixing_rule",
     "TwoPhaseRelPermTable",
     "ThreePhaseRelPermTable",
     "min_rule",
@@ -89,6 +92,16 @@ def mixing_rule(
 ) -> typing.Callable[[MixingRule], MixingRule]: ...
 
 
+@typing.overload
+def mixing_rule(
+    func: MixingRule,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+    serializer: typing.Optional[typing.Callable[[MixingRule, bool], T]] = None,
+    deserializer: typing.Optional[typing.Callable[[T], MixingRule]] = None,
+) -> MixingRule: ...
+
+
 def mixing_rule(
     func: typing.Optional[MixingRule] = None,
     name: typing.Optional[str] = None,
@@ -99,6 +112,9 @@ def mixing_rule(
     """
     Decorator to register a mixing rule function.
 
+    A mixing rule function combines two-phase relative permeabilities
+    into a three-phase relative permeability based on saturations.
+
     :param func: Mixing rule function to register.
     :param name: Optional name to register the function under.
     :param override: Whether to override an existing registration with the same name.
@@ -108,14 +124,37 @@ def mixing_rule(
     :param deserializer: Optional function to deserialize the mixing rule.
         This is especially useful for parameterized mixing rules.
     :return: The original function.
+
+    Example:
+    ```python
+    @mixing_rule(name="custom_rule")
+    def custom_rule(
+        kro_w: FloatOrArray,
+        kro_g: FloatOrArray,
+        water_saturation: FloatOrArray,
+        oil_saturation: FloatOrArray,
+        gas_saturation: FloatOrArray,
+    ) -> FloatOrArray:
+        # Custom mixing logic here
+        return (kro_w + kro_g) / 2.0
+
+    # Usage
+    rule = get_mixing_rule("custom_rule")
+    result = rule(kro_w, kro_g, Sw, So, Sg)
+    ```
     """
 
     def decorator(func: MixingRule) -> MixingRule:
-        rule_name = name or func.__name__  # type: ignore[attr-defined]
+        rule_name = name or getattr(func, "__name__", None)
+        if rule_name is None:
+            raise ValueError(
+                "Mixing rule function  must have a `__name__` attribute or a name must be provided."
+            )
+
         with _lock:
             if rule_name in _MIXING_RULES and not override:
                 raise ValidationError(
-                    f"Mixing rule '{rule_name}' is already registered."
+                    f"Mixing rule '{rule_name}' is already registered. Use `override=True` or provide a different name."
                 )
 
             _MIXING_RULES[rule_name] = func
@@ -130,7 +169,7 @@ def mixing_rule(
     return decorator(func)
 
 
-def mixing_rule_serializer(rule: MixingRule, recurse: bool = True) -> str:
+def mixing_rule_serializer(rule: MixingRule, recurse: bool = True) -> typing.Any:
     """
     Serialize a mixing rule function to its registered name.
 
@@ -160,6 +199,32 @@ def mixing_rule_deserializer(name: str) -> MixingRule:
         if name in _MIXING_RULE_DESERIALIZERS:
             return _MIXING_RULE_DESERIALIZERS[name](name)
         elif name in _MIXING_RULES:
+            return _MIXING_RULES[name]
+    raise ValidationError(
+        f"Mixing rule '{name}' is not registered. Use `@mixing_rule` to register."
+    )
+
+
+def list_mixing_rules() -> typing.List[str]:
+    """
+    List all registered mixing rule names.
+
+    :return: List of registered mixing rule names.
+    """
+    with _lock:
+        return list(_MIXING_RULES.keys())
+
+
+def get_mixing_rule(name: str) -> MixingRule:
+    """
+    Get a registered mixing rule function by name.
+
+    :param name: Registered name of the mixing rule.
+    :return: Mixing rule function.
+    :raises ValidationError: If the mixing rule is not registered.
+    """
+    with _lock:
+        if name in _MIXING_RULES:
             return _MIXING_RULES[name]
     raise ValidationError(
         f"Mixing rule '{name}' is not registered. Use `@mixing_rule` to register."
@@ -722,7 +787,7 @@ class TwoPhaseRelPermTable(Serializable):
 
 @attrs.frozen
 class ThreePhaseRelPermTable(
-    Serializable,
+    StoreSerializable,
     serializers={"mixing_rule": mixing_rule_serializer},
     deserializers={"mixing_rule": mixing_rule_deserializer},
 ):
@@ -1016,8 +1081,8 @@ def compute_corey_three_phase_relative_permeabilities(
 
 @attrs.frozen
 class BrooksCoreyThreePhaseRelPermModel(
-    Serializable,
-    serializable_serializers={"mixing_rule": mixing_rule_serializer},
+    StoreSerializable,
+    serializers={"mixing_rule": mixing_rule_serializer},
     deserializers={"mixing_rule": mixing_rule_deserializer},
 ):
     """

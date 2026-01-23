@@ -5,15 +5,17 @@ Fracture definition API for 3D reservoir models.
 import logging
 import typing
 
-import numba
 import attrs
+import numba
 import numpy as np
 
+from bores._precision import get_dtype
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.models import ReservoirModel
+from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 from bores.types import ThreeDimensions
-from bores._precision import get_dtype
 
 __all__ = [
     "Fracture",
@@ -301,7 +303,7 @@ def _compute_linear_default(
 
 
 @attrs.define(slots=True, frozen=True)
-class FractureDefaults:
+class FractureDefaults(Serializable):
     """
     Default value provider for reservoir properties.
 
@@ -445,8 +447,8 @@ class FractureDefaults:
         return dtype(np.mean(valid_data))  # type: ignore
 
 
-@attrs.frozen()
-class FractureGeometry:
+@attrs.frozen
+class FractureGeometry(Serializable):
     """
     Fracture geometry specification.
 
@@ -637,8 +639,8 @@ class FractureGeometry:
             return self.z_range
 
 
-@attrs.frozen()
-class Fracture:
+@attrs.frozen
+class Fracture(StoreSerializable):
     """
     Configuration for applying fractures to reservoir models.
 
@@ -1286,7 +1288,7 @@ def _apply_geometric_throw(
     return new_model
 
 
-@attrs.frozen()
+@attrs.frozen
 class DisplacementContext:
     """
     Context object that handles block-based displacement for all grids.

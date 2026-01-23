@@ -11,6 +11,7 @@ from bores.constants import c
 from bores.correlations.core import compute_gas_compressibility_factor
 from bores.errors import ValidationError
 from bores.serialization import Serializable, make_serializable_type_registrar
+from bores.stores import StoreSerializable
 from bores.tables.pvt import PVTTables
 from bores.types import FluidPhase
 from bores.wells.core import (
@@ -20,6 +21,7 @@ from bores.wells.core import (
     compute_required_bhp_for_gas_rate,
     compute_required_bhp_for_oil_rate,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -221,21 +223,20 @@ class RateClamp(Serializable):
         raise NotImplementedError
 
 
-_SUPPORTED_CLAMP_TYPES: typing.Dict[str, typing.Type["RateClamp"]] = {}
-
+_CLAMP_TYPES: typing.Dict[str, typing.Type[RateClamp]] = {}
 rate_clamp = make_serializable_type_registrar(
     base_cls=RateClamp,
-    registry=_SUPPORTED_CLAMP_TYPES,
+    registry=_CLAMP_TYPES,
     lock=threading.Lock(),
     key_attr="__type__",
-    allow_override=False,
+    override=False,
     auto_register_serializer=True,
     auto_register_deserializer=True,
 )
 """Decorator to register a new rate clamp type."""
 
 
-class WellControl(typing.Generic[WellFluidT_con], Serializable):
+class WellControl(typing.Generic[WellFluidT_con], StoreSerializable):
     """
     Base class for well control implementations.
 
@@ -312,14 +313,13 @@ class WellControl(typing.Generic[WellFluidT_con], Serializable):
         raise NotImplementedError
 
 
-_SUPPORTED_CONTROL_TYPES: typing.Dict[str, typing.Type["WellControl"]] = {}
-
+_WELL_CONTROLS: typing.Dict[str, typing.Type["WellControl"]] = {}
 well_control = make_serializable_type_registrar(
     base_cls=WellControl,
-    registry=_SUPPORTED_CONTROL_TYPES,
+    registry=_WELL_CONTROLS,
     lock=threading.Lock(),
     key_attr="__type__",
-    allow_override=False,
+    override=False,
     auto_register_serializer=True,
     auto_register_deserializer=True,
 )

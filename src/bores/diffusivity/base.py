@@ -1,5 +1,6 @@
 import functools
 import logging
+import threading
 import typing
 import warnings
 
@@ -43,6 +44,12 @@ __all__ = [
     "solve_linear_system",
     "to_1D_index_interior_only",
     "from_1D_index_interior_only",
+    "preconditioner_factory",
+    "solver_func",
+    "list_preconditioner_factories",
+    "list_solver_funcs",
+    "get_preconditioner_factory",
+    "get_solver_func",
 ]
 
 
@@ -494,14 +501,17 @@ def _spsolve(
 _lgmres = functools.partial(lgmres, inner_m=50, outer_k=5)
 
 
-_preconditioner_factories = {
+_preconditoner_registry_lock = threading.Lock()
+_PRECONDITIONER_FACTORIES = {
     "cpr": build_cpr_preconditioner,
     "amg": build_amg_preconditioner,
     "ilu": build_ilu_preconditioner,
     "diagonal": build_diagonal_preconditioner,
 }
+"""Registered preconditioner factory functions."""
 
-_solvers = {
+_solver_registry_lock = threading.Lock()
+_SOLVER_FUNCS = {
     "lgmres": _lgmres,
     "bicgstab": bicgstab,
     "tfqmr": tfqmr,
@@ -510,6 +520,187 @@ _solvers = {
     "cgs": cgs,
     "direct": _spsolve,
 }
+"""Registered solver functions."""
+
+
+@typing.overload
+def preconditioner_factory(func: PreconditionerFactory) -> PreconditionerFactory: ...
+
+
+@typing.overload
+def preconditioner_factory(
+    func: None = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Callable[[PreconditionerFactory], PreconditionerFactory]: ...
+
+
+@typing.overload
+def preconditioner_factory(
+    func: PreconditionerFactory,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> PreconditionerFactory: ...
+
+
+def preconditioner_factory(
+    func: typing.Optional[PreconditionerFactory] = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Union[
+    PreconditionerFactory,
+    typing.Callable[[PreconditionerFactory], PreconditionerFactory],
+]:
+    """
+    Decorator to register a preconditioner factory function.
+
+    A preconditioner factory is a callable that takes a CSR matrix and returns
+    a SciPy `LinearOperator` representing the preconditioner. It simply builds
+    the preconditioner when given the system matrix.
+
+    :param func: The preconditioner factory function to decorate.
+    :param name: Optional name to register the preconditioner under. If not provided,
+        the function's `__name__` attribute is used.
+    :param override: If True, allows overriding an existing preconditioner factory
+    :return: The original function, unmodified.
+    """
+
+    def decorator(func: PreconditionerFactory) -> PreconditionerFactory:
+        with _preconditoner_registry_lock:
+            key = name or getattr(func, "__name__", None)
+            if not key:
+                raise ValueError(
+                    "Preconditioner factory  must have a `__name__` attribute or a name must be provided."
+                )
+
+            if not override and key in _PRECONDITIONER_FACTORIES:
+                raise ValueError(
+                    f"Preconditioner factory '{name}' is already registered. "
+                    f"Use `override=True` to replace it."
+                )
+            _PRECONDITIONER_FACTORIES[key] = func
+        return func
+
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
+def list_preconditioner_factories() -> typing.List[str]:
+    """
+    List the names of all registered preconditioner factories.
+
+    :return: List of registered preconditioner factory names.
+    """
+    with _preconditoner_registry_lock:
+        return list(_PRECONDITIONER_FACTORIES.keys())
+
+
+def get_preconditioner_factory(name: str) -> PreconditionerFactory:
+    """
+    Get a registered preconditioner factory by name.
+
+    :param name: Name of the preconditioner factory.
+    :return: The corresponding preconditioner factory function.
+    :raises ValidationError: If the preconditioner factory is unknown.
+    """
+    with _preconditoner_registry_lock:
+        if name not in _PRECONDITIONER_FACTORIES:
+            raise ValidationError(
+                f"Unknown preconditioner factory: {name!r}. "
+                f"Use `@preconditioner_factory` to register new preconditioners. "
+                f"Available preconditioners: {list(_PRECONDITIONER_FACTORIES.keys())}"
+            )
+        return _PRECONDITIONER_FACTORIES[name]
+
+
+@typing.overload
+def solver_func(func: SolverFunc) -> SolverFunc: ...
+
+
+@typing.overload
+def solver_func(
+    func: None = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Callable[[SolverFunc], SolverFunc]: ...
+
+
+@typing.overload
+def solver_func(
+    func: SolverFunc,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> SolverFunc: ...
+
+
+def solver_func(
+    func: typing.Optional[SolverFunc] = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Union[
+    SolverFunc,
+    typing.Callable[[SolverFunc], SolverFunc],
+]:
+    """
+    Decorator to register a solver function.
+
+    A solver function is a callable that implements an iterative solver
+    interface compatible with SciPy's sparse linear algebra solvers.
+
+    :param func: The solver function to decorate.
+    :param name: Optional name to register the solver under. If not provided,
+        the function's `__name__` attribute is used.
+    :param override: If True, allows overriding an existing solver function.
+    :return: The original function, unmodified.
+    """
+
+    def decorator(func: SolverFunc) -> SolverFunc:
+        with _solver_registry_lock:
+            key = name or getattr(func, "__name__", None)
+            if not key:
+                raise ValueError(
+                    "Solver function  must have a `__name__` attribute or a name must be provided."
+                )
+
+            if not override and key in _SOLVER_FUNCS:
+                raise ValueError(
+                    f"Solver function '{name}' is already registered. "
+                    f"Use `override=True` to replace it."
+                )
+            _SOLVER_FUNCS[key] = func
+        return func
+
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
+def list_solver_funcs() -> typing.List[str]:
+    """
+    List the names of all registered solver functions.
+
+    :return: List of registered solver function names.
+    """
+    with _solver_registry_lock:
+        return list(_SOLVER_FUNCS.keys())
+
+
+def get_solver_func(name: str) -> typing.Optional[SolverFunc]:
+    """
+    Get a registered solver function by name.
+
+    :param name: Name of the solver function.
+    :return: The corresponding solver function.
+    """
+    with _solver_registry_lock:
+        if name not in _SOLVER_FUNCS:
+            raise ValidationError(
+                f"Unknown solver function: {name!r}. "
+                f"Use `@solver_func` to register new solvers. "
+                f"Available solvers: {list(_SOLVER_FUNCS.keys())}"
+            )
+        return _SOLVER_FUNCS[name]
 
 
 def _get_preconditioner(
@@ -527,12 +718,14 @@ def _get_preconditioner(
     if isinstance(preconditioner, (type(None), LinearOperator)):
         return preconditioner
     elif isinstance(preconditioner, str):
-        if preconditioner in _preconditioner_factories:
-            preconditioner_factory = _preconditioner_factories[preconditioner]
+        if preconditioner in _PRECONDITIONER_FACTORIES:
+            preconditioner_factory = _PRECONDITIONER_FACTORIES[preconditioner]
             M = preconditioner_factory(A_csr)
             return M
         else:
-            raise ValidationError(f"Unknown preconditioner type: {preconditioner!r}")
+            raise ValidationError(
+                f"Unknown preconditioner type: {preconditioner!r}. Available preconditioners: {list(_PRECONDITIONER_FACTORIES.keys())}"
+            )
     elif callable(preconditioner):
         preconditioner_factory = typing.cast(PreconditionerFactory, preconditioner)
         M = preconditioner_factory(A_csr)
@@ -540,7 +733,7 @@ def _get_preconditioner(
     return preconditioner  # type: ignore[return-value]
 
 
-def _get_solver_funcs(
+def _get_solver_func(
     solver: typing.Union[Solver, typing.Iterable[Solver]],
 ) -> typing.List[SolverFunc]:
     """
@@ -552,19 +745,21 @@ def _get_solver_funcs(
     :raises TypeError: If the solver specification is of an invalid type.
     """
     if isinstance(solver, str):
-        if solver in _solvers:
-            solver_func = _solvers[solver]
+        if solver in _SOLVER_FUNCS:
+            solver_func = _SOLVER_FUNCS[solver]
             if isinstance(solver_func, (list, tuple)):
                 return list(solver_func)  # type: ignore[return-value]
             return [solver_func]
-        raise ValidationError(f"Unknown solver type: {solver!r}")
+        raise ValidationError(
+            f"Unknown solver type: {solver!r}. Available solvers: {list(_SOLVER_FUNCS.keys())}"
+        )
     elif callable(solver):
         return [solver]  # type: ignore[return-value]
     elif isinstance(solver, (list, tuple, set)):
         solver_funcs = []
         for s in solver:
-            if isinstance(s, str) and s in _solvers:
-                solver_funcs.append(_solvers[s])
+            if isinstance(s, str) and s in _SOLVER_FUNCS:
+                solver_funcs.append(_SOLVER_FUNCS[s])
             elif callable(s):
                 solver_funcs.append(s)
             else:
@@ -609,7 +804,7 @@ def solve_linear_system(
     :return: A tuple (x, M) where x is the solution vector and M is the preconditioner used,
     :raises RuntimeError: If both solvers fail to converge.
     """
-    solver_funcs = _get_solver_funcs(solver)
+    solver_funcs = _get_solver_func(solver)
     is_direct = _spsolve in solver_funcs
     if is_direct:
         # No need to build preconditioner for direct solver

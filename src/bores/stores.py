@@ -14,12 +14,14 @@ import h5py
 from numcodecs import Blosc
 import numpy as np
 import orjson
+from typing_extensions import Self
 from typing_extensions import ParamSpec
+import yaml
 import zarr
 from zarr.storage import StoreLike
 
 from bores.errors import StorageError, ValidationError
-from bores.serialization import SerializableT
+from bores.serialization import Serializable, SerializableT
 from bores.utils import Lazy, load_pickle, save_as_pickle
 
 
@@ -30,6 +32,7 @@ __all__ = [
     "PickleStore",
     "HDF5Store",
     "JSONStore",
+    "YAMLStore",
 ]
 
 IS_PYTHON_310_OR_LOWER = sys.version_info < (3, 11)
@@ -961,9 +964,81 @@ class JSONStore(DataStore[SerializableT]):
                 yield obj
 
 
+@storage_backend("yaml")
+class YAMLStore(DataStore[SerializableT]):
+    """
+    YAML-based storage.
+
+    Human-readable format, good for configs, small datasets, and debugging.
+    """
+
+    supports_append: bool = False
+
+    def __init__(
+        self,
+        filepath: typing.Union[PathLike, str],
+    ):
+        """
+        Initialize the store
+
+        :param filepath: Path to the YAML file
+        :raises StorageError: If filepath is invalid or has wrong extension
+        """
+        self.filepath = _validate_filepath(filepath, expected_extension=".yaml")
+
+    @_raise_storage_error
+    def dump(  # type: ignore[override]
+        self,
+        data: typing.Iterable[SerializableT],
+        exist_ok: bool = True,
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        """
+        Dump states using YAML.
+
+        :param states: Iterable of serializable instances to dump
+        :param exist_ok: If True, will overwrite existing files safely
+        :param validator: Optional callable to validate/transform each item before dumping
+        """
+        data_list = []
+        for item in data:
+            if validator:
+                item = validator(item)
+            data_list.append(item.dump(recurse=True))
+
+        with open(self.filepath, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data_list, f, sort_keys=False)
+        return
+
+    @_raise_storage_error
+    def load(  # type: ignore[override]
+        self,
+        typ: typing.Type[SerializableT],
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        **kwargs: typing.Any,
+    ) -> typing.Generator[SerializableT, None, None]:
+        """
+        Load states from YAML file.
+
+        :param typ: Type of the serializable objects to load
+        :param validator: Optional callable to validate/transform each item after loading
+        :return: Generator yielding instances of the specified type
+        """
+        with open(self.filepath, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        for item in data:
+            obj = typ.load(item)
+            if validator is not None:
+                yield validator(obj)
+            else:
+                yield obj
+
+
 def new_store(
     backend: typing.Union[
-        str, typing.Literal["zarr", "hdf5", "json", "pickle"]
+        str, typing.Literal["zarr", "hdf5", "json", "pickle", "yaml"]
     ] = "zarr",
     *args: typing.Any,
     **kwargs: typing.Any,
@@ -990,3 +1065,57 @@ def new_store(
 
     store_class = _STORAGE_BACKENDS[backend]
     return store_class(*args, **kwargs)
+
+
+class StoreSerializable(Serializable):
+    """Serializable mixin with built-in store/file support."""
+
+    __abstract_serializable__ = True
+
+    @classmethod
+    def from_store(
+        cls, store: DataStore[Self], **load_kwargs: typing.Any
+    ) -> typing.Optional[Self]:
+        """
+        Load a `Config` instance from a `DataStore`.
+
+        :param store: `DataStore` to load the `Config` from.
+        :return: Loaded `Config` instance.
+        """
+        return next(iter(store.load(cls, **load_kwargs)), None)
+
+    def to_store(self, store: DataStore[Self], **dump_kwargs: typing.Any) -> None:
+        """
+        Dump the `Config` instance to a `DataStore`.
+
+        :param store: `DataStore` to dump the Config to.
+        """
+        store.dump([self], **dump_kwargs)
+
+    @classmethod
+    def from_file(
+        cls, filepath: typing.Union[str, PathLike], **load_kwargs: typing.Any
+    ) -> typing.Optional[Self]:
+        """
+        Load a `Config` instance from a file.
+
+        :param filepath: Path to the file to load the `Config` from.
+        :return: Loaded `Config` instance.
+        """
+        path = Path(filepath)
+        ext = path.suffix.lower().lstrip(".")
+        store = new_store(ext, path)
+        return cls.from_store(store, **load_kwargs)
+
+    def to_file(
+        self, filepath: typing.Union[str, PathLike], **dump_kwargs: typing.Any
+    ) -> None:
+        """
+        Dump the `Config` instance to a file.
+
+        :param filepath: Path to the file to dump the `Config` to.
+        """
+        path = Path(filepath)
+        ext = path.suffix.lower().lstrip(".")
+        store = new_store(ext, path)
+        self.to_store(store, **dump_kwargs)

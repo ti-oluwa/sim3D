@@ -11,7 +11,20 @@ from typing_extensions import Self
 from bores.errors import DeserializationError, SerializationError, ValidationError
 
 
-__all__ = ["Serializable", "dump", "load"]
+__all__ = ["Serializable", "dump", "load", "converter"]
+
+
+_TYPE_SERIALIZERS: typing.Dict[
+    typing.Type[typing.Any],
+    typing.Callable[[typing.Any, bool], typing.Dict[str, typing.Any]],
+] = {}
+_TYPE_DESERIALIZERS: typing.Dict[
+    typing.Type[typing.Any],
+    typing.Callable[[typing.Mapping[str, typing.Any]], typing.Any],
+] = {}
+_type_serializers_lock = threading.Lock()
+_type_deserializers_lock = threading.Lock()
+
 
 converter = cattrs.Converter()
 
@@ -88,6 +101,9 @@ converter.register_structure_hook_func(
 
 def _dump_value(value: typing.Any, recurse: bool):
     """Dump a value using cattrs, handling nested `Serializable` objects."""
+    if value is None:
+        return None
+
     if isinstance(value, Serializable):
         return value.__dump__(recurse)
 
@@ -118,10 +134,14 @@ def _load_value(value: typing.Any, typ: typing.Type[typing.Any]):
         origin = typing.get_origin(typ)
         args = typing.get_args(typ)
 
-        if origin in (list, tuple, Sequence):
+        if origin in (list, tuple) or (
+            origin and isinstance(origin, type) and issubclass(origin, Sequence)
+        ):
             return [_load_value(v, args[0]) for v in value]
 
-        if origin in (dict, Mapping):
+        if origin in (dict,) or (
+            origin and isinstance(origin, type) and issubclass(origin, Mapping)
+        ):
             return {k: _load_value(v, args[1]) for k, v in value.items()}
 
     return converter.structure(value, typ)
@@ -152,12 +172,6 @@ class SerializableMeta(type):
         ] = None,
     ):
         super().__init__(name, bases, namespace)
-        if (
-            "__abstract_serializable__" in namespace
-            and namespace["__abstract_serializable__"]
-        ):
-            return
-
         parent_serializers = {}
         parent_deserializers = {}
         parent_fields = {}
@@ -178,48 +192,51 @@ class SerializableMeta(type):
         cls_fields = fields or namespace.get("__annotations__", None)
         all_fields = {**parent_fields, **(cls_fields or {})}
 
-        auto_serializers = cls._discover_type_serializers(all_fields)
-        auto_deserializers = cls._discover_type_deserializers(all_fields)
+        type_serializers = cls._discover_type_serializers(all_fields)
+        type_deserializers = cls._discover_type_deserializers(all_fields)
         # Build final serializers/deserializers with proper precedence:
         # - Auto-discovered (lowest priority)
         # - Parent class (medium priority)
         # - Explicit on this class (highest priority)
         all_serializers = {
-            **auto_serializers,
+            **type_serializers,
             **parent_serializers,
             **(serializers or {}),
         }
         all_deserializers = {
-            **auto_deserializers,
+            **type_deserializers,
             **parent_deserializers,
             **(deserializers or {}),
         }
 
-        if not all_fields:
+        is_abstract_cls = (
+            "__abstract_serializable__" in namespace
+            and namespace["__abstract_serializable__"]
+        )
+        if is_abstract_cls is False and not all_fields:
             raise ValidationError(
-                "Serializable classes must have fields defined. If the class is an abstract base class, set `__abstract_serializable__` to True"
+                "Serializable classes must have fields defined. If the class is an abstract base class, "
+                "set `__abstract_serializable__` to True"
             )
 
-        if not isinstance(all_fields, Mapping):
-            raise ValidationError("`fields` must be a mapping of field names to types.")
+        if all_fields:
+            if "__dump__" not in namespace or getattr(
+                namespace["__dump__"], "_is_placeholder", False
+            ):
+                cls.__dump__ = cls._build_default_dumper(
+                    fields=all_fields,
+                    exclude=dump_exclude,
+                    serializers=all_serializers,
+                )
 
-        if "__dump__" not in namespace or getattr(
-            namespace["__dump__"], "__is_placeholder__", False
-        ):
-            cls.__dump__ = cls._build_default_dumper(
-                fields=all_fields,
-                exclude=dump_exclude,
-                serializers=all_serializers,
-            )
-
-        if "__load__" not in namespace or getattr(
-            namespace["__load__"], "__is_placeholder__", False
-        ):
-            cls.__load__ = cls._build_default_loader(
-                fields=all_fields,
-                exclude=load_exclude,
-                deserializers=all_deserializers,
-            )
+            if "__load__" not in namespace or getattr(
+                namespace["__load__"], "_is_placeholder", False
+            ):
+                cls.__load__ = cls._build_default_loader(
+                    fields=all_fields,
+                    exclude=load_exclude,
+                    deserializers=all_deserializers,
+                )
 
         cls.__serializable_fields__ = all_fields
         cls.__serializable_serializers__ = all_serializers
@@ -487,15 +504,23 @@ class Serializable(metaclass=SerializableMeta):
         """Load an object from a mapping."""
         raise NotImplementedError
 
-    __dump__.__is_placeholder__ = True  # type: ignore
-    __load__.__is_placeholder__ = True  # type: ignore
+    __dump__._is_placeholder = True  # type: ignore
+    __load__._is_placeholder = True  # type: ignore
 
     def dump(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
-        return self.__dump__(recurse)
+        try:
+            return self.__dump__(recurse)
+        except Exception as exc:
+            raise SerializationError("Failed to dump serializable object") from exc
 
     @classmethod
     def load(cls, data: typing.Dict[str, typing.Any]) -> Self:
-        return cls.__load__(data)
+        try:
+            return cls.__load__(data)
+        except Exception as exc:
+            raise DeserializationError(
+                f"Failed to load serializable object of type {cls.__name__!r}"
+            ) from exc
 
 
 # Register `Serializable` with cattrs converter
@@ -531,18 +556,6 @@ def load(
     return cls.__load__(data)
 
 
-_TYPE_SERIALIZERS: typing.Dict[
-    typing.Type[typing.Any],
-    typing.Callable[[typing.Any, bool], typing.Dict[str, typing.Any]],
-] = {}
-_TYPE_DESERIALIZERS: typing.Dict[
-    typing.Type[typing.Any],
-    typing.Callable[[typing.Mapping[str, typing.Any]], typing.Any],
-] = {}
-_type_serializers_lock = threading.Lock()
-_type_deserializers_lock = threading.Lock()
-
-
 def make_serializable_type_registrar(
     base_cls: typing.Type[SerializableT],
     registry: typing.Dict[str, typing.Type[SerializableT]],
@@ -551,7 +564,7 @@ def make_serializable_type_registrar(
     key_factory: typing.Optional[
         typing.Callable[[typing.Type[SerializableT]], str]
     ] = None,
-    allow_override: bool = False,
+    override: bool = False,
     auto_register_serializer: bool = True,
     auto_register_deserializer: bool = True,
 ) -> typing.Callable[[typing.Type[_SerializableT]], typing.Type[_SerializableT]]:
@@ -565,7 +578,7 @@ def make_serializable_type_registrar(
     :param key_attr: The attribute to use as the registry key.
     :param lock: An optional lock for thread safety.
     :param key_factory: An optional factory function to generate the registry key.
-    :param allow_override: Whether to allow overriding existing registrations.
+    :param override: Whether to allow overriding existing registrations.
     :return: A decorator to register `Serializable` subclasses.
     """
     if not key_attr:
@@ -580,19 +593,12 @@ def make_serializable_type_registrar(
                 f"Class {cls.__name__} is not a subclass of {base_cls.__name__}"
             )
 
-        if getattr(cls, "__abstract_serializable__", False):
-            return cls  # type: ignore[return-value]
-
         key = getattr(cls, key_attr, None)
-        if key is None:
+        if not key:
             key = key_factory(cls) if key_factory else cls.__name__.lower()
             setattr(cls, key_attr, key)
 
-        if (
-            not allow_override
-            and key in registry
-            and not issubclass(cls, registry[key])
-        ):
+        if not override and key in registry and not issubclass(cls, registry[key]):
             raise ValidationError(
                 f"Class {cls.__name__} is already registered under key '{key}'. Rename the class or set a unique '{key_attr}'."
             )
@@ -700,4 +706,3 @@ def register_type_deserializer(
     """Register a global type deserializer for a specific type."""
     with _type_deserializers_lock:
         _TYPE_DESERIALIZERS[typ] = deserializer
-

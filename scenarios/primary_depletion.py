@@ -18,6 +18,7 @@ def _():
         store=Path.cwd() / "scenarios/states/stabilized.zarr",
     )
 
+
     def main():
         state = list(stabilized_store.load(bores.ModelState, lazy=False))[-1]
         model = state.model
@@ -80,7 +81,7 @@ def _():
             initial_step_size=bores.Time(hours=20),
             max_step_size=bores.Time(days=5),
             min_step_size=bores.Time(minutes=10.0),
-            simulation_time=bores.Time(days=2 * bores.c.DAYS_PER_YEAR),  # 5 years
+            simulation_time=bores.Time(days=2 * bores.c.DAYS_PER_YEAR),  # 2 years
             max_cfl_number=0.9,
             ramp_up_factor=1.2,
             backoff_factor=0.5,
@@ -127,6 +128,13 @@ def _():
             relative_permeability_table=relative_permeability_table,
             capillary_pressure_table=capillary_pressure_table,
         )
+        boundary_conditions = bores.BoundaryConditions(
+            conditions={
+                "pressure": bores.GridBoundaryCondition(
+                    bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
+                ),
+            }
+        )
 
         config = bores.Config(
             timer=timer,
@@ -139,6 +147,7 @@ def _():
             pressure_preconditioner="ilu",
             pvt_tables=pvt_tables,
             max_gas_saturation_change=0.85,
+            boundary_conditions=boundary_conditions,
         )
         states = bores.run(model=model, config=config)
         return states

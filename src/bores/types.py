@@ -72,7 +72,7 @@ OneDimensionalGrid = NDimensionalGrid[OneDimension]
 """1D grid type for simulation data, represented as a 1D NumPy array of floats"""
 
 
-class Orientation(str, enum.Enum):
+class Orientation(enum.Enum):
     """
     Enum representing directional orientation in a 2D/3D simulation.
     """
@@ -86,7 +86,7 @@ class Orientation(str, enum.Enum):
         return self.value
 
 
-class FluidPhase(str, enum.Enum):
+class FluidPhase(enum.Enum):
     """Enum representing the phase of the fluid in the reservoir."""
 
     WATER = "water"
@@ -139,22 +139,20 @@ class ArrayLike(typing.Generic[Tco], typing.Protocol):
 Interpolator = typing.Callable[[float], float]
 
 
-PreconditionerStr = typing.Literal["cpr", "ilu", "amg", "diagonal"]
+PreconditionerStr = typing.Union[typing.Literal["cpr", "ilu", "amg", "diagonal"], str]
 PreconditionerFactory = typing.Callable[
     [typing.Union[csr_array, csr_matrix]], LinearOperator
 ]
-Preconditioner = typing.Union[
-    LinearOperator, PreconditionerStr, PreconditionerFactory, str
-]
+Preconditioner = typing.Union[LinearOperator, PreconditionerStr, PreconditionerFactory]
 
-SolverStr = typing.Literal[
-    "gmres", "lgmres", "bicgstab", "tfqmr", "cg", "cgs", "direct"
+SolverStr = typing.Union[
+    typing.Literal["gmres", "lgmres", "bicgstab", "tfqmr", "cg", "cgs", "direct"], str
 ]
 
 
 class SolverFunc(typing.Protocol):
     """
-    Protocol for an iterative solver function.
+    Protocol for a solver function compatible with SciPy's linear solvers.
     """
 
     def __call__(
@@ -171,7 +169,7 @@ class SolverFunc(typing.Protocol):
     ) -> np.typing.NDArray: ...
 
 
-Solver = typing.Union[SolverFunc, SolverStr, str]
+Solver = typing.Union[SolverFunc, SolverStr]
 
 
 class MixingRule(typing.Protocol):
@@ -217,7 +215,7 @@ class CapillaryPressures(typing.TypedDict):
     gas_oil: FloatOrArray  # Pcgo = Pg - Po
 
 
-class WettabilityType(str, enum.Enum):
+class WettabilityType(enum.Enum):
     """Enum representing the wettability type of the reservoir rock."""
 
     WATER_WET = "water_wet"

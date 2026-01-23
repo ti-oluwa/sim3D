@@ -1,46 +1,38 @@
 import typing
+import threading
+import os
+from pathlib import Path
+from typing_extensions import Self
 
 import attrs
 
 from bores.boundary_conditions import BoundaryConditions
-from bores.constants import Constant, Constants
-from bores.serialization import Serializable
+from bores.constants import Constants
 from bores.tables.pvt import PVTTables
 from bores.tables.rock_fluid import RockFluidTables
 from bores.timing import Timer
 from bores.types import (
     EvolutionScheme,
     MiscibilityModel,
-    Preconditioner,
+    PreconditionerStr,
     Range,
     RelativeMobilityRange,
-    Solver,
+    SolverStr,
     ThreeDimensions,
 )
 from bores.wells import WellSchedules, Wells
+from bores.stores import StoreSerializable
 
 
 __all__ = ["Config"]
 
 
-def _constants_serializer(constants: Constants, recurse: bool = True) -> dict:
-    """Serialize Constants object to a dictionary."""
-    return {name: value.dump(recurse) for name, value in constants.items()}
-
-
-def _constants_deserializer(data: dict) -> Constants:
-    """Deserialize dictionary to a Constants object."""
-    constants_dict = {name: Constant.load(value) for name, value in data.items()}
-    return Constants(_store=constants_dict)
-
-
+@typing.final
 @attrs.define
 class Config(
-    Serializable,
-    load_exclude={"pvt_tables"},
-    dump_exclude={"pvt_tables"},
-    serializers={"constants": _constants_serializer},
-    deserializers={"constants": _constants_deserializer},
+    StoreSerializable,
+    load_exclude={"pvt_tables", "_lock"},
+    dump_exclude={"pvt_tables", "_lock"},
 ):
     """Simulation run configuration and parameters."""
 
@@ -145,12 +137,14 @@ class Config(
     """Whether to warn about anomalous flow rates during the simulation."""
     log_interval: int = attrs.field(default=5, validator=attrs.validators.ge(0))  # type: ignore
     """Interval (in time steps) at which to log simulation progress."""
-    pressure_solver: typing.Union[Solver, typing.Iterable[Solver]] = "bicgstab"
+    pressure_solver: typing.Union[SolverStr, typing.Iterable[SolverStr]] = "bicgstab"
     """Pressure matrix system solver(s) (can be a list of solver to use in sequence) to use for solving linear systems."""
-    saturation_solver: typing.Union[Solver, typing.Iterable[Solver]] = "bicgstab"
+    saturation_solver: typing.Union[SolverStr, typing.Iterable[SolverStr]] = "bicgstab"
     """Saturation matrix system solver(s) (can be a list of solver to use in sequence) to use for solving linear systems."""
-    pressure_preconditioner: typing.Optional[Preconditioner] = "ilu"
+    pressure_preconditioner: typing.Optional[PreconditionerStr] = "ilu"
     """Preconditioner to use for pressure solvers."""
+    saturation_preconditioner: typing.Optional[PreconditionerStr] = "ilu"
+    """Preconditioner to use for saturation solvers."""
     phase_appearance_tolerance: float = attrs.field(  # type: ignore
         default=1e-6,
         validator=attrs.validators.ge(0),
@@ -233,3 +227,22 @@ class Config(
 
     Note: Larger changes can cause density/viscosity jumps and well control issues.
     """
+
+    _lock: threading.Lock = attrs.field(
+        factory=threading.Lock, init=False, repr=False, hash=False
+    )
+    """Internal lock for thread-safe operations."""
+
+    def copy(self) -> Self:
+        """Create a deep copy of the Config instance."""
+        with self._lock:
+            return attrs.evolve(self)
+
+    def update(self, **kwargs: typing.Any) -> None:
+        """Update configuration parameters in a thread-safe manner."""
+        with self._lock:
+            for key, value in kwargs.items():
+                if hasattr(self, key):
+                    setattr(self, key, value)
+                else:
+                    raise AttributeError(f"Config has no attribute '{key}'")

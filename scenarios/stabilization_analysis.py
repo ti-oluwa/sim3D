@@ -15,7 +15,7 @@ def _():
     bores.image_config(scale=3)
 
     store = bores.ZarrStore(
-        store=Path.cwd() / "scenarios/states/stabilization.zarr",
+        store=Path.cwd() / "scenarios/states/stabilization.zarr"
     )
     stream = bores.StateStream(
         store=store,
@@ -373,7 +373,7 @@ def _(bores, states, viz):
 
     property = "residual-oil-saturation-gas"
     figures = []
-    timesteps = [40]
+    timesteps = [20]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

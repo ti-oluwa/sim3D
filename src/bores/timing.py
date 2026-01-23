@@ -932,7 +932,6 @@ class Timer(Serializable):
             "growth_cooldown_steps": state.get("growth_cooldown_steps", 5),
             "failure_memory_window": state.get("failure_memory_window", 10),
             "metrics_history_size": state.get("metrics_history_size", 20),
-            "use_constant_step_size": state.get("use_constant_step_size", False),
         }
         timer = cls(**config_params)  # type: ignore
 
@@ -970,16 +969,16 @@ class Timer(Serializable):
         )
         object.__setattr__(timer, "failed_step_sizes", failed_step_sizes)
 
-        logger.info(
+        logger.debug(
             f"Timer state loaded: step {timer.step}, "
             f"elapsed time {timer.elapsed_time:.4f}s, "
             f"step size {timer.step_size:.6f}s"
         )
         return timer
 
-    def __dump__(self) -> TimerState:
+    def __dump__(self, recurse: bool = True) -> TimerState:
         return self.dump_state()
 
     @classmethod
-    def __load__(cls, state: TimerState) -> Self:
-        return cls.load_state(state)
+    def __load__(cls, data: TimerState) -> Self:
+        return cls.load_state(data)

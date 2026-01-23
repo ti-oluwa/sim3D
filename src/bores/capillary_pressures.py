@@ -8,6 +8,7 @@ import numpy.typing as npt
 
 from bores.errors import ValidationError
 from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 from bores.types import CapillaryPressures, FloatOrArray, FluidPhase, WettabilityType
 
 
@@ -119,7 +120,7 @@ class TwoPhaseCapillaryPressureTable(Serializable):
 
 
 @attrs.frozen
-class ThreePhaseCapillaryPressureTable(Serializable):
+class ThreePhaseCapillaryPressureTable(StoreSerializable):
     """
     Three-phase capillary pressure lookup table.
 
@@ -381,7 +382,7 @@ def compute_brooks_corey_capillary_pressures(
 
 
 @attrs.frozen
-class BrooksCoreyCapillaryPressureModel(Serializable):
+class BrooksCoreyCapillaryPressureModel(StoreSerializable):
     """
     Brooks-Corey capillary pressure model for three-phase systems.
 
@@ -690,7 +691,7 @@ def compute_van_genuchten_capillary_pressures(
 
 
 @attrs.frozen
-class VanGenuchtenCapillaryPressureModel(Serializable):
+class VanGenuchtenCapillaryPressureModel(StoreSerializable):
     """
     van Genuchten capillary pressure model for three-phase systems.
 
@@ -1007,7 +1008,7 @@ def compute_leverett_j_capillary_pressures(
 
 
 @attrs.frozen
-class LeverettJCapillaryPressureModel(Serializable):
+class LeverettJCapillaryPressureModel(StoreSerializable):
     """
     Leverett J-function capillary pressure model for three-phase systems.
 

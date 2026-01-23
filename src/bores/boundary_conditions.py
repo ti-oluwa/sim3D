@@ -3,16 +3,27 @@
 from collections import defaultdict
 import copy
 import enum
+import functools
+import threading
 import typing
 
 import attrs
 import numpy as np
+from typing_extensions import ParamSpec, Self
 
-from bores.errors import ValidationError
+from bores.errors import DeserializationError, SerializationError, ValidationError
+from bores.serialization import Serializable, make_serializable_type_registrar
+from bores.stores import StoreSerializable
 from bores.types import NDimension, NDimensionalGrid
 
 
 __all__ = [
+    "boundary_function",
+    "list_boundary_functions",
+    "get_boundary_function",
+    "serialize_boundary_function",
+    "deserialize_boundary_function",
+    "ParameterizedBoundaryFunction",
     "BoundaryDirection",
     "BoundaryMetadata",
     "BoundaryCondition",
@@ -31,6 +42,247 @@ __all__ = [
     "GridBoundaryCondition",
     "BoundaryConditions",
 ]
+
+
+_BOUNDARY_FUNCTIONS: typing.Dict[str, typing.Callable] = {}
+_boundary_function_lock = threading.Lock()
+P = ParamSpec("P")
+R = typing.TypeVar("R")
+
+
+@typing.overload
+def boundary_function(func: typing.Callable[P, R]) -> typing.Callable[P, R]: ...
+
+
+@typing.overload
+def boundary_function(
+    func: None = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Callable[[typing.Callable[P, R]], typing.Callable[P, R]]: ...
+
+
+def boundary_function(
+    func: typing.Optional[typing.Callable[P, R]] = None,
+    name: typing.Optional[str] = None,
+    override: bool = False,
+) -> typing.Union[
+    typing.Callable[P, R],
+    typing.Callable[[typing.Callable[P, R]], typing.Callable[P, R]],
+]:
+    """
+    Register a boundary function for serialization.
+
+    A boundary function is a callable that computes boundary values, usually
+    pressure or flux, based on spatial coordinates and/or time. This is basically any function you pass to
+    a `BoundaryCondition` that computes values based on position, time or any other parameters.
+
+    Usage:
+    ```python
+    @boundary_function
+    def linear_pressure_gradient(x, y):
+        return 2000 - 0.5 * x
+
+    # Or with custom name:
+    @boundary_function(name="custom_gradient")
+    def my_gradient(x, y):
+        return 2500 + 0.1 * x
+    ```
+
+    :param func: The function to register.
+    :param name: Optional custom name for registration. Uses __name__ if not provided.
+    :param override: If True, allows overriding existing registrations.
+    :return: The registered function or a decorator.
+    """
+
+    def decorator(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+        key = name or getattr(func, "__name__", None)
+        if not key:
+            raise ValidationError(
+                "Boundary function must have a `__name__` attribute or a name must be provided."
+            )
+
+        with _boundary_function_lock:
+            if not override and key in _BOUNDARY_FUNCTIONS:
+                raise ValidationError(
+                    f"Boundary function '{key}' already registered. "
+                    f"Use `override=True` or choose a different name."
+                )
+            _BOUNDARY_FUNCTIONS[key] = func
+        return func
+
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
+def list_boundary_functions() -> typing.List[str]:
+    """List all registered boundary functions."""
+    with _boundary_function_lock:
+        return list(_BOUNDARY_FUNCTIONS.keys())
+
+
+def get_boundary_function(name: str) -> typing.Callable:
+    """
+    Get a registered boundary function by name.
+
+    :param name: Name of the registered boundary function.
+    :return: The boundary function.
+    :raises ValidationError: If the boundary function is not registered.
+    """
+    with _boundary_function_lock:
+        if name not in _BOUNDARY_FUNCTIONS:
+            raise ValidationError(
+                f"Boundary function '{name}' not registered. "
+                f"Use `@boundary_function` to register it. "
+                f"Available: {list(_BOUNDARY_FUNCTIONS.keys())}"
+            )
+        return _BOUNDARY_FUNCTIONS[name]
+
+
+def serialize_boundary_function(
+    func: typing.Callable[..., typing.Any], recurse: bool = True
+) -> typing.Dict[str, typing.Any]:
+    """
+    Serialize a boundary function.
+
+    Supports:
+    1. Registered functions (by name)
+    2. Parameterized functions (functools.partial)
+    3. Built-in serializable function wrappers
+    """
+    # Check if it's a registered function
+    with _boundary_function_lock:
+        for name, registered_func in _BOUNDARY_FUNCTIONS.items():
+            if func is registered_func:
+                return {"type": "registered", "name": name}
+
+    # Handle partial functions (parameterized)
+    if isinstance(func, functools.partial):
+        base_func_data = serialize_boundary_function(func.func, recurse)
+        return {
+            "type": "partial",
+            "func": base_func_data,
+            "args": list(func.args),
+            "kwargs": dict(func.keywords),
+        }
+
+    # Handle built-in serializable wrappers
+    if isinstance(func, ParameterizedBoundaryFunction):
+        return {
+            "type": "parameterized",
+            "data": func.dump(recurse),
+        }
+
+    # Cannot serialize - must be registered
+    raise SerializationError(
+        f"Cannot serialize boundary function {func}. "
+        f"Please register it with @boundary_function. "
+        f"Available functions: {list(_BOUNDARY_FUNCTIONS.keys())}"
+    )
+
+
+def deserialize_boundary_function(
+    data: typing.Mapping[str, typing.Any],
+) -> typing.Callable[..., typing.Any]:
+    """Deserialize a boundary function from serialized data."""
+    func_type = data.get("type")
+
+    if func_type == "registered":
+        if "name" not in data:
+            raise DeserializationError(
+                "Missing 'name' for registered boundary function."
+            )
+        return get_boundary_function(data["name"])
+
+    elif func_type == "partial":
+        if "func" not in data:
+            raise DeserializationError("Missing 'func' for partial boundary function.")
+
+        base_func = deserialize_boundary_function(data["func"])
+        return functools.partial(
+            base_func,
+            *data.get("args", []),
+            **data.get("kwargs", {}),
+        )
+
+    elif func_type == "parameterized":
+        if "data" not in data:
+            raise DeserializationError(
+                "Missing 'data' for parameterized boundary function."
+            )
+        return ParameterizedBoundaryFunction.load(data["data"])
+
+    else:
+        raise DeserializationError(
+            f"Unknown boundary function type: {func_type}. "
+            f"Valid types: 'registered', 'partial', 'parameterized'"
+        )
+
+
+@boundary_function
+def parametric_gradient(x, y, slope=0.5, intercept=2000):
+    """Parameterized linear gradient."""
+    return intercept - slope * x
+
+
+@boundary_function
+def sinusoidal_pressure(t: float, amplitude=200, period=86400, offset=2000):
+    """Sinusoidal time-dependent pressure (daily cycle)."""
+    return offset + amplitude * np.sin(2 * np.pi * t / period)
+
+
+@boundary_function
+def exponential_decay(t: float, initial=2000, time_constant=3600):
+    """Exponential pressure decay."""
+    return initial * np.exp(-t / time_constant)
+
+
+class ParameterizedBoundaryFunction(
+    Serializable, fields={"func_name": str, "params": typing.Dict[str, typing.Any]}
+):
+    """
+    Wrapper for parameterized boundary functions.
+
+    Alternative to `functools.partial` that's fully serializable.
+
+    Usage:
+    ```python
+    # Define a base function
+    @boundary_function
+    def parametric_gradient(x, y, slope, intercept):
+        return intercept - slope * x
+
+    # Create parameterized version
+    custom_gradient = ParameterizedBoundaryFunction(
+        func_name="parametric_gradient",
+        params={"slope": 0.8, "intercept": 2500}
+    )
+
+    # Use it
+    result = custom_gradient(x_array, y_array)
+    ```
+    """
+
+    def __init__(
+        self,
+        func_name: str,
+        params: typing.Dict[str, typing.Any],
+    ):
+        """
+        Initialize parameterized function.
+
+        :param func_name: Name of the registered base boundary function
+        :param params: Dictionary of parameter names to values
+        """
+        self.func_name = func_name
+        self.params = params
+        self._func = get_boundary_function(func_name)
+
+    def __call__(self, *args: typing.Any, **kwargs: typing.Any) -> np.ndarray:
+        """Call the function with stored parameters."""
+        merged_kwargs = {**self.params, **kwargs}
+        return self._func(*args, **merged_kwargs)
 
 
 class BoundaryDirection(enum.Enum):
@@ -162,7 +414,7 @@ class BoundaryMetadata:
 
     # Use with spatial boundary
     spatial_bc = SpatialBoundary(
-        spatial_func=lambda x, y: 2000 + 0.1 * x - 0.05 * y
+        func=lambda x, y: 2000 + 0.1 * x - 0.05 * y
     )
 
     grid = np.zeros((52, 27))  # Grid with ghost cells
@@ -284,14 +536,21 @@ class BoundaryMetadata:
             object.__setattr__(self, "coordinates", coordinates)
 
 
-@typing.runtime_checkable
-class BoundaryCondition(typing.Protocol):
+class BoundaryCondition(
+    typing.Generic[NDimension],
+    StoreSerializable,
+    # Register serialization handlers for boundary functions
+    serializers={"func": serialize_boundary_function},
+    deserializers={"func": deserialize_boundary_function},
+):
     """
-    Protocol for defining boundary conditions with enhanced context.
+    Base class for boundary conditions on N-dimensional grids.
 
     Each boundary condition type must implement an 'apply' method that receives
     the full grid, boundary indices, direction, and optional metadata.
     """
+
+    __abstract_serializable__ = True
 
     def apply(
         self,
@@ -309,11 +568,24 @@ class BoundaryCondition(typing.Protocol):
         :param direction: The boundary direction (left, right, etc.)
         :param metadata: Optional metadata for advanced boundary conditions
         """
-        ...
+        raise NotImplementedError
 
 
-@attrs.frozen
-class NoFlowBoundary(typing.Generic[NDimension]):
+_BOUNDARY_CONDITIONS: typing.Dict[str, typing.Type[BoundaryCondition]] = {}
+boundary_condition = make_serializable_type_registrar(
+    base_cls=BoundaryCondition,
+    registry=_BOUNDARY_CONDITIONS,
+    lock=threading.Lock(),
+    key_attr="__type__",
+    override=False,
+    auto_register_serializer=True,
+    auto_register_deserializer=True,
+)
+"""Decorator to register a boundary condition type for serialization."""
+
+
+@boundary_condition
+class NoFlowBoundary(BoundaryCondition[NDimension]):
     """
     Implements a no-flow boundary condition.
 
@@ -347,6 +619,9 @@ class NoFlowBoundary(typing.Generic[NDimension]):
     ```
     """
 
+    __type__ = "no_flow_boundary"
+    __abstract_serializable__ = True
+
     def apply(
         self,
         *,
@@ -359,9 +634,17 @@ class NoFlowBoundary(typing.Generic[NDimension]):
         neighbor_indices = get_neighbor_indices(boundary_indices, direction)
         grid[boundary_indices] = grid[neighbor_indices]
 
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        return {}
 
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        return cls()
+
+
+@boundary_condition
 @attrs.frozen
-class ConstantBoundary(typing.Generic[NDimension]):
+class ConstantBoundary(BoundaryCondition[NDimension]):
     """
     Implements a constant boundary condition (Dirichlet).
 
@@ -396,6 +679,8 @@ class ConstantBoundary(typing.Generic[NDimension]):
     ```
     """
 
+    __type__ = "constant_boundary"
+
     constant: typing.Any
     """The constant value to set at the boundary."""
 
@@ -412,8 +697,9 @@ class ConstantBoundary(typing.Generic[NDimension]):
         grid[boundary_indices] = grid.dtype.type(self.constant)
 
 
+@boundary_condition
 @attrs.frozen
-class VariableBoundary(typing.Generic[NDimension]):
+class VariableBoundary(BoundaryCondition[NDimension]):
     """
     Implements a variable boundary condition using a callable function.
 
@@ -423,8 +709,9 @@ class VariableBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundary_conditions import VariableBoundary, BoundaryDirection, get_neighbor_indices
+    from bores.boundary_conditions import VariableBoundary, BoundaryDirection, get_neighbor_indices, boundary_function, GridBoundaryCondition
 
+    @boundary_function
     def pressure_gradient_func(grid, boundary_indices, direction, metadata):
         # Example: Pressure increases with depth
         if direction == BoundaryDirection.Y_PLUS:  # Top boundary
@@ -454,6 +741,8 @@ class VariableBoundary(typing.Generic[NDimension]):
     # Result: Top = 1000 psi, Bottom = 3000 psi, sides copy neighbors (no-flow)
     ```
     """
+
+    __type__ = "variable_boundary"
 
     func: typing.Callable[
         [
@@ -488,8 +777,9 @@ DirichletBoundary = ConstantBoundary
 """Alias for `ConstantBoundary` representing Dirichlet boundary conditions."""
 
 
+@boundary_condition
 @attrs.frozen
-class SpatialBoundary(typing.Generic[NDimension]):
+class SpatialBoundary(BoundaryCondition[NDimension]):
     """
     Implements a spatial boundary condition using coordinate-based functions.
 
@@ -499,7 +789,7 @@ class SpatialBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundary_conditions import SpatialBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import SpatialBoundary, BoundaryMetadata, GridBoundaryCondition, boundary_function
 
     # Create coordinate grid (1000 ft x 500 ft reservoir)
     x_coords = np.linspace(0, 1000, 51)  # 0 to 1000 ft
@@ -510,18 +800,21 @@ class SpatialBoundary(typing.Generic[NDimension]):
     metadata = BoundaryMetadata(coordinates=coordinates)
 
     # Example 1: Linear pressure drop with distance
+    linear_gradient = boundary_function(lambda x, y: 2000 - 0.5 * x, name="linear_pressure_gradient")
     pressure_gradient = SpatialBoundary(
-        spatial_func=lambda x, y: 2000 - 0.5 * x  # 2000 psi at x=0, drops to 1500 at x=1000
+        func=linear_gradient  # 2000 psi at x=0, drops to 1500 at x=1000
     )
 
     # Example 2: Pressure increasing with depth
+    depth_pressure_func = boundary_function(lambda x, y: 2000 + 0.03 * y, name="depth_pressure_func")
     depth_pressure = SpatialBoundary(
-        spatial_func=lambda x, y: 2000 + 0.03 * y  # 2000 psi at y=0, 2015 psi at y=500
+        func=depth_pressure_func  # 2000 psi at y=0, 2015 psi at y=500
     )
 
     # Example 3: Radial pressure distribution from center
+    radial_pressure_func = boundary_function(lambda x, y: 2000 + 10 * np.sqrt((x-500)**2 + (y-250)**2), name="radial_pressure_distribution")
     radial_pressure = SpatialBoundary(
-        spatial_func=lambda x, y: 2000 + 10 * np.sqrt((x-500)**2 + (y-250)**2)
+        func=radial_pressure_func  # Increases with distance from center (500,250)
     )
 
     # Apply to boundaries (pressure property only)
@@ -538,7 +831,9 @@ class SpatialBoundary(typing.Generic[NDimension]):
     ```
     """
 
-    spatial_func: typing.Callable[..., np.ndarray]
+    __type__ = "spatial_boundary"
+
+    func: typing.Callable[..., np.ndarray]
     """Function that takes coordinate arrays and returns boundary values."""
 
     def apply(
@@ -561,34 +856,33 @@ class SpatialBoundary(typing.Generic[NDimension]):
         # Apply spatial function based on dimensionality and preserve dtype
         if coords.ndim == 2:  # 2D case
             if coords.shape[-1] >= 2:
-                result = self.spatial_func(coords[..., 0], coords[..., 1])
+                result = self.func(coords[..., 0], coords[..., 1])
             else:
-                result = self.spatial_func(coords[..., 0])
+                result = self.func(coords[..., 0])
             grid[boundary_indices] = np.asarray(result, dtype=grid.dtype)
         elif coords.ndim == 3:  # 3D case
             if coords.shape[-1] >= 3:
-                result = self.spatial_func(
-                    coords[..., 0], coords[..., 1], coords[..., 2]
-                )
+                result = self.func(coords[..., 0], coords[..., 1], coords[..., 2])
             elif coords.shape[-1] >= 2:
-                result = self.spatial_func(coords[..., 0], coords[..., 1])
+                result = self.func(coords[..., 0], coords[..., 1])
             else:
-                result = self.spatial_func(coords[..., 0])
+                result = self.func(coords[..., 0])
             grid[boundary_indices] = np.asarray(result, dtype=grid.dtype)
         else:
             # Fallback: flatten coordinates and apply function
             flat_coords = coords.reshape(-1, coords.shape[-1])
             if flat_coords.shape[1] >= 2:
-                result = self.spatial_func(flat_coords[:, 0], flat_coords[:, 1])
+                result = self.func(flat_coords[:, 0], flat_coords[:, 1])
             else:
-                result = self.spatial_func(flat_coords[:, 0])
+                result = self.func(flat_coords[:, 0])
             grid[boundary_indices] = np.asarray(result, dtype=grid.dtype).reshape(
                 coords.shape[:-1]
             )
 
 
+@boundary_condition
 @attrs.frozen
-class TimeDependentBoundary(typing.Generic[NDimension]):
+class TimeDependentBoundary(BoundaryCondition[NDimension]):
     """
     Implements a time-dependent boundary condition.
 
@@ -598,26 +892,30 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundary_conditions import TimeDependentBoundary, BoundaryMetadata, GridBoundaryCondition
+    from bores.boundary_conditions import TimeDependentBoundary, BoundaryMetadata, GridBoundaryCondition, boundary_function
 
     # Example 1: Sinusoidal injection pressure (daily cycle)
+    sinusoidal_func = boundary_function(lambda t: 2000 + 200 * np.sin(2 * np.pi * t / 86400), name="sinusoidal_pressure")
     daily_cycle = TimeDependentBoundary(
-        time_func=lambda t: 2000 + 200 * np.sin(2 * np.pi * t / 86400)  # 24-hour cycle
+        func=sinusoidal_func  # 24-hour cycle
     )
 
     # Example 2: Linear pressure ramp-up
+    linear_ramp_func = boundary_function(lambda t: min(1000 + 0.1 * t, 2500), name="linear_pressure_ramp")
     pressure_ramp = TimeDependentBoundary(
-        time_func=lambda t: min(1000 + 0.1 * t, 2500)  # Ramp from 1000 to 2500 psi
+        func=linear_ramp_func  # Ramp from 1000 to 2500 psi
     )
 
     # Example 3: Exponential decay (well shut-in)
+    exponential_decay_func = boundary_function(lambda t: 2000 * np.exp(-t / 3600), name="exponential_pressure_decay")
     pressure_decay = TimeDependentBoundary(
-        time_func=lambda t: 2000 * np.exp(-t / 3600)  # Decay with 1-hour time constant
+        func=exponential_decay_func  # Decay with 1-hour time constant
     )
 
     # Example 4: Step function (sudden pressure change)
+    step_func = boundary_function(lambda t: 2500 if t > 1800 else 1500, name="step_pressure_change")
     step_pressure = TimeDependentBoundary(
-        time_func=lambda t: 2500 if t > 1800 else 1500  # Jump at 30 minutes
+        func=step_func  # Jump at 30 minutes
     )
 
     # Use in simulation at t = 12 hours (pressure property)
@@ -639,7 +937,9 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
     ```
     """
 
-    time_func: typing.Callable[[float], float]
+    __type__ = "time_dependent_boundary"
+
+    func: typing.Callable[[float], float]
     """Function that takes time and returns boundary value."""
 
     def apply(
@@ -654,13 +954,14 @@ class TimeDependentBoundary(typing.Generic[NDimension]):
         if metadata is None or metadata.time is None:
             raise ValidationError(f"{self.__class__.__name__} requires time metadata")
 
-        value = self.time_func(metadata.time)
+        value = self.func(metadata.time)
         # Preserve the grid's dtype
         grid[boundary_indices] = grid.dtype.type(value)
 
 
+@boundary_condition
 @attrs.frozen
-class LinearGradientBoundary(typing.Generic[NDimension]):
+class LinearGradientBoundary(BoundaryCondition[NDimension]):
     """
     Implements a linear gradient boundary condition.
 
@@ -686,23 +987,23 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
 
     # Example 1: Pressure drop across reservoir (west to east)
     pressure_drop = LinearGradientBoundary(
-        start_value=2500.0,      # High pressure at west (x=0)
-        end_value=1500.0,        # Low pressure at east (x=1000)
-        gradient_direction="x"
+        start=2500.0,      # High pressure at west (x=0)
+        end=1500.0,        # Low pressure at east (x=1000)
+        direction="x"
     )
 
     # Example 2: Pressure gradient with depth (shallow to deep)
     depth_pressure = LinearGradientBoundary(
-        start_value=2000.0,      # Lower pressure at shallow depth (z=50)
-        end_value=2300.0,        # Higher pressure at deep depth (z=150)
-        gradient_direction="z"
+        start=2000.0,      # Lower pressure at shallow depth (z=50)
+        end=2300.0,        # Higher pressure at deep depth (z=150)
+        direction="z"
     )
 
     # Example 3: Pressure gradient from north to south
     pressure_ns_gradient = LinearGradientBoundary(
-        start_value=2200.0,      # High pressure at north (y=0)
-        end_value=1800.0,        # Low pressure at south (y=500)
-        gradient_direction="y"
+        start=2200.0,      # High pressure at north (y=0)
+        end=1800.0,        # Low pressure at south (y=500)
+        direction="y"
     )
 
     # Apply to 3D grid boundaries (pressure property only)
@@ -722,11 +1023,13 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
     ```
     """
 
-    start_value: float
+    __type__ = "linear_gradient_boundary"
+
+    start: float
     """Value at the start of the gradient."""
-    end_value: float
+    end: float
     """Value at the end of the gradient."""
-    gradient_direction: typing.Literal["x", "y", "z"]
+    direction: typing.Literal["x", "y", "z"]
     """Direction of the gradient."""
 
     def apply(
@@ -746,16 +1049,14 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
         coords = metadata.coordinates[boundary_indices]
 
         # Determine which coordinate axis to use for gradient
-        if self.gradient_direction == "x":
+        if self.direction == "x":
             coord_values = coords[..., 0]
-        elif self.gradient_direction == "y":
+        elif self.direction == "y":
             coord_values = coords[..., 1]
-        elif self.gradient_direction == "z":
+        elif self.direction == "z":
             coord_values = coords[..., 2] if coords.shape[-1] > 2 else coords[..., 0]
         else:
-            raise ValidationError(
-                f"Invalid gradient direction: {self.gradient_direction}"
-            )
+            raise ValidationError(f"Invalid gradient direction: {self.direction}")
 
         # Calculate gradient
         coord_min = np.min(coord_values)
@@ -763,18 +1064,17 @@ class LinearGradientBoundary(typing.Generic[NDimension]):
 
         if coord_max == coord_min:
             # No gradient possible, use start value (preserve dtype)
-            grid[boundary_indices] = grid.dtype.type(self.start_value)
+            grid[boundary_indices] = grid.dtype.type(self.start)
         else:
             # Linear interpolation, preserve dtype
             normalized_coords = (coord_values - coord_min) / (coord_max - coord_min)
-            result = self.start_value + normalized_coords * (
-                self.end_value - self.start_value
-            )
+            result = self.start + normalized_coords * (self.end - self.start)
             grid[boundary_indices] = result.astype(grid.dtype, copy=False)
 
 
+@boundary_condition
 @attrs.frozen
-class FluxBoundary(typing.Generic[NDimension]):
+class FluxBoundary(BoundaryCondition[NDimension]):
     """
     Implements a flux boundary condition (Neumann with physical interpretation).
 
@@ -796,22 +1096,22 @@ class FluxBoundary(typing.Generic[NDimension]):
     )
 
     # Example 1: Water injection (positive flux)
-    water_injector = FluxBoundary(flux_value=100.0)  # 100 bbl/day/ft² injection
+    water_injector = FluxBoundary(flux=100.0)  # 100 bbl/day/ft² injection
 
     # Example 2: Oil production (negative flux)
-    oil_producer = FluxBoundary(flux_value=-50.0)    # 50 bbl/day/ft² production
+    oil_producer = FluxBoundary(flux=-50.0)    # 50 bbl/day/ft² production
 
     # Example 3: Heat injection
-    heat_injector = FluxBoundary(flux_value=1000.0)  # 1000 BTU/hr/ft²
+    heat_injector = FluxBoundary(flux=1000.0)  # 1000 BTU/hr/ft²
 
     # Example 4: Gas venting (very high production)
-    gas_vent = FluxBoundary(flux_value=-500.0)       # 500 Mscf/day/ft²
+    gas_vent = FluxBoundary(flux=-500.0)       # 500 Mscf/day/ft²
 
     # Set up reservoir with injection/production boundaries (pressure property)
     pressure_boundary_config = GridBoundaryCondition(
         left=water_injector,  # West: water injection
         right=oil_producer,     # East: oil production
-        front=FluxBoundary(flux_value=0.0),    # South: no flux
+        front=FluxBoundary(flux=0.0),    # South: no flux
         back=gas_vent,         # North: gas production
     )
 
@@ -834,7 +1134,9 @@ class FluxBoundary(typing.Generic[NDimension]):
     ```
     """
 
-    flux_value: float
+    __type__ = "flux_boundary"
+
+    flux: float
     """Flux value (positive for injection, negative for production)."""
 
     def apply(
@@ -914,12 +1216,13 @@ class FluxBoundary(typing.Generic[NDimension]):
         # Apply flux boundary: dφ/dn = flux (outward normal convention)
         # φ_boundary = φ_neighbor + sign * flux * spacing
         # Preserve the grid's dtype
-        result = neighbor_values + sign * self.flux_value * spacing
+        result = neighbor_values + sign * self.flux * spacing
         grid[boundary_indices] = result.astype(grid.dtype, copy=False)
 
 
+@boundary_condition
 @attrs.frozen
-class RobinBoundary(typing.Generic[NDimension]):
+class RobinBoundary(BoundaryCondition[NDimension]):
     """
     Implements a Robin (mixed/convective) boundary condition.
 
@@ -972,6 +1275,8 @@ class RobinBoundary(typing.Generic[NDimension]):
     temperature_bc.apply(temperature_grid, metadata=metadata)
     ```
     """
+
+    __type__ = "robin_boundary"
 
     alpha: float
     """Coefficient for the value term (Dirichlet weight)."""
@@ -1060,15 +1365,16 @@ class RobinBoundary(typing.Generic[NDimension]):
             grid[boundary_indices] = result.astype(grid.dtype, copy=False)
 
 
+@boundary_condition
 @attrs.frozen
-class PeriodicBoundary(typing.Generic[NDimension]):
+class PeriodicBoundary(BoundaryCondition[NDimension]):
     """
     Implements a periodic boundary condition.
 
     Links opposite boundaries so that flow/values wrap around,
     useful for modeling repeating geological patterns or infinite domains.
 
-    Note: For proper periodic BCs, both opposite faces must use PeriodicBoundary.
+    Note: For proper periodic BCs, both opposite faces must use `PeriodicBoundary`.
 
     Example usage:
     ```python
@@ -1099,6 +1405,9 @@ class PeriodicBoundary(typing.Generic[NDimension]):
     # - Back ghost cells = front interior values
     ```
     """
+
+    __type__ = "periodic_boundary"
+    __abstract_serializable__ = True
 
     def apply(
         self,
@@ -1141,13 +1450,20 @@ class PeriodicBoundary(typing.Generic[NDimension]):
 
         grid[boundary_indices] = grid[tuple(opposite_indices)]
 
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        return {}
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        return cls()
+
 
 NeumannBoundary = FluxBoundary
 """Alias for `FluxBoundary` representing Neumann boundary conditions (flux-based)."""
 
 
-@attrs.frozen()
-class GridBoundaryCondition(typing.Generic[NDimension]):
+@attrs.frozen
+class GridBoundaryCondition(typing.Generic[NDimension], Serializable):
     """
     Container for defining boundary conditions for a grid.
     Each face in a 3D or 2D grid (x-, x+, y-, y+, z-, z+) can have its own boundary condition.
@@ -1320,20 +1636,20 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
                 left=ConstantBoundary(constant=2000.0),  # Fixed pressure inlet
                 right=NoFlowBoundary(),  # Sealed boundary
                 front=LinearGradientBoundary(  # Pressure gradient
-                    start_value=2000.0,
-                    end_value=1800.0,
-                    gradient_direction="x"
+                    start=2000.0,
+                    end=1800.0,
+                    direction="x"
                 ),
-                back=FluxBoundary(flux_value=-100.0),  # Production
+                back=FluxBoundary(flux=-100.0),  # Production
             ),
             # Temperature boundary conditions (separate from pressure)
             "temperature": GridBoundaryCondition(
                 left=SpatialBoundary(
-                    spatial_func=lambda x, y: 60 + 0.025 * y  # Geothermal gradient
+                    func=lambda x, y: 60 + 0.025 * y  # Geothermal gradient
                 ),
                 right=NoFlowBoundary(),
                 front=TimeDependentBoundary(
-                    time_func=lambda t: 80 + 10 * np.sin(t / 3600)  # Daily cycle
+                    func=lambda t: 80 + 10 * np.sin(t / 3600)  # Daily cycle
                 ),
                 back=ConstantBoundary(constant=70.0),
             )

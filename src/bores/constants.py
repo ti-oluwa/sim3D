@@ -4,8 +4,10 @@ from contextvars import ContextVar
 import typing
 
 import attrs
+from typing_extensions import Self
 
 from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 
 
 __all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
@@ -503,7 +505,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
 
 
 class Constants(
-    Serializable,
+    StoreSerializable,
     fields={"_store": typing.Dict[str, Constant]},
 ):
     """
@@ -516,7 +518,7 @@ class Constants(
 
     __slots__ = ("_store",)
 
-    def __new__(cls) -> "Constants":
+    def __new__(cls, *args, **kwargs) -> "Constants":
         instance = super().__new__(cls)
         instance._store = {}
         return instance
@@ -524,20 +526,14 @@ class Constants(
     def __init__(
         self,
         defaults: typing.Optional[typing.Dict[str, typing.Any]] = None,
-        _store=None,
     ) -> None:
         """
         Initialize the constants store with default values.
 
         :param defaults: Optional dictionary of default constants to initialize with.
-            If None, uses the predefined DEFAULT_CONSTANTS.
-        :param _store: Internal use only. If provided, uses this dictionary as the store directly.
+            If None, uses the predefined `DEFAULT_CONSTANTS`.
         """
-        if _store is not None:
-            self._store = _store
-            return
-
-        defaults = defaults or DEFAULT_CONSTANTS
+        defaults = defaults if defaults is not None else DEFAULT_CONSTANTS
         for name, value in defaults.items():
             if isinstance(value, Constant):
                 self._store[name] = value
@@ -702,6 +698,26 @@ class Constants(
         :return: `ConstantsContext` for temporary overrides
         """
         return ConstantsContext(self)
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        """Dump constants to dict."""
+        return {
+            name: const.dump(recurse) if isinstance(const, Constant) else const
+            for name, const in self._store.items()
+        }
+
+    @classmethod
+    def __load__(cls, data: typing.Dict[str, typing.Any]) -> Self:
+        """Load constants from dict."""
+        store = {
+            name: Constant.load(val)
+            if isinstance(val, dict) and "value" in val
+            else Constant(value=val)
+            for name, val in data.items()
+        }
+        constants = cls(defaults={})  # type: ignore[arg-type]
+        constants._store = store
+        return constants
 
 
 _constants_context: ContextVar[Constants] = ContextVar(

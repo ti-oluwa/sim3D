@@ -13,10 +13,10 @@ from bores.grids.base import (
     build_depth_grid,
     build_elevation_grid,
 )
+from bores.stores import StoreSerializable
 from bores.types import T
 from bores.types import NDimension, NDimensionalGrid
 from bores.utils import Lazy, LazyField
-from bores.serialization import Serializable
 
 
 __all__ = [
@@ -29,14 +29,14 @@ __all__ = [
 
 
 @attrs.frozen(slots=True)
-class FluidProperties(PadMixin[NDimension], Serializable):
+class FluidProperties(PadMixin[NDimension], StoreSerializable):
     """
     Fluid properties of a reservoir model.
 
     Some of these properties are liable to change over time due to flow.
 
     Varying properties include:
-    
+
     - Pressure
     - Temperature
     - Oil saturation
@@ -155,7 +155,7 @@ class FluidProperties(PadMixin[NDimension], Serializable):
 
 
 @attrs.frozen(slots=True)
-class RockPermeability(PadMixin[NDimension], Serializable):
+class RockPermeability(PadMixin[NDimension], StoreSerializable):
     """
     Rock permeability in the reservoir, in milliDarcy (mD).
 
@@ -181,7 +181,7 @@ class RockPermeability(PadMixin[NDimension], Serializable):
 
 
 @attrs.frozen(slots=True)
-class RockProperties(PadMixin[NDimension], Serializable):
+class RockProperties(PadMixin[NDimension], StoreSerializable):
     """
     Rock properties of a reservoir model.
 
@@ -246,7 +246,7 @@ class RockProperties(PadMixin[NDimension], Serializable):
 
 
 @attrs.frozen(slots=True)
-class SaturationHistory(PadMixin[NDimension], Serializable):
+class SaturationHistory(PadMixin[NDimension], StoreSerializable):
     """
     Tracks historical maximum saturations and displacement regimes in the reservoir.
     """
@@ -293,7 +293,7 @@ _Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
 
 class ReservoirModel(
     typing.Generic[NDimension],
-    Serializable,
+    StoreSerializable,
     fields={
         "grid_shape": tuple,
         "cell_dimension": tuple,
