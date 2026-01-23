@@ -205,27 +205,6 @@ absolute_permeability = bores.RockPermeability(
     z=z_permeability_grid,  # typically 0.1x of x-direction (vertical)
 )
 
-# Create relative permeability and capillary pressure models
-relative_permeability_table = bores.BrooksCoreyThreePhaseRelPermModel(
-    irreducible_water_saturation=0.15,
-    residual_oil_saturation_water=0.25,
-    residual_oil_saturation_gas=0.15,
-    residual_gas_saturation=0.045,
-    wettability=bores.WettabilityType.WATER_WET,
-    water_exponent=2.0,
-    oil_exponent=2.0,
-    gas_exponent=2.0,
-    mixing_rule=bores.eclipse_rule,
-)
-
-capillary_pressure_table = bores.BrooksCoreyCapillaryPressureModel(
-    oil_water_entry_pressure_water_wet=2.0,  # psi
-    oil_water_pore_size_distribution_index_water_wet=2.0,
-    gas_oil_entry_pressure=2.8,  # psi
-    gas_oil_pore_size_distribution_index=2.0,
-    wettability=bores.WettabilityType.WATER_WET,
-)
-
 # Build the reservoir model
 model = bores.reservoir_model(
     grid_shape=grid_shape,
@@ -247,13 +226,10 @@ model = bores.reservoir_model(
     residual_gas_saturation_grid=residual_gas_saturation_grid,
     irreducible_water_saturation_grid=irreducible_water_saturation_grid,
     connate_water_saturation_grid=connate_water_saturation_grid,
-    relative_permeability_table=relative_permeability_table,
-    capillary_pressure_table=capillary_pressure_table,
     # Optional parameters:
     oil_specific_gravity_grid=oil_specific_gravity_grid,
     gas_gravity_grid=gas_gravity_grid,
     net_to_gross_ratio_grid=net_to_gross_grid,
-    boundary_conditions=boundary_conditions,
     dip_angle=dip_angle,
     dip_azimuth=dip_azimuth,
     reservoir_gas="methane", # Assumed that reservoir gas is methane. Can be any gas supported by CoolProp
@@ -395,6 +371,11 @@ The `Config` object specifies parameters that control simulation behavior:
 
 ```python
 config = bores.Config(
+    timer=timer,  # Timer object defined above
+    rock_fluid_tables=...,  # Rock-Fluid tables for relative permeability & capillary pressure
+    boundary_conditions=...,  # Optional Boundary conditions for the model
+    wells=...,  # Wells configuration
+    well_schedules=...,  # Well schedules for time-dependent controls
     # Evolution scheme
     scheme="impes",  # IMPES (Implicit Pressure, Explicit Saturation)
     # or "explicit" for fully explicit scheme
@@ -517,14 +498,11 @@ A checkpoint is a saved state of the simulation that allows resuming from that p
 from pathlib import Path
 
 # Create a store
-store = bores.ZarrStore(
-    store=Path("./results/simulation.zarr"),
-    metadata_dir=Path("./results/metadata/"),
-)
+store = bores.ZarrStore(store=Path("./results/simulation.zarr"))
 
 # Run with streaming
 stream = bores.StateStream(
-    bores.run(model=model, timer=timer, wells=wells, config=config),
+    bores.run(model=model, config=config),
     store=store,
     async_io=True, # Prevent state persistence I/O operations from blocking stream
     batch_size=50,  # Persist every 50 states
@@ -550,50 +528,39 @@ with stream:
 
 ### State Stores
 
-BORES provides multiple storage backends for persisting simulation states. Each backend is a subclass of `DataStore` and has been implemented as optimally as possible for performance and storage efficiency. Available stores include:
+BORES provides multiple storage backends for persisting serializables. A serializable is any object that subclasses the `Serializable` base class for serialization and deserialization respectively. The contain `load` and `dump` methods that help deserialize and serialize objects to a dicitionary representation. Most objects in BORES are serializables including `ModelState`, `ReservoirModel`, `Config`, `Timer`, `Wells`, `WellSchedules`, etc.
+
+Each backend is a subclass of `DataStore` and has been implemented as optimally as possible for performance and storage efficiency. Available stores include:
 
 - `ZarrStore` - Uses the Zarr format (recommended for large simulations). Best support for lazy loading.
-- `HDF5Store` - Uses HDF5 format (good for medium to large simulations). Lazy loading supported but less efficient than Zarr.
+- `HDF5Store` - Uses HDF5 format (good for medium to large simulations). No Lazy loading supported.
 - `PickleStore` - Uses Python's Pickle format (simple but not efficient for large datasets). No lazy loading.
-- `NPZStore` - Uses NumPy's NPZ compressed format (good for small to medium simulations). No lazy loading.
-
-Some stores support lazy loading, which allows loading only metadata initially and deferring grid data loading until accessed. This is particularly useful for large simulations where loading all data into memory at once is impractical.
-The stores also support compression to reduce disk space usage.
+- `JSONStore` - Uses JSON format (human-readable but inefficient for large datasets). No lazy loading.
+- `YAMLStore` - Uses YAML format (human-readable but inefficient for large datasets). Useful for storing configurations. No lazy loading.
 
 ```python
 # Zarr (recommended for large simulations)
 zarr_store = bores.ZarrStore(
     store=Path("./results/simulation.zarr"), # Supports any Zarr store (directory, zip, s3, gcs, etc.)
-    metadata_dir=Path("./results/metadata/"),
     compression_level=3,  # Zlib compression level (0-9)
 )
 
 # HDF5
-hdf5_store = bores.HDF5Store(
-    filepath=Path("./results/simulation.h5"),
-    metadata_dir=Path("./results/metadata/"),
-)
+hdf5_store = bores.HDF5Store(filepath=Path("./results/simulation.h5"))
 
 # Pickle (for small simulations or debugging)
-pickle_store = bores.PickleStore(
-    filepath=Path("./results/pickle/")
-)
+pickle_store = bores.PickleStore(filepath=Path("./results/pickle/"))
 
-# NPZ (NumPy compressed)
-npz_store = bores.NPZStore(
-    filepath=Path("./results/npz/"),
-    metadata_dir=Path("./results/metadata/"),
-)
 ```
 
 ### Loading States
 
 ```python
 # Load all states
-states = store.load(validate=False, lazy=False)
+states = store.load(lazy=False)
 
-# Lazy loading (loads metadata only, grids on access)
-states = store.load(validate=False, lazy=True)
+# Lazy loading with validation (loads grids on access)
+states = store.load(validator=bores.validate_state, lazy=True)
 
 # Get the last state for continuation
 # Note that `load` returns a generator and we do not use list(states)
@@ -732,7 +699,7 @@ gas_injector_2 = gas_injector.duplicate(
 
 ### Well Events & Scheduling
 
-Schedule changes to wells during simulation using `WellEvent` objects. You can change well status, control strategies, well fluid and other parameters at specified simulation times using hooks and actions.
+Schedule changes to wells during simulation using `WellEvent`, `WellSchedule`, and `WellSchedules` objects. You can change well status, control strategies, well fluid and other parameters at specified simulation times using hooks and actions.
 
 There are several built-in hooks and actions for common well events:
 
@@ -749,14 +716,19 @@ producer = bores.production_well(
     ...,
     is_active=False,  # Initially shut-in
 )
-
-# Schedule activation
-producer.schedule_event(
-    bores.WellEvent(
+producer_schedule = bores.WellSchedule()
+producer_schedule.add(
+    id_="open_well_after_100_days",
+    event=bores.WellEvent(
         hook=bores.well_time_hook(time=bores.Time(days=100)),
         action=bores.well_update_action(is_active=True),
     )
 )
+well_schedules = bores.WellSchedules()
+well_schedules.add(well_name=producer.well_name, schedule=producer_schedule)
+
+# Update config with well schedules
+config.update(well_schedules=well_schedules)
 ```
 
 To combine multiple hooks or actions, use `well_hooks` and `well_actions` utilities.
@@ -767,14 +739,16 @@ def pressure_drop_hook(well, state):
     avg_pressure = state.model.fluid_properties.pressure_grid.mean()
     return avg_pressure < 2200.0
 
-combined_hook = bores.well_hooks(
+composite_hook = bores.well_hooks(
     bores.well_time_hook(time=bores.Time(days=200)),
     pressure_drop_hook,
     on_any=True,  # Trigger if any hook returns True
 )
-gas_injector.schedule_event(
-    bores.WellEvent(
-        hook=combined_hook,
+injector_schedule = bores.WellSchedule()
+injector_schedule.add(
+    id_="increase_injection_rate",
+    event=bores.WellEvent(
+        hook=composite_hook,
         action=bores.well_update_action(
             control=bores.AdaptiveBHPRateControl(
                 target_rate=2_000_000,  # Increase injection rate
@@ -797,9 +771,10 @@ wells = bores.wells_(
     injectors=[gas_injector, gas_injector_2],
     producers=[producer],
 )
+config = bores.Config(..., wells=wells, ...)
 
 # Run simulation with wells
-states = bores.run(model=model, timer=timer, wells=wells, config=config)
+states = bores.run(model=model, config=config)
 ```
 
 ---
@@ -995,11 +970,16 @@ relperm_model = bores.BrooksCoreyThreePhaseRelPermModel(
     # Three-phase oil mixing rule
     mixing_rule=bores.stone_II_rule,
 )
-
-# Use in reservoir model
-model = bores.reservoir_model(
-    # ... other params ...
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=relperm_model,
+    capillary_pressure_table=...,  # Capillary pressure model or table
+)
+
+# Use in simulation config
+config = bores.Config(
+    ...,
+    rock_fluid_tables=rock_fluid_tables,
+    ...,
 )
 ```
 
@@ -1086,10 +1066,15 @@ three_phase_relperm = bores.ThreePhaseRelPermTable(
     mixing_rule=bores.stone_II_rule,    # How to compute kro in 3-phase
 )
 
-# Use in reservoir model
-model = bores.reservoir_model(
-    # ... other params ...
+# Use in simulation config
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=three_phase_relperm,
+    capillary_pressure_table=...,  # Capillary pressure model or table
+)
+config = bores.Config(
+    ...,
+    rock_fluid_tables=rock_fluid_tables,
+    ...,
 )
 ```
 
@@ -1239,10 +1224,15 @@ three_phase_pc = bores.ThreePhaseCapillaryPressureTable(
     gas_oil_table=gas_oil_pc,
 )
 
-# Use in reservoir model
-model = bores.reservoir_model(
-    # ... other params ...
+# Use in simulation config
+rock_fluid_tables = bores.RockFluidTables(
+    relative_permeability_table=...,  # Relative permeability model or table
     capillary_pressure_table=three_phase_pc,
+)
+config = bores.Config(
+    ...,
+    rock_fluid_tables=rock_fluid_tables,
+    ...,
 )
 ```
 
@@ -1324,11 +1314,16 @@ three_phase_pc = bores.ThreePhaseCapillaryPressureTable(
     gas_oil_table=gas_oil_pc,
 )
 
-# 4. Use in reservoir model
-model = bores.reservoir_model(
-    # ... grid, properties, etc. ...
+# 4. Create `RockFluidTables`
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=three_phase_kr,
     capillary_pressure_table=three_phase_pc,
+)
+# 5. Use in simulation config
+config = bores.Config(
+    ...,
+    rock_fluid_tables=rock_fluid_tables,
+    ...,
 )
 ```
 
@@ -1401,7 +1396,7 @@ config = bores.Config(
     # ... other config params ...
     constants=custom_constants,  # Use custom constants
 )
-states = bores.run(model=model, timer=timer, wells=wells, config=config
+states = bores.run(model=model, config=config)
 ```
 
 ---
@@ -1470,10 +1465,11 @@ boundary_conditions = bores.BoundaryConditions(
     }
 )
 
-# Apply to model
-model = bores.reservoir_model(
+# Apply to simulation config
+config = bores.Config(
     ...,
     boundary_conditions=boundary_conditions,
+    ...,
 )
 ```
 
@@ -1515,19 +1511,21 @@ import bores
 from bores.errors import SolverError, StopSimulation
 
 config = bores.Config(
+    timer=timer,
+    rock_fluid_tables=rock_fluid_tables,
     scheme="impes",
     max_iterations=250,
 )
 
 for _ in range(3):  # Retry up to 3 times
     try:
-        for state in bores.run(model=model, timer=timer, wells=wells, config=config):
+        for state in bores.run(model=model, config=config):
             ... # Process each state
         
     except SolverError as e:
         print(f"Solver failed to converge: {e}")
         # Try with relaxed settings
-        config = bores.Config(
+        config.update(
             scheme="impes",
             pressure_convergence_tolerance=1e-4,  # Relax tolerance
             max_iterations=500,
@@ -1554,6 +1552,7 @@ BORES currently supports **IMPES** and **Explicit** schemes:
 
 ```python
 config = bores.Config(
+    ...,
     scheme="impes",
     
     # Iterative solver options
@@ -1574,6 +1573,7 @@ config = bores.Config(
 
 ```python
 config = bores.Config(
+    ...,
     scheme="explicit",
     
     # Separate CFL limits for pressure and saturation
@@ -1728,10 +1728,7 @@ Use `ModelAnalyst` for common analysis operations:
 > Check the `bores.analyses` module for more details or check `scenerios/*_analysis.py` for real usage examples.
 
 ```python
-store = bores.ZarrStore(
-    store=Path("/results/simulation.zarr"), 
-    metadata_dir=Path("/results/metadata")
-)
+store = bores.ZarrStore(store=Path("/results/simulation.zarr"))
 # Create stream in store replay mode (no need for lazy loading since grid will mostly be used immediately)
 stream = bores.StateStream(
     store=store, 
@@ -1943,12 +1940,17 @@ A: Load the final state from storage and use it to rebuild the model:
 
 ```python
 # Load states
-store = bores.HDF5Store(filepath=Path("results/simulation.h5"), metadata_dir=Path("results/metadata"))
-stream = bores.StateStream(store=store, validate=False, auto_replay=True, lazy_load=False)
+store = bores.HDF5Store(filepath=Path("results/simulation.h5"))
+stream = bores.StateStream(
+    store=store, 
+    validate=False, 
+    auto_replay=True, 
+    lazy_load=False
+)
 last_state = stream.last()
 
 # Continue simulation with last recorded timer state
-timer = bores.Timer.load_state(last_state.timer_state)
+timer = bores.Timer.load_state(last_state.timer_state)  # OR bores.Timer.load(...)
 ```
 
 **Q: Why are my well rates different from what I specified?**
@@ -2117,7 +2119,7 @@ water_saturation_grid, oil_saturation_grid, gas_saturation_grid = bores.build_sa
     use_transition_zones=True,
     oil_water_transition_thickness=12.0,
     gas_oil_transition_thickness=8.0,
-    transition_curvature_exponent=1.2,
+    transition_curvature_exponent=1.2, # Higher values = smoother transitions
 )
 
 # 9. Build oil viscosity grid (increases with depth)
@@ -2169,6 +2171,11 @@ capillary_pressure_table = bores.BrooksCoreyCapillaryPressureModel(
     gas_oil_pore_size_distribution_index=2.0,
     wettability=bores.WettabilityType.WATER_WET,
 )
+# Bundle into rock-fluid tables
+rock_fluid_tables = bores.RockFluidTables(
+    relative_permeability_table=relative_permeability_table,
+    capillary_pressure_table=capillary_pressure_table,
+)
 
 # 13. Build temperature grid (geothermal gradient)
 surface_temp = 60.0  # °F
@@ -2212,6 +2219,7 @@ pvt_table_data = bores.build_pvt_table_data(
     reservoir_gas="methane",
 )
 pvt_tables = bores.PVTTables(table_data=pvt_table_data, interpolation_method="linear")
+del pvt_table_data  # To free memory once loaded into PVTTables
 
 # 16. Build the reservoir model
 model = bores.reservoir_model(
@@ -2237,9 +2245,6 @@ model = bores.reservoir_model(
     connate_water_saturation_grid=connate_water_saturation_grid,
     residual_gas_saturation_grid=residual_gas_saturation_grid,
     net_to_gross_ratio_grid=net_to_gross_grid,
-    boundary_conditions=boundary_conditions,
-    relative_permeability_table=relative_permeability_table,
-    capillary_pressure_table=capillary_pressure_table,
     reservoir_gas="methane",
     dip_angle=dip_angle,
     dip_azimuth=dip_azimuth,
@@ -2323,6 +2328,9 @@ timer = bores.Timer(
 )
 
 config = bores.Config(
+    timer=timer,
+    rock_fluid_tables=rock_fluid_tables,
+    wells=wells,
     scheme="impes",
     output_frequency=1,
     miscibility_model="immiscible",
@@ -2331,16 +2339,14 @@ config = bores.Config(
     pressure_solver="bicgstab",
     preconditioner="ilu",
     pvt_tables=pvt_tables,
+    boundary_conditions=boundary_conditions,
 )
 
 # 20. Run simulation with storage
-store = bores.ZarrStore(
-    store=Path.cwd() / "results/simulation.zarr",
-    metadata_dir=Path.cwd() / "results/metadata",
-)
+store = bores.ZarrStore(store=Path.cwd() / "results/simulation.zarr")
 
 stream = bores.StateStream(
-    bores.run(model=model, timer=timer, wells=wells, config=config),
+    bores.run(model=model, config=config),
     store=store,
     batch_size=50,
 )

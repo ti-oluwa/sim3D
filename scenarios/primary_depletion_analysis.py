@@ -18,7 +18,7 @@ def _():
         filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
     )
     stream = bores.StateStream(store=depletion_store, validate=False)
-    states = list(stream)
+    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 2 == 0))
     return bores, itertools, np, states
 
 

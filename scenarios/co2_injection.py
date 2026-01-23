@@ -115,7 +115,7 @@ def _():
         # We use a well schedule to activate the producer after some time
         well_schedule = bores.WellSchedule()
         well_schedule.add(
-            id="open_well",
+            "open_well",
             event=bores.WellEvent(
                 hook=bores.well_time_hook(time_step=100),
                 action=bores.well_update_action(is_active=True),

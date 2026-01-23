@@ -1,13 +1,12 @@
-import typing
 import threading
-import os
-from pathlib import Path
-from typing_extensions import Self
+import typing
 
 import attrs
+from typing_extensions import Self
 
 from bores.boundary_conditions import BoundaryConditions
 from bores.constants import Constants
+from bores.stores import StoreSerializable
 from bores.tables.pvt import PVTTables
 from bores.tables.rock_fluid import RockFluidTables
 from bores.timing import Timer
@@ -21,14 +20,13 @@ from bores.types import (
     ThreeDimensions,
 )
 from bores.wells import WellSchedules, Wells
-from bores.stores import StoreSerializable
 
 
 __all__ = ["Config"]
 
 
 @typing.final
-@attrs.define
+@attrs.frozen(kw_only=True, auto_attribs=True)
 class Config(
     StoreSerializable,
     load_exclude={"pvt_tables", "_lock"},
@@ -243,6 +241,6 @@ class Config(
         with self._lock:
             for key, value in kwargs.items():
                 if hasattr(self, key):
-                    setattr(self, key, value)
+                    object.__setattr__(self, key, value)
                 else:
                     raise AttributeError(f"Config has no attribute '{key}'")

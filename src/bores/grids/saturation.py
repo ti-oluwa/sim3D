@@ -85,6 +85,7 @@ def build_saturation_grids(
     :param gas_oil_transition_thickness: Thickness of gas-oil transition zone (ft).
     :param oil_water_transition_thickness: Thickness of oil-water transition zone (ft).
     :param transition_curvature_exponent: Controls nonlinearity of saturation gradient.
+        Higher values yield smoother transitions (default: 2.0).
     :return: Tuple of (water_saturation, oil_saturation, gas_saturation) grids.
     :raises ValidationError: If contact depths are invalid or transitions overlap.
     """
