@@ -1611,7 +1611,9 @@ class GridBoundaryCondition(typing.Generic[NDimension], Serializable):
             )
 
 
-class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
+class BoundaryConditions(
+    defaultdict[str, GridBoundaryCondition[NDimension]], Serializable
+):
     """
     A container for managing reservoir model boundary conditions for different properties.
 
@@ -1693,6 +1695,8 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
 
     """
 
+    __abstract_serializable__ = True
+
     def __init__(
         self,
         conditions: typing.Optional[
@@ -1753,6 +1757,21 @@ class BoundaryConditions(defaultdict[str, GridBoundaryCondition[NDimension]]):
 
     def __copy__(self):
         return self.__class__(conditions=dict(self), factory=self.factory)
+
+    @classmethod
+    def __load__(
+        cls,
+        data: typing.Mapping[str, typing.Any],
+    ) -> Self:
+        conditions_data = data.get("conditions", {})
+        conditions = {
+            prop: GridBoundaryCondition.load(cond_data)
+            for prop, cond_data in conditions_data.items()
+        }
+        return cls(conditions=conditions)
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        return {"conditions": {prop: cond.dump(recurse) for prop, cond in self.items()}}
 
 
 default_bc = BoundaryConditions()["__default__"]

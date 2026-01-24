@@ -1,7 +1,9 @@
 """Run a simulation workflow on a 3-Dimensional reservoir model."""
 
 import copy
+from datetime import datetime, timezone
 import logging
+from os import PathLike
 import typing
 import warnings
 
@@ -22,7 +24,7 @@ from bores.diffusivity import (
     evolve_pressure_implicitly,
     evolve_saturation_explicitly,
 )
-from bores.errors import SimulationError, StopSimulation, TimingError
+from bores.errors import SimulationError, StopSimulation, TimingError, ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
     RateGrids,
@@ -46,12 +48,14 @@ from bores.models import (
     SaturationHistory,
 )
 from bores.states import ModelState
+from bores.stores import StoreSerializable
 from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
 from bores.utils import clip
 from bores.wells import Wells
+from bores.tables.pvt import PVTTableData, PVTTables
 
 
-__all__ = ["run"]
+__all__ = ["run", "Run"]
 
 logger = logging.getLogger(__name__)
 
@@ -916,19 +920,148 @@ def log_progress(
         )
 
 
+@attrs.frozen
+class Run(StoreSerializable):
+    """
+    Simulation run specification.
+
+    Executes a reservoir simulation on a 3D static reservoir model using the provided configuration.
+
+    Example:
+    ```python
+    from bores import ReservoirModel, Config, Run, run
+
+    model = ReservoirModel.from_file("path/to/3d_model.h5")
+    config = Config.from_file("path/to/simulation_config.yaml")
+
+    run = Run(model=model, config=config)
+    for state in run():
+        # Process the model state at each output interval
+        print(state)
+
+    ```
+    """
+
+    model: ReservoirModel[ThreeDimensions]
+    """The reservoir model to simulate."""
+
+    config: Config
+    """Simulation configuration and parameters."""
+
+    name: typing.Optional[str] = None
+    """Human-readable name for this run."""
+
+    description: typing.Optional[str] = None
+    """Detailed description of the simulation."""
+
+    tags: typing.Tuple[str, ...] = attrs.field(factory=tuple)
+    """Tags for organizing runs."""
+
+    created_at: typing.Optional[str] = attrs.field(
+        factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    """ISO timestamp of when this run was created."""
+
+    def execute(self) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
+        """Execute this simulation run."""
+        return run(self.model, self.config)
+
+    def __call__(
+        self,
+    ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
+        """Execute this simulation run."""
+        return self.execute()
+
+    @classmethod
+    def from_files(
+        cls,
+        model_path: typing.Union[str, PathLike],
+        config_path: typing.Union[str, PathLike],
+        pvt_table_path: typing.Optional[typing.Union[str, PathLike]] = None,
+    ) -> "Run":
+        """
+        Load run from separate model and config files.
+
+        :param model_path: Path to the reservoir model file.
+        :param config_path: Path to the simulation configuration file.
+        :param pvt_table_path: Optional path to PVT table data file.
+        :return: `Run` instance with loaded model and config.
+        """
+        model = ReservoirModel.from_file(model_path)
+        if not isinstance(model, ReservoirModel) or model.dimensions != 3:
+            raise ValidationError(
+                "Loaded model must be a 3D `ReservoirModel` instance."
+            )
+
+        config = Config.from_file(config_path)
+        if config is None:
+            raise ValidationError("Failed to load simulation config from file.")
+
+        if pvt_table_path is not None:
+            pvt_table_data = PVTTableData.from_file(pvt_table_path)
+            if pvt_table_data is None:
+                raise ValidationError("Failed to load PVT table data from file.")
+
+            pvt_tables = PVTTables(pvt_table_data)
+            config.update(pvt_tables=pvt_tables)
+        return cls(model=model, config=config)
+
+
 def run(
-    model: ReservoirModel[ThreeDimensions], config: Config
+    input: typing.Union[ReservoirModel[ThreeDimensions], Run],
+    config: typing.Optional[Config] = None,
 ) -> typing.Generator[ModelState[ThreeDimensions], None, None]:
     """
-    Run a simulation on a 3D static reservoir model and wells.
+    Run a simulation on a 3D reservoir model.
 
     The 3D simulation evolves pressure and saturation over time using the specified evolution scheme.
     3D simulations are computationally intensive and may require significant memory and processing power.
 
-    :param model: The reservoir model containing grid, rock, and fluid properties.
-    :param config: Simulation run configuration and parameters.
+    :param input: Either a `ReservoirModel` instance or a `Run` instance containing the model and configuration.
+    :param config: Simulation run configuration and parameters. Only required if `input` is a `ReservoirModel`.
+        If `input` is a `Run`, the configuration from the `Run` instance will be used. If config is provided
+        alongside a `Run` instance, it will override the config in the `Run`.
     :yield: Yields the model state at specified output intervals.
+
+    Example:
+    ```python
+    import bores
+
+    # Using ReservoirModel and Config directly
+    model = bores.ReservoirModel.from_file("path/to/3d_model.h5")
+    config = bores.Config.from_file("path/to/simulation_config.yaml")
+    for state in bores.run(model, config):
+        # Process the model state at each output interval
+        print(state)
+
+    # Using Run instance
+    run = bores.Run(model=model, config=config)
+    for state in bores.run(run):
+        # Process the model state at each output interval
+        print(state)
+
+    # Using Run instance with overridden config
+    new_config = bores.Config.from_file("path/to/new_simulation_config.yaml")
+    for state in bores.run(run, config=new_config):
+        # Process the model state at each output interval
+        print(state)
+
+    ```
     """
+    if isinstance(input, Run):
+        model = input.model
+        if config is not None:
+            logger.info(
+                "Overriding 'config' parameter from 'Run' instance with provided 'config' parameter."
+            )
+        config = config or input.config
+    else:
+        if config is None:
+            raise ValueError(
+                "Must provide 'config' parameter when 'input' is a ReservoirModel"
+            )
+        model = input
+
     rock_fluid_tables = config.rock_fluid_tables
     boundary_conditions = config.boundary_conditions
     timer = config.timer

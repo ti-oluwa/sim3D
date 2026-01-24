@@ -63,25 +63,27 @@ _STORAGE_BACKENDS: typing.Dict[str, typing.Type[DataStore]] = {}
 
 @typing.overload
 def storage_backend(
-    name: str,
+    *names: str,
     store_cls: typing.Type[StoreT],
-) -> None:
+) -> typing.Type[StoreT]:
     """Register a data store class with a given name."""
     ...
 
 
 @typing.overload
 def storage_backend(
-    name: str,
+    *names: str,
 ) -> typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]:
     """Register a data store class with a given name."""
     ...
 
 
 def storage_backend(
-    name: str,
+    *names: str,
     store_cls: typing.Optional[typing.Type[StoreT]] = None,
-) -> typing.Union[None, typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]]:
+) -> typing.Union[
+    typing.Type[StoreT], typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]
+]:
     """
     Data store registration decorator.
 
@@ -93,12 +95,12 @@ def storage_backend(
     """
 
     def _decorator(store_cls: typing.Type[StoreT]) -> typing.Type[StoreT]:
-        _STORAGE_BACKENDS[name] = store_cls
+        for name in names:
+            _STORAGE_BACKENDS[name] = store_cls
         return store_cls
 
     if store_cls is not None:
-        _STORAGE_BACKENDS[name] = store_cls
-        return
+        return _decorator(store_cls)
     return _decorator
 
 
@@ -106,6 +108,7 @@ def _validate_filepath(
     filepath: typing.Union[PathLike, str],
     expected_extension: typing.Optional[str] = None,
     is_directory: bool = False,
+    create_if_not_exists: bool = False,
 ) -> Path:
     """
     Validate and normalize a filepath for state storage.
@@ -115,6 +118,7 @@ def _validate_filepath(
         If None, no extension validation is performed
     :param is_directory: If True, validates that the path is suitable for a directory
         (no extension or matches expected extension for directory-based stores)
+    :param create_if_not_exists: If True, creates the file/directory if it does not exist
     :return: Validated Path object
     :raises StorageError: If filepath is invalid or has wrong extension
     """
@@ -157,6 +161,25 @@ def _validate_filepath(
                 f"Use '{path.with_suffix(expected_extension)}' instead."
             )
 
+    if create_if_not_exists:
+        # Ensure parent directory exists
+        is_file = path.suffix != ""
+        directory = path.parent if is_file else path
+        if not directory.exists():
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"Created parent directory: {directory}")
+            except Exception as exc:
+                raise StorageError(
+                    f"Failed to create parent directory '{directory}': {exc}"
+                ) from exc
+
+        if is_file and not path.exists():
+            try:
+                path.touch(exist_ok=True)
+                logger.debug(f"Created file: {path}")
+            except Exception as exc:
+                raise StorageError(f"Failed to create file '{path}': {exc}") from exc
     return path
 
 
@@ -307,7 +330,7 @@ def _normalize_loaded_mapping_sequence(value: typing.Any) -> typing.Any:
     return value
 
 
-@storage_backend("pickle")
+@storage_backend("pickle", "pkl")
 class PickleStore(DataStore[SerializableT]):
     """
     Pickle-based storage.
@@ -332,7 +355,9 @@ class PickleStore(DataStore[SerializableT]):
         :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
         :raises StorageError: If filepath is invalid or has wrong extension
         """
-        self.filepath = _validate_filepath(filepath, expected_extension=".pkl")
+        self.filepath = _validate_filepath(
+            filepath, expected_extension=".pkl", create_if_not_exists=True
+        )
         self.compression = compression
         self.compression_level = compression_level
 
@@ -431,7 +456,11 @@ class ZarrStore(DataStore[SerializableT]):
         :param group_name_gen: Optional callable to generate group names based on index and item
         :raises StorageError: If filepath is invalid or has incompatible extension
         """
-        self.store = store
+        self.store = (
+            _validate_filepath(store, is_directory=True, create_if_not_exists=True)
+            if isinstance(store, (str, PathLike))
+            else store
+        )
         self.chunks = chunks
         if IS_PYTHON_310_OR_LOWER:
             self.compressor = Blosc(
@@ -673,7 +702,7 @@ class ZarrStore(DataStore[SerializableT]):
         return f"{self.__class__.__name__}(store={self.store}, compressor={self.compressor.cname})"
 
 
-@storage_backend("hdf5")
+@storage_backend("hdf5", "h5")
 class HDF5Store(DataStore[SerializableT]):
     """
     HDF5-based storage.
@@ -701,7 +730,9 @@ class HDF5Store(DataStore[SerializableT]):
         :param compression_opts: Compression level (1-9 for gzip)
         :raises StorageError: If filepath is invalid or has wrong extension
         """
-        self.filepath = _validate_filepath(filepath, expected_extension=".h5")
+        self.filepath = _validate_filepath(
+            filepath, expected_extension=".h5", create_if_not_exists=True
+        )
         self.compression = compression
         self.compression_opts = compression_opts  # 1-9 for gzip
         self.group_name_gen = group_name_gen or self._default_group_name_gen
@@ -908,7 +939,9 @@ class JSONStore(DataStore[SerializableT]):
         :param filepath: Path to the JSON file
         :raises StorageError: If filepath is invalid or has wrong extension
         """
-        self.filepath = _validate_filepath(filepath, expected_extension=".json")
+        self.filepath = _validate_filepath(
+            filepath, expected_extension=".json", create_if_not_exists=True
+        )
 
     @_raise_storage_error
     def dump(  # type: ignore[override]
@@ -964,7 +997,7 @@ class JSONStore(DataStore[SerializableT]):
                 yield obj
 
 
-@storage_backend("yaml")
+@storage_backend("yaml", "yml")
 class YAMLStore(DataStore[SerializableT]):
     """
     YAML-based storage.
@@ -984,7 +1017,9 @@ class YAMLStore(DataStore[SerializableT]):
         :param filepath: Path to the YAML file
         :raises StorageError: If filepath is invalid or has wrong extension
         """
-        self.filepath = _validate_filepath(filepath, expected_extension=".yaml")
+        self.filepath = _validate_filepath(
+            filepath, expected_extension=".yaml", create_if_not_exists=True
+        )
 
     @_raise_storage_error
     def dump(  # type: ignore[override]

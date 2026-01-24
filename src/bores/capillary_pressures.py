@@ -1,18 +1,22 @@
 """Capillary pressure models and tables for multiphase flow simulations."""
 
 import typing
+import threading
 
 import attrs
 import numpy as np
 import numpy.typing as npt
 
 from bores.errors import ValidationError
-from bores.serialization import Serializable
+from bores.serialization import Serializable, make_serializable_type_registrar
 from bores.stores import StoreSerializable
 from bores.types import CapillaryPressures, FloatOrArray, FluidPhase, WettabilityType
 
 
 __all__ = [
+    "capillary_pressure_table",
+    "list_capillary_pressure_tables",
+    "get_capillary_pressure_table",
     "TwoPhaseCapillaryPressureTable",
     "ThreePhaseCapillaryPressureTable",
     "BrooksCoreyCapillaryPressureModel",
@@ -22,6 +26,65 @@ __all__ = [
     "compute_van_genuchten_capillary_pressures",
     "compute_leverett_j_capillary_pressures",
 ]
+
+
+class CapillaryPressureTable(StoreSerializable):
+    """
+    Protocol for a capillary pressure table that computes
+    capillary pressures based on fluid saturations.
+    """
+
+    __abstract_serializable__ = True
+
+    def __call__(self, *args: typing.Any, **kwargs: typing.Any) -> CapillaryPressures:
+        """
+        Computes capillary pressures based on fluid saturations.
+
+        :param kwargs: Saturation parameters (water_saturation, oil_saturation, gas_saturation).
+        :return: A dictionary containing capillary pressures for oil-water and gas-oil systems.
+        """
+        raise NotImplementedError
+
+
+_CAPILLARY_PRESSURE_TABLES: typing.Dict[str, typing.Type[CapillaryPressureTable]] = {}
+_capillary_pressure_table_lock = threading.Lock()
+capillary_pressure_table = make_serializable_type_registrar(
+    base_cls=CapillaryPressureTable,
+    registry=_CAPILLARY_PRESSURE_TABLES,
+    key_attr="__type__",
+    lock=_capillary_pressure_table_lock,
+    override=False,
+    auto_register_serializer=True,
+    auto_register_deserializer=True,
+)
+
+
+def list_capillary_pressure_tables() -> typing.List[str]:
+    """
+    List all registered capillary pressure table types.
+
+    :return: List of capillary pressure table type names.
+    """
+    with _capillary_pressure_table_lock:
+        return list(_CAPILLARY_PRESSURE_TABLES.keys())
+
+
+def get_capillary_pressure_table(name: str) -> typing.Type[CapillaryPressureTable]:
+    """
+    Get a registered capillary pressure table type by name.
+
+    :param name: Name of the capillary pressure table type.
+    :return: Capillary pressure table class.
+    :raises KeyError: If the type name is not registered.
+    """
+    with _capillary_pressure_table_lock:
+        if name not in _CAPILLARY_PRESSURE_TABLES:
+            raise ValidationError(
+                f"Capillary pressure table type '{name}' is not registered. "
+                f"Use `@capillary_pressure_table` to register it. "
+                f"Available types: {list(_CAPILLARY_PRESSURE_TABLES.keys())}"
+            )
+        return _CAPILLARY_PRESSURE_TABLES[name]
 
 
 @attrs.frozen
@@ -119,8 +182,13 @@ class TwoPhaseCapillaryPressureTable(Serializable):
         return self.get_capillary_pressure(wetting_phase_saturation)
 
 
+@capillary_pressure_table
 @attrs.frozen
-class ThreePhaseCapillaryPressureTable(StoreSerializable):
+class ThreePhaseCapillaryPressureTable(
+    CapillaryPressureTable,
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
+):
     """
     Three-phase capillary pressure lookup table.
 
@@ -130,6 +198,8 @@ class ThreePhaseCapillaryPressureTable(StoreSerializable):
     Pcow = Po - Pw (oil-water capillary pressure)
     Pcgo = Pg - Po (gas-oil capillary pressure)
     """
+
+    __type__ = "three_phase_capillary_pressure_table"
 
     oil_water_table: TwoPhaseCapillaryPressureTable
     """
@@ -145,7 +215,7 @@ class ThreePhaseCapillaryPressureTable(StoreSerializable):
     A table of Pcgo against oil saturation.
     """
 
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def __attrs_post_init__(self) -> None:
@@ -381,8 +451,13 @@ def compute_brooks_corey_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
+@capillary_pressure_table
 @attrs.frozen
-class BrooksCoreyCapillaryPressureModel(StoreSerializable):
+class BrooksCoreyCapillaryPressureModel(
+    CapillaryPressureTable,
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
+):
     """
     Brooks-Corey capillary pressure model for three-phase systems.
 
@@ -390,6 +465,8 @@ class BrooksCoreyCapillaryPressureModel(StoreSerializable):
 
     Supports water-wet, oil-wet, and mixed-wet systems.
     """
+
+    __type__ = "brooks_corey_capillary_pressure_model"
 
     irreducible_water_saturation: typing.Optional[float] = None
     """Default irreducible water saturation (Swc). Can be overridden per call."""
@@ -416,7 +493,7 @@ class BrooksCoreyCapillaryPressureModel(StoreSerializable):
     mixed_wet_water_fraction: float = 0.5
     """Fraction of pore space that is water-wet in mixed-wet systems (0-1)."""
 
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def get_capillary_pressures(
@@ -690,8 +767,13 @@ def compute_van_genuchten_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
+@capillary_pressure_table
 @attrs.frozen
-class VanGenuchtenCapillaryPressureModel(StoreSerializable):
+class VanGenuchtenCapillaryPressureModel(
+    CapillaryPressureTable,
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
+):
     """
     van Genuchten capillary pressure model for three-phase systems.
 
@@ -699,6 +781,8 @@ class VanGenuchtenCapillaryPressureModel(StoreSerializable):
 
     Provides smoother transitions than Brooks-Corey model.
     """
+
+    __type__ = "van_genuchten_capillary_pressure_model"
 
     irreducible_water_saturation: typing.Optional[float] = None
     """Default irreducible water saturation (Swc). Can be overridden per call."""
@@ -724,7 +808,7 @@ class VanGenuchtenCapillaryPressureModel(StoreSerializable):
     """Wettability type (WATER_WET, OIL_WET, or MIXED_WET)."""
     mixed_wet_water_fraction: float = 0.5
     """Fraction of pore space that is water-wet in mixed-wet systems (0-1)."""
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def get_capillary_pressures(
@@ -1007,8 +1091,13 @@ def compute_leverett_j_capillary_pressures(
     return oil_water_capillary_pressure, gas_oil_capillary_pressure
 
 
+@capillary_pressure_table
 @attrs.frozen
-class LeverettJCapillaryPressureModel(StoreSerializable):
+class LeverettJCapillaryPressureModel(
+    CapillaryPressureTable,
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
+):
     """
     Leverett J-function capillary pressure model for three-phase systems.
 
@@ -1018,6 +1107,8 @@ class LeverettJCapillaryPressureModel(StoreSerializable):
     Useful when capillary pressure data needs to be scaled across different
     rock types or fluid systems.
     """
+
+    __type__ = "leverett_j_capillary_pressure_model"
 
     irreducible_water_saturation: typing.Optional[float] = None
     """Default irreducible water saturation (Swc). Can be overridden per call."""
@@ -1041,7 +1132,7 @@ class LeverettJCapillaryPressureModel(StoreSerializable):
     """Gas-oil contact angle in degrees (0° = oil-wet to gas)."""
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (affects sign convention)."""
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def get_capillary_pressures(

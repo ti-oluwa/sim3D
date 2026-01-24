@@ -15,11 +15,11 @@ def _():
     bores.image_config(scale=3)
 
 
-    injection_store = bores.HDF5Store(
-        filepath=Path.cwd() / "scenarios/states/co2_injection.h5",
-        metadata_dir=Path.cwd() / "scenarios/states/co2_injection_metadata/",
+    store = bores.ZarrStore(
+        store=Path("./scenarios/runs/ch4_injection/results/ch4_injection.zarr")
     )
-    states = list(injection_store.load(validate=False))
+    stream = bores.StateStream(store=store, lazy_load=False)
+    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 5 == 0))
     return bores, itertools, np, states
 
 

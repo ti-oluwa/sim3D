@@ -9,7 +9,7 @@ import numpy as np
 import numpy.typing as npt
 
 from bores.errors import ValidationError
-from bores.serialization import Serializable
+from bores.serialization import Serializable, make_serializable_type_registrar
 from bores.stores import StoreSerializable
 from bores.types import (
     FloatOrArray,
@@ -27,6 +27,9 @@ __all__ = [
     "mixing_rule_deserializer",
     "list_mixing_rules",
     "get_mixing_rule",
+    "relperm_table",
+    "get_relperm_table",
+    "list_relperm_tables",
     "TwoPhaseRelPermTable",
     "ThreePhaseRelPermTable",
     "min_rule",
@@ -654,6 +657,69 @@ def linear_interpolation_rule(
     return np.where(total_displacing > 0.0, result, np.maximum(kro_w, kro_g))
 
 
+class RelativePermeabilityTable(StoreSerializable):
+    """
+    Protocol for a relative permeability table that computes
+    relative permeabilities based on fluid saturations.
+    """
+
+    __abstract_serializable__ = True
+
+    def __call__(
+        self, *args: typing.Any, **kwargs: typing.Any
+    ) -> RelativePermeabilities:
+        """
+        Computes relative permeabilities based on fluid saturations.
+
+        :param kwargs: Additional parameters for the relative permeability function.
+        :return: A dictionary containing relative permeabilities for water, oil, and gas phases.
+        """
+        raise NotImplementedError
+
+
+_RELPERM_TABLES: typing.Dict[str, typing.Type[RelativePermeabilityTable]] = {}
+_relperm_tables_lock = threading.Lock()
+relperm_table = make_serializable_type_registrar(
+    base_cls=RelativePermeabilityTable,
+    registry=_RELPERM_TABLES,
+    key_attr="__type__",
+    lock=_relperm_tables_lock,
+    override=False,
+    auto_register_serializer=True,
+    auto_register_deserializer=True,
+)
+
+
+def list_relperm_tables() -> typing.List[str]:
+    """
+    List all registered relative permeability table types.
+
+    :return: List of registered relative permeability table type names.
+    """
+    with _relperm_tables_lock:
+        return list(_RELPERM_TABLES.keys())
+
+
+def get_relperm_table(
+    name: str
+) -> typing.Type[RelativePermeabilityTable]:
+    """
+    Get a registered relative permeability table type by name.
+
+    :param name: Registered name of the relative permeability table type.
+    :return: Relative permeability table class.
+    :raises ValidationError: If the relative permeability table type is not registered.
+    """
+    with _relperm_tables_lock:
+        if name not in _RELPERM_TABLES:
+            raise ValidationError(
+                f"Relative permeability table type '{name}' is not registered. "
+                f"Use `@relperm_table` to register it. "
+                f"Available types: {list(_RELPERM_TABLES.keys())}"
+            )
+        return _RELPERM_TABLES[name]
+
+
 @attrs.frozen
 class TwoPhaseRelPermTable(Serializable):
     """
@@ -785,11 +851,14 @@ class TwoPhaseRelPermTable(Serializable):
         return kr_wetting, kr_non_wetting
 
 
+@relperm_table
 @attrs.frozen
 class ThreePhaseRelPermTable(
-    StoreSerializable,
+    RelativePermeabilityTable,
     serializers={"mixing_rule": mixing_rule_serializer},
     deserializers={"mixing_rule": mixing_rule_deserializer},
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
 ):
     """
     Three-phase relative permeability lookup table, with mixing rules.
@@ -804,6 +873,8 @@ class ThreePhaseRelPermTable(
     Supported mixing rules: `min_rule`, `stone_I_rule`, `stone_II_rule`, etc.
     Additional custom rules can be defined as needed.
     """
+
+    __type__ = "three_phase_relperm_table"
 
     oil_water_table: TwoPhaseRelPermTable
     """Relative permeability table for oil-water system (water = wetting, oil = non-wetting)."""
@@ -823,7 +894,7 @@ class ThreePhaseRelPermTable(
 
     If None, a simple conservative rule (min(kro_w, kro_g)) is used.
     """
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def __attrs_post_init__(self) -> None:
@@ -1079,11 +1150,14 @@ def compute_corey_three_phase_relative_permeabilities(
     return krw, kro, krg  # type: ignore[return-value]
 
 
+@relperm_table
 @attrs.frozen
 class BrooksCoreyThreePhaseRelPermModel(
-    StoreSerializable,
+    RelativePermeabilityTable,
     serializers={"mixing_rule": mixing_rule_serializer},
     deserializers={"mixing_rule": mixing_rule_deserializer},
+    load_exclude={"supports_arrays"},
+    dump_exclude={"supports_arrays"},
 ):
     """
     Brooks-Corey-type three-phase relative permeability model.
@@ -1093,6 +1167,8 @@ class BrooksCoreyThreePhaseRelPermModel(
 
     Supports water-wet and oil-wet wettability assumptions.
     """
+
+    __type__ = "brooks_corey_three_phase_relperm_model"
 
     irreducible_water_saturation: typing.Optional[float] = None
     """(Default) Irreducible water saturation (Swc)."""
@@ -1134,7 +1210,7 @@ class BrooksCoreyThreePhaseRelPermModel(
     - Sg: Gas saturation
     and return the mixed oil relative permeability.
     """
-    supports_arrays: bool = True
+    supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
     def get_relative_permeabilities(

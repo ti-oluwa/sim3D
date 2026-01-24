@@ -14,11 +14,13 @@ def _():
 
     bores.image_config(scale=3)
 
-    depletion_store = bores.HDF5Store(
-        filepath=Path.cwd() / "scenarios/states/primary_depletion.h5",
+    depletion_store = bores.ZarrStore(
+        store=Path(
+            "./scenarios/runs/primary_depletion/results/primary_depletion.zarr"
+        )
     )
-    stream = bores.StateStream(store=depletion_store, validate=False)
-    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 2 == 0))
+    stream = bores.StateStream(store=depletion_store, lazy_load=False)
+    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 10 == 0))
     return bores, itertools, np, states
 
 

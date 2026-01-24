@@ -231,10 +231,10 @@ class Config(
     )
     """Internal lock for thread-safe operations."""
 
-    def copy(self) -> Self:
+    def copy(self, **kwargs: typing.Any) -> Self:
         """Create a deep copy of the Config instance."""
         with self._lock:
-            return attrs.evolve(self)
+            return attrs.evolve(self, **kwargs)
 
     def update(self, **kwargs: typing.Any) -> None:
         """Update configuration parameters in a thread-safe manner."""

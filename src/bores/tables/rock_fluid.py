@@ -1,48 +1,11 @@
-import typing
-
 import attrs
 
-from bores.types import CapillaryPressures, RelativePermeabilities
+from bores.capillary_pressures import CapillaryPressureTable
+from bores.relperm import RelativePermeabilityTable
 from bores.serialization import Serializable
 
 
-__all__ = ["RelativePermeabilityTable", "CapillaryPressureTable", "RockFluidTables"]
-
-
-@typing.runtime_checkable
-class RelativePermeabilityTable(typing.Protocol):
-    """
-    Protocol for a relative permeability table that computes
-    relative permeabilities based on fluid saturations.
-    """
-
-    def __call__(
-        self, *args: typing.Any, **kwargs: typing.Any
-    ) -> RelativePermeabilities:
-        """
-        Computes relative permeabilities based on fluid saturations.
-
-        :param kwargs: Additional parameters for the relative permeability function.
-        :return: A dictionary containing relative permeabilities for water, oil, and gas phases.
-        """
-        ...
-
-
-@typing.runtime_checkable
-class CapillaryPressureTable(typing.Protocol):
-    """
-    Protocol for a capillary pressure table that computes
-    capillary pressures based on fluid saturations.
-    """
-
-    def __call__(self, *args: typing.Any, **kwargs: typing.Any) -> CapillaryPressures:
-        """
-        Computes capillary pressures based on fluid saturations.
-
-        :param kwargs: Saturation parameters (water_saturation, oil_saturation, gas_saturation).
-        :return: A dictionary containing capillary pressures for oil-water and gas-oil systems.
-        """
-        ...
+__all__ = ["RockFluidTables"]
 
 
 @attrs.frozen

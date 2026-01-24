@@ -54,7 +54,7 @@ class ModelState(
     },
 ):
     """
-    The state of the reservoir model at a specific time step during a simulation.
+    A captured state of the reservoir model at a specific time step during a simulation run.
     """
 
     model = LazyField[ReservoirModel[NDimension]]()

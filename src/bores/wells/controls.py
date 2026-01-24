@@ -313,7 +313,7 @@ class WellControl(typing.Generic[WellFluidT_con], StoreSerializable):
         raise NotImplementedError
 
 
-_WELL_CONTROLS: typing.Dict[str, typing.Type["WellControl"]] = {}
+_WELL_CONTROLS: typing.Dict[str, typing.Type[WellControl]] = {}
 well_control = make_serializable_type_registrar(
     base_cls=WellControl,
     registry=_WELL_CONTROLS,

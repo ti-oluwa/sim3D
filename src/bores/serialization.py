@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from enum import Enum
 import functools
+import sys
 import threading
 import typing
 
@@ -40,6 +41,16 @@ def fallback_structure(value, typ):
 def _is_generic_alias(typ: typing.Any) -> bool:
     """Check if a type is a generic alias (e.g., List[int], Dict[str, float])"""
     return hasattr(typ, "__origin__") and typ.__origin__ is not None
+
+
+converter.register_unstructure_hook_func(
+    check_func=lambda t: _is_generic_alias(t) or not attrs.has(t),
+    func=fallback_unstructure,
+)
+converter.register_structure_hook_func(
+    check_func=lambda t: _is_generic_alias(t) or not attrs.has(t),
+    func=fallback_structure,
+)
 
 
 @functools.lru_cache(maxsize=512)
@@ -89,60 +100,124 @@ def _is_optional_type(typ: typing.Any) -> bool:
     return type(None) in args
 
 
-converter.register_unstructure_hook_func(
-    check_func=lambda t: _is_generic_alias(t) or not attrs.has(t),
-    func=fallback_unstructure,
-)
-converter.register_structure_hook_func(
-    check_func=lambda t: _is_generic_alias(t) or not attrs.has(t),
-    func=fallback_structure,
-)
+def _is_typed_dict_type(typ: typing.Any) -> bool:
+    return (
+        isinstance(typ, type)
+        and issubclass(typ, dict)
+        and hasattr(typ, "__annotations__")
+        and hasattr(typ, "__total__")
+    )
 
 
-def _dump_value(value: typing.Any, recurse: bool):
+def _is_namedtuple_type(typ: typing.Any) -> bool:
+    return (
+        isinstance(typ, type)
+        and issubclass(typ, tuple)
+        and hasattr(typ, "_fields")
+        and isinstance(typ._fields, tuple)  # type: ignore[attr-defined]
+    )
+
+
+def _dump_value(
+    value: typing.Any,
+    recurse: bool,
+    serializers: typing.Optional[
+        typing.Mapping[
+            typing.Union[str, typing.Type],
+            typing.Callable[[typing.Any, bool], typing.Any],
+        ]
+    ] = None,
+    typ: typing.Optional[typing.Type[typing.Any]] = None,
+):
     """Dump a value using cattrs, handling nested `Serializable` objects."""
+    typ = typ or type(value)
+    if serializers and typ in serializers:
+        return serializers[typ](value, True)
+
     if value is None:
         return None
 
     if isinstance(value, Serializable):
-        return value.__dump__(recurse)
+        return value.dump(recurse)
 
     if isinstance(value, Enum):
         return value.value
 
     if isinstance(value, Mapping):
-        return {k: _dump_value(v, recurse) for k, v in value.items()}
+        return {k: _dump_value(v, recurse, serializers) for k, v in value.items()}
 
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [_dump_value(v, recurse) for v in value]
+        return [_dump_value(v, recurse, serializers) for v in value]
 
     return converter.unstructure(value)
 
 
-def _load_value(value: typing.Any, typ: typing.Type[typing.Any]):
+def _load_value(
+    value: typing.Any,
+    typ: typing.Type[typing.Any],
+    deserializers: typing.Optional[
+        typing.Mapping[
+            typing.Union[str, typing.Type],
+            typing.Callable[[typing.Any], typing.Any],
+        ]
+    ] = None,
+) -> typing.Any:
     """Load a value using cattrs, handling nested `Serializable` objects."""
+    if deserializers and typ in deserializers:
+        return deserializers[typ](value)
+
     if value is None:
         return None
 
     if _is_serializable_type(typ):
-        return _get_origin_class(typ).__load__(value)  # type: ignore[attr-type]
+        return _get_origin_class(typ).load(value)  # type: ignore[attr-type]
 
     if isinstance(typ, type) and issubclass(typ, Enum):
         return typ(value)
+
+    if _is_optional_type(typ):
+        args = typing.get_args(typ)
+        non_none_args = [arg for arg in args if arg is not type(None)]
+        if len(non_none_args) == 1:
+            return _load_value(value, non_none_args[0], deserializers)
+        else:
+            for arg in non_none_args:
+                try:
+                    return _load_value(value, arg, deserializers)
+                except Exception:
+                    continue
+            raise DeserializationError(
+                f"Value {value!r} does not match any type in {typ}"
+            )
 
     if _is_generic_alias(typ):
         origin = typing.get_origin(typ)
         args = typing.get_args(typ)
 
-        if origin in (list, tuple) or (
+        if origin in (list, tuple, Sequence) or (
             origin and isinstance(origin, type) and issubclass(origin, Sequence)
         ):
-            return [_load_value(v, args[0]) for v in value]
+            return [_load_value(v, args[0], deserializers) for v in value]
 
-        if origin in (dict,) or (
+        if origin in (dict, Mapping) or (
             origin and isinstance(origin, type) and issubclass(origin, Mapping)
         ):
-            return {k: _load_value(v, args[1]) for k, v in value.items()}
+            return {k: _load_value(v, args[1], deserializers) for k, v in value.items()}
+
+    if _is_typed_dict_type(typ):
+        annotations = typing.get_type_hints(typ, include_extras=False)
+        return typ(
+            {k: _load_value(v, annotations[k], deserializers) for k, v in value.items()}
+        )
+
+    if _is_namedtuple_type(typ):
+        annotations = typing.get_type_hints(typ, include_extras=False)
+        return typ(
+            **{
+                k: _load_value(v, annotations[k], deserializers)
+                for k, v in value.items()
+            }
+        )
 
     return converter.structure(value, typ)
 
@@ -189,8 +264,25 @@ class SerializableMeta(type):
             ):
                 parent_deserializers.update(serializable_deserializers)
 
-        cls_fields = fields or namespace.get("__annotations__", None)
-        all_fields = {**parent_fields, **(cls_fields or {})}
+        try:
+            module = sys.modules.get(cls.__module__)
+            annotations = typing.get_type_hints(
+                cls,
+                globalns=vars(module),
+                localns=dict(vars(cls)),
+                include_extras=False,
+            )
+        except NameError:
+            annotations = namespace.get("__annotations__", {})
+
+        cls_fields = fields or annotations
+        all_fields = {**parent_fields, **cls_fields}
+        # Clean fields: remove any with value `None` or starting with dunder
+        all_fields = {
+            k: v
+            for k, v in all_fields.items()
+            if v is not None and not k.startswith("__")
+        }
 
         type_serializers = cls._discover_type_serializers(all_fields)
         type_deserializers = cls._discover_type_deserializers(all_fields)
@@ -292,7 +384,8 @@ class SerializableMeta(type):
         """
         discovered = {}
         with _type_deserializers_lock:
-            for field_name, field_type in fields.items():
+            for field_name, field_type in fields.items():    
+                # Get the origin class for generic types
                 origin = _get_origin_class(field_type)
                 if origin is None:
                     continue
@@ -378,7 +471,7 @@ class SerializableMeta(type):
                 # Nested `Serializable`
                 if isinstance(value, Serializable):
                     try:
-                        result[field] = value.__dump__(recurse)
+                        result[field] = value.dump(recurse)
                     except Exception as exc:
                         raise SerializationError(
                             f"Failed to serialize nested `Serializable` field '{field}'"
@@ -386,7 +479,7 @@ class SerializableMeta(type):
                 else:
                     # Default cattrs unstructure
                     try:
-                        result[field] = _dump_value(value, recurse)
+                        result[field] = _dump_value(value, recurse, serializers, typ)
                     except Exception as exc:
                         raise SerializationError(
                             f"Failed to unstructure field '{field}' of type {typ}"
@@ -468,7 +561,7 @@ class SerializableMeta(type):
                 if _is_serializable_type(typ):
                     origin_cls = _get_origin_class(typ)
                     try:
-                        init_kwargs[field] = origin_cls.__load__(value)  # type: ignore[attr-type]
+                        init_kwargs[field] = origin_cls.load(value)  # type: ignore[attr-defined]
                     except Exception as exc:
                         raise DeserializationError(
                             f"Failed to deserialize nested `Serializable` field '{field}' of type {typ}"
@@ -476,7 +569,7 @@ class SerializableMeta(type):
                 else:
                     # Default cattrs structure
                     try:
-                        init_kwargs[field] = _load_value(value, typ)
+                        init_kwargs[field] = _load_value(value, typ, deserializers)
                     except Exception as exc:
                         raise DeserializationError(
                             f"Failed to structure field '{field}' of type {typ}"
@@ -514,7 +607,7 @@ class Serializable(metaclass=SerializableMeta):
             raise SerializationError("Failed to dump serializable object") from exc
 
     @classmethod
-    def load(cls, data: typing.Dict[str, typing.Any]) -> Self:
+    def load(cls, data: typing.Mapping[str, typing.Any]) -> Self:
         try:
             return cls.__load__(data)
         except Exception as exc:
@@ -527,11 +620,11 @@ class Serializable(metaclass=SerializableMeta):
 def structure_serializable(
     data: typing.Mapping[str, typing.Any], cls: typing.Type[Serializable]
 ) -> Serializable:
-    return cls.__load__(data)
+    return cls.load(data)
 
 
 def unstructure_serializable(obj: Serializable) -> typing.Mapping[str, typing.Any]:
-    return obj.__dump__()
+    return obj.dump(recurse=True)
 
 
 converter.register_structure_hook(Serializable, structure_serializable)
@@ -690,9 +783,12 @@ def make_registry_deserializer(
     return deserializer
 
 
+T = typing.TypeVar("T")
+
+
 def register_type_serializer(
-    typ: typing.Type[SerializableT],
-    serializer: typing.Callable[[SerializableT, bool], typing.Dict[str, typing.Any]],
+    typ: typing.Type[T],
+    serializer: typing.Callable[[T, bool], typing.Dict[str, typing.Any]],
 ) -> None:
     """Register a global type serializer for a specific type."""
     with _type_serializers_lock:
@@ -700,8 +796,8 @@ def register_type_serializer(
 
 
 def register_type_deserializer(
-    typ: typing.Type[SerializableT],
-    deserializer: typing.Callable[[typing.Mapping[str, typing.Any]], SerializableT],
+    typ: typing.Type[T],
+    deserializer: typing.Callable[[typing.Mapping[str, typing.Any]], T],
 ) -> None:
     """Register a global type deserializer for a specific type."""
     with _type_deserializers_lock:

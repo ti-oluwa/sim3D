@@ -502,7 +502,7 @@ store = bores.ZarrStore(store=Path("./results/simulation.zarr"))
 
 # Run with streaming
 stream = bores.StateStream(
-    bores.run(model=model, config=config),
+    bores.run(model, config=config),
     store=store,
     async_io=True, # Prevent state persistence I/O operations from blocking stream
     batch_size=50,  # Persist every 50 states
@@ -774,7 +774,7 @@ wells = bores.wells_(
 config = bores.Config(..., wells=wells, ...)
 
 # Run simulation with wells
-states = bores.run(model=model, config=config)
+states = bores.run(model, config=config)
 ```
 
 ---
@@ -1396,7 +1396,7 @@ config = bores.Config(
     # ... other config params ...
     constants=custom_constants,  # Use custom constants
 )
-states = bores.run(model=model, config=config)
+states = bores.run(model, config=config)
 ```
 
 ---
@@ -1519,7 +1519,7 @@ config = bores.Config(
 
 for _ in range(3):  # Retry up to 3 times
     try:
-        for state in bores.run(model=model, config=config):
+        for state in bores.run(model, config=config):
             ... # Process each state
         
     except SolverError as e:
@@ -2346,7 +2346,7 @@ config = bores.Config(
 store = bores.ZarrStore(store=Path.cwd() / "results/simulation.zarr")
 
 stream = bores.StateStream(
-    bores.run(model=model, config=config),
+    bores.run(model, config=config),
     store=store,
     batch_size=50,
 )
