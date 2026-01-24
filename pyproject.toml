@@ -1,6 +1,6 @@
 [project]
 name = "bores-framework"
-version = "0.0.1"
+version = "0.0.1b1"
 description = "3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework (BORES)."
 authors = [
     { name = "ti-oluwa", email = "tioluwa.dev@gmail.com" },
@@ -35,17 +35,6 @@ dependencies = [
     "orjson>=3.11.5",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "auto-mix-prep>=0.2.0",
-    "marimo>=0.18.4",
-    "mypy>=1.16.1",
-    "rich>=14.0.0",
-    "ruff>=0.12.1",
-    "ty>=0.0.1a26",
-    "watchdog>=6.0.0",
-]
-
 [tool.marimo.runtime]
 pythonpath=["src"]
 output_max_bytes = 10_000_000
@@ -72,4 +61,10 @@ scipy = [
 [dependency-groups]
 dev = [
     "marimo>=0.18.4",
+    "auto-mix-prep>=0.2.0",
+    "mypy>=1.16.1",
+    "rich>=14.0.0",
+    "ruff>=0.12.1",
+    "ty>=0.0.1a26",
+    "watchdog>=6.0.0",
 ]

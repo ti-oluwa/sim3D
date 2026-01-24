@@ -9,9 +9,9 @@ import attrs
 from typing_extensions import Self
 
 from bores.errors import TimingError, ValidationError
-from bores.serialization import Serializable
+from bores.stores import StoreSerializable
 
-__all__ = ["Time", "Timer", "TimerState", "StepMetricsDict"]
+__all__ = ["Time", "Timer", "TimerState"]
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class StepMetricsDict(typing.TypedDict):
     step_number: int
     step_size: float
     cfl: typing.Optional[float]
-    newton_iters: typing.Optional[int]
+    newton_iterations: typing.Optional[int]
     success: bool
 
 
@@ -94,12 +94,12 @@ class StepMetrics:
     step_number: int
     step_size: float
     cfl: typing.Optional[float] = None
-    newton_iters: typing.Optional[int] = None
+    newton_iterations: typing.Optional[int] = None
     success: bool = True
 
 
 @attrs.define
-class Timer(Serializable):
+class Timer(StoreSerializable):
     """
     Simulation time manager for smart and adaptive time stepping.
     """
@@ -249,19 +249,19 @@ class Timer(Serializable):
                     factor *= 0.9
 
         # Check Newton iteration trends (is solver struggling?)
-        recent_iters = [
-            m.newton_iters
+        recent_iterations = [
+            m.newton_iterations
             for m in list(self.recent_metrics)[-5:]
-            if m.newton_iters is not None and m.success
+            if m.newton_iterations is not None and m.success
         ]
-        if len(recent_iters) >= 3:
-            avg_iters = sum(recent_iters) / len(recent_iters)
-            if avg_iters > 8:
+        if len(recent_iterations) >= 3:
+            avg_iterations = sum(recent_iterations) / len(recent_iterations)
+            if avg_iterations > 8:
                 factor *= 0.85
-            elif all(i > 10 for i in recent_iters[-3:]):
+            elif all(i > 10 for i in recent_iterations[-3:]):
                 factor *= 0.75  # Solver consistently struggling
 
-        return max(factor, 0.5)  # Never be too aggressive in reduction
+        return max(factor, 0.5)  # We don't want to be too aggressive in reduction
 
     def propose_step_size(self) -> float:
         """Proposes the next time step size without updating state."""
@@ -328,7 +328,7 @@ class Timer(Serializable):
             step_number=self.next_step,
             step_size=step_size,
             cfl=max_cfl_encountered,
-            newton_iters=newton_iterations,
+            newton_iterations=newton_iterations,
             success=False,
         )
         self.recent_metrics.append(metrics)
@@ -419,13 +419,12 @@ class Timer(Serializable):
                         f"Moderate CFL violation: {max_cfl_encountered:.3f} > {cfl_limit:.3f} (ratio: {overshoot_ratio:.4f})"
                     )
                 else:
-                    # Mild CFL violation - try to target the limit
+                    # Mild CFL violation. Try to target the limit
                     cfl_factor = (cfl_limit * 0.9) / max_cfl_encountered
                     cfl_factor = max(cfl_factor, 0.6)  # Don't reduce too much
                     logger.debug(
                         f"Mild CFL violation: {max_cfl_encountered:.3f} > {cfl_limit:.3f} (ratio: {overshoot_ratio:.4f})"
                     )
-
                 factors.append(cfl_factor)
 
         # Saturation change backoff
@@ -437,7 +436,7 @@ class Timer(Serializable):
                 overshoot_ratio = max_saturation_change / max_allowed_saturation_change
 
                 if overshoot_ratio > 3.0:
-                    # Very large saturation changes - aggressive reduction
+                    # Very large saturation changes. Apply aggressive reduction
                     sat_factor = 0.25
                     logger.debug(
                         f"Severe saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
@@ -449,13 +448,12 @@ class Timer(Serializable):
                         f"Large saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
                     )
                 else:
-                    # Moderate overshoot - proportional reduction
+                    # Moderate overshoot. Apply proportional reduction
                     sat_factor = max_allowed_saturation_change / max_saturation_change
-                    sat_factor = max(sat_factor, 0.5)
+                    sat_factor = max(sat_factor, 0.5)  # Don't reduce too much
                     logger.debug(
                         f"Moderate saturation change: {max_saturation_change:.4f} > {max_allowed_saturation_change:.4f} (ratio: {overshoot_ratio:.4f})"
                     )
-
                 factors.append(sat_factor)
 
         # Pressure change backoff
@@ -488,14 +486,14 @@ class Timer(Serializable):
         # Newton iteration failure backoff
         if newton_iterations is not None:
             if newton_iterations > 20:
-                # Solver really struggling - aggressive reduction
+                # Solver really struggling. Apply aggressive reduction
                 newton_factor = 0.3
                 logger.debug(
                     f"Newton solver struggling severely: {newton_iterations} iterations"
                 )
                 factors.append(newton_factor)
             elif newton_iterations > 15:
-                # Solver struggling - moderate reduction
+                # Solver struggling. Apply moderate reduction
                 newton_factor = 0.5
                 logger.debug(
                     f"Newton solver struggling: {newton_iterations} iterations"
@@ -598,7 +596,7 @@ class Timer(Serializable):
             step_number=self.step,
             step_size=step_size,
             cfl=max_cfl_encountered,
-            newton_iters=newton_iterations,
+            newton_iterations=newton_iterations,
             success=True,
         )
         self.recent_metrics.append(metrics)
@@ -638,7 +636,6 @@ class Timer(Serializable):
                 logger.debug(
                     f"CFL comfortable ({proximity_to_limit:.2%}), normal growth"
                 )
-
             adjustment_factors.append(("CFL", cfl_factor))
 
         # Saturation change adjustment with intelligent scaling
@@ -650,7 +647,7 @@ class Timer(Serializable):
                 sat_utilization = max_saturation_change / max_allowed_saturation_change
 
                 if sat_utilization > 0.95:
-                    # Very close to limit, reduce step size
+                    # Very close to limit. Reduce step size
                     sat_factor = 0.85
                     logger.debug(
                         f"Saturation change very high ({sat_utilization:.2%}), reducing step"
@@ -676,7 +673,7 @@ class Timer(Serializable):
                         f"Saturation change low ({sat_utilization:.2%}), allowing growth"
                     )
                 else:
-                    # Normal range, proportional adjustment
+                    # Normal range. Apply proportional adjustment
                     sat_factor = min(
                         1.15,
                         max_allowed_saturation_change / max_saturation_change * 0.9,
@@ -684,7 +681,6 @@ class Timer(Serializable):
                     logger.debug(
                         f"Saturation change normal ({sat_utilization:.2%}), proportional growth"
                     )
-
                 adjustment_factors.append(("Saturation", sat_factor))
 
         # Pressure change adjustment with intelligent scaling
@@ -693,19 +689,19 @@ class Timer(Serializable):
                 pres_utilization = max_pressure_change / max_allowed_pressure_change
 
                 if pres_utilization > 0.95:
-                    # Very close to limit, reduce step size
+                    # Very close to limit. Reduce step size
                     pres_factor = 0.85
                     logger.debug(
                         f"Pressure change very high ({pres_utilization:.2%}), reducing step"
                     )
                 elif pres_utilization > 0.85:
-                    # Getting close, maintain or slightly reduce
+                    # Getting close. Maintain or slightly reduce
                     pres_factor = 0.95
                     logger.debug(
                         f"Pressure change high ({pres_utilization:.2%}), maintaining step"
                     )
                 elif pres_utilization > 0.7:
-                    # Moderate usage, allow modest growth
+                    # Moderate usage. Allow modest growth
                     pres_factor = 1.05
                     logger.debug(
                         f"Pressure change moderate ({pres_utilization:.2%}), modest growth"
@@ -719,14 +715,13 @@ class Timer(Serializable):
                         f"Pressure change low ({pres_utilization:.2%}), allowing growth"
                     )
                 else:
-                    # Normal range, proportional adjustment
+                    # Normal range. Apply proportional adjustment
                     pres_factor = min(
                         1.15, max_allowed_pressure_change / max_pressure_change * 0.9
                     )
                     logger.debug(
                         f"Pressure change normal ({pres_utilization:.2%}), proportional growth"
                     )
-
                 adjustment_factors.append(("Pressure", pres_factor))
 
         # Performance-based factor from historical trends
@@ -976,9 +971,10 @@ class Timer(Serializable):
         )
         return timer
 
-    def __dump__(self, recurse: bool = True) -> TimerState:
-        return self.dump_state()
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        return typing.cast(typing.Dict[str, typing.Any], self.dump_state())
 
     @classmethod
-    def __load__(cls, data: TimerState) -> Self:
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        data = typing.cast(TimerState, data)
         return cls.load_state(data)

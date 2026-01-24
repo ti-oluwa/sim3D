@@ -1,9 +1,9 @@
 from collections.abc import Mapping, Sequence
 from enum import Enum
-import functools
 import sys
 import threading
 import typing
+import warnings
 
 import attrs
 import cattrs
@@ -53,7 +53,6 @@ converter.register_structure_hook_func(
 )
 
 
-@functools.lru_cache(maxsize=512)
 def _get_origin_class(typ: typing.Any) -> typing.Optional[type]:
     """
     Extract the origin class from a generic type.
@@ -72,7 +71,6 @@ def _get_origin_class(typ: typing.Any) -> typing.Optional[type]:
     return None
 
 
-@functools.lru_cache(maxsize=512)
 def _is_serializable_type(typ: typing.Any) -> bool:
     """
     Check if a type (including generics) is a Serializable subclass.
@@ -116,6 +114,173 @@ def _is_namedtuple_type(typ: typing.Any) -> bool:
         and hasattr(typ, "_fields")
         and isinstance(typ._fields, tuple)  # type: ignore[attr-defined]
     )
+
+
+def _unwrap_type(typ: typing.Any) -> typing.List[typing.Type[typing.Any]]:
+    """
+    Recursively unwrap a type to get all constituent non-None types.
+
+    Examples:
+        Optional[Foo] -> [Foo]
+        Union[Foo, Bar, None] -> [Foo, Bar]
+        List[Optional[Foo]] -> [List[Foo], Foo]
+        Dict[str, Optional[Foo]] -> [Dict[str, Foo], Foo]
+        Optional[List[Foo]] -> [List[Foo], Foo]
+        Union[List[Foo], Dict[str, Bar]] -> [List[Foo], Dict[str, Bar], Foo, Bar]
+    """
+    result = []
+
+    if typ is type(None):
+        return []
+
+    origin = typing.get_origin(typ)
+    args = typing.get_args(typ)
+
+    # Handle Union types (including Optional)
+    if origin is typing.Union:
+        for arg in args:
+            if arg is not type(None):
+                result.extend(_unwrap_type(arg))
+        return result
+
+    # For generic types, add the container first
+    if origin is not None and args:
+        result.append(typ)
+
+        # Only unwrap nested custom types, not primitives
+        for arg in args:
+            arg_origin = _get_origin_class(arg)
+            # Skip primitives like str, int, float
+            if arg_origin and not _is_primitive_type(arg_origin):
+                result.extend(_unwrap_type(arg))
+
+        return result
+
+    # Base case: non-generic type
+    result.append(typ)
+    return result
+
+
+def _is_primitive_type(typ: type) -> bool:
+    """Check if a type is a primitive built-in type."""
+    return typ in (str, int, float, bool, bytes, type(None))
+
+
+def _get_primary_types(typ: typing.Any) -> typing.List[typing.Type[typing.Any]]:
+    """
+    Get the primary types to check for serializers/deserializers.
+
+    This extracts the outermost meaningful types after unwrapping Unions/Optional,
+    plus any deeply nested types that might have custom serializers.
+
+    Examples:
+        Optional[Foo] -> [Foo]
+        List[Foo] -> [List[Foo], Foo]
+        Dict[str, Foo] -> [Dict[str, Foo], Foo]
+        Optional[List[Foo]] -> [List[Foo], Foo]
+        Union[Foo, Bar] -> [Foo, Bar]
+    """
+    all_types = _unwrap_type(typ)
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_types = []
+    for t in all_types:
+        # Create a hashable representation
+        type_id = id(t)
+        if type_id not in seen:
+            seen.add(type_id)
+            unique_types.append(t)
+
+    return unique_types
+
+
+def _discover_type_serializers(
+    fields: typing.Mapping[str, typing.Type[typing.Any]],
+) -> typing.Dict[str, typing.Callable[[typing.Any, bool], typing.Any]]:
+    """
+    Auto-discover serializers for fields based on their types.
+
+    Unwraps Optional, Union, and other generic containers to find
+    all types that might need custom serializers.
+    """
+    discovered = {}
+
+    with _type_serializers_lock:
+        for field_name, field_type in fields.items():
+            # Get all types to check (unwrapping Optional/Union and extracting generics)
+            types_to_check = _get_primary_types(field_type)
+
+            # Check each type in order of specificity (most specific first)
+            for typ in types_to_check:
+                origin = _get_origin_class(typ)
+                if origin is None:
+                    continue
+
+                # Handle typing special forms (list, dict, etc.)
+                if not isinstance(origin, type):
+                    if origin in _TYPE_SERIALIZERS:
+                        discovered[field_name] = _TYPE_SERIALIZERS[origin]
+                        break
+                    continue
+
+                # Walk MRO for class-based types
+                for base in origin.__mro__:
+                    if base in _TYPE_SERIALIZERS:
+                        discovered[field_name] = _TYPE_SERIALIZERS[base]
+                        break
+                else:
+                    # Continue to next type if no serializer found
+                    continue
+
+                # Break outer loop if we found a serializer
+                break
+
+    return discovered
+
+
+def _discover_type_deserializers(
+    fields: typing.Mapping[str, typing.Type[typing.Any]],
+) -> typing.Dict[str, typing.Callable[[typing.Any], typing.Any]]:
+    """
+    Auto-discover deserializers for fields based on their types.
+
+    Unwraps Optional, Union, and other generic containers to find
+    all types that might need custom deserializers.
+    """
+    discovered = {}
+
+    with _type_deserializers_lock:
+        for field_name, field_type in fields.items():
+            # Get all types to check (unwrapping Optional/Union and extracting generics)
+            types_to_check = _get_primary_types(field_type)
+
+            # Check each type in order of specificity (most specific first)
+            for typ in types_to_check:
+                origin = _get_origin_class(typ)
+                if origin is None:
+                    continue
+
+                # Handle typing special forms (list, dict, etc.)
+                if not isinstance(origin, type):
+                    if origin in _TYPE_DESERIALIZERS:
+                        discovered[field_name] = _TYPE_DESERIALIZERS[origin]
+                        break
+                    continue
+
+                # Walk MRO to find deserializer
+                for base in origin.__mro__:
+                    if base in _TYPE_DESERIALIZERS:
+                        discovered[field_name] = _TYPE_DESERIALIZERS[base]
+                        break
+                else:
+                    # Continue to next type if no deserializer found
+                    continue
+
+                # Break outer loop if we found a deserializer
+                break
+
+    return discovered
 
 
 def _dump_value(
@@ -222,6 +387,184 @@ def _load_value(
     return converter.structure(value, typ)
 
 
+def _build_dumper(
+    fields: typing.Mapping[str, typing.Type],
+    exclude: typing.Optional[typing.Iterable[str]] = None,
+    serializers: typing.Optional[
+        typing.Mapping[
+            typing.Union[str, typing.Type],
+            typing.Callable[[typing.Any, bool], typing.Any],
+        ]
+    ] = None,
+) -> typing.Callable:
+    """
+    Build a dumper function for the class.
+
+    :param fields: Mapping of field names to types.
+    :param exclude: Optional iterable of field names to exclude from dumping.
+    :param serializers: Optional mapping of field names or types to custom serializer callables.
+    :return: A dumper function.
+    """
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        result = {}
+        for field, typ in fields.items():
+            if exclude and field in exclude:
+                continue
+
+            value = getattr(self, field)
+
+            # Custom serializer by field name (highest priority)
+            if serializers and (field in serializers):
+                serializer = serializers[field]
+                try:
+                    result[field] = serializer(value, recurse)
+                except Exception as exc:
+                    raise SerializationError(
+                        f"Failed to serialize field '{field}' using custom serializer"
+                    ) from exc
+                continue
+
+            # Custom serializer by type (handle generics)
+            if serializers:
+                # Try exact type match first
+                if typ in serializers:
+                    serializer = serializers[typ]
+                    try:
+                        result[field] = serializer(value, recurse)
+                    except Exception as exc:
+                        raise SerializationError(
+                            f"Failed to serialize field '{field}' of type {typ} using custom serializer"
+                        ) from exc
+                    continue
+
+                # Then try origin class for generics
+                origin = _get_origin_class(typ)
+                if origin and origin != typ and origin in serializers:
+                    serializer = serializers[origin]
+                    try:
+                        result[field] = serializer(value, recurse)
+                    except Exception as exc:
+                        raise SerializationError(
+                            f"Failed to serialize field '{field}' of type {origin} using custom serializer"
+                        ) from exc
+                    continue
+
+            # Nested `Serializable`
+            if isinstance(value, Serializable):
+                try:
+                    result[field] = value.dump(recurse)
+                except Exception as exc:
+                    raise SerializationError(
+                        f"Failed to serialize nested `Serializable` field '{field}'"
+                    ) from exc
+            else:
+                # Default cattrs unstructure
+                try:
+                    result[field] = _dump_value(value, recurse, serializers, typ)
+                except Exception as exc:
+                    raise SerializationError(
+                        f"Failed to unstructure field '{field}' of type {typ}"
+                    ) from exc
+
+        return result
+
+    return __dump__
+
+
+def _build_loader(
+    fields: typing.Mapping[str, typing.Type],
+    exclude: typing.Optional[typing.Iterable[str]] = None,
+    deserializers: typing.Optional[
+        typing.Mapping[typing.Union[str, typing.Type], typing.Callable]
+    ] = None,
+) -> typing.Callable:
+    """
+    Build a loader function for the class.
+
+    :param fields: Mapping of field names to types.
+    :param exclude: Optional iterable of field names to exclude from loading.
+    :param deserializers: Optional mapping of field names or types to custom deserializer callables.
+    :return: A loader function.
+    """
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]):
+        init_kwargs = {}
+        for field, typ in fields.items():
+            if exclude and field in exclude:
+                continue
+
+            # Field must exist in data (let __init__ handle defaults)
+            if field not in data:
+                continue
+
+            value = data[field]
+
+            # Handle None for Optional types
+            if value is None and _is_optional_type(typ):
+                init_kwargs[field] = None
+                continue
+
+            # Custom deserializer by field name (highest priority)
+            if deserializers and (field in deserializers):
+                deserializer = deserializers[field]
+                try:
+                    init_kwargs[field] = deserializer(value)
+                except Exception as exc:
+                    raise DeserializationError(
+                        f"Failed to deserialize field '{field}' using custom deserializer"
+                    ) from exc
+                continue
+
+            # Custom deserializer by type (handle generics)
+            if deserializers:
+                # Check exact type match first
+                if typ in deserializers:
+                    deserializer = deserializers[typ]
+                    try:
+                        init_kwargs[field] = deserializer(value)
+                    except Exception as exc:
+                        raise DeserializationError(
+                            f"Failed to deserialize field '{field}' of type {typ} using custom deserializer"
+                        ) from exc
+                    continue
+
+                # Then check origin class for generics
+                origin = _get_origin_class(typ)
+                if origin and origin != typ and origin in deserializers:
+                    deserializer = deserializers[origin]
+                    try:
+                        init_kwargs[field] = deserializer(value)
+                    except Exception as exc:
+                        raise DeserializationError(
+                            f"Failed to deserialize field '{field}' of type {origin} using custom deserializer"
+                        ) from exc
+                    continue
+
+            # Check if it's a `Serializable` (including generics)
+            if _is_serializable_type(typ):
+                origin_cls = _get_origin_class(typ)
+                try:
+                    init_kwargs[field] = origin_cls.load(value)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    raise DeserializationError(
+                        f"Failed to deserialize nested `Serializable` field '{field}' of type {typ}"
+                    ) from exc
+            else:
+                # Default cattrs structure
+                try:
+                    init_kwargs[field] = _load_value(value, typ, deserializers)
+                except Exception as exc:
+                    raise DeserializationError(
+                        f"Failed to structure field '{field}' of type {typ}"
+                    ) from exc
+
+        return cls(**init_kwargs)
+
+    return __load__
+
+
 class SerializableMeta(type):
     """Metaclass for `Serializable` classes"""
 
@@ -250,7 +593,7 @@ class SerializableMeta(type):
         parent_serializers = {}
         parent_deserializers = {}
         parent_fields = {}
-        for cl in cls.__mro__[:-1][::-1]:  # Exclude `object`
+        for cl in reversed(cls.__mro__[1:-1]):  # Exclude `object`
             if serializable_fields := getattr(cl, "__serializable_fields__", None):
                 parent_fields.update(serializable_fields)
 
@@ -272,8 +615,13 @@ class SerializableMeta(type):
                 localns=dict(vars(cls)),
                 include_extras=False,
             )
-        except NameError:
+        except NameError as exc:
             annotations = namespace.get("__annotations__", {})
+            warnings.warn(
+                f"Could not resolve type hints for {cls.__name__}: {exc}. "
+                f"Using raw annotations which may not work with forward references.",
+                RuntimeWarning,
+            )
 
         cls_fields = fields or annotations
         all_fields = {**parent_fields, **cls_fields}
@@ -284,9 +632,9 @@ class SerializableMeta(type):
             if v is not None and not k.startswith("__")
         }
 
-        type_serializers = cls._discover_type_serializers(all_fields)
-        type_deserializers = cls._discover_type_deserializers(all_fields)
-        # Build final serializers/deserializers with proper precedence:
+        type_serializers = _discover_type_serializers(all_fields)
+        type_deserializers = _discover_type_deserializers(all_fields)
+        # Build final serializers/deserializers with proper precedence
         # - Auto-discovered (lowest priority)
         # - Parent class (medium priority)
         # - Explicit on this class (highest priority)
@@ -315,7 +663,7 @@ class SerializableMeta(type):
             if "__dump__" not in namespace or getattr(
                 namespace["__dump__"], "_is_placeholder", False
             ):
-                cls.__dump__ = cls._build_default_dumper(
+                cls.__dump__ = _build_dumper(
                     fields=all_fields,
                     exclude=dump_exclude,
                     serializers=all_serializers,
@@ -324,7 +672,7 @@ class SerializableMeta(type):
             if "__load__" not in namespace or getattr(
                 namespace["__load__"], "_is_placeholder", False
             ):
-                cls.__load__ = cls._build_default_loader(
+                cls.__load__ = _build_loader(
                     fields=all_fields,
                     exclude=load_exclude,
                     deserializers=all_deserializers,
@@ -335,249 +683,6 @@ class SerializableMeta(type):
         cls.__serializable_deserializers__ = all_deserializers
         if "__abstract_serializable__" not in namespace:
             cls.__abstract_serializable__ = False
-
-    @staticmethod
-    def _discover_type_serializers(
-        fields: typing.Mapping[str, typing.Type],
-    ) -> typing.Dict[str, typing.Callable]:
-        """
-        Auto-discover serializers for fields based on their types.
-
-        Looks up the global type serializer registry to find matching
-        serializers for field types. Walks the MRO to support inheritance.
-        """
-        discovered = {}
-        with _type_serializers_lock:
-            for field_name, field_type in fields.items():
-                # Get the origin class for generic types
-                origin = _get_origin_class(field_type)
-                if origin is None:
-                    continue
-
-                # Check if origin is actually a class (not a typing special form)
-                if not isinstance(origin, type):
-                    # For typing special forms like list, dict, try direct lookup
-                    if origin in _TYPE_SERIALIZERS:
-                        serializer = _TYPE_SERIALIZERS[origin]
-                        discovered[field_name] = serializer
-                    continue
-
-                # Check if there's a registered serializer for this type
-                # Walk the MRO to find base class serializers
-                for base in origin.__mro__:
-                    if base in _TYPE_SERIALIZERS:
-                        serializer = _TYPE_SERIALIZERS[base]
-                        discovered[field_name] = serializer
-                        break
-
-        return discovered
-
-    @staticmethod
-    def _discover_type_deserializers(
-        fields: typing.Mapping[str, typing.Type],
-    ) -> typing.Dict[str, typing.Callable]:
-        """
-        Auto-discover deserializers for fields based on their types.
-
-        Looks up the global type deserializer registry to find matching
-        deserializers for field types. Walks the MRO to support inheritance.
-        """
-        discovered = {}
-        with _type_deserializers_lock:
-            for field_name, field_type in fields.items():    
-                # Get the origin class for generic types
-                origin = _get_origin_class(field_type)
-                if origin is None:
-                    continue
-
-                # Check if origin is actually a class (not a typing special form)
-                if not isinstance(origin, type):
-                    # For typing special forms like list, dict, try direct lookup
-                    if origin in _TYPE_DESERIALIZERS:
-                        deserializer = _TYPE_DESERIALIZERS[origin]
-                        discovered[field_name] = deserializer
-                    continue
-
-                # Walk MRO to find deserializer
-                for base in origin.__mro__:
-                    if base in _TYPE_DESERIALIZERS:
-                        deserializer = _TYPE_DESERIALIZERS[base]
-                        discovered[field_name] = deserializer
-                        break
-
-        return discovered
-
-    @staticmethod
-    def _build_default_dumper(
-        fields: typing.Mapping[str, typing.Type],
-        exclude: typing.Optional[typing.Iterable[str]] = None,
-        serializers: typing.Optional[
-            typing.Mapping[
-                typing.Union[str, typing.Type],
-                typing.Callable[[typing.Any, bool], typing.Any],
-            ]
-        ] = None,
-    ) -> typing.Callable:
-        """
-        Build a dumper function for the class.
-
-        :param fields: Mapping of field names to types.
-        :param exclude: Optional iterable of field names to exclude from dumping.
-        :param serializers: Optional mapping of field names or types to custom serializer callables.
-        :return: A dumper function.
-        """
-
-        def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
-            result = {}
-            for field, typ in fields.items():
-                if exclude and field in exclude:
-                    continue
-
-                value = getattr(self, field)
-
-                # Custom serializer by field name (highest priority)
-                if serializers and (field in serializers):
-                    serializer = serializers[field]
-                    try:
-                        result[field] = serializer(value, recurse)
-                    except Exception as exc:
-                        raise SerializationError(
-                            f"Failed to serialize field '{field}' using custom serializer"
-                        ) from exc
-                    continue
-
-                # Custom serializer by type (handle generics)
-                if serializers:
-                    origin = _get_origin_class(typ)
-                    if origin and origin in serializers:
-                        serializer = serializers[origin]
-                        try:
-                            result[field] = serializer(value, recurse)
-                        except Exception as exc:
-                            raise SerializationError(
-                                f"Failed to serialize field '{field}' of type {origin} using custom serializer"
-                            ) from exc
-                        continue
-                    elif typ in serializers:
-                        serializer = serializers[typ]
-                        try:
-                            result[field] = serializer(value, recurse)
-                        except Exception as exc:
-                            raise SerializationError(
-                                f"Failed to serialize field '{field}' of type {typ} using custom serializer"
-                            ) from exc
-                        continue
-
-                # Nested `Serializable`
-                if isinstance(value, Serializable):
-                    try:
-                        result[field] = value.dump(recurse)
-                    except Exception as exc:
-                        raise SerializationError(
-                            f"Failed to serialize nested `Serializable` field '{field}'"
-                        ) from exc
-                else:
-                    # Default cattrs unstructure
-                    try:
-                        result[field] = _dump_value(value, recurse, serializers, typ)
-                    except Exception as exc:
-                        raise SerializationError(
-                            f"Failed to unstructure field '{field}' of type {typ}"
-                        ) from exc
-
-            return result
-
-        return __dump__
-
-    @staticmethod
-    def _build_default_loader(
-        fields: typing.Mapping[str, typing.Type],
-        exclude: typing.Optional[typing.Iterable[str]] = None,
-        deserializers: typing.Optional[
-            typing.Mapping[typing.Union[str, typing.Type], typing.Callable]
-        ] = None,
-    ) -> typing.Callable:
-        """
-        Build a loader function for the class.
-
-        :param fields: Mapping of field names to types.
-        :param exclude: Optional iterable of field names to exclude from loading.
-        :param deserializers: Optional mapping of field names or types to custom deserializer callables.
-        :return: A loader function.
-        """
-
-        @classmethod
-        def __load__(cls, data: typing.Mapping[str, typing.Any]):
-            init_kwargs = {}
-            for field, typ in fields.items():
-                if exclude and field in exclude:
-                    continue
-
-                # Field must exist in data (let __init__ handle defaults)
-                if field not in data:
-                    continue
-
-                value = data[field]
-
-                # Handle None for Optional types
-                if value is None and _is_optional_type(typ):
-                    init_kwargs[field] = None
-                    continue
-
-                # Custom deserializer by field name (highest priority)
-                if deserializers and (field in deserializers):
-                    deserializer = deserializers[field]
-                    try:
-                        init_kwargs[field] = deserializer(value)
-                    except Exception as exc:
-                        raise DeserializationError(
-                            f"Failed to deserialize field '{field}' using custom deserializer"
-                        ) from exc
-                    continue
-
-                # Custom deserializer by type (handle generics)
-                if deserializers:
-                    origin = _get_origin_class(typ)
-                    if origin and origin in deserializers:
-                        deserializer = deserializers[origin]
-                        try:
-                            init_kwargs[field] = deserializer(value)
-                        except Exception as exc:
-                            raise DeserializationError(
-                                f"Failed to deserialize field '{field}' of type {origin} using custom deserializer"
-                            ) from exc
-                        continue
-                    elif typ in deserializers:
-                        deserializer = deserializers[typ]
-                        try:
-                            init_kwargs[field] = deserializer(value)
-                        except Exception as exc:
-                            raise DeserializationError(
-                                f"Failed to deserialize field '{field}' of type {typ} using custom deserializer"
-                            ) from exc
-                        continue
-
-                # Check if it's a `Serializable` (including generics)
-                if _is_serializable_type(typ):
-                    origin_cls = _get_origin_class(typ)
-                    try:
-                        init_kwargs[field] = origin_cls.load(value)  # type: ignore[attr-defined]
-                    except Exception as exc:
-                        raise DeserializationError(
-                            f"Failed to deserialize nested `Serializable` field '{field}' of type {typ}"
-                        ) from exc
-                else:
-                    # Default cattrs structure
-                    try:
-                        init_kwargs[field] = _load_value(value, typ, deserializers)
-                    except Exception as exc:
-                        raise DeserializationError(
-                            f"Failed to structure field '{field}' of type {typ}"
-                        ) from exc
-
-            return cls(**init_kwargs)
-
-        return __load__
 
 
 class Serializable(metaclass=SerializableMeta):
@@ -773,7 +878,7 @@ def make_registry_deserializer(
         key, value = next(iter(data.items()))
         if key not in registry:
             raise DeserializationError(
-                f"Unsupported {base_cls.__name__} type key: {key!r}"
+                f"Unsupported {base_cls.__name__} type: {key!r}"
             )
 
         cls = registry[key]

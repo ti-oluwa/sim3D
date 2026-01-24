@@ -1,5 +1,7 @@
 """
-**BORES** - 3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework.
+**BORES**
+
+3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework.
 """
 
 from ._precision import *  # noqa
@@ -29,4 +31,4 @@ from .serialization import *  # noqa
 use_32bit_precision()  # noqa
 
 
-__version__ = "0.0.1"
+__version__ = "0.0.1b1"

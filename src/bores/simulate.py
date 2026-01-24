@@ -937,7 +937,7 @@ class Run(StoreSerializable):
     run = Run(model=model, config=config)
     for state in run():
         # Process the model state at each output interval
-        print(state)
+        process(state)
 
     ```
     """
@@ -1017,6 +1017,9 @@ def run(
     The 3D simulation evolves pressure and saturation over time using the specified evolution scheme.
     3D simulations are computationally intensive and may require significant memory and processing power.
 
+    Complex reservoir features such as faults, fractures, boundary condtions can be modeled, but may increase computational demands.
+    Ensure that the model and configuration are appropriate for 3D simulations.
+
     :param input: Either a `ReservoirModel` instance or a `Run` instance containing the model and configuration.
     :param config: Simulation run configuration and parameters. Only required if `input` is a `ReservoirModel`.
         If `input` is a `Run`, the configuration from the `Run` instance will be used. If config is provided
@@ -1032,19 +1035,17 @@ def run(
     config = bores.Config.from_file("path/to/simulation_config.yaml")
     for state in bores.run(model, config):
         # Process the model state at each output interval
-        print(state)
+        process(state)
 
     # Using Run instance
     run = bores.Run(model=model, config=config)
     for state in bores.run(run):
-        # Process the model state at each output interval
-        print(state)
+        process(state)
 
     # Using Run instance with overridden config
     new_config = bores.Config.from_file("path/to/new_simulation_config.yaml")
     for state in bores.run(run, config=new_config):
-        # Process the model state at each output interval
-        print(state)
+        process(state)
 
     ```
     """
