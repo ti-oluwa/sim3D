@@ -14,7 +14,7 @@ from typing_extensions import Self
 
 from bores.errors import StreamError
 from bores.states import ModelState, validate_state
-from bores.stores import DataStore, PickleStore
+from bores.stores import DataStore, HDF5Store
 from bores.types import NDimension
 
 
@@ -50,8 +50,8 @@ class StateStream(typing.Generic[NDimension]):
     immediately freeing memory. Supports batching for I/O efficiency and async I/O for
     non-blocking disk writes.
 
-    Usage Benefits:
-        - Low memory overhead (states persisted immediately after yield)
+    Why stream states?
+        - Low memory overhead (states persisted immediately/eventually after yield)
         - Batch persistence for I/O efficiency
         - Optional async I/O (2-3x speedup when I/O slower than simulation)
         - Optional validation before save
@@ -94,6 +94,7 @@ class StateStream(typing.Generic[NDimension]):
     # Or explicitly:
     for state in stream.replay():
         analyze_state(state)
+
     ```
 
     Example Usage (Async I/O):
@@ -113,6 +114,7 @@ class StateStream(typing.Generic[NDimension]):
         # Force all pending I/O to complete before analysis
         stream.flush(block=True)
     # Auto-cleanup ensures all data written
+
     ```
     """
 
@@ -133,7 +135,7 @@ class StateStream(typing.Generic[NDimension]):
         max_batch_memory_usage: typing.Optional[float] = None,
         async_io: bool = False,
         max_queue_size: int = 50,
-        io_thread_name: str = "state-io-worker",
+        io_thread_name: str = "stream-io-worker",
         queue_timeout: float = 1.0,
     ) -> None:
         """
@@ -878,12 +880,12 @@ class StateStream(typing.Generic[NDimension]):
         if self._checkpoint_dir is None:
             return
 
-        checkpoint_path = self._checkpoint_dir / f"checkpoint_{state.step:06d}.pkl"
+        checkpoint_path = self._checkpoint_dir / f"checkpoint_{state.step:06d}.h5"
         try:
-            checkpoint_store = PickleStore(
-                filepath=checkpoint_path, compression="lzma", compression_level=8
+            store = HDF5Store(
+                filepath=checkpoint_path, compression="gzip", compression_opts=6
             )
-            checkpoint_store.dump([state], exist_ok=True, validator=None)
+            store.dump([state], exist_ok=True, validator=None)
 
             self._checkpoints_count += 1
             logger.info(
@@ -904,13 +906,13 @@ class StateStream(typing.Generic[NDimension]):
         if self._checkpoint_dir is None:
             raise StreamError("Checkpointing not configured (no checkpoint_interval)")
 
-        checkpoint_files = self._checkpoint_dir.glob(f"checkpoint_{step:06d}.pkl*")
+        checkpoint_files = self._checkpoint_dir.glob(f"checkpoint_{step:06d}.h5*")
         checkpoint_path = next(checkpoint_files, None)
         if checkpoint_path is None:
             raise FileNotFoundError(f"Checkpoint not found for step {step}")
 
-        checkpoint_store = PickleStore(filepath=checkpoint_path)
-        state = next(checkpoint_store.load(ModelState, validator=None), None)
+        store = HDF5Store(filepath=checkpoint_path)
+        state = next(store.load(ModelState, validator=None), None)
         if state is None:
             raise StreamError(f"Checkpoint file is empty: {checkpoint_path}")
 
@@ -928,12 +930,12 @@ class StateStream(typing.Generic[NDimension]):
             raise StreamError("Checkpointing not configured (no checkpoint_interval)")
 
         checkpoint_files = sorted(
-            self._checkpoint_dir.glob("checkpoint_*.pkl*"),
+            self._checkpoint_dir.glob("checkpoint_*.h5*"),
             key=lambda p: int(p.stem.split("_")[1].split(".")[0]),
         )
         for checkpoint_path in checkpoint_files:
-            checkpoint_store = PickleStore(filepath=checkpoint_path)
-            state = next(checkpoint_store.load(ModelState, validator=None), None)
+            store = HDF5Store(filepath=checkpoint_path)
+            state = next(store.load(ModelState, validator=None), None)
             if state is not None:
                 yield state
             else:
@@ -953,7 +955,7 @@ class StateStream(typing.Generic[NDimension]):
             return []
 
         checkpoints = []
-        for path in self._checkpoint_dir.glob("checkpoint_*.pkl*"):
+        for path in self._checkpoint_dir.glob("checkpoint_*.h5*"):
             try:
                 step = int(path.stem.split("_")[1].split(".")[0])
                 checkpoints.append(step)

@@ -60,7 +60,7 @@ scipy = [
 
 [dependency-groups]
 dev = [
-    "marimo>=0.18.4",
+    "marimo>=0.19.6",
     "auto-mix-prep>=0.2.0",
     "mypy>=1.16.1",
     "rich>=14.0.0",

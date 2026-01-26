@@ -740,11 +740,9 @@ SerializableT = typing.TypeVar("SerializableT", bound=Serializable)
 _SerializableT = typing.TypeVar("_SerializableT", bound=Serializable)
 
 
-def dump(
-    self, o: Serializable, /, recurse: bool = True
-) -> typing.Dict[str, typing.Any]:
+def dump(o: Serializable, /, recurse: bool = True) -> typing.Dict[str, typing.Any]:
     """Dump a `Serializable` object to a dictionary."""
-    return o.__dump__(recurse=recurse)
+    return o.__dump__(recurse)
 
 
 def load(
@@ -877,9 +875,7 @@ def make_registry_deserializer(
 
         key, value = next(iter(data.items()))
         if key not in registry:
-            raise DeserializationError(
-                f"Unsupported {base_cls.__name__} type: {key!r}"
-            )
+            raise DeserializationError(f"Unsupported {base_cls.__name__} type: {key!r}")
 
         cls = registry[key]
         return cls.load(value)

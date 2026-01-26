@@ -17,14 +17,12 @@ def setup_run():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
-
     # Load the new run with the resulting model state from the primary depletion run
     run = bores.Run.from_files(
         model_path=Path("./scenarios/runs/primary_depletion/results/model.h5"),
         config_path=Path("./scenarios/runs/setup/config.yaml"),
         pvt_table_path=Path("./scenarios/runs/setup/pvt.h5"),
     )
-
 
     # Gas injection wells, 3-spot pattern
     injection_clamp = bores.InjectionClamp()
@@ -135,6 +133,7 @@ def setup_run():
         wells=wells,
         timer=timer,
         miscibility_model="todd_longstaff",
+        boundary_conditions=None,
     )
     return Path, bores, run
 
@@ -155,7 +154,12 @@ def create_store(Path, bores):
 
 @app.cell
 def execute_run(bores, run, store):
-    stream = bores.StateStream(run(), store=store, batch_size=30)
+    stream = bores.StateStream(
+        run(),
+        store=store,
+        batch_size=30,
+        async_io=True,
+    )
     with stream:
         stream.consume()
     return

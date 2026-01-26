@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -125,17 +125,19 @@ def setup_run():
     timer = bores.Timer(
         initial_step_size=bores.Time(hours=30.0),
         max_step_size=bores.Time(days=5.0),
-        min_step_size=bores.Time(hours=1.0),
+        min_step_size=bores.Time(minutes=10),
         simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 5) + 100),
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
         backoff_factor=0.5,
         aggressive_backoff_factor=0.25,
+        max_rejects=20,
     )
     run.config.update(
         wells=wells,
         timer=timer,
         miscibility_model="todd_longstaff",
+        boundary_conditions=None,
     )
     return Path, bores, run
 
@@ -156,7 +158,12 @@ def create_store(Path, bores):
 
 @app.cell
 def execute_run(bores, run, store):
-    stream = bores.StateStream(run(), store=store, batch_size=30)
+    stream = bores.StateStream(
+        run(),
+        store=store,
+        batch_size=30,
+        async_io=True,
+    )
     with stream:
         stream.consume()
     return

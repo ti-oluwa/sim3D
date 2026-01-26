@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full")
 
 
@@ -18,7 +18,7 @@ def _():
         store=Path("./scenarios/runs/co2_injection/results/co2_injection.zarr")
     )
     stream = bores.StateStream(store=store, lazy_load=False)
-    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 5 == 0))
+    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 20 == 0))
     return bores, itertools, np, states
 
 
@@ -725,7 +725,7 @@ def _(bores, states, viz):
 
     property = "solvent-concentration"
     figures = []
-    timesteps = [2, 450, 960, 1541]
+    timesteps = [13]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

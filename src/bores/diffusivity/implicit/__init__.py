@@ -1,1 +1,1 @@
-from .pressure import evolve_pressure_implicitly  # noqa: F401
+from .pressure import evolve_pressure  # noqa: F401

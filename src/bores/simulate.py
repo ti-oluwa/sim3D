@@ -18,12 +18,7 @@ from bores.boundary_conditions import (
 )
 from bores.config import Config
 from bores.constants import c
-from bores.diffusivity import (
-    evolve_miscible_saturation_explicitly,
-    evolve_pressure_explicitly,
-    evolve_pressure_implicitly,
-    evolve_saturation_explicitly,
-)
+from bores.diffusivity import explicit, implicit
 from bores.errors import SimulationError, StopSimulation, TimingError, ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
@@ -49,10 +44,10 @@ from bores.models import (
 )
 from bores.states import ModelState
 from bores.stores import StoreSerializable
+from bores.tables.pvt import PVTTableData, PVTTables
 from bores.types import MiscibilityModel, NDimension, NDimensionalGrid, ThreeDimensions
 from bores.utils import clip
 from bores.wells import Wells
-from bores.tables.pvt import PVTTableData, PVTTables
 
 
 __all__ = ["run", "Run"]
@@ -243,7 +238,7 @@ def _run_impes_step(
     :return: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (implicit)...")
-    pressure_result = evolve_pressure_implicitly(
+    pressure_result = implicit.evolve_pressure(
         cell_dimension=cell_dimension,
         thickness_grid=padded_thickness_grid,
         elevation_grid=padded_elevation_grid,
@@ -413,9 +408,9 @@ def _run_impes_step(
     gas_production_grid = zeros_grid.copy()
 
     if miscibility_model == "immiscible":
-        evolve_saturation = evolve_saturation_explicitly
+        evolve_saturation = explicit.evolve_saturation
     else:
-        evolve_saturation = evolve_miscible_saturation_explicitly
+        evolve_saturation = explicit.evolve_miscible_saturation
 
     saturation_result = evolve_saturation(
         cell_dimension=cell_dimension,
@@ -601,7 +596,7 @@ def _run_explicit_step(
     :return: `StepResult` containing updated rates and fluid properties.
     """
     logger.debug("Evolving pressure (explicit)...")
-    pressure_result = evolve_pressure_explicitly(
+    pressure_result = explicit.evolve_pressure(
         cell_dimension=cell_dimension,
         thickness_grid=padded_thickness_grid,
         elevation_grid=padded_elevation_grid,
@@ -734,9 +729,9 @@ def _run_explicit_step(
     gas_production_grid = zeros_grid.copy()
 
     if miscibility_model == "immiscible":
-        evolve_saturation = evolve_saturation_explicitly
+        evolve_saturation = explicit.evolve_saturation
     else:
-        evolve_saturation = evolve_miscible_saturation_explicitly
+        evolve_saturation = explicit.evolve_miscible_saturation
 
     saturation_result = evolve_saturation(
         cell_dimension=cell_dimension,

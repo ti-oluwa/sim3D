@@ -16,14 +16,12 @@ def setup_run():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
-
     # Load the new run with the resulting model state from the stabilization run
     run = bores.Run.from_files(
         model_path=Path("./scenarios/runs/stabilization/results/model.h5"),
         config_path=Path("./scenarios/runs/setup/config.yaml"),
         pvt_table_path=Path("./scenarios/runs/setup/pvt.h5"),
     )
-
 
     # Production well
     clamp = bores.ProductionClamp()
@@ -35,7 +33,7 @@ def setup_run():
             clamp=clamp,
         ),
         gas_control=bores.AdaptiveBHPRateControl(
-            target_rate=-500,
+            target_rate=-100,
             target_phase="gas",
             bhp_limit=800,
             clamp=clamp,
@@ -81,7 +79,7 @@ def setup_run():
         initial_step_size=bores.Time(hours=20),
         max_step_size=bores.Time(days=5),
         min_step_size=bores.Time(minutes=10.0),
-        simulation_time=bores.Time(days=1 * bores.c.DAYS_PER_YEAR),  # 5 years
+        simulation_time=bores.Time(days=2 * bores.c.DAYS_PER_YEAR),  # 5 years
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
         backoff_factor=0.5,
@@ -109,7 +107,12 @@ def create_store(Path, bores):
 
 @app.cell
 def execute_run(bores, run, store):
-    stream = bores.StateStream(run(), store=store, batch_size=30)
+    stream = bores.StateStream(
+        run(),
+        store=store,
+        batch_size=30,
+        async_io=True,
+    )
     with stream:
         last_state = stream.last()
     return (last_state,)
@@ -117,7 +120,9 @@ def execute_run(bores, run, store):
 
 @app.cell
 def capture_last_model_state(Path, last_state):
-    last_state.model.to_file(Path("./scenarios/runs/primary_depletion/results/model.h5"))
+    last_state.model.to_file(
+        Path("./scenarios/runs/primary_depletion/results/model.h5")
+    )
     return
 
 

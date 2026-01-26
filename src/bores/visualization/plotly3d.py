@@ -3,7 +3,6 @@ Plotly-based 3D Visualization Suite for Reservoir Simulation Data and Results.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from enum import Enum
 import itertools
 import logging
@@ -1428,7 +1427,7 @@ class BaseRenderer(ABC):
 
                     # Handle single-cell perforations (start == end)
                     # Create a small vertical line segment for visibility
-                    if start_loc == end_loc:
+                    if tuple(start_loc) == tuple(end_loc):
                         if cell_dimension is not None and depth_grid is not None:
                             # Use a small vertical extent for single-cell perforations
                             # Since depth_grid gives cell center, extend above and below
@@ -1705,7 +1704,7 @@ class BaseRenderer(ABC):
 
                     # Handle single-cell perforations (start == end)
                     # Create a small vertical line segment for visibility
-                    if start_loc == end_loc:
+                    if tuple(start_loc) == tuple(end_loc):
                         logger.debug(
                             f"    Single-cell perforation detected at {start_loc}, extending vertically"
                         )

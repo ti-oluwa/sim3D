@@ -9,9 +9,16 @@ import numpy as np
 
 from bores.constants import c
 from bores.correlations.arrays import (
+    compute_gas_compressibility as compute_gas_compressibility_vectorized,
     compute_gas_compressibility_factor as compute_gas_compressibility_factor_vectorized,
     compute_gas_density as compute_gas_density_vectorized,
+    compute_gas_formation_volume_factor as compute_gas_formation_volume_factor_vectorized,
+    compute_gas_free_water_formation_volume_factor as compute_gas_free_water_formation_volume_factor_vectorized,
     compute_gas_viscosity as compute_gas_viscosity_vectorized,
+    compute_water_compressibility as compute_water_compressibility_vectorized,
+    compute_water_density as compute_water_density_vectorized,
+    compute_water_formation_volume_factor as compute_water_formation_volume_factor_vectorized,
+    compute_water_viscosity as compute_water_viscosity_vectorized,
 )
 from bores.correlations.core import (
     compute_gas_compressibility,
@@ -514,7 +521,7 @@ def _build_table_interpolator(
     :param temperature: Temperature(s) at which to interpolate the property.
     """
 
-    def _interpolator(pressure: FloatOrArray) -> FloatOrArray:
+    def interpolator(pressure: FloatOrArray) -> FloatOrArray:
         # Clamp pressure to table bounds
         result = pvt_tables.pt_interpolate(
             name=property_name, pressure=pressure, temperature=temperature
@@ -526,9 +533,9 @@ def _build_table_interpolator(
             )
         return result
 
-    _interpolator._supports_arrays = True  # type: ignore
-    _interpolator.__name__ = f"{property_name}_interpolator"
-    return _interpolator
+    interpolator._supports_arrays = True  # type: ignore
+    interpolator.__name__ = f"{property_name}_interpolator"
+    return interpolator
 
 
 @attrs.frozen
@@ -711,7 +718,7 @@ class WellFluid(Serializable):
         )
 
 
-@attrs.frozen()
+@attrs.frozen
 class InjectedFluid(WellFluid):
     """Properties of the fluid being injected into or produced by a well."""
 
@@ -754,8 +761,8 @@ class InjectedFluid(WellFluid):
                 )
 
     def get_density(
-        self, pressure: float, temperature: float, **kwargs: typing.Any
-    ) -> float:
+        self, pressure: FloatOrArray, temperature: FloatOrArray, **kwargs: typing.Any
+    ) -> FloatOrArray:
         """
         Get the density of the fluid at given pressure and temperature.
 
@@ -764,14 +771,31 @@ class InjectedFluid(WellFluid):
         :kwargs: Additional parameters for phase density calculations.
         :return: The density of the fluid (lbm/ft³).
         """
+        vectorize_pressure = isinstance(pressure, np.ndarray)
+        vectorize_temperature = isinstance(temperature, np.ndarray)
+        use_vectorization = vectorize_pressure or vectorize_temperature
+        if use_vectorization and not vectorize_pressure:
+            pressure = np.full_like(temperature, pressure)
+        elif use_vectorization and not vectorize_temperature:
+            temperature = np.full_like(pressure, temperature)
+
         if self.phase == FluidPhase.WATER:
             gas_free_water_fvf = kwargs.get(
                 "gas_free_water_formation_volume_factor", None
             )
             if gas_free_water_fvf is None:
-                gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
-                    pressure=pressure, temperature=temperature
-                )
+                if use_vectorization:
+                    gas_free_water_fvf = (
+                        compute_gas_free_water_formation_volume_factor_vectorized(
+                            pressure=pressure,  # type: ignore
+                            temperature=temperature,  # type: ignore
+                        )
+                    )
+                else:
+                    gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                    )
                 kwargs["gas_free_water_formation_volume_factor"] = gas_free_water_fvf
 
             # Assume no-gas in injection water if not explicitly specified
@@ -780,30 +804,52 @@ class InjectedFluid(WellFluid):
             if "gas_gravity" not in kwargs:
                 kwargs["gas_gravity"] = self.specific_gravity
 
+            if use_vectorization:
+                return compute_water_density_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    salinity=self.salinity or 0.0,
+                    **kwargs,
+                )
+
             return compute_water_density(
-                pressure=pressure,
-                temperature=temperature,
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
                 salinity=self.salinity or 0.0,
                 **kwargs,
             )
 
         gas_z_factor = kwargs.get("gas_compressibility_factor", None)
         if gas_z_factor is None:
-            gas_z_factor = compute_gas_compressibility_factor(
-                pressure=pressure,
-                temperature=temperature,
-                gas_gravity=self.specific_gravity,
+            if use_vectorization:
+                gas_z_factor = compute_gas_compressibility_factor_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=np.full_like(pressure, self.specific_gravity),
+                )
+            else:
+                gas_z_factor = compute_gas_compressibility_factor(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=self.specific_gravity,
+                )
+        if use_vectorization:
+            return compute_gas_density_vectorized(
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
+                gas_gravity=np.full_like(pressure, self.specific_gravity),
+                gas_compressibility_factor=gas_z_factor,
             )
         return compute_gas_density(
-            pressure=pressure,
-            temperature=temperature,
+            pressure=pressure,  # type: ignore
+            temperature=temperature,  # type: ignore
             gas_gravity=self.specific_gravity,
-            gas_compressibility_factor=gas_z_factor,
+            gas_compressibility_factor=gas_z_factor,  # type: ignore
         )
 
     def get_viscosity(
-        self, pressure: float, temperature: float, **kwargs: typing.Any
-    ) -> float:
+        self, pressure: FloatOrArray, temperature: FloatOrArray, **kwargs: typing.Any
+    ) -> FloatOrArray:
         """
         Get the viscosity of the fluid at given pressure and temperature.
 
@@ -812,10 +858,24 @@ class InjectedFluid(WellFluid):
         :kwargs: Additional parameters for viscosity calculations.
         :return: The viscosity of the fluid (cP).
         """
+        vectorize_pressure = isinstance(pressure, np.ndarray)
+        vectorize_temperature = isinstance(temperature, np.ndarray)
+        use_vectorization = vectorize_pressure or vectorize_temperature
+        if use_vectorization and not vectorize_pressure:
+            pressure = np.full_like(temperature, pressure)
+        elif use_vectorization and not vectorize_temperature:
+            temperature = np.full_like(pressure, temperature)
+
         if self.phase == FluidPhase.WATER:
+            if use_vectorization:
+                return compute_water_viscosity_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    salinity=self.salinity or 0.0,
+                )
             return compute_water_viscosity(
-                pressure=pressure,
-                temperature=temperature,
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
                 salinity=self.salinity or 0.0,
             )
 
@@ -823,26 +883,49 @@ class InjectedFluid(WellFluid):
         if gas_density is None:
             gas_z_factor = kwargs.get("gas_compressibility_factor", None)
             if gas_z_factor is None:
-                gas_z_factor = compute_gas_compressibility_factor(
-                    pressure=pressure,
-                    temperature=temperature,
-                    gas_gravity=self.specific_gravity,
+                if use_vectorization:
+                    gas_z_factor = compute_gas_compressibility_factor_vectorized(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                        gas_gravity=np.full_like(pressure, self.specific_gravity),
+                    )
+                else:
+                    gas_z_factor = compute_gas_compressibility_factor(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                        gas_gravity=self.specific_gravity,
+                    )
+
+            if use_vectorization:
+                gas_density = compute_gas_density_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=np.full_like(pressure, self.specific_gravity),
+                    gas_compressibility_factor=gas_z_factor,
                 )
-            gas_density = compute_gas_density(
-                pressure=pressure,
-                temperature=temperature,
-                gas_gravity=self.specific_gravity,
-                gas_compressibility_factor=gas_z_factor,
+            else:
+                gas_density = compute_gas_density(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=self.specific_gravity,
+                    gas_compressibility_factor=gas_z_factor,  # type: ignore
+                )
+
+        if use_vectorization:
+            return compute_gas_viscosity_vectorized(
+                temperature=temperature,  # type: ignore
+                gas_density=gas_density,  # type: ignore
+                gas_molecular_weight=self.molecular_weight,
             )
         return compute_gas_viscosity(
-            temperature=temperature,
-            gas_density=gas_density,
+            temperature=temperature,  # type: ignore
+            gas_density=gas_density,  # type: ignore
             gas_molecular_weight=self.molecular_weight,
         )
 
     def get_compressibility(
-        self, pressure: float, temperature: float, **kwargs: typing.Any
-    ) -> float:
+        self, pressure: FloatOrArray, temperature: FloatOrArray, **kwargs: typing.Any
+    ) -> FloatOrArray:
         """
         Get the compressibility of the fluid at given pressure and temperature.
 
@@ -862,31 +945,66 @@ class InjectedFluid(WellFluid):
 
         :return: The compressibility of the fluid (psi⁻¹).
         """
+        vectorize_pressure = isinstance(pressure, np.ndarray)
+        vectorize_temperature = isinstance(temperature, np.ndarray)
+        use_vectorization = vectorize_pressure or vectorize_temperature
+        if use_vectorization and not vectorize_pressure:
+            pressure = np.full_like(temperature, pressure)
+        elif use_vectorization and not vectorize_temperature:
+            temperature = np.full_like(pressure, temperature)
+
         if self.phase == FluidPhase.WATER:
             gas_free_water_fvf = kwargs.get(
                 "gas_free_water_formation_volume_factor", None
             )
             if gas_free_water_fvf is None:
-                gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
-                    pressure=pressure, temperature=temperature
-                )
+                if use_vectorization:
+                    gas_free_water_fvf = (
+                        compute_gas_free_water_formation_volume_factor_vectorized(
+                            pressure=pressure,  # type: ignore
+                            temperature=temperature,  # type: ignore
+                        )
+                    )
+                else:
+                    gas_free_water_fvf = compute_gas_free_water_formation_volume_factor(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                    )
                 kwargs["gas_free_water_formation_volume_factor"] = gas_free_water_fvf
 
+            if use_vectorization:
+                return compute_water_compressibility_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    salinity=self.salinity or 0.0,
+                    **kwargs,
+                )
+
             return compute_water_compressibility(
-                pressure=pressure,
-                temperature=temperature,
-                **kwargs,
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
                 salinity=self.salinity or 0.0,
+                **kwargs,
             )
 
         kwargs.setdefault("gas_gravity", self.specific_gravity)
+        if use_vectorization:
+            if "gas_gravity" not in kwargs:
+                kwargs["gas_gravity"] = np.full_like(pressure, self.specific_gravity)
+            return compute_gas_compressibility_vectorized(
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
+                **kwargs,
+            )
         return compute_gas_compressibility(
-            pressure=pressure, temperature=temperature, **kwargs
+            pressure=pressure,  # type: ignore
+            temperature=temperature,  # type: ignore
+            **kwargs,
         )
 
     def get_formation_volume_factor(
-        self, pressure: float, temperature: float, **kwargs: typing.Any
-    ) -> float:
+        self, pressure: FloatOrArray, temperature: FloatOrArray, **kwargs: typing.Any
+    ) -> FloatOrArray:
         """
         Get the formation volume factor of the fluid at given pressure and temperature.
 
@@ -895,32 +1013,67 @@ class InjectedFluid(WellFluid):
         :kwargs: Additional parameters for formation volume factor calculations.
         :return: The formation volume factor of the fluid (bbl/STB or ft³/SCF).
         """
+        vectorize_pressure = isinstance(pressure, np.ndarray)
+        vectorize_temperature = isinstance(temperature, np.ndarray)
+        use_vectorization = vectorize_pressure or vectorize_temperature
+        if use_vectorization and not vectorize_pressure:
+            pressure = np.full_like(temperature, pressure)
+        elif use_vectorization and not vectorize_temperature:
+            temperature = np.full_like(pressure, temperature)
+
         if self.phase == FluidPhase.WATER:
             water_density = kwargs.get("water_density", None)
             if water_density is None:
                 # Not need for gas free fvf or gas fvf, since injection water
                 # is typically gas free fresh water or degassed formation water
-                water_density = compute_water_density(
-                    pressure=pressure,
-                    temperature=temperature,
+                if use_vectorization:
+                    water_density = compute_water_density_vectorized(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                        salinity=self.salinity or 0.0,
+                    )
+                else:
+                    water_density = compute_water_density(
+                        pressure=pressure,  # type: ignore
+                        temperature=temperature,  # type: ignore
+                        salinity=self.salinity or 0.0,
+                    )
+
+            if use_vectorization:
+                return compute_water_formation_volume_factor_vectorized(
                     salinity=self.salinity or 0.0,
+                    water_density=water_density,  # type: ignore
                 )
             return compute_water_formation_volume_factor(
                 salinity=self.salinity or 0.0,
-                water_density=water_density,
+                water_density=water_density,  # type: ignore
             )
 
         gas_z_factor = kwargs.get("gas_compressibility_factor", None)
         if gas_z_factor is None:
-            gas_z_factor = compute_gas_compressibility_factor(
-                pressure=pressure,
-                temperature=temperature,
-                gas_gravity=self.specific_gravity,
+            if use_vectorization:
+                gas_z_factor = compute_gas_compressibility_factor_vectorized(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=np.full_like(pressure, self.specific_gravity),
+                )
+            else:
+                gas_z_factor = compute_gas_compressibility_factor(
+                    pressure=pressure,  # type: ignore
+                    temperature=temperature,  # type: ignore
+                    gas_gravity=self.specific_gravity,
+                )
+
+        if use_vectorization:
+            return compute_gas_formation_volume_factor_vectorized(
+                pressure=pressure,  # type: ignore
+                temperature=temperature,  # type: ignore
+                gas_compressibility_factor=gas_z_factor,  # type: ignore
             )
         return compute_gas_formation_volume_factor(
-            pressure=pressure,
-            temperature=temperature,
-            gas_compressibility_factor=gas_z_factor,
+            pressure=pressure,  # type: ignore
+            temperature=temperature,  # type: ignore
+            gas_compressibility_factor=gas_z_factor,  # type: ignore
         )
 
 
@@ -934,7 +1087,7 @@ class ProducedFluid(WellFluid):  # type: ignore[attr-defined]
 WellFluidT = typing.TypeVar("WellFluidT", bound=WellFluid)
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, inline="always")
 def _geometric_mean(values: typing.Sequence[float]) -> float:
     prod = 1.0
     n = 0
@@ -951,7 +1104,7 @@ def compute_effective_permeability_for_well(
     permeability: typing.Sequence[float], orientation: Orientation
 ) -> float:
     """
-    Compute k_eff for Peaceman WI using geometric mean of the two permeabilities
+    Compute `k_eff` for Peaceman WI using geometric mean of the two permeabilities
     perpendicular to the well axis. `permeability` is (kx, ky, kz).
     orientation is one of Orientation.X/Y/Z (or a string equivalent).
     """
@@ -966,5 +1119,5 @@ def compute_effective_permeability_for_well(
         return np.sqrt(max(ky, 0.0) * max(kz, 0.0))
     elif orientation == Orientation.Y:  # well along y: transverse are x,z
         return np.sqrt(max(kx, 0.0) * max(kz, 0.0))
-    # Oblique/unknown orientation: conservative fallback = geometric mean of all three
+    # For Oblique/unknown orientation, use conservative fallback, i.e geometric mean of all three
     return _geometric_mean((kx, ky, kz))

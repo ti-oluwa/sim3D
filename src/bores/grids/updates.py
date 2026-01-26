@@ -1,9 +1,7 @@
 import typing
 
 import attrs
-import numpy as np
 
-from bores._precision import get_dtype
 from bores.grids.pvt import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -105,7 +103,7 @@ def update_pvt_grids(
     :param fluid_properties: Current fluid property grids (pressure, temperature, salinity, densities, etc.)
     :param wells: Current wells configuration (used for fluid type information).
     :param miscibility_model: The miscibility model used in the simulation.
-    :param
+    :param pvt_tables: PVT table for property lookups (if None, correlations are used).
     :return: Updated FluidProperties object with recalculated gas, water, and oil properties.
     """
     pressure_grid = fluid_properties.pressure_grid
@@ -249,23 +247,22 @@ def update_pvt_grids(
     # before the gas to oil ratio grid, as the latter depends on the former.
 
     if pvt_tables is None:
-        # Step 1: Compute NEW bubble point using CURRENT Rs
+        # Step 1: Compute New bubble point using Current Rs
         new_oil_bubble_point_pressure_grid = build_oil_bubble_point_pressure_grid(
             gas_gravity_grid=fluid_properties.gas_gravity_grid,
             oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
             temperature_grid=temperature_grid,
             solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
         )
-
-        # Step 2: Compute Rs at NEW bubble point
+        # Step 2: Compute Rs at New bubble point
         gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
             temperature_grid=temperature_grid,
-            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # Use same NEW bubble point here
+            bubble_point_pressure_grid=new_oil_bubble_point_pressure_grid,  # Use same New bubble point here
             gas_gravity_grid=fluid_properties.gas_gravity_grid,
             oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
         )
-        # Step 3: Compute NEW Rs at current pressure
+        # Step 3: Compute New Rs at current pressure
         new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
@@ -316,13 +313,13 @@ def update_pvt_grids(
             gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
         )
     else:
-        # Step 1: Compute NEW bubble point using CURRENT Rs
+        # Step 1: Compute New bubble point using Current Rs
         new_oil_bubble_point_pressure_grid = pvt_tables.oil_bubble_point_pressure(
             temperature=temperature_grid,
             solution_gor=fluid_properties.solution_gas_to_oil_ratio_grid,
         )
 
-        # Step 2: Compute NEW Rs at current pressure
+        # Step 2: Compute New Rs at current pressure
         new_solution_gas_to_oil_ratio_grid = pvt_tables.solution_gas_to_oil_ratio(
             pressure=pressure_grid,
             temperature=temperature_grid,
@@ -360,12 +357,20 @@ def update_pvt_grids(
     if miscibility_model != "immiscible":
         for well in wells.injection_wells:
             injected_fluid = well.injected_fluid
-            if injected_fluid and injected_fluid.is_miscible:
-                injected_fluid_viscosity_grid = np.vectorize(
-                    injected_fluid.get_viscosity, otypes=[get_dtype()]
-                )(
+            if injected_fluid is not None and injected_fluid.is_miscible:
+                injected_fluid_viscosity_grid = injected_fluid.get_viscosity(
                     pressure=pressure_grid,
                     temperature=temperature_grid,
+                )
+                injected_fluid_density_grid = injected_fluid.get_density(
+                    pressure=pressure_grid,
+                    temperature=temperature_grid,
+                )
+                injected_fluid_viscosity_grid = typing.cast(
+                    NDimensionalGrid[ThreeDimensions], injected_fluid_viscosity_grid
+                )
+                injected_fluid_density_grid = typing.cast(
+                    NDimensionalGrid[ThreeDimensions], injected_fluid_density_grid
                 )
                 # Update effective oil viscosity grid using Todd-Longstaff model
                 new_oil_effective_viscosity_grid = build_oil_effective_viscosity_grid(
@@ -379,7 +384,7 @@ def update_pvt_grids(
                 )
                 new_oil_effective_density_grid = build_oil_effective_density_grid(
                     oil_density_grid=new_oil_density_grid,  # type: ignore
-                    solvent_density_grid=injected_fluid_viscosity_grid,
+                    solvent_density_grid=injected_fluid_density_grid,
                     oil_viscosity_grid=new_oil_effective_viscosity_grid,
                     solvent_viscosity_grid=injected_fluid_viscosity_grid,
                     solvent_concentration_grid=fluid_properties.solvent_concentration_grid,

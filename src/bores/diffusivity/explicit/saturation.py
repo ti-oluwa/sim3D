@@ -27,7 +27,7 @@ from bores.wells import Wells
 import numba
 import numpy as np
 
-__all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation_explicitly"]
+__all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation"]
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class ExplicitSaturationSolution:
     solvent_concentration_grid: typing.Optional[ThreeDimensionalGrid] = None
 
 
-def evolve_saturation_explicitly(
+def evolve_saturation(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,
@@ -1282,7 +1282,7 @@ def normalize_saturations(
     return water_saturation_grid, oil_saturation_grid, gas_saturation_grid
 
 
-def evolve_miscible_saturation_explicitly(
+def evolve_miscible_saturation(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,

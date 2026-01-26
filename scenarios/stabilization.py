@@ -7,7 +7,6 @@ app = marimo.App(width="full", app_title="bores")
 @app.cell
 def build_run_from_base_setup():
     import logging
-    import typing
     from pathlib import Path
     import numpy as np
     import bores
@@ -42,7 +41,11 @@ def create_store(Path, bores):
 
 @app.cell
 def execute_run(bores, run, store):
-    stream = bores.StateStream(run(), store=store)
+    stream = bores.StateStream(
+        run(),
+        store=store,
+        async_io=True,
+    )
     with stream:
         last_state = stream.last()
     return (last_state,)

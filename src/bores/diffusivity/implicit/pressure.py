@@ -41,7 +41,7 @@ class ImplicitPressureSolution:
     max_pressure_change: float
 
 
-def evolve_pressure_implicitly(
+def evolve_pressure(
     cell_dimension: typing.Tuple[float, float],
     thickness_grid: ThreeDimensionalGrid,
     elevation_grid: ThreeDimensionalGrid,

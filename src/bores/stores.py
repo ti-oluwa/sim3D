@@ -947,7 +947,6 @@ class JSONStore(DataStore[SerializableT]):
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
-        exist_ok: bool = True,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
         **kwargs: typing.Any,
     ) -> None:
@@ -955,7 +954,6 @@ class JSONStore(DataStore[SerializableT]):
         Dump states using JSON.
 
         :param states: Iterable of serializable instances to dump
-        :param exist_ok: If True, will overwrite existing files safely
         :param validator: Optional callable to validate/transform each item before dumping
         """
         data_list = []
@@ -1025,7 +1023,6 @@ class YAMLStore(DataStore[SerializableT]):
     def dump(  # type: ignore[override]
         self,
         data: typing.Iterable[SerializableT],
-        exist_ok: bool = True,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
         **kwargs: typing.Any,
     ) -> None:
