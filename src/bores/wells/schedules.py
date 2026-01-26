@@ -1,3 +1,5 @@
+import itertools
+import functools
 import threading
 import typing
 
@@ -8,9 +10,8 @@ from bores.errors import DeserializationError, SerializationError, ValidationErr
 from bores.serialization import Serializable
 from bores.states import ModelState
 from bores.stores import StoreSerializable
-from bores.types import ActionFunc, HookFunc
-from bores.types import Coordinates
-from bores.wells.base import InjectionWell, ProductionWell, Well, Wells
+from bores.types import Coordinates, S, T
+from bores.wells.base import InjectionWell, ProductionWell, Well, Wells, WellT
 from bores.wells.controls import WellControl
 from bores.wells.core import InjectedFluid, ProducedFluid, WellFluid
 
@@ -19,80 +20,85 @@ __all__ = [
     "WellEvent",
     "WellSchedule",
     "WellSchedules",
-    "well_time_hook",
-    "well_hooks",
+    "well_time_predicate",
+    "well_predicates",
     "well_update_action",
     "well_actions",
-    "well_hook",
+    "well_predicate",
     "well_action",
-    "list_well_hooks",
+    "list_well_predicates",
     "list_well_actions",
-    "get_well_hook",
+    "get_well_predicate",
     "get_well_action",
-    "serialize_well_hook",
+    "serialize_well_predicate",
     "serialize_well_action",
 ]
 
 
-_HOOKS: typing.Dict[str, HookFunc] = {}
+PredicateFunc = typing.Callable[[S, T], bool]
+"""A function that takes two arguments of types S and T and returns a boolean value."""
+ActionFunc = typing.Callable[[S, T], None]
+"""A function that takes two arguments of types S and T and returns None."""
+
+_HOOKS: typing.Dict[str, PredicateFunc] = {}
 _ACTIONS: typing.Dict[str, ActionFunc] = {}
-_hook_lock = threading.Lock()
+_predicate_lock = threading.Lock()
 _action_lock = threading.Lock()
 
 
 @typing.overload
-def well_hook(func: HookFunc) -> HookFunc: ...
+def well_predicate(func: PredicateFunc) -> PredicateFunc: ...
 
 
 @typing.overload
-def well_hook(
+def well_predicate(
     func: None = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Callable[[HookFunc], HookFunc]: ...
+) -> typing.Callable[[PredicateFunc], PredicateFunc]: ...
 
 
 @typing.overload
-def well_hook(
-    func: HookFunc,
+def well_predicate(
+    func: PredicateFunc,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> HookFunc: ...
+) -> PredicateFunc: ...
 
 
-def well_hook(
-    func: typing.Optional[HookFunc] = None,
+def well_predicate(
+    func: typing.Optional[PredicateFunc] = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Union[HookFunc, typing.Callable[[HookFunc], HookFunc]]:
+) -> typing.Union[PredicateFunc, typing.Callable[[PredicateFunc], PredicateFunc]]:
     """
-    Register a well hook function for serialization.
+    Register a well predicate function for serialization.
 
 
-    A well hook is a callable that takes a well and the model state as arguments
+    A well predicate is a callable that takes a well and the model state as arguments
     and returns a boolean indicating whether to apply a scheduled event.
 
-    :param func: The hook function to register.
-    :param name: The name to register the hook under. If None, the function's
+    :param func: The predicate function to register.
+    :param name: The name to register the predicate under. If None, the function's
         __name__ attribute is used.
-    :param override: If True, override any existing hook with the same name.
-    :return: The registered hook function or a decorator to register the function.
+    :param override: If True, override any existing predicate with the same name.
+    :return: The registered predicate function or a decorator to register the function.
     """
 
-    def decorator(func: HookFunc) -> HookFunc:
-        hook_name = name or getattr(func, "__name__", None)
-        if not hook_name:
+    def decorator(func: PredicateFunc) -> PredicateFunc:
+        predicate_name = name or getattr(func, "__name__", None)
+        if not predicate_name:
             raise ValidationError(
                 "Hook function must have a `__name__` attribute or a name must be provided."
             )
 
-        with _hook_lock:
-            if hook_name in _HOOKS and not override:
+        with _predicate_lock:
+            if predicate_name in _HOOKS and not override:
                 raise ValidationError(
-                    f"Hook '{hook_name}' already registered. Use `override=True` or provide a different name."
+                    f"Hook '{predicate_name}' already registered. Use `override=True` or provide a different name."
                 )
 
-            _HOOKS[hook_name] = func
+            _HOOKS[predicate_name] = func
         return func
 
     if func is not None:
@@ -158,9 +164,9 @@ def well_action(
     return decorator
 
 
-def list_well_hooks() -> typing.List[str]:
-    """List all registered well hooks."""
-    with _hook_lock:
+def list_well_predicates() -> typing.List[str]:
+    """List all registered well predicates."""
+    with _predicate_lock:
         return list(_HOOKS.keys())
 
 
@@ -170,18 +176,18 @@ def list_well_actions() -> typing.List[str]:
         return list(_ACTIONS.keys())
 
 
-def get_well_hook(name: str) -> HookFunc:
+def get_well_predicate(name: str) -> PredicateFunc:
     """
-    Get a registered well hook by name.
+    Get a registered well predicate by name.
 
-    :param name: The name of the registered hook.
-    :return: The hook function associated with the given name.
-    :raises ValidationError: If the hook is not registered.
+    :param name: The name of the registered predicate.
+    :return: The predicate function associated with the given name.
+    :raises ValidationError: If the predicate is not registered.
     """
-    with _hook_lock:
+    with _predicate_lock:
         if name not in _HOOKS:
             raise ValidationError(
-                f"Hook '{name}' not registered. Use `@well_hook` to register it."
+                f"Hook '{name}' not registered. Use `@well_predicate` to register it."
             )
         return _HOOKS[name]
 
@@ -202,61 +208,63 @@ def get_well_action(name: str) -> ActionFunc:
         return _ACTIONS[name]
 
 
-def serialize_well_hook(
-    hook: HookFunc, recurse: bool = True
+def serialize_well_predicate(
+    predicate: PredicateFunc, recurse: bool = True
 ) -> typing.Dict[str, typing.Any]:
-    """Serialize a hook function."""
-    # Check for registered hooks
-    with _hook_lock:
-        for name, registered_hook in _HOOKS.items():
-            if hook is registered_hook:
+    """Serialize a predicate function."""
+    # Check for registered predicates
+    with _predicate_lock:
+        for name, registered_predicate in _HOOKS.items():
+            if predicate is registered_predicate:
                 return {"type": "registered", "name": name}
 
-    # Check for built-in hook types
-    if isinstance(hook, WellTimeHook):
+    # Check for built-in predicate types
+    if isinstance(predicate, WellTimeHook):
         return {
-            "type": "time_hook",
-            "data": hook.dump(recurse),
+            "type": "time_predicate",
+            "data": predicate.dump(recurse),
         }
 
-    if isinstance(hook, WellHooks):
+    if isinstance(predicate, WellHooks):
         return {
-            "type": "composite_hooks",
-            "data": hook.dump(recurse),
+            "type": "composite_predicates",
+            "data": predicate.dump(recurse),
         }
 
     raise SerializationError(
-        f"Cannot serialize hook {hook}. Please register it with `@well_hook`."
+        f"Cannot serialize predicate {predicate}. Please register it with `@well_predicate`."
     )
 
 
-def deserialize_well_hook(data: typing.Mapping[str, typing.Any]) -> HookFunc:
-    """Deserialize a hook function."""
+def deserialize_well_predicate(data: typing.Mapping[str, typing.Any]) -> PredicateFunc:
+    """Deserialize a predicate function."""
     if "type" not in data:
-        raise DeserializationError("Invalid data for hook deserialization")
+        raise DeserializationError("Invalid data for predicate deserialization")
 
-    hook_type = data["type"]
+    predicate_type = data["type"]
 
-    if hook_type == "registered":
-        with _hook_lock:
+    if predicate_type == "registered":
+        with _predicate_lock:
             if data["name"] not in _HOOKS:
                 raise DeserializationError(f"Hook '{data['name']}' not registered")
             return _HOOKS[data["name"]]
 
-    elif hook_type == "time_hook":
-        if "data" not in data:
-            raise DeserializationError("Invalid data for time hook deserialization")
-        return WellTimeHook.load(data["data"])
-
-    elif hook_type == "composite_hooks":
+    elif predicate_type == "time_predicate":
         if "data" not in data:
             raise DeserializationError(
-                "Invalid data for composite hooks deserialization"
+                "Invalid data for time predicate deserialization"
+            )
+        return WellTimeHook.load(data["data"])
+
+    elif predicate_type == "composite_predicates":
+        if "data" not in data:
+            raise DeserializationError(
+                "Invalid data for composite predicates deserialization"
             )
         return WellHooks.load(data["data"])
 
     raise DeserializationError(
-        f"Unknown hook type: {hook_type}. Please register it with `@well_hook`."
+        f"Unknown predicate type: {predicate_type}. Please register it with `@well_predicate`."
     )
 
 
@@ -318,6 +326,61 @@ def deserialize_well_action(data: typing.Mapping[str, typing.Any]) -> ActionFunc
     )
 
 
+class EventPredicate(typing.Generic[WellT, Coordinates]):
+    """
+    A predicate that can be used to evaluate conditions on wells and model states.
+    """
+
+    def __init__(self, func: PredicateFunc[WellT, ModelState[Coordinates]]):
+        self.func = func
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> bool:
+        return self.func(well, state)
+
+    def __and__(
+        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        def combined_func(well: WellT, state: ModelState[Coordinates]) -> bool:
+            return self(well, state) and other(well, state)
+
+        return self.__class__(combined_func)
+
+    def __or__(
+        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        def combined_func(well: WellT, state: ModelState[Coordinates]) -> bool:
+            return self(well, state) or other(well, state)
+
+        return self.__class__(combined_func)
+
+    def __invert__(self) -> Self:
+        def inverted_func(well: WellT, state: ModelState[Coordinates]) -> bool:
+            return not self(well, state)
+
+        return self.__class__(inverted_func)
+
+
+class EventAction(typing.Generic[WellT, Coordinates]):
+    """
+    An action that can be applied to wells and model states.
+    """
+
+    def __init__(self, func: ActionFunc[WellT, ModelState[Coordinates]]):
+        self.func = func
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> None:
+        self.func(well, state)
+
+    def __and__(
+        self, other: typing.Union[Self, ActionFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        def combined_func(well: WellT, state: ModelState[Coordinates]) -> None:
+            self(well, state)
+            other(well, state)
+
+        return self.__class__(combined_func)
+
+
 @attrs.define(slots=True, hash=True)
 class WellEvent(typing.Generic[Coordinates], Serializable):
     """
@@ -328,12 +391,13 @@ class WellEvent(typing.Generic[Coordinates], Serializable):
     The event is applied to the well at the specified time step.
     """
 
-    hook: HookFunc[Well[Coordinates, WellFluid], typing.Any]
-    """A callable hook that takes the well and model state as arguments and returns a boolean indicating whether to apply the event."""
+    predicate: PredicateFunc[Well[Coordinates, WellFluid], ModelState[Coordinates]]
+    """A callable predicate that takes the well and model state as arguments and returns a boolean indicating whether to apply the event."""
+
     action: ActionFunc[Well[Coordinates, WellFluid], typing.Any]
     """A callable action that takes the well and model state as arguments and performs the event action."""
 
-    def apply(
+    def __call__(
         self, well: Well[Coordinates, WellFluid], state: ModelState[Coordinates]
     ) -> None:
         """
@@ -343,22 +407,21 @@ class WellEvent(typing.Generic[Coordinates], Serializable):
         :param state: The current model state in the simulation.
         """
         self.action(well, state)
-        return None
 
     def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
         """Serialize the well event."""
         return {
-            "hook": serialize_well_hook(self.hook),
+            "predicate": serialize_well_predicate(self.predicate),
             "action": serialize_well_action(self.action),
         }
 
     @classmethod
     def __load__(cls, data: typing.Mapping[str, typing.Any]) -> "WellEvent":
         """Deserialize the well event."""
-        if "hook" not in data or "action" not in data:
+        if "predicate" not in data or "action" not in data:
             raise DeserializationError("Invalid data for well event deserialization")
         return cls(
-            hook=deserialize_well_hook(data["hook"]),
+            predicate=deserialize_well_predicate(data["predicate"]),
             action=deserialize_well_action(data["action"]),
         )
 
@@ -476,17 +539,23 @@ class WellSchedule(typing.Generic[Coordinates], Serializable):
         """
         if not ids:
             for event in self.events.values():
-                if event.hook(well, state):
-                    event.apply(well, state)
+                if event.predicate(well, state):
+                    event(well, state)
 
         else:
             for id_ in ids:
                 event = self.events.get(id_, None)
                 if event is None:
                     continue
-                if event.hook(well, state):
-                    event.apply(well, state)
+                if event.predicate(well, state):
+                    event(well, state)
         return None
+
+    def __and__(self, other: Self) -> Self:
+        combined_schedule = self.__class__()
+        for id_, event in itertools.chain(self.events.items(), other.events.items()):
+            combined_schedule.add(id_, event)
+        return combined_schedule
 
     def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
         return {
@@ -639,7 +708,7 @@ class WellTimeHook(
         time: typing.Optional[float] = None,
     ):
         """
-        Initializes the well_time_hook with either a specific time step or time.
+        Initializes the well_time_predicate with either a specific time step or time.
 
         :param time_step: The specific time step at which to trigger the event.
         :param time: The specific simulation time at which to trigger the event.
@@ -651,9 +720,9 @@ class WellTimeHook(
 
     def __call__(self, well: Well, state: ModelState[Coordinates]) -> bool:
         """
-        The hook function that checks if the event should be applied based on the model state.
+        The predicate function that checks if the event should be applied based on the model state.
 
-        :param well: The well to which this hook is applied.
+        :param well: The well to which this predicate is applied.
         :param state: The current model state in the simulation.
         :return: A boolean indicating whether to apply the event.
         """
@@ -734,47 +803,57 @@ class WellUpdateAction(
 
 
 class WellHooks(Serializable):
-    """Composite hook that chains multiple hook functions."""
+    """Composite predicate that chains multiple predicate functions."""
 
     __abstract_serializable__ = True
 
-    def __init__(self, *hooks: HookFunc[Well, typing.Any], on_any: bool = False):
+    def __init__(
+        self, *predicates: PredicateFunc[Well, typing.Any], on_any: bool = False
+    ):
         """
-        Initializes the WellHooks with a sequence of hook functions.
+        Initializes the WellHooks with a sequence of predicate functions.
 
-        :param hooks: A sequence of hook functions to be chained.
-        :param on_any: If True, the composite hook returns True if any of the hooks return True.
-                       If False, it returns True only if all hooks return True.
+        :param predicates: A sequence of predicate functions to be chained.
+        :param on_any: If True, the composite predicate returns True if any of the predicates return True.
+                       If False, it returns True only if all predicates return True.
         """
-        self.hooks = hooks
+        self.predicates = predicates
         self.on_any = on_any
 
     def __call__(self, well: Well, state: ModelState[Coordinates]) -> bool:
         """
-        Calls the composite hook function.
+        Calls the composite predicate function.
 
-        :param well: The well to which this hook is applied.
+        :param well: The well to which this predicate is applied.
         :param state: The current model state in the simulation.
         :return: A boolean indicating whether to apply the event.
         """
-        results = (hook(well, state) for hook in self.hooks)
+        results = (predicate(well, state) for predicate in self.predicates)
         return any(results) if self.on_any else all(results)
 
     def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
-        """Serialize the composite hook."""
+        """Serialize the composite predicate."""
         return {
-            "hooks": [serialize_well_hook(hook, recurse) for hook in self.hooks],
+            "predicates": [
+                serialize_well_predicate(predicate, recurse)
+                for predicate in self.predicates
+            ],
             "on_any": self.on_any,
         }
 
     @classmethod
     def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
-        """Deserialize the composite hook."""
-        if "hooks" not in data or "on_any" not in data:
-            raise DeserializationError("Invalid data for well hooks deserialization")
+        """Deserialize the composite predicate."""
+        if "predicates" not in data or "on_any" not in data:
+            raise DeserializationError(
+                "Invalid data for well predicates deserialization"
+            )
 
-        hooks = [deserialize_well_hook(hook_data) for hook_data in data["hooks"]]
-        return cls(*hooks, on_any=data["on_any"])
+        predicates = [
+            deserialize_well_predicate(predicate_data)
+            for predicate_data in data["predicates"]
+        ]
+        return cls(*predicates, on_any=data["on_any"])
 
 
 class WellActions(Serializable):
@@ -822,16 +901,16 @@ class WellActions(Serializable):
         return cls(*actions)
 
 
-def well_time_hook(
+def well_time_predicate(
     time_step: typing.Optional[int] = None,
     time: typing.Optional[float] = None,
-) -> HookFunc[Well, typing.Any]:
+) -> PredicateFunc[Well, typing.Any]:
     """
-    Returns a hook function that triggers at a specific time step or time.
+    Returns a predicate function that triggers at a specific time step or time.
 
     :param time_step: The specific time step at which to trigger the event.
     :param time: The specific simulation time at which to trigger the event.
-    :return: A hook function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
+    :return: A predicate function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
     """
     return WellTimeHook(time_step=time_step, time=time)
 
@@ -862,19 +941,19 @@ def well_update_action(
     )
 
 
-def well_hooks(
-    *hooks: HookFunc[Well, typing.Any],
+def well_predicates(
+    *predicates: PredicateFunc[Well, typing.Any],
     on_any: bool = False,
-) -> HookFunc[Well, typing.Any]:
+) -> PredicateFunc[Well, typing.Any]:
     """
-    Returns a composite hook function that chains multiple hooks.
+    Returns a composite predicate function that chains multiple predicates.
 
-    :param hooks: A sequence of hook functions to be chained.
-    :param on_any: If True, the composite hook returns True if any of the hooks return True.
-                   If False, it returns True only if all hooks return True.
-    :return: A composite hook function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
+    :param predicates: A sequence of predicate functions to be chained.
+    :param on_any: If True, the composite predicate returns True if any of the predicates return True.
+                   If False, it returns True only if all predicates return True.
+    :return: A composite predicate function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
     """
-    return WellHooks(*hooks, on_any=on_any)
+    return WellHooks(*predicates, on_any=on_any)
 
 
 def well_actions(

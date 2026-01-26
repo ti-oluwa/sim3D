@@ -44,10 +44,6 @@ Tco = typing.TypeVar("Tco", covariant=True)
 
 S = typing.TypeVar("S")
 
-HookFunc = typing.Callable[[S, T], bool]
-"""A function that takes two arguments of types S and T and returns a boolean value."""
-ActionFunc = typing.Callable[[S, T], None]
-"""A function that takes two arguments of types S and T and returns None."""
 
 NDimension = typing.TypeVar("NDimension", bound=typing.Tuple[int, ...])
 Coordinates = typing.TypeVar("Coordinates", bound=typing.Tuple[int, ...])

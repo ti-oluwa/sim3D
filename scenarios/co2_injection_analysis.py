@@ -714,7 +714,7 @@ def _(bores, states, viz):
         opacity=0.7,
         # labels=labels,
         aspect_mode="data",
-        z_scale=1.0,
+        z_scale=3.0,
         marker_size=12,
         show_wells=True,
         show_surface_marker=True,
@@ -723,9 +723,9 @@ def _(bores, states, viz):
         # cmax=0.85,
     )
 
-    property = "solvent-concentration"
+    property = "oil-effective-viscosity"
     figures = []
-    timesteps = [13]
+    timesteps = [-1]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],
