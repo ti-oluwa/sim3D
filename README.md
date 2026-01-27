@@ -703,8 +703,8 @@ Schedule changes to wells during simulation using `WellEvent`, `WellSchedule`, a
 
 There are several built-in hooks and actions for common well events:
 
-- `well_time_hook(time)` - Trigger event at specific simulation time or time step
-- `well_update_action(...)` - Update well parameters (e.g., `is_active`, `control`, etc.)
+- `time_predicate(time)` - Trigger event at specific simulation time or time step
+- `update_well(...)` - Update well parameters (e.g., `is_active`, `control`, etc.)
 
 You can write your hook and/or action if you need more complex scheduling logic. A hook is simply a callable that takes two parameters: `well: Well` and `state: ModelState`, and returns a boolean indicating whether to trigger the event.
 An action is the same, but performs the desired update on the well when triggered.
@@ -720,8 +720,8 @@ producer_schedule = bores.WellSchedule()
 producer_schedule.add(
     id_="open_well_after_100_days",
     event=bores.WellEvent(
-        hook=bores.well_time_hook(time=bores.Time(days=100)),
-        action=bores.well_update_action(is_active=True),
+        predicate=bores.time_predicate(time=bores.Time(days=100)),
+        action=bores.update_well(is_active=True),
     )
 )
 well_schedules = bores.WellSchedules()
@@ -731,25 +731,46 @@ well_schedules.add(well_name=producer.well_name, schedule=producer_schedule)
 config.update(well_schedules=well_schedules)
 ```
 
-To combine multiple hooks or actions, use `well_hooks` and `well_actions` utilities.
+To combine multiple predicates or actions, use `EventPredicate`/`EventPredicates` and `EventAction`/`EventActions` utilities.
 
 ```python
-# Change injection rate after 200 days or when average reservoir pressure drops below 2200 psia
-def pressure_drop_hook(well, state):
+# Change injection rate after 200 days or when average reservoir pressure drops below 2200 psia and average oil production rate below 500 STB/day
+@bores.event_predicate(name="P_avg < 2200psi") # Make sure to register as event predicate with an optional name
+def pressure_less_than_2200(well: bores.Well, state: bores.ModelState) -> bool:
     avg_pressure = state.model.fluid_properties.pressure_grid.mean()
     return avg_pressure < 2200.0
 
-composite_hook = bores.well_hooks(
-    bores.well_time_hook(time=bores.Time(days=200)),
-    pressure_drop_hook,
-    on_any=True,  # Trigger if any hook returns True
+@bores.event_predicate(name="Q_oil < 500STB/day") # Make sure to register as event predicate
+def avg_production_rate_below_500STB(well: bores.Well, state: bores.ModelState) -> bool:
+    production_in_ft3_per_day = state.production.oil
+    production_in_bbl_per_day = production_in_ft3_per_day * bores.c.FT3_TO_BBL
+    oil_fvf = state.model.fluid_properties.oil_formation_volume_factor_grid # bbl/STB
+    production_in_stb_per_day = production_in_bbl_per_day / oil_fvf
+    return abs(production_in_stb_per_day.mean()) < 500.0  # Note: production rates are negative
+
+# Option 1: Create an `EventPredicate` that combines both conditions (Support complex predicate combinations)
+pressure_predicate = bores.EventPredicate(pressure_less_than_2200)
+composite_predicate = (pressure_predicate & avg_production_rate_below_500STB) | bores.time_predicate(time=bores.Time(days=200))
+
+# Option 2: Use `EventPredicates` utility to combine multiple predicates (only support AND or OR logic for all predicates)
+composite_predicate = bores.EventPredicates(
+    pressure_less_than_2200,
+    avg_production_rate_below_500STB,
+    on_any=False,  # AND logic
 )
+composite_predicate = bores.EventPredicates(
+    composite_predicate,
+    bores.time_predicate(time=bores.Time(days=200)),
+    on_any=True,  # OR logic
+)
+
+# Schedule to increase injection rate when either condition is met
 injector_schedule = bores.WellSchedule()
 injector_schedule.add(
     id_="increase_injection_rate",
     event=bores.WellEvent(
-        hook=composite_hook,
-        action=bores.well_update_action(
+        predicate=composite_predicate,
+        action=bores.update_well(
             control=bores.AdaptiveBHPRateControl(
                 target_rate=2_000_000,  # Increase injection rate
                 target_phase="gas",

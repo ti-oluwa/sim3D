@@ -7,6 +7,7 @@ import typing
 import attrs
 import numpy as np
 
+from bores._precision import get_dtype
 from bores.errors import ValidationError
 from bores.grids.base import (
     CapillaryPressureGrids,
@@ -21,12 +22,11 @@ from bores.models import (
     RockProperties,
     SaturationHistory,
 )
+from bores.serialization import Serializable
 from bores.timing import TimerState
 from bores.types import NDimension, T
 from bores.utils import Lazy, LazyField
 from bores.wells.base import Wells
-from bores.serialization import Serializable
-from bores._precision import get_dtype
 
 logger = logging.getLogger(__name__)
 

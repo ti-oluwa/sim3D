@@ -295,14 +295,31 @@ def _dump_value(
         ]
     ] = None,
     typ: typing.Optional[typing.Type[typing.Any]] = None,
+    *,
+    check_serializers: bool = True,
 ):
     """Dump a value using cattrs, handling nested `Serializable` objects."""
     typ = typ or type(value)
-    if serializers and typ in serializers:
+    if check_serializers and serializers and typ in serializers:
         return serializers[typ](value, True)
 
-    if value is None:
-        return None
+    if _is_optional_type(typ):
+        if value is None:
+            return None
+
+        args = typing.get_args(typ)
+        non_none_args = [arg for arg in args if arg is not type(None)]
+        if len(non_none_args) == 1:
+            return _dump_value(value, recurse, serializers, non_none_args[0])
+        else:
+            for arg in non_none_args:
+                try:
+                    return _dump_value(value, recurse, serializers, arg)
+                except Exception:
+                    continue
+            raise SerializationError(
+                f"Value {value!r} does not match any type in {typ}"
+            )
 
     if isinstance(value, Serializable):
         return value.dump(recurse)
@@ -328,21 +345,17 @@ def _load_value(
             typing.Callable[[typing.Any], typing.Any],
         ]
     ] = None,
+    *,
+    check_deserializers: bool = True,
 ) -> typing.Any:
     """Load a value using cattrs, handling nested `Serializable` objects."""
-    if deserializers and typ in deserializers:
+    if check_deserializers and deserializers and typ in deserializers:
         return deserializers[typ](value)
 
-    if value is None:
-        return None
-
-    if _is_serializable_type(typ):
-        return _get_origin_class(typ).load(value)  # type: ignore[attr-type]
-
-    if isinstance(typ, type) and issubclass(typ, Enum):
-        return typ(value)
-
     if _is_optional_type(typ):
+        if value is None:
+            return None
+
         args = typing.get_args(typ)
         non_none_args = [arg for arg in args if arg is not type(None)]
         if len(non_none_args) == 1:
@@ -356,6 +369,12 @@ def _load_value(
             raise DeserializationError(
                 f"Value {value!r} does not match any type in {typ}"
             )
+
+    if _is_serializable_type(typ):
+        return _get_origin_class(typ).load(value)  # type: ignore[attr-type]
+
+    if isinstance(typ, type) and issubclass(typ, Enum):
+        return typ(value)
 
     if _is_generic_alias(typ):
         origin = typing.get_origin(typ)
@@ -452,7 +471,6 @@ def _build_dumper(
                         ) from exc
                     continue
 
-            # Nested `Serializable`
             if isinstance(value, Serializable):
                 try:
                     result[field] = value.dump(recurse)
@@ -461,9 +479,11 @@ def _build_dumper(
                         f"Failed to serialize nested `Serializable` field '{field}'"
                     ) from exc
             else:
-                # Default cattrs unstructure
                 try:
-                    result[field] = _dump_value(value, recurse, serializers, typ)
+                    # No need to check serializers again here, as we've already done so above
+                    result[field] = _dump_value(
+                        value, recurse, serializers, typ, check_serializers=False
+                    )
                 except Exception as exc:
                     raise SerializationError(
                         f"Failed to unstructure field '{field}' of type {typ}"
@@ -502,11 +522,6 @@ def _build_loader(
                 continue
 
             value = data[field]
-
-            # Handle None for Optional types
-            if value is None and _is_optional_type(typ):
-                init_kwargs[field] = None
-                continue
 
             # Custom deserializer by field name (highest priority)
             if deserializers and (field in deserializers):
@@ -554,9 +569,11 @@ def _build_loader(
                         f"Failed to deserialize nested `Serializable` field '{field}' of type {typ}"
                     ) from exc
             else:
-                # Default cattrs structure
                 try:
-                    init_kwargs[field] = _load_value(value, typ, deserializers)
+                    # No need to check deserializers again here, as we've already done so above
+                    init_kwargs[field] = _load_value(
+                        value, typ, deserializers, check_deserializers=False
+                    )
                 except Exception as exc:
                     raise DeserializationError(
                         f"Failed to structure field '{field}' of type {typ}"
