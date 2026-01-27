@@ -19,15 +19,10 @@ from bores.types import NDimension, NDimensionalGrid
 
 __all__ = [
     "boundary_function",
-    "list_boundary_functions",
-    "get_boundary_function",
-    "serialize_boundary_function",
-    "deserialize_boundary_function",
     "ParameterizedBoundaryFunction",
     "BoundaryDirection",
     "BoundaryMetadata",
     "BoundaryCondition",
-    "get_neighbor_indices",
     "NoFlowBoundary",
     "ConstantBoundary",
     "VariableBoundary",
@@ -45,6 +40,7 @@ __all__ = [
 
 
 _BOUNDARY_FUNCTIONS: typing.Dict[str, typing.Callable] = {}
+"""Registry of boundary functions."""
 _boundary_function_lock = threading.Lock()
 P = ParamSpec("P")
 R = typing.TypeVar("R")
@@ -483,7 +479,7 @@ class BoundaryMetadata:
                         # Use first x,y location as representative (assuming uniform layers)
                         layer_thickness = (
                             self.thickness_grid[0, 0, :]
-                            if self.thickness_grid.shape[2] == nz  # type: ignore
+                            if self.thickness_grid.shape[2] == nz
                             else None
                         )
 

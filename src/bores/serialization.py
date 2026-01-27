@@ -19,10 +19,12 @@ _TYPE_SERIALIZERS: typing.Dict[
     typing.Type[typing.Any],
     typing.Callable[[typing.Any, bool], typing.Dict[str, typing.Any]],
 ] = {}
+"""Registry of type serializers."""
 _TYPE_DESERIALIZERS: typing.Dict[
     typing.Type[typing.Any],
     typing.Callable[[typing.Mapping[str, typing.Any]], typing.Any],
 ] = {}
+"""Registry of type deserializers."""
 _type_serializers_lock = threading.Lock()
 _type_deserializers_lock = threading.Lock()
 
@@ -220,14 +222,14 @@ def _discover_type_serializers(
                 # Handle typing special forms (list, dict, etc.)
                 if not isinstance(origin, type):
                     if origin in _TYPE_SERIALIZERS:
-                        discovered[field_name] = _TYPE_SERIALIZERS[origin]
+                        discovered[typ] = _TYPE_SERIALIZERS[origin]
                         break
                     continue
 
                 # Walk MRO for class-based types
                 for base in origin.__mro__:
                     if base in _TYPE_SERIALIZERS:
-                        discovered[field_name] = _TYPE_SERIALIZERS[base]
+                        discovered[typ] = _TYPE_SERIALIZERS[base]
                         break
                 else:
                     # Continue to next type if no serializer found
@@ -264,14 +266,14 @@ def _discover_type_deserializers(
                 # Handle typing special forms (list, dict, etc.)
                 if not isinstance(origin, type):
                     if origin in _TYPE_DESERIALIZERS:
-                        discovered[field_name] = _TYPE_DESERIALIZERS[origin]
+                        discovered[typ] = _TYPE_DESERIALIZERS[origin]
                         break
                     continue
 
                 # Walk MRO to find deserializer
                 for base in origin.__mro__:
                     if base in _TYPE_DESERIALIZERS:
-                        discovered[field_name] = _TYPE_DESERIALIZERS[base]
+                        discovered[typ] = _TYPE_DESERIALIZERS[base]
                         break
                 else:
                     # Continue to next type if no deserializer found

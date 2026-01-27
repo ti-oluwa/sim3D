@@ -1,5 +1,4 @@
 import itertools
-import functools
 import threading
 import typing
 
@@ -11,7 +10,7 @@ from bores.serialization import Serializable
 from bores.states import ModelState
 from bores.stores import StoreSerializable
 from bores.types import Coordinates, S, T
-from bores.wells.base import InjectionWell, ProductionWell, Well, Wells, WellT
+from bores.wells.base import InjectionWell, ProductionWell, Well, WellT, Wells
 from bores.wells.controls import WellControl
 from bores.wells.core import InjectedFluid, ProducedFluid, WellFluid
 
@@ -20,18 +19,14 @@ __all__ = [
     "WellEvent",
     "WellSchedule",
     "WellSchedules",
-    "well_time_predicate",
-    "well_predicates",
-    "well_update_action",
-    "well_actions",
-    "well_predicate",
-    "well_action",
-    "list_well_predicates",
-    "list_well_actions",
-    "get_well_predicate",
-    "get_well_action",
-    "serialize_well_predicate",
-    "serialize_well_action",
+    "EventPredicates",
+    "EventActions",
+    "EventPredicate",
+    "EventAction",
+    "event_predicate",
+    "event_action",
+    "time_predicate",
+    "update_well",
 ]
 
 
@@ -40,37 +35,348 @@ PredicateFunc = typing.Callable[[S, T], bool]
 ActionFunc = typing.Callable[[S, T], None]
 """A function that takes two arguments of types S and T and returns None."""
 
-_HOOKS: typing.Dict[str, PredicateFunc] = {}
-_ACTIONS: typing.Dict[str, ActionFunc] = {}
+
+class EventPredicates(typing.Generic[WellT, Coordinates], Serializable):
+    """Composite predicate that chains multiple predicate functions."""
+
+    __abstract_serializable__ = True
+
+    def __init__(
+        self,
+        *predicates: PredicateFunc[WellT, ModelState[Coordinates]],
+        on_any: bool = False,
+    ):
+        """
+        Initializes the `EventPredicates` with a sequence of predicate functions.
+
+        :param predicates: A sequence of predicate functions to be chained.
+        :param on_any: If True, the composite predicate returns True if any of the predicates return True.
+                       If False, it returns True only if all predicates return True.
+        """
+        self.predicates = predicates
+        self.on_any = on_any
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> bool:
+        """
+        Calls the composite predicate function.
+
+        :param well: The well to which this predicate is applied.
+        :param state: The current model state in the simulation.
+        :return: A boolean indicating whether to apply the event.
+        """
+        results = (predicate(well, state) for predicate in self.predicates)
+        return any(results) if self.on_any else all(results)
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        """Serialize the composite predicate."""
+        return {
+            "predicates": [
+                serialize_event_predicate(predicate, recurse)
+                for predicate in self.predicates
+            ],
+            "on_any": self.on_any,
+        }
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        """Deserialize the composite predicate."""
+        if "predicates" not in data or "on_any" not in data:
+            raise DeserializationError(
+                "Invalid data for well predicates deserialization"
+            )
+
+        predicates = [
+            deserialize_event_predicate(predicate_data)
+            for predicate_data in data["predicates"]
+        ]
+        return cls(*predicates, on_any=data["on_any"])
+
+
+class EventActions(typing.Generic[WellT, Coordinates], Serializable):
+    """Composite action that chains multiple action functions."""
+
+    __abstract_serializable__ = True
+
+    def __init__(self, *actions: ActionFunc[WellT, ModelState[Coordinates]]):
+        """
+        Initializes the `EventActions` with a sequence of action functions.
+
+        :param actions: A sequence of action functions to be chained.
+        """
+        if not actions:
+            raise ValidationError("At least one action must be provided to chain.")
+        self.actions = actions
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> None:
+        """
+        Executes all chained action functions in sequence.
+
+        :param well: The well to which the actions are applied.
+        :param state: The current model state in the simulation.
+        """
+        for action in self.actions:
+            action(well, state)
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        """Serialize the composite action."""
+        return {
+            "actions": [
+                serialize_event_action(action, recurse) for action in self.actions
+            ]
+        }
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        """Deserialize the composite action."""
+        if "actions" not in data:
+            raise DeserializationError("Invalid data for well actions deserialization")
+
+        actions = [
+            deserialize_event_action(action_data) for action_data in data["actions"]
+        ]
+        return cls(*actions)
+
+
+@attrs.define(slots=True)
+class EventPredicate(typing.Generic[WellT, Coordinates], Serializable):
+    """A predicate that can be serialized and composed with complex expressions."""
+
+    _func: typing.Optional[PredicateFunc[WellT, ModelState[Coordinates]]] = attrs.field(
+        default=None, repr=False
+    )
+    """The underlying predicate function. If None, this is a composite predicate."""
+    _op: typing.Optional[typing.Literal["and", "or", "not"]] = attrs.field(default=None)
+    """The logical operation for composite predicates."""
+    _operands: typing.Tuple[Self, ...] = attrs.field(factory=tuple)
+    """The operand predicates for composite predicates."""
+
+    @classmethod
+    def from_func(cls, func: PredicateFunc[WellT, ModelState[Coordinates]]) -> Self:
+        """Create an EventPredicate from a function."""
+        return cls(_func=func)
+
+    @classmethod
+    def from_event_predicates(
+        cls, event_predicates: EventPredicates[WellT, Coordinates]
+    ) -> Self:
+        """
+        Create `EventPredicate` from `EventPredicates` for interoperability.
+
+        :param event_predicates: The `EventPredicates` instance to convert.
+        :return: An `EventPredicate` instance.
+        """
+        return cls(_func=event_predicates)
+
+    @classmethod
+    def any_of(cls, *predicates: PredicateFunc[WellT, ModelState[Coordinates]]) -> Self:
+        """Convenience method for creating logical OR of multiple predicates."""
+        if len(predicates) == 1:
+            return cls.from_func(predicates[0])
+        result = cls.from_func(predicates[0])
+        for pred in predicates[1:]:
+            result = result | pred
+        return result
+
+    @classmethod
+    def all_of(cls, *predicates: PredicateFunc[WellT, ModelState[Coordinates]]) -> Self:
+        """Convenience method for creating logical AND of multiple predicates."""
+        if len(predicates) == 1:
+            return cls.from_func(predicates[0])
+        result = cls.from_func(predicates[0])
+        for pred in predicates[1:]:
+            result = result & pred
+        return result
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> bool:
+        if self._func is not None:
+            # Leaf node, call the actual predicate function
+            return self._func(well, state)
+        elif self._op == "and":
+            # AND operation, all operands must be True
+            return all(op(well, state) for op in self._operands)  # type: ignore
+        elif self._op == "or":
+            # OR operation, any operand must be True
+            return any(op(well, state) for op in self._operands)  # type: ignore
+        elif self._op == "not":
+            # NOT operation, invert the operand
+            return not self._operands[0](well, state)  # type: ignore
+        raise ValueError("Invalid EventPredicate state: no func or op defined")
+
+    def __and__(
+        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        """Combine with AND logic: self & other"""
+        if not isinstance(other, EventPredicate):
+            other = EventPredicate.from_func(other)
+        return self.__class__(_op="and", _operands=(self, other))  # type: ignore
+
+    def __or__(
+        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        """Combine with OR logic: self | other"""
+        if not isinstance(other, EventPredicate):
+            other = EventPredicate.from_func(other)
+        return self.__class__(_op="or", operands=(self, other))  # type: ignore
+
+    def __invert__(self) -> Self:
+        """Invert with NOT logic: ~self"""
+        return self.__class__(_op="not", _operands=(self,))  # type: ignore
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        """Serialize the predicate expression."""
+        if self._func is not None:
+            # Leaf node, serialize the underlying function
+            return {
+                "type": "event_predicate_leaf",
+                "func": serialize_event_predicate(self._func, recurse),
+            }
+        # Composite node, serialize the expression tree
+        return {
+            "type": "event_predicate_composite",
+            "op": self._op,
+            "operands": [op.dump(recurse) for op in self._operands],  # type: ignore
+        }
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        """Deserialize the predicate expression."""
+        pred_type = data.get("type")
+
+        if pred_type == "event_predicate_leaf":
+            # Deserialize leaf node
+            func = deserialize_event_predicate(data["func"])
+            return cls(_func=func)
+        elif pred_type == "event_predicate_composite":
+            # Deserialize composite node
+            operands = tuple(cls.load(op_data) for op_data in data["operands"])
+            return cls(_op=data["op"], _operands=operands)  # type: ignore
+        raise DeserializationError(f"Unknown EventPredicate type: {pred_type}")
+
+
+@attrs.define(slots=True)
+class EventAction(typing.Generic[WellT, Coordinates], Serializable):
+    """An action that can be serialized and composed."""
+
+    _func: typing.Optional[ActionFunc[WellT, ModelState[Coordinates]]] = attrs.field(
+        default=None, repr=False
+    )
+    """The underlying action function. If None, this is a composite action."""
+    _actions: typing.Tuple[Self, ...] = attrs.field(factory=tuple)
+    """The chained actions for composite actions."""
+
+    @classmethod
+    def from_func(cls, func: ActionFunc[WellT, ModelState[Coordinates]]) -> Self:
+        """Create an `EventAction` from a function."""
+        return cls(_func=func)
+
+    @classmethod
+    def from_actions(cls, actions: EventActions[WellT, Coordinates]) -> Self:
+        """Create EventAction from EventActions for interoperability."""
+        return cls(_func=actions)
+
+    @classmethod
+    def sequence(cls, *actions: ActionFunc[WellT, ModelState[Coordinates]]) -> Self:
+        """Convenience: create sequence of actions."""
+        if len(actions) == 1:
+            return cls.from_func(actions[0])
+        result = cls.from_func(actions[0])
+        for action in actions[1:]:
+            result = result & action
+        return result
+
+    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> None:
+        if self._func is not None:
+            # Leaf node, call the actual action function
+            self._func(well, state)
+        else:
+            # Composite - execute all actions in sequence
+            for action in self._actions:
+                action(well, state)  # type: ignore
+
+    def __and__(
+        self, other: typing.Union[Self, ActionFunc[WellT, ModelState[Coordinates]]]
+    ) -> Self:
+        """Chain actions: self & other (execute both in sequence)"""
+        if not isinstance(other, EventAction):
+            other = EventAction.from_func(other)
+
+        # Flatten nested chains for efficiency
+        left_actions = self._actions if self._func is None else (self,)
+        right_actions = other._actions if other._func is None else (other,)
+        return self.__class__(_actions=left_actions + right_actions)  # type: ignore
+
+    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        """Serialize the action."""
+        if self._func is not None:
+            # Leaf node, serialize the underlying function
+            return {
+                "type": "event_action_leaf",
+                "func": serialize_event_action(self._func, recurse),
+            }
+        # Composite node, serialize the action chain
+        return {
+            "type": "event_action_composite",
+            "actions": [action.dump(recurse) for action in self._actions],  # type: ignore
+        }
+
+    @classmethod
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
+        """Deserialize the action."""
+        action_type = data.get("type")
+
+        if action_type == "event_action_leaf":
+            # Deserialize leaf node
+            func = deserialize_event_action(data["func"])
+            return cls(_func=func)
+        elif action_type == "event_action_composite":
+            # Deserialize composite node
+            actions = tuple(cls.load(action_data) for action_data in data["actions"])
+            return cls(_actions=actions)  # type: ignore
+        raise DeserializationError(f"Unknown EventAction type: {action_type}")
+
+
+_HOOKS: typing.Dict[str, PredicateFunc[Well, ModelState]] = {}
+_ACTIONS: typing.Dict[str, ActionFunc[Well, ModelState]] = {}
 _predicate_lock = threading.Lock()
 _action_lock = threading.Lock()
 
 
 @typing.overload
-def well_predicate(func: PredicateFunc) -> PredicateFunc: ...
+def event_predicate(
+    func: PredicateFunc[WellT, ModelState[Coordinates]],
+) -> PredicateFunc[WellT, ModelState[Coordinates]]: ...
 
 
 @typing.overload
-def well_predicate(
+def event_predicate(
     func: None = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Callable[[PredicateFunc], PredicateFunc]: ...
+) -> typing.Callable[
+    [PredicateFunc[WellT, ModelState[Coordinates]]],
+    PredicateFunc[WellT, ModelState[Coordinates]],
+]: ...
 
 
 @typing.overload
-def well_predicate(
-    func: PredicateFunc,
+def event_predicate(
+    func: PredicateFunc[WellT, ModelState[Coordinates]],
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> PredicateFunc: ...
+) -> PredicateFunc[WellT, ModelState[Coordinates]]: ...
 
 
-def well_predicate(
+def event_predicate(
     func: typing.Optional[PredicateFunc] = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Union[PredicateFunc, typing.Callable[[PredicateFunc], PredicateFunc]]:
+) -> typing.Union[
+    PredicateFunc[WellT, ModelState[Coordinates]],
+    typing.Callable[
+        [PredicateFunc[WellT, ModelState[Coordinates]]],
+        PredicateFunc[WellT, ModelState[Coordinates]],
+    ],
+]:
     """
     Register a well predicate function for serialization.
 
@@ -107,30 +413,41 @@ def well_predicate(
 
 
 @typing.overload
-def well_action(func: ActionFunc) -> ActionFunc: ...
+def event_action(
+    func: ActionFunc[WellT, ModelState[Coordinates]],
+) -> ActionFunc[WellT, ModelState[Coordinates]]: ...
 
 
 @typing.overload
-def well_action(
+def event_action(
     func: None = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Callable[[ActionFunc], ActionFunc]: ...
+) -> typing.Callable[
+    [ActionFunc[WellT, ModelState[Coordinates]]],
+    ActionFunc[WellT, ModelState[Coordinates]],
+]: ...
 
 
 @typing.overload
-def well_action(
-    func: ActionFunc,
+def event_action(
+    func: ActionFunc[WellT, ModelState[Coordinates]],
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> ActionFunc: ...
+) -> ActionFunc[WellT, ModelState[Coordinates]]: ...
 
 
-def well_action(
-    func: typing.Optional[ActionFunc] = None,
+def event_action(
+    func: typing.Optional[ActionFunc[WellT, ModelState[Coordinates]]] = None,
     name: typing.Optional[str] = None,
     override: bool = False,
-) -> typing.Union[ActionFunc, typing.Callable[[ActionFunc], ActionFunc]]:
+) -> typing.Union[
+    ActionFunc[WellT, ModelState[Coordinates]],
+    typing.Callable[
+        [ActionFunc[WellT, ModelState[Coordinates]]],
+        ActionFunc[WellT, ModelState[Coordinates]],
+    ],
+]:
     """
     Register a well action function for serialization.
 
@@ -164,21 +481,21 @@ def well_action(
     return decorator
 
 
-def list_well_predicates() -> typing.List[str]:
-    """List all registered well predicates."""
+def list_event_predicates() -> typing.List[str]:
+    """List all registered well event predicates."""
     with _predicate_lock:
         return list(_HOOKS.keys())
 
 
-def list_well_actions() -> typing.List[str]:
-    """List all registered well actions."""
+def list_event_actions() -> typing.List[str]:
+    """List all registered well event actions."""
     with _action_lock:
         return list(_ACTIONS.keys())
 
 
-def get_well_predicate(name: str) -> PredicateFunc:
+def get_event_predicate(name: str) -> PredicateFunc[Well, ModelState]:
     """
-    Get a registered well predicate by name.
+    Get a registered well event predicate by name.
 
     :param name: The name of the registered predicate.
     :return: The predicate function associated with the given name.
@@ -187,14 +504,14 @@ def get_well_predicate(name: str) -> PredicateFunc:
     with _predicate_lock:
         if name not in _HOOKS:
             raise ValidationError(
-                f"Hook '{name}' not registered. Use `@well_predicate` to register it."
+                f"Hook '{name}' not registered. Use `@event_predicate` to register it."
             )
         return _HOOKS[name]
 
 
-def get_well_action(name: str) -> ActionFunc:
+def get_event_action(name: str) -> ActionFunc[Well, ModelState]:
     """
-    Get a registered well action by name.
+    Get a registered well event action by name.
 
     :param name: The name of the registered action.
     :return: The action function associated with the given name.
@@ -203,15 +520,24 @@ def get_well_action(name: str) -> ActionFunc:
     with _action_lock:
         if name not in _ACTIONS:
             raise ValidationError(
-                f"Action '{name}' not registered. Use `@well_action` to register it."
+                f"Action '{name}' not registered. Use `@event_action` to register it."
             )
         return _ACTIONS[name]
 
 
-def serialize_well_predicate(
-    predicate: PredicateFunc, recurse: bool = True
+def serialize_event_predicate(
+    predicate: PredicateFunc[WellT, ModelState], recurse: bool = True
 ) -> typing.Dict[str, typing.Any]:
-    """Serialize a predicate function."""
+    """
+    Serialize a well event predicate function.
+
+    :param predicate: The predicate function to serialize.
+    :param recurse: Whether to recursively serialize nested predicates.
+    :return: A dictionary representing the serialized predicate.
+    """
+    if isinstance(predicate, EventPredicate):
+        return predicate.dump(recurse)
+
     # Check for registered predicates
     with _predicate_lock:
         for name, registered_predicate in _HOOKS.items():
@@ -219,29 +545,38 @@ def serialize_well_predicate(
                 return {"type": "registered", "name": name}
 
     # Check for built-in predicate types
-    if isinstance(predicate, WellTimeHook):
+    if isinstance(predicate, TimePredicate):
         return {
             "type": "time_predicate",
             "data": predicate.dump(recurse),
         }
 
-    if isinstance(predicate, WellHooks):
+    if isinstance(predicate, EventPredicates):
         return {
             "type": "composite_predicates",
             "data": predicate.dump(recurse),
         }
 
     raise SerializationError(
-        f"Cannot serialize predicate {predicate}. Please register it with `@well_predicate`."
+        f"Cannot serialize predicate {predicate}. Please register it with `@event_predicate`."
     )
 
 
-def deserialize_well_predicate(data: typing.Mapping[str, typing.Any]) -> PredicateFunc:
-    """Deserialize a predicate function."""
+def deserialize_event_predicate(
+    data: typing.Mapping[str, typing.Any],
+) -> PredicateFunc[Well, ModelState]:
+    """
+    Deserialize a well event predicate function.
+
+    :param data: The serialized predicate data.
+    :return: The deserialized predicate function.
+    """
     if "type" not in data:
         raise DeserializationError("Invalid data for predicate deserialization")
 
     predicate_type = data["type"]
+    if predicate_type in ("event_predicate_leaf", "event_predicate_composite"):
+        return EventPredicate.load(data)
 
     if predicate_type == "registered":
         with _predicate_lock:
@@ -254,54 +589,71 @@ def deserialize_well_predicate(data: typing.Mapping[str, typing.Any]) -> Predica
             raise DeserializationError(
                 "Invalid data for time predicate deserialization"
             )
-        return WellTimeHook.load(data["data"])
+        return TimePredicate.load(data["data"])
 
     elif predicate_type == "composite_predicates":
         if "data" not in data:
             raise DeserializationError(
                 "Invalid data for composite predicates deserialization"
             )
-        return WellHooks.load(data["data"])
+        return EventPredicates.load(data["data"])
 
     raise DeserializationError(
-        f"Unknown predicate type: {predicate_type}. Please register it with `@well_predicate`."
+        f"Unknown predicate type: {predicate_type}. Please register it with `@event_predicate`."
     )
 
 
-def serialize_well_action(
-    action: ActionFunc, recurse: bool = True
+def serialize_event_action(
+    action: ActionFunc[WellT, ModelState], recurse: bool = True
 ) -> typing.Optional[typing.Dict[str, typing.Any]]:
-    """Serialize an action function."""
+    """
+    Serialize a well event action function.
+
+    :param action: The action function to serialize.
+    :param recurse: Whether to recursively serialize nested actions.
+    :return: A dictionary representing the serialized action.
+    """
+    if isinstance(action, EventAction):
+        return action.dump(recurse)
+
     # Check for registered actions
     with _action_lock:
         for name, registered_action in _ACTIONS.items():
             if action is registered_action:
                 return {"type": "registered", "name": name}
 
-    # Check for built-in action types
-    if isinstance(action, WellUpdateAction):
+    if isinstance(action, UpdateAction):
         return {
             "type": "update_action",
             "data": action.dump(recurse),
         }
 
-    if isinstance(action, WellActions):
+    if isinstance(action, EventActions):
         return {
             "type": "composite_actions",
             "data": action.dump(recurse),
         }
 
     raise SerializationError(
-        f"Cannot serialize action {action}. Please register it with `@well_action`."
+        f"Cannot serialize action {action}. Please register it with `@event_action`."
     )
 
 
-def deserialize_well_action(data: typing.Mapping[str, typing.Any]) -> ActionFunc:
-    """Deserialize an action function."""
+def deserialize_event_action(
+    data: typing.Mapping[str, typing.Any],
+) -> ActionFunc[Well, ModelState]:
+    """
+    Deserialize a well event action function.
+
+    :param data: The serialized action data.
+    :return: The deserialized action function.
+    """
     if "type" not in data:
         raise DeserializationError("Invalid data for action deserialization")
 
     action_type = data["type"]
+    if action_type in ("event_action_leaf", "event_action_composite"):
+        return EventAction.load(data)
 
     if action_type == "registered":
         with _action_lock:
@@ -312,73 +664,18 @@ def deserialize_well_action(data: typing.Mapping[str, typing.Any]) -> ActionFunc
     elif action_type == "update_action":
         if "data" not in data:
             raise DeserializationError("Invalid data for update action deserialization")
-        return WellUpdateAction.load(data["data"])
+        return UpdateAction.load(data["data"])
 
     elif action_type == "composite_actions":
         if "data" not in data:
             raise DeserializationError(
                 "Invalid data for composite actions deserialization"
             )
-        return WellActions.load(data["data"])
+        return EventActions.load(data["data"])
 
     raise DeserializationError(
-        f"Unknown action type: {action_type}. Please register it with `@well_action`."
+        f"Unknown action type: {action_type}. Please register it with `@event_action`."
     )
-
-
-class EventPredicate(typing.Generic[WellT, Coordinates]):
-    """
-    A predicate that can be used to evaluate conditions on wells and model states.
-    """
-
-    def __init__(self, func: PredicateFunc[WellT, ModelState[Coordinates]]):
-        self.func = func
-
-    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> bool:
-        return self.func(well, state)
-
-    def __and__(
-        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
-    ) -> Self:
-        def combined_func(well: WellT, state: ModelState[Coordinates]) -> bool:
-            return self(well, state) and other(well, state)
-
-        return self.__class__(combined_func)
-
-    def __or__(
-        self, other: typing.Union[Self, PredicateFunc[WellT, ModelState[Coordinates]]]
-    ) -> Self:
-        def combined_func(well: WellT, state: ModelState[Coordinates]) -> bool:
-            return self(well, state) or other(well, state)
-
-        return self.__class__(combined_func)
-
-    def __invert__(self) -> Self:
-        def inverted_func(well: WellT, state: ModelState[Coordinates]) -> bool:
-            return not self(well, state)
-
-        return self.__class__(inverted_func)
-
-
-class EventAction(typing.Generic[WellT, Coordinates]):
-    """
-    An action that can be applied to wells and model states.
-    """
-
-    def __init__(self, func: ActionFunc[WellT, ModelState[Coordinates]]):
-        self.func = func
-
-    def __call__(self, well: WellT, state: ModelState[Coordinates]) -> None:
-        self.func(well, state)
-
-    def __and__(
-        self, other: typing.Union[Self, ActionFunc[WellT, ModelState[Coordinates]]]
-    ) -> Self:
-        def combined_func(well: WellT, state: ModelState[Coordinates]) -> None:
-            self(well, state)
-            other(well, state)
-
-        return self.__class__(combined_func)
 
 
 @attrs.define(slots=True, hash=True)
@@ -411,8 +708,8 @@ class WellEvent(typing.Generic[Coordinates], Serializable):
     def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
         """Serialize the well event."""
         return {
-            "predicate": serialize_well_predicate(self.predicate),
-            "action": serialize_well_action(self.action),
+            "predicate": serialize_event_predicate(self.predicate, recurse),
+            "action": serialize_event_action(self.action, recurse),
         }
 
     @classmethod
@@ -421,15 +718,24 @@ class WellEvent(typing.Generic[Coordinates], Serializable):
         if "predicate" not in data or "action" not in data:
             raise DeserializationError("Invalid data for well event deserialization")
         return cls(
-            predicate=deserialize_well_predicate(data["predicate"]),
-            action=deserialize_well_action(data["action"]),
+            predicate=deserialize_event_predicate(data["predicate"]),
+            action=deserialize_event_action(data["action"]),
         )
 
 
 @attrs.frozen(slots=True)
 class WellSchedule(typing.Generic[Coordinates], Serializable):
     """
-    Represents a schedule of events for a well over time.
+    A collection of scheduled events for a well.
+
+    Each event is identified by a unique string identifier.
+
+    Example:
+    ```python
+    schedule = WellSchedule()
+    schedule.add("event1", WellEvent(...))
+    ```
+
     """
 
     events: typing.Dict[str, WellEvent[Coordinates]] = attrs.field(
@@ -580,7 +886,18 @@ class WellSchedule(typing.Generic[Coordinates], Serializable):
 @attrs.define(slots=True)
 class WellSchedules(typing.Generic[Coordinates], StoreSerializable):
     """
-    Represents a collection of well schedules for multiple wells.
+    A collection of schedules for multiple wells.
+
+    Each well is identified by its name, and has an associated `WellSchedule`.
+
+    Example:
+    ```python
+    schedule = WellSchedule()
+    schedule.add("event1", WellEvent(...))
+
+    schedules = WellSchedules()
+    schedules.add("Well_A", schedule)
+    ```
     """
 
     schedules: typing.Dict[str, WellSchedule[Coordinates]] = attrs.field(
@@ -670,6 +987,8 @@ class WellSchedules(typing.Generic[Coordinates], StoreSerializable):
             if not well_list:
                 continue
             for well in well_list:
+                if well is None:
+                    continue
                 schedule.apply(well, state)  # type: ignore
         return None
 
@@ -698,7 +1017,7 @@ class WellSchedules(typing.Generic[Coordinates], StoreSerializable):
         return well_schedules
 
 
-class WellTimeHook(
+class TimePredicate(
     Serializable,
     fields={"time_step": typing.Optional[int], "time": typing.Optional[float]},
 ):
@@ -708,7 +1027,7 @@ class WellTimeHook(
         time: typing.Optional[float] = None,
     ):
         """
-        Initializes the well_time_predicate with either a specific time step or time.
+        Initializes the well time predicate with either a specific time step or time.
 
         :param time_step: The specific time step at which to trigger the event.
         :param time: The specific simulation time at which to trigger the event.
@@ -733,7 +1052,7 @@ class WellTimeHook(
         return False
 
 
-class WellUpdateAction(
+class UpdateAction(
     Serializable,
     fields={
         "control": typing.Optional[WellControl],
@@ -752,7 +1071,7 @@ class WellUpdateAction(
         produced_fluids: typing.Optional[typing.Sequence[ProducedFluid]] = None,
     ):
         """
-        Initializes the WellUpdateAction with properties to update.
+        Initializes the well update action with properties to update.
 
         :param control: New control strategy for the well.
         :param skin_factor: New skin factor for the well.
@@ -802,109 +1121,10 @@ class WellUpdateAction(
         return
 
 
-class WellHooks(Serializable):
-    """Composite predicate that chains multiple predicate functions."""
-
-    __abstract_serializable__ = True
-
-    def __init__(
-        self, *predicates: PredicateFunc[Well, typing.Any], on_any: bool = False
-    ):
-        """
-        Initializes the WellHooks with a sequence of predicate functions.
-
-        :param predicates: A sequence of predicate functions to be chained.
-        :param on_any: If True, the composite predicate returns True if any of the predicates return True.
-                       If False, it returns True only if all predicates return True.
-        """
-        self.predicates = predicates
-        self.on_any = on_any
-
-    def __call__(self, well: Well, state: ModelState[Coordinates]) -> bool:
-        """
-        Calls the composite predicate function.
-
-        :param well: The well to which this predicate is applied.
-        :param state: The current model state in the simulation.
-        :return: A boolean indicating whether to apply the event.
-        """
-        results = (predicate(well, state) for predicate in self.predicates)
-        return any(results) if self.on_any else all(results)
-
-    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
-        """Serialize the composite predicate."""
-        return {
-            "predicates": [
-                serialize_well_predicate(predicate, recurse)
-                for predicate in self.predicates
-            ],
-            "on_any": self.on_any,
-        }
-
-    @classmethod
-    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
-        """Deserialize the composite predicate."""
-        if "predicates" not in data or "on_any" not in data:
-            raise DeserializationError(
-                "Invalid data for well predicates deserialization"
-            )
-
-        predicates = [
-            deserialize_well_predicate(predicate_data)
-            for predicate_data in data["predicates"]
-        ]
-        return cls(*predicates, on_any=data["on_any"])
-
-
-class WellActions(Serializable):
-    """Composite action that chains multiple action functions."""
-
-    __abstract_serializable__ = True
-
-    def __init__(self, *actions: ActionFunc[Well, typing.Any]):
-        """
-        Initializes the WellActions with a sequence of action functions.
-
-        :param actions: A sequence of action functions to be chained.
-        """
-        if not actions:
-            raise ValidationError("At least one action must be provided to chain.")
-        self.actions = actions
-
-    def __call__(self, well: Well, state: ModelState[Coordinates]) -> None:
-        """
-        Executes all chained action functions in sequence.
-
-        :param well: The well to which the actions are applied.
-        :param state: The current model state in the simulation.
-        """
-        for action in self.actions:
-            action(well, state)
-
-    def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
-        """Serialize the composite action."""
-        return {
-            "actions": [
-                serialize_well_action(action, recurse) for action in self.actions
-            ]
-        }
-
-    @classmethod
-    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
-        """Deserialize the composite action."""
-        if "actions" not in data:
-            raise DeserializationError("Invalid data for well actions deserialization")
-
-        actions = [
-            deserialize_well_action(action_data) for action_data in data["actions"]
-        ]
-        return cls(*actions)
-
-
-def well_time_predicate(
+def time_predicate(
     time_step: typing.Optional[int] = None,
     time: typing.Optional[float] = None,
-) -> PredicateFunc[Well, typing.Any]:
+) -> PredicateFunc[Well, ModelState]:
     """
     Returns a predicate function that triggers at a specific time step or time.
 
@@ -912,16 +1132,16 @@ def well_time_predicate(
     :param time: The specific simulation time at which to trigger the event.
     :return: A predicate function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
     """
-    return WellTimeHook(time_step=time_step, time=time)
+    return TimePredicate(time_step=time_step, time=time)
 
 
-def well_update_action(
+def update_well(
     control: typing.Optional[WellControl] = None,
     skin_factor: typing.Optional[float] = None,
     is_active: typing.Optional[bool] = None,
     injected_fluid: typing.Optional[InjectedFluid] = None,
     produced_fluids: typing.Optional[typing.Sequence[ProducedFluid]] = None,
-) -> ActionFunc[Well, typing.Any]:
+) -> ActionFunc[Well, ModelState]:
     """
     Returns an action function that modifies well configuration.
 
@@ -932,37 +1152,10 @@ def well_update_action(
     :param produced_fluids: New fluid properties for production wells.
     :return: An action function that takes a well and model state as arguments and performs the property updates.
     """
-    return WellUpdateAction(
+    return UpdateAction(
         control=control,
         skin_factor=skin_factor,
         is_active=is_active,
         injected_fluid=injected_fluid,
         produced_fluids=produced_fluids,
     )
-
-
-def well_predicates(
-    *predicates: PredicateFunc[Well, typing.Any],
-    on_any: bool = False,
-) -> PredicateFunc[Well, typing.Any]:
-    """
-    Returns a composite predicate function that chains multiple predicates.
-
-    :param predicates: A sequence of predicate functions to be chained.
-    :param on_any: If True, the composite predicate returns True if any of the predicates return True.
-                   If False, it returns True only if all predicates return True.
-    :return: A composite predicate function that takes a well and model state as arguments and returns a boolean indicating whether to apply the event.
-    """
-    return WellHooks(*predicates, on_any=on_any)
-
-
-def well_actions(
-    *actions: ActionFunc[Well, typing.Any],
-) -> ActionFunc[Well, typing.Any]:
-    """
-    Returns a composite action function that chains multiple actions.
-
-    :param actions: A sequence of action functions to be chained.
-    :return: A composite action function that takes a well and model state as arguments and performs all actions in sequence.
-    """
-    return WellActions(*actions)

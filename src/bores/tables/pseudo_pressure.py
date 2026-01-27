@@ -15,13 +15,7 @@ from bores.types import FloatOrArray
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "compute_gas_pseudo_pressure",
-    "GasPseudoPressureTable",
-    "build_gas_pseudo_pressure_table",
-    "clear_pseudo_pressure_table_cache",
-    "get_pseudo_pressure_table_cache_info",
-]
+__all__ = ["GasPseudoPressureTable", "build_gas_pseudo_pressure_table"]
 
 
 def compute_gas_pseudo_pressure(

@@ -33,15 +33,7 @@ from bores.wells.core import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "Well",
-    "InjectionWell",
-    "ProductionWell",
-    "Wells",
-    "well_type",
-    "serialize_well",
-    "deserialize_well",
-]
+__all__ = ["Well", "InjectionWell", "ProductionWell", "Wells", "well_type"]
 
 
 @attrs.define(hash=True)
@@ -309,11 +301,11 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
 WellT = typing.TypeVar("WellT", bound=Well)
 
 
-_SUPPORTED_WELL_TYPES = {}
-
+_WELL_TYPES = {}
+"""Registry for supported well types."""
 well_type = make_serializable_type_registrar(
     base_cls=Well,
-    registry=_SUPPORTED_WELL_TYPES,
+    registry=_WELL_TYPES,
     lock=threading.Lock(),
     key_attr="__type__",
     override=False,
@@ -326,7 +318,7 @@ well_type = make_serializable_type_registrar(
 # Build and register serializers/deserializers for Well base class
 serialize_well = make_registry_serializer(
     base_cls=Well,
-    registry=_SUPPORTED_WELL_TYPES,
+    registry=_WELL_TYPES,
     key_attr="__type__",
 )
 register_type_serializer(
@@ -335,7 +327,7 @@ register_type_serializer(
 )
 deserialize_well = make_registry_deserializer(
     base_cls=Well,
-    registry=_SUPPORTED_WELL_TYPES,
+    registry=_WELL_TYPES,
 )
 register_type_deserializer(
     typ=Well,
@@ -640,7 +632,7 @@ class Wells(
         typing.Optional[ProductionWell[Coordinates]],
     ]:
         """
-        Get a well by its grid coordinates.
+        Get wells by their grid coordinates.
 
         :param location: The (i, j) coordinates of the well in the reservoir grid.
         :return: Well or None: The well at the specified location, or None if not found.
@@ -654,7 +646,7 @@ class Wells(
         typing.Optional[ProductionWell[Coordinates]],
     ]:
         """
-        Get a well by its name.
+        Get wells by their name.
 
         :param name: The name of the well.
         :return: A tuple of (injection_well, production_well) or (None, None) if not found.

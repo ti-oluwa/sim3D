@@ -27,6 +27,7 @@ from .analyses import *  # noqa
 from .stores import *  # noqa
 from .streams import *  # noqa
 from .serialization import *  # noqa
+from .errors import *  # noqa
 
 use_32bit_precision()  # noqa
 

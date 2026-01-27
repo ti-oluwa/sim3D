@@ -11,7 +11,6 @@ import plotly.io as pio
 __all__ = [
     "property_registry",
     "PropertyRegistry",
-    "PropertyMeta",
     "ColorScheme",
     "merge_plots",
     "image_config",

@@ -15,16 +15,11 @@ from bores.types import CapillaryPressures, FloatOrArray, FluidPhase, Wettabilit
 
 __all__ = [
     "capillary_pressure_table",
-    "list_capillary_pressure_tables",
-    "get_capillary_pressure_table",
     "TwoPhaseCapillaryPressureTable",
     "ThreePhaseCapillaryPressureTable",
     "BrooksCoreyCapillaryPressureModel",
     "VanGenuchtenCapillaryPressureModel",
     "LeverettJCapillaryPressureModel",
-    "compute_brooks_corey_capillary_pressures",
-    "compute_van_genuchten_capillary_pressures",
-    "compute_leverett_j_capillary_pressures",
 ]
 
 
@@ -47,6 +42,7 @@ class CapillaryPressureTable(StoreSerializable):
 
 
 _CAPILLARY_PRESSURE_TABLES: typing.Dict[str, typing.Type[CapillaryPressureTable]] = {}
+"""Registry for capillary pressure table types."""
 _capillary_pressure_table_lock = threading.Lock()
 capillary_pressure_table = make_serializable_type_registrar(
     base_cls=CapillaryPressureTable,

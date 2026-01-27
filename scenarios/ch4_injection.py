@@ -110,8 +110,8 @@ def setup_run():
     # We use a well schedule to activate the producer after some time
     well_schedule = bores.WellSchedule()
     well_schedule["open_well"] = bores.WellEvent(
-        hook=bores.well_time_hook(time_step=100),
-        action=bores.well_update_action(is_active=True),
+        predicate=bores.time_predicate(time=bores.Time(days=100)),
+        action=bores.update_well(is_active=True),
     )
     well_schedules = bores.WellSchedules()
     well_schedules[producer.name] = well_schedule
@@ -131,6 +131,7 @@ def setup_run():
     )
     run.config.update(
         wells=wells,
+        well_schedules=well_schedules,
         timer=timer,
         miscibility_model="todd_longstaff",
         boundary_conditions=None,

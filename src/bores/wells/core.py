@@ -1078,7 +1078,7 @@ class InjectedFluid(WellFluid):
 
 
 @attrs.frozen
-class ProducedFluid(WellFluid):  # type: ignore[attr-defined]
+class ProducedFluid(WellFluid):
     """Properties of the fluid being produced by a well."""
 
     pass

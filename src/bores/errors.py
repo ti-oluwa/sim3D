@@ -1,5 +1,21 @@
 """BORES-specific error classes."""
 
+__all__ = [
+    "BORESError",
+    "ValidationError",
+    "PreconditionerError",
+    "SolverError",
+    "ComputationError",
+    "SimulationError",
+    "TimingError",
+    "StopSimulation",
+    "StorageError",
+    "StreamError",
+    "SerializableError",
+    "SerializationError",
+    "DeserializationError",
+]
+
 
 class BORESError(Exception):
     """Base class for all BORES-related errors."""

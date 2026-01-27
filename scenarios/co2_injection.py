@@ -112,8 +112,8 @@ def setup_run():
     well_schedule.add(
         id_="open_well",
         event=bores.WellEvent(
-            hook=bores.well_time_hook(time_step=100),
-            action=bores.well_update_action(is_active=True),
+            predicate=bores.time_predicate(time=bores.Time(days=100)),
+            action=bores.update_well(is_active=True),
         ),
     )
     well_schedules = bores.WellSchedules()
@@ -126,7 +126,7 @@ def setup_run():
         initial_step_size=bores.Time(hours=30.0),
         max_step_size=bores.Time(days=5.0),
         min_step_size=bores.Time(minutes=10),
-        simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 5) + 100),
+        simulation_time=bores.Time(days=(bores.c.DAYS_PER_YEAR * 2) + 100),
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
         backoff_factor=0.5,
@@ -135,6 +135,7 @@ def setup_run():
     )
     run.config.update(
         wells=wells,
+        well_schedules=well_schedules,
         timer=timer,
         miscibility_model="todd_longstaff",
         boundary_conditions=None,

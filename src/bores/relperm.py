@@ -23,10 +23,6 @@ from bores.types import (
 
 __all__ = [
     "mixing_rule",
-    "mixing_rule_serializer",
-    "mixing_rule_deserializer",
-    "list_mixing_rules",
-    "get_mixing_rule",
     "relperm_table",
     "get_relperm_table",
     "list_relperm_tables",
@@ -72,12 +68,15 @@ Comparison of common three-phase relative permeability mixing rules:
 
 
 _MIXING_RULES: typing.Dict[str, MixingRule] = {}
+"""Registry of mixing rule functions."""
 _MIXING_RULE_SERIALIZERS: typing.Dict[
     MixingRule, typing.Callable[[MixingRule, bool], typing.Any]
 ] = {}
+"""Registry of mixing rule serializers."""
 _MIXING_RULE_DESERIALIZERS: typing.Dict[
     str, typing.Callable[[typing.Any], MixingRule]
 ] = {}
+"""Registry of mixing rule deserializers."""
 _lock = threading.Lock()
 
 
@@ -172,7 +171,7 @@ def mixing_rule(
     return decorator(func)
 
 
-def mixing_rule_serializer(rule: MixingRule, recurse: bool = True) -> typing.Any:
+def serialize_mixing_rule(rule: MixingRule, recurse: bool = True) -> typing.Any:
     """
     Serialize a mixing rule function to its registered name.
 
@@ -191,7 +190,7 @@ def mixing_rule_serializer(rule: MixingRule, recurse: bool = True) -> typing.Any
     )
 
 
-def mixing_rule_deserializer(name: str) -> MixingRule:
+def deserialize_mixing_rule(name: str) -> MixingRule:
     """
     Deserialize a mixing rule function from its registered name.
 
@@ -678,6 +677,7 @@ class RelativePermeabilityTable(StoreSerializable):
 
 
 _RELPERM_TABLES: typing.Dict[str, typing.Type[RelativePermeabilityTable]] = {}
+"""Registry of relative permeability table types."""
 _relperm_tables_lock = threading.Lock()
 relperm_table = make_serializable_type_registrar(
     base_cls=RelativePermeabilityTable,
@@ -700,9 +700,7 @@ def list_relperm_tables() -> typing.List[str]:
         return list(_RELPERM_TABLES.keys())
 
 
-def get_relperm_table(
-    name: str
-) -> typing.Type[RelativePermeabilityTable]:
+def get_relperm_table(name: str) -> typing.Type[RelativePermeabilityTable]:
     """
     Get a registered relative permeability table type by name.
 
@@ -855,8 +853,8 @@ class TwoPhaseRelPermTable(Serializable):
 @attrs.frozen
 class ThreePhaseRelPermTable(
     RelativePermeabilityTable,
-    serializers={"mixing_rule": mixing_rule_serializer},
-    deserializers={"mixing_rule": mixing_rule_deserializer},
+    serializers={"mixing_rule": serialize_mixing_rule},
+    deserializers={"mixing_rule": deserialize_mixing_rule},
     load_exclude={"supports_arrays"},
     dump_exclude={"supports_arrays"},
 ):
@@ -1154,8 +1152,8 @@ def compute_corey_three_phase_relative_permeabilities(
 @attrs.frozen
 class BrooksCoreyThreePhaseRelPermModel(
     RelativePermeabilityTable,
-    serializers={"mixing_rule": mixing_rule_serializer},
-    deserializers={"mixing_rule": mixing_rule_deserializer},
+    serializers={"mixing_rule": serialize_mixing_rule},
+    deserializers={"mixing_rule": deserialize_mixing_rule},
     load_exclude={"supports_arrays"},
     dump_exclude={"supports_arrays"},
 ):

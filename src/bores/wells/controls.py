@@ -224,6 +224,7 @@ class RateClamp(Serializable):
 
 
 _CLAMP_TYPES: typing.Dict[str, typing.Type[RateClamp]] = {}
+"""Registry for rate clamp types."""
 rate_clamp = make_serializable_type_registrar(
     base_cls=RateClamp,
     registry=_CLAMP_TYPES,
@@ -314,6 +315,7 @@ class WellControl(typing.Generic[WellFluidT_con], StoreSerializable):
 
 
 _WELL_CONTROLS: typing.Dict[str, typing.Type[WellControl]] = {}
+"""Registry for well control types."""
 well_control = make_serializable_type_registrar(
     base_cls=WellControl,
     registry=_WELL_CONTROLS,

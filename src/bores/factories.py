@@ -51,13 +51,7 @@ from bores.wells import (
     Wells,
 )
 
-__all__ = [
-    "reservoir_model",
-    "injection_well",
-    "production_well",
-    "wells_",
-    "validate_saturation_grids",
-]
+__all__ = ["reservoir_model", "injection_well", "production_well", "wells_"]
 
 
 def validate_saturation_grids(
