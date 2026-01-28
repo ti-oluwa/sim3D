@@ -118,6 +118,10 @@ def _is_namedtuple_type(typ: typing.Any) -> bool:
     )
 
 
+def _is_enum_type(typ: typing.Any) -> bool:
+    return isinstance(typ, type) and issubclass(typ, Enum)
+
+
 def _unwrap_type(typ: typing.Any) -> typing.List[typing.Type[typing.Any]]:
     """
     Recursively unwrap a type to get all constituent non-None types.
@@ -285,7 +289,7 @@ def _discover_type_deserializers(
     return discovered
 
 
-def _dump_value(
+def _serialize(
     value: typing.Any,
     recurse: bool,
     serializers: typing.Optional[
@@ -299,9 +303,12 @@ def _dump_value(
     check_serializers: bool = True,
 ):
     """Dump a value using cattrs, handling nested `Serializable` objects."""
-    typ = typ or type(value)
+    # If no type provided, infer from value
+    typ = typ if typ is not None else type(value)
+
+    # Check for custom serializer first
     if check_serializers and serializers and typ in serializers:
-        return serializers[typ](value, True)
+        return serializers[typ](value, recurse)
 
     if _is_optional_type(typ):
         if value is None:
@@ -310,33 +317,87 @@ def _dump_value(
         args = typing.get_args(typ)
         non_none_args = [arg for arg in args if arg is not type(None)]
         if len(non_none_args) == 1:
-            return _dump_value(value, recurse, serializers, non_none_args[0])
+            return _serialize(value, recurse, serializers, non_none_args[0])
         else:
+            # Try each non-None type in the Union
             for arg in non_none_args:
                 try:
-                    return _dump_value(value, recurse, serializers, arg)
+                    return _serialize(value, recurse, serializers, arg)
                 except Exception:
                     continue
             raise SerializationError(
                 f"Value {value!r} does not match any type in {typ}"
             )
 
-    if isinstance(value, Serializable):
-        return value.dump(recurse)
+    if _is_serializable_type(typ):
+        origin_cls = _get_origin_class(typ)
+        return origin_cls.dump(value, recurse)  # type: ignore
 
-    if isinstance(value, Enum):
+    if _is_enum_type(typ):
         return value.value
 
+    # Handle generic types (List, Dict, etc.)
+    if _is_generic_alias(typ):
+        origin = typing.get_origin(typ)
+        args = typing.get_args(typ)
+
+        # Handle sequence types (List, Tuple, etc.)
+        if origin in (list, tuple, Sequence) or (
+            origin and isinstance(origin, type) and issubclass(origin, Sequence)
+        ):
+            if not isinstance(value, (str, bytes)) and isinstance(value, Sequence):
+                element_type = args[0] if args else type(None)
+                return [
+                    _serialize(v, recurse, serializers, element_type) for v in value
+                ]
+
+        # Handle mapping types (Dict, etc.)
+        if origin in (dict, Mapping) or (
+            origin and isinstance(origin, type) and issubclass(origin, Mapping)
+        ):
+            if isinstance(value, Mapping):
+                key_type = args[0] if len(args) > 0 else type(None)
+                value_type = args[1] if len(args) > 1 else type(None)
+                return {
+                    _serialize(k, recurse, serializers, key_type): _serialize(
+                        v, recurse, serializers, value_type
+                    )
+                    for k, v in value.items()
+                }
+
+    if _is_typed_dict_type(typ):
+        if isinstance(value, Mapping):
+            annotations = typing.get_type_hints(typ, include_extras=False)
+            return {
+                k: _serialize(v, recurse, serializers, annotations.get(k, type(v)))
+                for k, v in value.items()
+            }
+
+    if _is_namedtuple_type(typ):
+        if isinstance(value, tuple) and hasattr(value, "_fields"):
+            annotations = typing.get_type_hints(typ, include_extras=False)
+            return {
+                field: _serialize(
+                    getattr(value, field),
+                    recurse,
+                    serializers,
+                    annotations.get(field, type(getattr(value, field))),
+                )
+                for field in value._fields  # type: ignore[attr-defined]
+            }
+
+    # Fallback check for Mapping/Sequence at runtime
+    # (for cases where type annotation isn't available or is too generic)
     if isinstance(value, Mapping):
-        return {k: _dump_value(v, recurse, serializers) for k, v in value.items()}
+        return {k: _serialize(v, recurse, serializers) for k, v in value.items()}
 
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [_dump_value(v, recurse, serializers) for v in value]
+        return [_serialize(v, recurse, serializers) for v in value]
 
     return converter.unstructure(value)
 
 
-def _load_value(
+def _deserialize(
     value: typing.Any,
     typ: typing.Type[typing.Any],
     deserializers: typing.Optional[
@@ -349,6 +410,7 @@ def _load_value(
     check_deserializers: bool = True,
 ) -> typing.Any:
     """Load a value using cattrs, handling nested `Serializable` objects."""
+    # Check for custom deserializer first
     if check_deserializers and deserializers and typ in deserializers:
         return deserializers[typ](value)
 
@@ -359,11 +421,11 @@ def _load_value(
         args = typing.get_args(typ)
         non_none_args = [arg for arg in args if arg is not type(None)]
         if len(non_none_args) == 1:
-            return _load_value(value, non_none_args[0], deserializers)
+            return _deserialize(value, non_none_args[0], deserializers)
         else:
             for arg in non_none_args:
                 try:
-                    return _load_value(value, arg, deserializers)
+                    return _deserialize(value, arg, deserializers)
                 except Exception:
                     continue
             raise DeserializationError(
@@ -371,9 +433,10 @@ def _load_value(
             )
 
     if _is_serializable_type(typ):
-        return _get_origin_class(typ).load(value)  # type: ignore[attr-type]
+        origin_cls = _get_origin_class(typ)
+        return origin_cls.load(value)  # type: ignore[attr-type]
 
-    if isinstance(typ, type) and issubclass(typ, Enum):
+    if _is_enum_type(typ):
         return typ(value)
 
     if _is_generic_alias(typ):
@@ -383,24 +446,29 @@ def _load_value(
         if origin in (list, tuple, Sequence) or (
             origin and isinstance(origin, type) and issubclass(origin, Sequence)
         ):
-            return [_load_value(v, args[0], deserializers) for v in value]
+            return [_deserialize(v, args[0], deserializers) for v in value]
 
         if origin in (dict, Mapping) or (
             origin and isinstance(origin, type) and issubclass(origin, Mapping)
         ):
-            return {k: _load_value(v, args[1], deserializers) for k, v in value.items()}
+            return {
+                k: _deserialize(v, args[1], deserializers) for k, v in value.items()
+            }
 
     if _is_typed_dict_type(typ):
         annotations = typing.get_type_hints(typ, include_extras=False)
         return typ(
-            {k: _load_value(v, annotations[k], deserializers) for k, v in value.items()}
+            {
+                k: _deserialize(v, annotations[k], deserializers)
+                for k, v in value.items()
+            }
         )
 
     if _is_namedtuple_type(typ):
         annotations = typing.get_type_hints(typ, include_extras=False)
         return typ(
             **{
-                k: _load_value(v, annotations[k], deserializers)
+                k: _deserialize(v, annotations[k], deserializers)
                 for k, v in value.items()
             }
         )
@@ -408,7 +476,7 @@ def _load_value(
     return converter.structure(value, typ)
 
 
-def _build_dumper(
+def _build_serializer(
     fields: typing.Mapping[str, typing.Type],
     exclude: typing.Optional[typing.Iterable[str]] = None,
     serializers: typing.Optional[
@@ -419,15 +487,31 @@ def _build_dumper(
     ] = None,
 ) -> typing.Callable:
     """
-    Build a dumper function for the class.
+    Build a serializer function for the class.
 
     :param fields: Mapping of field names to types.
-    :param exclude: Optional iterable of field names to exclude from dumping.
+    :param exclude: Optional iterable of field names to exclude from serializing.
     :param serializers: Optional mapping of field names or types to custom serializer callables.
-    :return: A dumper function.
+    :return: A serializer function.
     """
+    # Cache for lazily discovered serializers
+    _lazy_serializers_cache: typing.Dict[
+        typing.Union[str, typing.Type[typing.Any]], typing.Any
+    ] = {}
+    _serializers_discovered = False
 
     def __dump__(self, recurse: bool = True) -> typing.Dict[str, typing.Any]:
+        nonlocal _lazy_serializers_cache, _serializers_discovered
+
+        # Lazy discovery: discover type serializers on first call
+        if not _serializers_discovered:
+            discovered = _discover_type_serializers(fields)
+            # Merge: explicit serializers take precedence over discovered
+            _lazy_serializers_cache = {**discovered, **(serializers or {})}
+            _serializers_discovered = True
+
+        # Use the cached/discovered serializers
+        active_serializers = _lazy_serializers_cache
         result = {}
         for field, typ in fields.items():
             if exclude and field in exclude:
@@ -436,8 +520,8 @@ def _build_dumper(
             value = getattr(self, field)
 
             # Custom serializer by field name (highest priority)
-            if serializers and (field in serializers):
-                serializer = serializers[field]
+            if active_serializers and (field in active_serializers):
+                serializer = active_serializers[field]
                 try:
                     result[field] = serializer(value, recurse)
                 except Exception as exc:
@@ -447,10 +531,10 @@ def _build_dumper(
                 continue
 
             # Custom serializer by type (handle generics)
-            if serializers:
+            if active_serializers:
                 # Try exact type match first
-                if typ in serializers:
-                    serializer = serializers[typ]
+                if typ in active_serializers:
+                    serializer = active_serializers[typ]
                     try:
                         result[field] = serializer(value, recurse)
                     except Exception as exc:
@@ -461,8 +545,8 @@ def _build_dumper(
 
                 # Then try origin class for generics
                 origin = _get_origin_class(typ)
-                if origin and origin != typ and origin in serializers:
-                    serializer = serializers[origin]
+                if origin and origin != typ and origin in active_serializers:
+                    serializer = active_serializers[origin]
                     try:
                         result[field] = serializer(value, recurse)
                     except Exception as exc:
@@ -471,9 +555,10 @@ def _build_dumper(
                         ) from exc
                     continue
 
-            if isinstance(value, Serializable):
+            if _is_serializable_type(typ):
+                origin_cls = _get_origin_class(typ)
                 try:
-                    result[field] = value.dump(recurse)
+                    result[field] = origin_cls.dump(value, recurse)  # type: ignore
                 except Exception as exc:
                     raise SerializationError(
                         f"Failed to serialize nested `Serializable` field '{field}'"
@@ -481,8 +566,12 @@ def _build_dumper(
             else:
                 try:
                     # No need to check serializers again here, as we've already done so above
-                    result[field] = _dump_value(
-                        value, recurse, serializers, typ, check_serializers=False
+                    result[field] = _serialize(
+                        value=value,
+                        recurse=recurse,
+                        active_serializers=active_serializers,  # type: ignore[arg-type]
+                        typ=typ,
+                        check_serializers=False,
                     )
                 except Exception as exc:
                     raise SerializationError(
@@ -494,7 +583,7 @@ def _build_dumper(
     return __dump__
 
 
-def _build_loader(
+def _build_deserializer(
     fields: typing.Mapping[str, typing.Type],
     exclude: typing.Optional[typing.Iterable[str]] = None,
     deserializers: typing.Optional[
@@ -502,16 +591,33 @@ def _build_loader(
     ] = None,
 ) -> typing.Callable:
     """
-    Build a loader function for the class.
+    Build a deserializer function for the class.
 
     :param fields: Mapping of field names to types.
-    :param exclude: Optional iterable of field names to exclude from loading.
+    :param exclude: Optional iterable of field names to exclude from deserializing.
     :param deserializers: Optional mapping of field names or types to custom deserializer callables.
-    :return: A loader function.
+    :return: A deserializer function.
     """
+    # Cache for lazily discovered deserializers
+    _lazy_deserializers_cache: typing.Dict[
+        typing.Union[str, typing.Type[typing.Any]], typing.Any
+    ] = {}
+    _deserializers_discovered = False
 
     @classmethod
     def __load__(cls, data: typing.Mapping[str, typing.Any]):
+        nonlocal _lazy_deserializers_cache, _deserializers_discovered
+
+        # Lazy discovery: discover type deserializers on first call
+        if not _deserializers_discovered:
+            discovered = _discover_type_deserializers(fields)
+            # Merge: explicit deserializers take precedence over discovered
+            _lazy_deserializers_cache = {**discovered, **(deserializers or {})}
+            _deserializers_discovered = True
+
+        # Use the cached/discovered deserializers
+        active_deserializers = _lazy_deserializers_cache
+
         init_kwargs = {}
         for field, typ in fields.items():
             if exclude and field in exclude:
@@ -524,8 +630,8 @@ def _build_loader(
             value = data[field]
 
             # Custom deserializer by field name (highest priority)
-            if deserializers and (field in deserializers):
-                deserializer = deserializers[field]
+            if active_deserializers and (field in active_deserializers):
+                deserializer = active_deserializers[field]
                 try:
                     init_kwargs[field] = deserializer(value)
                 except Exception as exc:
@@ -535,10 +641,10 @@ def _build_loader(
                 continue
 
             # Custom deserializer by type (handle generics)
-            if deserializers:
+            if active_deserializers:
                 # Check exact type match first
-                if typ in deserializers:
-                    deserializer = deserializers[typ]
+                if typ in active_deserializers:
+                    deserializer = active_deserializers[typ]
                     try:
                         init_kwargs[field] = deserializer(value)
                     except Exception as exc:
@@ -549,8 +655,8 @@ def _build_loader(
 
                 # Then check origin class for generics
                 origin = _get_origin_class(typ)
-                if origin and origin != typ and origin in deserializers:
-                    deserializer = deserializers[origin]
+                if origin and origin != typ and origin in active_deserializers:
+                    deserializer = active_deserializers[origin]
                     try:
                         init_kwargs[field] = deserializer(value)
                     except Exception as exc:
@@ -571,8 +677,11 @@ def _build_loader(
             else:
                 try:
                     # No need to check deserializers again here, as we've already done so above
-                    init_kwargs[field] = _load_value(
-                        value, typ, deserializers, check_deserializers=False
+                    init_kwargs[field] = _deserialize(
+                        value=value,
+                        typ=typ,
+                        active_deserializers=active_deserializers,  # type: ignore[arg-type]
+                        check_deserializers=False,
                     )
                 except Exception as exc:
                     raise DeserializationError(
@@ -651,19 +760,19 @@ class SerializableMeta(type):
             if v is not None and not k.startswith("__")
         }
 
-        type_serializers = _discover_type_serializers(all_fields)
-        type_deserializers = _discover_type_deserializers(all_fields)
+        # NOTE: We don't discover type serializers/deserializers here anymore!
+        # Discovery happens lazily on first dump/load call.
+        # We only store explicitly provided serializers/deserializers.
+
         # Build final serializers/deserializers with proper precedence
-        # - Auto-discovered (lowest priority)
         # - Parent class (medium priority)
         # - Explicit on this class (highest priority)
+        # - Auto-discovered (lowest priority, added lazily at runtime)
         all_serializers = {
-            **type_serializers,
             **parent_serializers,
             **(serializers or {}),
         }
         all_deserializers = {
-            **type_deserializers,
             **parent_deserializers,
             **(deserializers or {}),
         }
@@ -682,7 +791,7 @@ class SerializableMeta(type):
             if "__dump__" not in namespace or getattr(
                 namespace["__dump__"], "_is_placeholder", False
             ):
-                cls.__dump__ = _build_dumper(
+                cls.__dump__ = _build_serializer(
                     fields=all_fields,
                     exclude=dump_exclude,
                     serializers=all_serializers,
@@ -691,7 +800,7 @@ class SerializableMeta(type):
             if "__load__" not in namespace or getattr(
                 namespace["__load__"], "_is_placeholder", False
             ):
-                cls.__load__ = _build_loader(
+                cls.__load__ = _build_deserializer(
                     fields=all_fields,
                     exclude=load_exclude,
                     deserializers=all_deserializers,

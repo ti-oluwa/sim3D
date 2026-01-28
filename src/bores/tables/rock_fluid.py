@@ -1,3 +1,5 @@
+import typing
+
 import attrs
 
 from bores.capillary_pressures import CapillaryPressureTable
@@ -8,6 +10,7 @@ from bores.serialization import Serializable
 __all__ = ["RockFluidTables"]
 
 
+@typing.final
 @attrs.frozen
 class RockFluidTables(Serializable):
     """

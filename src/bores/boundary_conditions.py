@@ -170,7 +170,7 @@ def serialize_boundary_function(
             "data": func.dump(recurse),
         }
 
-    # Cannot serialize - must be registered
+    # Cannot serialize, must be registered
     raise SerializationError(
         f"Cannot serialize boundary function {func}. "
         f"Please register it with @boundary_function. "
@@ -1458,6 +1458,7 @@ NeumannBoundary = FluxBoundary
 """Alias for `FluxBoundary` representing Neumann boundary conditions (flux-based)."""
 
 
+@typing.final
 @attrs.frozen
 class GridBoundaryCondition(typing.Generic[NDimension], Serializable):
     """
@@ -1607,6 +1608,7 @@ class GridBoundaryCondition(typing.Generic[NDimension], Serializable):
             )
 
 
+@typing.final
 class BoundaryConditions(
     defaultdict[str, GridBoundaryCondition[NDimension]], Serializable
 ):

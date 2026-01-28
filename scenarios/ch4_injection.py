@@ -134,7 +134,6 @@ def setup_run():
         well_schedules=well_schedules,
         timer=timer,
         miscibility_model="todd_longstaff",
-        boundary_conditions=None,
     )
     return Path, bores, run
 

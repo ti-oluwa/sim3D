@@ -13,6 +13,7 @@ from bores.stores import StoreSerializable
 __all__ = ["Constant", "Constants", "c", "ConstantsContext", "get_constant"]
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class Constant(Serializable):
     """
@@ -504,6 +505,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
 }
 
 
+@typing.final
 class Constants(
     StoreSerializable,
     fields={"_store": typing.Dict[str, Constant]},
@@ -707,7 +709,7 @@ class Constants(
         }
 
     @classmethod
-    def __load__(cls, data: typing.Dict[str, typing.Any]) -> Self:
+    def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
         """Load constants from dict."""
         store = {
             name: Constant.load(val)

@@ -28,6 +28,7 @@ __all__ = [
 ]
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class FluidProperties(PadMixin[NDimension], StoreSerializable):
     """
@@ -154,6 +155,7 @@ class FluidProperties(PadMixin[NDimension], StoreSerializable):
         )
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class RockPermeability(PadMixin[NDimension], StoreSerializable):
     """
@@ -180,6 +182,7 @@ class RockPermeability(PadMixin[NDimension], StoreSerializable):
         return attrs.fields(type(self))
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class RockProperties(PadMixin[NDimension], StoreSerializable):
     """
@@ -245,6 +248,7 @@ class RockProperties(PadMixin[NDimension], StoreSerializable):
         return unpadded
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class SaturationHistory(PadMixin[NDimension], StoreSerializable):
     """

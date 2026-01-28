@@ -10,6 +10,8 @@ BORES is a reservoir engineering framework designed for 3D black-oil modelling a
 
 BORES started as a final year project for my Bachelor's degree in Petroleum Engineering at the Federal University of Petroleum Resources, Effurun, Nigeria. Why write this when there are other commercial and open-source reservoir simulators like Eclipse, CMG, MRST, OpenPorousMedia, etc.? Well, Existing libraries are either closed-source, written in low-level languages (C/C++, Fortran), or have complex APIs with poor documentation that make prototyping and experimentation difficult. BORES aims to fill this gap by providing a simple, Pythonic interface for reservoir simulation that is easy to understand and extend. Simply put, this make things more accessible to petroleum engineers, students and researchers who may not be expert programmers as Python is such a simple language to learn and use, and is widely adopted in the scientific computing community.
 
+> Note that BORES uses Oil field units (feet, psi, stb, scf, etc.) throughout the framework.
+
 ## Table of Contents
 
 - [Installation](#installation)
@@ -397,7 +399,7 @@ config = bores.Config(
     
     # Solver selection
     pressure_solver="bicgstab",     # BiCGSTAB, LGMRES, etc.
-    preconditioner="ilu",            # ILU preconditioning, can be AMG, Diagonal, CPR, or None
+    pressure_preconditioner="ilu",            # ILU preconditioning, can be AMG, Diagonal, CPR, or None
     
     # PVT tables (if using)
     pvt_tables=pvt_tables,
@@ -1580,7 +1582,7 @@ config = bores.Config(
     pressure_solver="bicgstab",  # BiCGSTAB (recommended)
     # or: "lgmres", "gmres", "tfqmr", "cg", "cgs", "direct"
     
-    preconditioner="ilu",  # ILU (recommended)
+    pressure_preconditioner="ilu",  # ILU (recommended)
     # or: "diagonal", "ilu", "amg", "cpr", None
     
     # Convergence settings
@@ -2358,7 +2360,7 @@ config = bores.Config(
     use_pseudo_pressure=True,
     max_iterations=500,
     pressure_solver="bicgstab",
-    preconditioner="ilu",
+    pressure_preconditioner="ilu",
     pvt_tables=pvt_tables,
     boundary_conditions=boundary_conditions,
 )

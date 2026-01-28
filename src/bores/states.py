@@ -36,6 +36,7 @@ __all__ = ["ModelState", "validate_state"]
 _Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
 
 
+@typing.final
 class ModelState(
     typing.Generic[NDimension],
     Serializable,

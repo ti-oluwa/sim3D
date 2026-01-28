@@ -59,7 +59,6 @@ class StepMetricsDict(typing.TypedDict):
 class TimerState(typing.TypedDict):
     """Complete state of a timer instance for serialization."""
 
-    # Configuration parameters
     initial_step_size: float
     max_step_size: float
     min_step_size: float
@@ -73,7 +72,6 @@ class TimerState(typing.TypedDict):
     failure_memory_window: int
     metrics_history_size: int
     use_constant_step_size: bool
-    # Current state
     elapsed_time: float
     step: int
     step_size: float
@@ -82,7 +80,6 @@ class TimerState(typing.TypedDict):
     last_step_failed: bool
     rejection_count: int
     steps_since_last_failure: int
-    # History
     recent_metrics: typing.List[StepMetricsDict]
     failed_step_sizes: typing.List[float]
 

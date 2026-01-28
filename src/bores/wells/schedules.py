@@ -678,6 +678,7 @@ def deserialize_event_action(
     )
 
 
+@typing.final
 @attrs.define(slots=True, hash=True)
 class WellEvent(typing.Generic[Coordinates], Serializable):
     """
@@ -723,6 +724,7 @@ class WellEvent(typing.Generic[Coordinates], Serializable):
         )
 
 
+@typing.final
 @attrs.frozen(slots=True)
 class WellSchedule(typing.Generic[Coordinates], Serializable):
     """
@@ -883,6 +885,7 @@ class WellSchedule(typing.Generic[Coordinates], Serializable):
         return schedule
 
 
+@typing.final
 @attrs.define(slots=True)
 class WellSchedules(typing.Generic[Coordinates], StoreSerializable):
     """

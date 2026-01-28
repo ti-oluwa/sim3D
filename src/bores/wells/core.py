@@ -718,6 +718,7 @@ class WellFluid(Serializable):
         )
 
 
+@typing.final
 @attrs.frozen
 class InjectedFluid(WellFluid):
     """Properties of the fluid being injected into or produced by a well."""
@@ -1077,6 +1078,7 @@ class InjectedFluid(WellFluid):
         )
 
 
+@typing.final
 @attrs.frozen
 class ProducedFluid(WellFluid):
     """Properties of the fluid being produced by a well."""

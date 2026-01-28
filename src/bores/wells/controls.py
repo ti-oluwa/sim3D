@@ -237,6 +237,58 @@ rate_clamp = make_serializable_type_registrar(
 """Decorator to register a new rate clamp type."""
 
 
+@rate_clamp
+@attrs.frozen
+class ProductionClamp(RateClamp):
+    """Clamp condition for production wells."""
+
+    __type__ = "production_clamp"
+
+    value: float = 0.0
+    """Clamp value to return when condition is met."""
+
+    def clamp_rate(
+        self, rate: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        """Clamp if rate is positive (injection during production)."""
+        if rate > 0.0:
+            return self.value
+        return None
+
+    def clamp_bhp(
+        self, bottom_hole_pressure: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        if bottom_hole_pressure > pressure:
+            return pressure
+        return None
+
+
+@rate_clamp
+@attrs.frozen
+class InjectionClamp(RateClamp):
+    """Clamp condition for injection wells."""
+
+    __type__ = "injection_clamp"
+
+    value: float = 0.0
+    """Clamp value to return when condition is met."""
+
+    def clamp_rate(
+        self, rate: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        """Clamp if rate is negative (production during injection)."""
+        if rate < 0.0:
+            return self.value
+        return None
+
+    def clamp_bhp(
+        self, bottom_hole_pressure: float, pressure: float, **kwargs
+    ) -> typing.Optional[float]:
+        if bottom_hole_pressure < pressure:
+            return pressure
+        return None
+
+
 class WellControl(typing.Generic[WellFluidT_con], StoreSerializable):
     """
     Base class for well control implementations.
@@ -326,58 +378,6 @@ well_control = make_serializable_type_registrar(
     auto_register_deserializer=True,
 )
 """Decorator to register a new well control type."""
-
-
-@rate_clamp
-@attrs.frozen
-class ProductionClamp(RateClamp):
-    """Clamp condition for production wells."""
-
-    __type__ = "production_clamp"
-
-    value: float = 0.0
-    """Clamp value to return when condition is met."""
-
-    def clamp_rate(
-        self, rate: float, pressure: float, **kwargs
-    ) -> typing.Optional[float]:
-        """Clamp if rate is positive (injection during production)."""
-        if rate > 0.0:
-            return self.value
-        return None
-
-    def clamp_bhp(
-        self, bottom_hole_pressure: float, pressure: float, **kwargs
-    ) -> typing.Optional[float]:
-        if bottom_hole_pressure > pressure:
-            return pressure
-        return None
-
-
-@rate_clamp
-@attrs.frozen
-class InjectionClamp(RateClamp):
-    """Clamp condition for injection wells."""
-
-    __type__ = "injection_clamp"
-
-    value: float = 0.0
-    """Clamp value to return when condition is met."""
-
-    def clamp_rate(
-        self, rate: float, pressure: float, **kwargs
-    ) -> typing.Optional[float]:
-        """Clamp if rate is negative (production during injection)."""
-        if rate < 0.0:
-            return self.value
-        return None
-
-    def clamp_bhp(
-        self, bottom_hole_pressure: float, pressure: float, **kwargs
-    ) -> typing.Optional[float]:
-        if bottom_hole_pressure < pressure:
-            return pressure
-        return None
 
 
 @well_control

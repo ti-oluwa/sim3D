@@ -137,9 +137,9 @@ def setup_run():
         wells=wells,
         well_schedules=well_schedules,
         timer=timer,
-        miscibility_model="todd_longstaff",
-        boundary_conditions=None,
+        # miscibility_model="todd_longstaff",
     )
+    run.config.to_file(Path("./scenarios/runs/co2_injection/config.yaml"))
     return Path, bores, run
 
 

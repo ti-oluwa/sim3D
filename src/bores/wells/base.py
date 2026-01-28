@@ -335,6 +335,7 @@ register_type_deserializer(
 )
 
 
+@typing.final
 @well_type
 @attrs.define(hash=True)
 class InjectionWell(Well[Coordinates, InjectedFluid]):
@@ -388,6 +389,7 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
         )
 
 
+@typing.final
 @well_type
 @attrs.define(hash=True)
 class ProductionWell(Well[Coordinates, ProducedFluid]):
@@ -548,6 +550,7 @@ _wells_deserializers = {
 }
 
 
+@typing.final
 @attrs.frozen
 class Wells(
     typing.Generic[Coordinates],
