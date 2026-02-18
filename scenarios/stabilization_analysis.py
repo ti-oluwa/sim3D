@@ -20,7 +20,7 @@ def _():
     stream = bores.StateStream(store=store, auto_replay=True)
 
     def steps(step):
-        return step == 0 or step % 4 == 0
+        return step == 0 or step % 2 == 0
 
     states = list(stream.replay(steps=steps))
     return bores, itertools, np, states
@@ -371,7 +371,7 @@ def _(bores, states, viz):
         # isomin=0.05
     )
 
-    property = "oil-saturation"
+    property = "residual-gas-saturation"
     figures = []
     timesteps = [10]
     for timestep in timesteps:

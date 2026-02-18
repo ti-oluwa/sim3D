@@ -71,7 +71,7 @@ def setup_run():
             ),
         ),
         skin_factor=2.5,
-        is_active=True,
+        is_active=True, 
     )
 
     wells = bores.wells_(injectors=None, producers=[producer])

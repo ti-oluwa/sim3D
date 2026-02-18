@@ -1,3 +1,4 @@
+from bores.correlations import fahrenheit_to_rankine
 from bores._precision import get_dtype
 import logging
 import typing
@@ -721,11 +722,12 @@ def compute_gas_formation_volume_factor(
         raise ValidationError("Z-factor must be positive.")
 
     dtype = pressure.dtype
+    temperature_in_rankine = fahrenheit_to_rankine(temperature)
     return (
         gas_compressibility_factor
-        * temperature
+        * temperature_in_rankine
         * c.STANDARD_PRESSURE_IMPERIAL
-        / (pressure * c.STANDARD_TEMPERATURE_IMPERIAL)
+        / (pressure * c.STANDARD_TEMPERATURE_RANKINE)
     ).astype(dtype)
 
 
@@ -1847,7 +1849,7 @@ def compute_gas_pseudocritical_properties(
         T_pc = 169.2 + 349.5 * γ_g - 74.0 * γ_g²    [°R]
 
     Wichert-Aziz Correction:
-        ε = 120[(X_H2S + X_N2)^0.9 - (X_H2S + X_N2)^1.6] + 15[√X_CO2 - X_CO2⁴]
+        ε = 120[(X_H2S + X_CO2)^0.9 - (X_H2S + X_CO2)^1.6] + 15[√X_H2S - X_H2S⁴]
 
         Then:
         T_pc' = T_pc - ε
@@ -1885,10 +1887,9 @@ def compute_gas_pseudocritical_properties(
     )
 
     if max_(total_acid_gas_fraction) > 0.001:
-        epsilon = 120.0 * (
-            (h2s_mole_fraction + n2_mole_fraction) ** 0.9  # type: ignore
-            - (h2s_mole_fraction + n2_mole_fraction) ** 1.6  # type: ignore
-        ) + 15.0 * (co2_mole_fraction**0.5 - co2_mole_fraction**4)  # type: ignore
+        A = h2s_mole_fraction + co2_mole_fraction
+        B = h2s_mole_fraction
+        epsilon = 120.0 * (A**0.9 - A**1.6) + 15.0 * (B**0.5 - B**4)
 
         pseudocritical_temperature_rankine -= epsilon
         pseudocritical_pressure = (
@@ -2121,8 +2122,8 @@ def _compute_oil_compressibility_liberation_correction_term(
     """
     dtype = pressure.dtype
     delta_p = np.maximum(0.01, 1e-4 * pressure).astype(dtype)
-    pressure_plus = pressure - delta_p
-    pressure_minus = pressure + delta_p
+    pressure_plus = pressure + delta_p
+    pressure_minus = pressure - delta_p
     gor_plus_delta = compute_gas_to_oil_ratio(
         pressure=pressure_plus,
         temperature=temperature,
@@ -2668,9 +2669,8 @@ def compute_gas_solubility_in_water(
     else:
         # Henry's Law for all temperatures (no specialized correlation)
         molar_masses = {
-            "co2": c.MOLECULAR_WEIGHtemperature_in_celsiusO2
-            / 1000,  # Convert g/mol to kg/mol
-            "ch4": c.MOLECULAR_WEIGHtemperature_in_celsiusH4 / 1000,
+            "co2": c.MOLECULAR_WEIGHT_CO2 / 1000,  # Convert g/mol to kg/mol
+            "ch4": c.MOLECULAR_WEIGHT_CH4 / 1000,
             "n2": c.MOLECULAR_WEIGHT_N2 / 1000,
             "ar": c.MOLECULAR_WEIGHT_ARGON / 1000,
             "o2": c.MOLECULAR_WEIGHT_O2 / 1000,
@@ -3478,12 +3478,6 @@ def compute_miscibility_transition_factor(
         Note: The original Todd-Longstaff paper defines omega as a mixing parameter.
         This function computes how that mixing parameter varies with pressure near MMP.
     """
-    # Fast path for extreme cases (>2 standard deviations from MMP)
-    if np.any(pressure >= minimum_miscibility_pressure + (2.0 * transition_width)):  # type: ignore
-        return np.full_like(pressure, 1.0)  # Fully miscible (well above MMP)
-    elif np.any(pressure <= minimum_miscibility_pressure - (2.0 * transition_width)):  # type: ignore
-        return np.full_like(pressure, 0.0)  # Fully immiscible (well below MMP)
-
     # Smooth transition using hyperbolic tangent
     # Normalize pressure relative to MMP and transition width
     normalized = (pressure - minimum_miscibility_pressure) / transition_width

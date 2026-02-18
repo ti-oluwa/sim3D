@@ -8,7 +8,7 @@ import warnings
 from CoolProp.CoolProp import PropsSI  # type: ignore[import, import-untyped]
 import numba  # type: ignore[import-untyped]
 import numpy as np
-from scipy.optimize import brentq, root_scalar # type: ignore[import-untyped]
+from scipy.optimize import brentq, root_scalar  # type: ignore[import-untyped]
 
 from bores.constants import c
 from bores.errors import ValidationError, ComputationError
@@ -710,11 +710,12 @@ def compute_gas_formation_volume_factor(
     if gas_compressibility_factor <= 0:
         raise ValidationError("Z-factor must be positive.")
 
+    temperature_in_rankine = fahrenheit_to_rankine(temperature)
     return (
         gas_compressibility_factor
-        * temperature
+        * temperature_in_rankine
         * c.STANDARD_PRESSURE_IMPERIAL
-        / (pressure * c.STANDARD_TEMPERATURE_IMPERIAL)
+        / (pressure * c.STANDARD_TEMPERATURE_RANKINE)
     )
 
 
@@ -1407,7 +1408,7 @@ def compute_water_bubble_point_pressure(
     :return: Bubble point pressure (psi)
     """
     gas = _get_gas_symbol(gas)
-    if gas == "methane" and np.any(100 <= temperature <= 400):
+    if gas == "ch4" and np.any(100 <= temperature <= 400):
         # Inverted McCain
         return compute_water_bubble_point_pressure_mccain(
             temperature=temperature,
@@ -1718,7 +1719,7 @@ def compute_gas_pseudocritical_properties(
         T_pc = 169.2 + 349.5 * γ_g - 74.0 * γ_g²    [°R]
 
     Wichert-Aziz Correction:
-        ε = 120[(X_H2S + X_N2)^0.9 - (X_H2S + X_N2)^1.6] + 15[√X_CO2 - X_CO2⁴]
+        ε = 120[(X_H2S + X_CO2)^0.9 - (X_H2S + X_CO2)^1.6] + 15[√X_H2S - X_H2S⁴]
 
         Then:
         T_pc' = T_pc - ε
@@ -1752,10 +1753,9 @@ def compute_gas_pseudocritical_properties(
     )
 
     if total_acid_gas_fraction > 0.001:
-        epsilon = 120.0 * (
-            (h2s_mole_fraction + n2_mole_fraction) ** 0.9
-            - (h2s_mole_fraction + n2_mole_fraction) ** 1.6
-        ) + 15.0 * (co2_mole_fraction**0.5 - co2_mole_fraction**4)
+        A = h2s_mole_fraction + co2_mole_fraction
+        B = h2s_mole_fraction
+        epsilon = 120.0 * (A**0.9 - A**1.6) + 15.0 * (B**0.5 - B**4)
 
         pseudocritical_temperature_rankine -= epsilon
         pseudocritical_pressure = (
@@ -1979,8 +1979,8 @@ def _compute_oil_compressibility_liberation_correction_term(
     :return: Correction term for oil compressibility.
     """
     delta_p = np.maximum(0.01, 1e-4 * pressure)
-    pressure_plus = pressure - delta_p
-    pressure_minus = pressure + delta_p
+    pressure_plus = pressure + delta_p
+    pressure_minus = pressure - delta_p
     if pressure_plus > 0:
         gor_plus_delta = compute_gas_to_oil_ratio(
             pressure=pressure_plus,

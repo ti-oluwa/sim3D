@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full")
 
 
@@ -204,7 +204,7 @@ def setup_3d_model():
         reservoir_gas="methane",
     )
     pvt_tables = bores.PVTTables(
-        table_data=pvt_table_data, interpolation_method="linear"
+        data=pvt_table_data, interpolation_method="linear"
     )
 
     model = bores.reservoir_model(
