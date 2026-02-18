@@ -1729,7 +1729,7 @@ def compute_gas_pseudocritical_properties(
     :param h2s_mole_fraction: Mole fraction of H₂S (dimensionless).
     :param co2_mole_fraction: Mole fraction of CO₂ (dimensionless).
     :param n2_mole_fraction: Mole fraction of N₂ (dimensionless).
-    :return: Tuple (P_pc in psi, T_pc in °F)
+    :return: Tuple (P_pc in psi, T_pc in °R)
     """
     if gas_gravity <= 0:
         raise ValidationError("Gas specific gravity must be greater than zero.")
@@ -1767,8 +1767,7 @@ def compute_gas_pseudocritical_properties(
             )
         )
 
-    pseudocritical_temperature_fahrenheit = pseudocritical_temperature_rankine - 459.67
-    return pseudocritical_pressure, pseudocritical_temperature_fahrenheit
+    return pseudocritical_pressure, pseudocritical_temperature_rankine
 
 
 def compute_gas_density(

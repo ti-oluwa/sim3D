@@ -1902,10 +1902,9 @@ def compute_gas_pseudocritical_properties(
         )
 
     dtype = gas_gravity.dtype
-    pseudocritical_temperature_fahrenheit = pseudocritical_temperature_rankine - 459.67
     return pseudocritical_pressure.astype(
         dtype
-    ), pseudocritical_temperature_fahrenheit.astype(dtype)  # type: ignore[return-value]
+    ), pseudocritical_temperature_rankine.astype(dtype)  # type: ignore[return-value]
 
 
 def compute_gas_density(
