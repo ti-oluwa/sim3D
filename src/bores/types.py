@@ -3,8 +3,8 @@ import typing
 
 import attrs
 import numpy as np
-from scipy.sparse import csr_array, csr_matrix
-from scipy.sparse.linalg import LinearOperator
+from scipy.sparse import csr_array, csr_matrix  # type: ignore[import-untyped]
+from scipy.sparse.linalg import LinearOperator  # type: ignore[import-untyped]
 from typing_extensions import TypeAlias, TypedDict
 
 from bores.errors import ValidationError

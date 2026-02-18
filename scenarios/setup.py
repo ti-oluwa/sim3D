@@ -196,9 +196,7 @@ def setup_3d_model():
     )
 
     pvt_table_data = bores.build_pvt_table_data(
-        pressures=bores.array(
-            [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]
-        ),
+        pressures=bores.array([500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]),
         temperatures=bores.array([120, 140, 160, 180, 200, 220]),
         salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
         oil_specific_gravity=0.845,

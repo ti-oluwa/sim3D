@@ -3,7 +3,7 @@
 import itertools
 import typing
 
-import numba
+import numba  # type: ignore[import-untyped]
 import numpy as np
 from numpy.typing import DTypeLike
 

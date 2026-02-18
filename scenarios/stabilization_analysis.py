@@ -15,15 +15,12 @@ def _():
     bores.image_config(scale=3)
 
     store = bores.ZarrStore(
-        store=Path.cwd()
-        / "scenarios/runs/stabilization/results/stabilization.zarr"
+        store=Path.cwd() / "scenarios/runs/stabilization/results/stabilization.zarr"
     )
     stream = bores.StateStream(store=store, auto_replay=True)
 
-
     def steps(step):
         return step == 0 or step % 4 == 0
-
 
     states = list(stream.replay(steps=steps))
     return bores, itertools, np, states

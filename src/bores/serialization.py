@@ -274,7 +274,7 @@ def _discover_type_serializers(
                 # Break outer loop if we found a serializer
                 break
 
-    return discovered
+    return discovered  # type: ignore[return-value]
 
 
 def _discover_type_deserializers(
@@ -318,7 +318,7 @@ def _discover_type_deserializers(
                 # Break outer loop if we found a deserializer
                 break
 
-    return discovered
+    return discovered  # type: ignore[return-value]
 
 
 def _serialize(
@@ -475,7 +475,7 @@ def _deserialize(
 
     if _is_serializable_type(typ):
         origin_cls = _get_origin_class(typ)
-        return origin_cls.load(value)  # type: ignore[attr-type]
+        return origin_cls.load(value)  # type: ignore[union-attr]
 
     if _is_enum_type(typ):
         return typ(value)
@@ -564,7 +564,7 @@ def _build_serializer(
         if not _serializers_discovered:
             discovered = _discover_type_serializers(fields)
             # Merge: explicit serializers take precedence over discovered
-            _lazy_serializers_cache = {**discovered, **(serializers or {})}
+            _lazy_serializers_cache = {**discovered, **(serializers or {})}  # type: ignore[dict-item]
             _serializers_discovered = True
 
         # Use the cached/discovered serializers
@@ -661,7 +661,7 @@ def _build_deserializer(
     ] = {}
     _deserializers_discovered = False
 
-    @classmethod
+    @classmethod  # type: ignore[misc]
     def __load__(cls, data: typing.Mapping[str, typing.Any]):
         nonlocal _lazy_deserializers_cache, _deserializers_discovered
 
@@ -669,7 +669,7 @@ def _build_deserializer(
         if not _deserializers_discovered:
             discovered = _discover_type_deserializers(fields)
             # Merge: explicit deserializers take precedence over discovered
-            _lazy_deserializers_cache = {**discovered, **(deserializers or {})}
+            _lazy_deserializers_cache = {**discovered, **(deserializers or {})} # type: ignore[dict-item]
             _deserializers_discovered = True
 
         # Use the cached/discovered deserializers
@@ -726,7 +726,7 @@ def _build_deserializer(
             if _is_serializable_type(typ):
                 origin_cls = _get_origin_class(typ)
                 try:
-                    init_kwargs[field] = origin_cls.load(value)  # type: ignore[attr-defined]
+                    init_kwargs[field] = origin_cls.load(value)  # type: ignore[union-attr]
                 except Exception as exc:
                     raise DeserializationError(
                         f"Failed to deserialize nested `Serializable` field '{field}' of type {typ}"

@@ -3,9 +3,9 @@ from enum import Enum
 import typing
 
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.io as pio
+import plotly.graph_objects as go  # type: ignore[import-untyped]
+from plotly.subplots import make_subplots  # type: ignore[import-untyped]
+import plotly.io as pio  # type: ignore[import-untyped]
 
 
 __all__ = [

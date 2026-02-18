@@ -6,8 +6,8 @@ import pickle
 import typing
 
 import attrs
-import numba
-from numba.extending import overload
+import numba  # type: ignore[import-untyped]
+from numba.extending import overload  # type: ignore[import-untyped]
 import numpy as np
 from typing_extensions import Self
 

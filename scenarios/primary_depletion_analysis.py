@@ -15,15 +15,12 @@ def _():
     bores.image_config(scale=3)
 
     store = bores.ZarrStore(
-        store=Path(
-            "./scenarios/runs/primary_depletion/results/primary_depletion.zarr"
-        )
+        store=Path("./scenarios/runs/primary_depletion/results/primary_depletion.zarr")
     )
     stream = bores.StateStream(store=store, auto_replay=True)
 
     def steps(step: int):
         return step == 0 or step % 4 == 0
-
 
     states = list(stream.replay(steps=steps))
     return bores, itertools, np, states
@@ -78,9 +75,7 @@ def _(bores, itertools, np, states):
         avg_pressure = np.mean(fluid_properties.pressure_grid)
         avg_viscosity = np.mean(fluid_properties.oil_effective_viscosity_grid)
         avg_density = np.mean(fluid_properties.oil_effective_density_grid)
-        avg_oil_rel_mobility = np.mean(
-            state.relative_mobilities.oil_relative_mobility
-        )
+        avg_oil_rel_mobility = np.mean(state.relative_mobilities.oil_relative_mobility)
 
         avg_pcow = np.mean(state.capillary_pressures.oil_water_capillary_pressure)
         avg_pcgo = np.mean(state.capillary_pressures.gas_oil_capillary_pressure)
@@ -504,9 +499,7 @@ def _(analyst, bores, np):
     # Reserves
     oil_in_place_history = analyst.oil_in_place_history(interval=1, from_step=1)
     gas_in_place_history = analyst.gas_in_place_history(interval=1, from_step=1)
-    water_in_place_history = analyst.water_in_place_history(
-        interval=1, from_step=1
-    )
+    water_in_place_history = analyst.water_in_place_history(interval=1, from_step=1)
 
     oil_water_reserves_fig = bores.make_series_plot(
         data={
@@ -679,7 +672,7 @@ def _(bores, states, viz):
         # cmax=2.0,
     )
 
-    property = "oil-saturation"
+    property = "oil-effective-density"
     figures = []
     timesteps = [0, 14]
     for timestep in timesteps:

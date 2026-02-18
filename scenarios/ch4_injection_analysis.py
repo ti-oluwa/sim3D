@@ -14,7 +14,6 @@ def _():
 
     bores.image_config(scale=3)
 
-
     store = bores.ZarrStore(
         store=Path("./scenarios/runs/ch4_injection/results/ch4_injection.zarr")
     )

@@ -157,7 +157,7 @@ def build_saturation_grids(
         gas_saturation=gas_saturation,
         active=active_mask,
     )
-    return water_saturation, oil_saturation, gas_saturation
+    return water_saturation, oil_saturation, gas_saturation  # type: ignore[return-value]
 
 
 def _validate_inputs(

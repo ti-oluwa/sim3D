@@ -5,7 +5,7 @@ import typing
 
 from cachetools import LFUCache
 import numpy as np
-from scipy.integrate import cumulative_trapezoid, quad
+from scipy.integrate import cumulative_trapezoid, quad  # type: ignore[import-untyped]
 
 from bores._precision import get_dtype
 from bores.constants import c

@@ -4,7 +4,7 @@ import threading
 import typing
 
 import attrs
-import numba
+import numba  # type: ignore[import-untyped]
 import numpy as np
 import numpy.typing as npt
 
@@ -1129,7 +1129,7 @@ def compute_corey_three_phase_relative_permeabilities(
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Water relperm (intermediate phase, use Stone I style blending)
-        krw = mixing_rule(
+        krw = mixing_rule(  # type: ignore[assignment]
             kro_w=(1.0 - kro),  # treat oil as wetting
             kro_g=(1.0 - krg),  # treat gas as nonwetting
             water_saturation=sw,

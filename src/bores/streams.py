@@ -106,9 +106,9 @@ class StateStream(typing.Generic[NDimension]):
         validate: bool = False,
         auto_save: bool = True,
         auto_replay: bool = True,
-        save_predicate: typing.Optional[
-            typing.Callable[[ModelState[NDimension]], bool]
-        ] = None,
+        save: typing.Union[
+            typing.Callable[[ModelState[NDimension]], bool], bool
+        ] = True,
         checkpoint_store: typing.Optional[DataStore[ModelState[NDimension]]] = None,
         checkpoint_interval: typing.Optional[int] = None,
         max_batch_memory_usage: typing.Optional[float] = None,
@@ -129,8 +129,8 @@ class StateStream(typing.Generic[NDimension]):
         :param auto_replay: If True, automatically replay from store when iterating after consumption.
             If False, raises `StreamError` instead (default: True)
         :param lazy_load: When replaying from store, use lazy loading if supported (default: True)
-        :param save_predicate: Optional function to filter which states to save.
-            If provided, only states where save_predicate(state) returns True are saved.
+        :param save: Usually a function to filter which states to save. Can be a boolean flag that will determined whether to save states or not.
+            If provided, only states where save(state) returns True are saved.
             Example: ```lambda s: s.step % 10 == 0``` (save every 10th state)
         :param checkpoint_interval: Optional interval for checkpointing. If provided,
             creates a checkpoint every N states for crash recovery. Example: 100
@@ -155,7 +155,7 @@ class StateStream(typing.Generic[NDimension]):
         self.validate = validate
         self.auto_save = auto_save
         self.auto_replay = auto_replay
-        self.save_predicate = save_predicate
+        self.save = save
         self.checkpoint_store = checkpoint_store
         self.checkpoint_interval = checkpoint_interval
         self.max_batch_memory_usage = max_batch_memory_usage
@@ -176,9 +176,9 @@ class StateStream(typing.Generic[NDimension]):
                 logger.debug(
                     "`auto_save=True` but no store provided. This setting has no effect."
                 )
-            if self.save_predicate is not None:
+            if self.save is not None:
                 logger.warning(
-                    "`save_predicate` provided but no store configured. Predicate will be ignored."
+                    "`save` provided but no store configured. Predicate will be ignored."
                 )
             if self.max_batch_memory_usage is not None:
                 logger.warning(
@@ -212,6 +212,7 @@ class StateStream(typing.Generic[NDimension]):
         self._saved_count: int = 0
         self._checkpoints_count: int = 0
         self._started: bool = False
+        self._uses_save_func = callable(save)
         self._consumed: bool = False
         self._state_size_mb: typing.Optional[float] = None
 
@@ -788,14 +789,14 @@ class StateStream(typing.Generic[NDimension]):
 
     def _should_save(self, state: ModelState[NDimension]) -> bool:
         """
-        Determine if state should be saved based on save_predicate.
+        Determine if state should be saved based on `save`.
 
         :param state: State to evaluate
         :return: True if state should be saved, False otherwise
         """
-        if self.save_predicate is None:
-            return True
-        return self.save_predicate(state)
+        if not self._uses_save_func:
+            return self.save  # type: ignore[return-value]
+        return self.save(state)  # type: ignore[call-arg]
 
     def _should_flush(self) -> bool:
         """

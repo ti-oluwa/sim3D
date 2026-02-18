@@ -510,15 +510,15 @@ class BoundaryMetadata:
                         else:
                             # Fallback: assume uniform thickness equal to dx
                             dz = dx  # Default thickness
-                            z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
+                            z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)  # type: ignore[assignment]
                     else:
                         # Fallback: assume uniform thickness equal to dx
                         dz = dx  # Default thickness
-                        z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
+                        z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)  # type: ignore[assignment]
                 else:
                     # Fallback: assume uniform thickness equal to dx
                     dz = dx  # Default thickness
-                    z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)
+                    z_coords = np.linspace(-dz / 2, (nz + 0.5) * dz, nz + 2)  # type: ignore[assignment]
 
                 # Create meshgrid and stack
                 xx, yy, zz = np.meshgrid(x_coords, y_coords, z_coords, indexing="ij")
@@ -1185,7 +1185,7 @@ class FluxBoundary(BoundaryCondition[NDimension]):
                 else:  # TOP
                     # Top boundary (shallowest) - use first layer thickness (k=0)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
-                spacing = avg_thickness / 2.0
+                spacing = avg_thickness / 2.0  # type: ignore[assignment]
             else:
                 # Fallback to dx if no thickness info
                 spacing = dx / 2.0
@@ -1328,7 +1328,7 @@ class RobinBoundary(BoundaryCondition[NDimension]):
                 else:  # TOP
                     # Top boundary (shallowest) - use first layer thickness (k=0)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
-                spacing = avg_thickness / 2.0
+                spacing = avg_thickness / 2.0  # type: ignore[assignment]
             else:
                 spacing = dx / 2.0
 
@@ -1762,7 +1762,7 @@ class BoundaryConditions(
         data: typing.Mapping[str, typing.Any],
     ) -> Self:
         conditions_data = data.get("conditions", {})
-        conditions = {
+        conditions: typing.Dict[str, GridBoundaryCondition[NDimension]] = {
             prop: GridBoundaryCondition.load(cond_data)
             for prop, cond_data in conditions_data.items()
         }
@@ -1772,5 +1772,5 @@ class BoundaryConditions(
         return {"conditions": {prop: cond.dump(recurse) for prop, cond in self.items()}}
 
 
-default_bc = BoundaryConditions()["__default__"]
+default_bc: GridBoundaryCondition[typing.Any] = BoundaryConditions()["__default__"]
 """Default boundary conditions using `NoFlowBoundary` for all sides."""

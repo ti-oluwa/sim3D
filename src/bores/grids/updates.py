@@ -41,7 +41,7 @@ def update_pvt_grids(
     Updates PVT fluid properties grids using the current pressure and temperature values.
     This function recalculates the fluid PVT properties in a physically consistent sequence:
 
-    ```markdown
+    ```mermaid
     ┌────────────┐
     │  PRESSURE  │
     └────┬───────┘

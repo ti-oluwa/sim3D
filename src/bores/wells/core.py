@@ -79,7 +79,7 @@ def compute_well_index(
     well flow rate to the pressure drop across the well.
 
     The formula for the well index is:
-    
+
     W = (k * h) / (ln(re/rw) + s)
 
     where:

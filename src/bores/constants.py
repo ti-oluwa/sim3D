@@ -749,7 +749,7 @@ class ConstantsContext:
 
         :return: The new Constants instance
         """
-        self._token = _constants_context.set(self._new_constants)
+        self._token = _constants_context.set(self._new_constants)  # type: ignore[assignment]
         return self._new_constants
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

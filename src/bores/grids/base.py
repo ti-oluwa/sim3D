@@ -2,7 +2,7 @@ from bores.serialization import Serializable
 import typing
 
 import attrs
-import numba
+import numba  # type: ignore[import-untyped]
 import numpy as np
 from typing_extensions import Self
 
@@ -653,7 +653,7 @@ class PadMixin(typing.Generic[NDimension]):
             else:
                 padded_fields_values[field.name] = padded_value
 
-        instance = attrs.evolve(self, **padded_fields_values)
+        instance = attrs.evolve(self, **padded_fields_values)  # type: ignore[misc]
         for name, value in non_init_fields_values:
             object.__setattr__(instance, name, value)
         return instance
@@ -686,7 +686,7 @@ class PadMixin(typing.Generic[NDimension]):
             else:
                 unpadded_fields_values[field.name] = padded_value
 
-        instance = attrs.evolve(self, **unpadded_fields_values)
+        instance = attrs.evolve(self, **unpadded_fields_values)  # type: ignore[misc]
         for name, value in non_init_fields_values:
             object.__setattr__(instance, name, value)
         return instance
@@ -722,7 +722,7 @@ class PadMixin(typing.Generic[NDimension]):
                 )
             hooked_value = hook(value)
             hooked_fields[field.name] = hooked_value
-        return attrs.evolve(self, **hooked_fields)
+        return attrs.evolve(self, **hooked_fields)  # type: ignore[misc]
 
 
 @attrs.frozen(slots=True)

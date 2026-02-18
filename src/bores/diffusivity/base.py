@@ -5,11 +5,11 @@ import typing
 import warnings
 
 import attrs
-import numba
+import numba  # type: ignore[import-untyped]
 import numpy as np
-import pyamg
-from scipy.sparse import csr_array, csr_matrix, diags, isspmatrix_csr
-from scipy.sparse.linalg import (
+import pyamg  # type: ignore[import-untyped]
+from scipy.sparse import csr_array, csr_matrix, diags, isspmatrix_csr  # type: ignore[import-untyped]
+from scipy.sparse.linalg import (  # type: ignore[import-untyped]
     LinearOperator,
     bicgstab,
     cg,
@@ -611,7 +611,7 @@ def get_preconditioner_factory(name: str) -> PreconditionerFactory:
                 f"Use `@preconditioner_factory` to register new preconditioners. "
                 f"Available preconditioners: {list(_PRECONDITIONER_FACTORIES.keys())}"
             )
-        return _PRECONDITIONER_FACTORIES[name]
+        return _PRECONDITIONER_FACTORIES[name]  # type: ignore[return-value]
 
 
 @typing.overload
@@ -720,7 +720,7 @@ def _get_preconditioner(
     elif isinstance(preconditioner, str):
         if preconditioner in _PRECONDITIONER_FACTORIES:
             preconditioner_factory = _PRECONDITIONER_FACTORIES[preconditioner]
-            M = preconditioner_factory(A_csr)
+            M = preconditioner_factory(A_csr)  # type: ignore[operator]
             return M
         else:
             raise ValidationError(

@@ -5,10 +5,10 @@ import logging
 import typing
 import warnings
 
-from CoolProp.CoolProp import PropsSI  # type: ignore[import]
-import numba
+from CoolProp.CoolProp import PropsSI  # type: ignore[import, import-untyped]
+import numba  # type: ignore[import-untyped]
 import numpy as np
-from scipy.optimize import brentq, root_scalar
+from scipy.optimize import brentq, root_scalar # type: ignore[import-untyped]
 
 from bores.constants import c
 from bores.errors import ValidationError, ComputationError

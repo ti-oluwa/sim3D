@@ -3,10 +3,10 @@ import logging
 import typing
 import warnings
 
-from CoolProp.CoolProp import PropsSI  # type: ignore[import]
-import numba
+from CoolProp.CoolProp import PropsSI  # type: ignore[import, import-untyped]
+import numba  # type: ignore[import-untyped]
 import numpy as np
-from scipy.optimize import brentq
+from scipy.optimize import brentq  # type: ignore[import-untyped]
 
 from bores.constants import c
 from bores.errors import ComputationError, ValidationError
@@ -1206,7 +1206,7 @@ def compute_gas_compressibility_factor(
             co2_mole_fraction=co2_mole_fraction,
             n2_mole_fraction=n2_mole_fraction,
         )
-        Z = np.where(high_pressure_mask, Z_dak, Z)
+        Z = np.where(high_pressure_mask, Z_dak, Z)  # type: ignore[assignment]
 
     # Medium pressure: Use Hall-Yarborough
     if np.any(medium_pressure_mask):
@@ -1218,7 +1218,7 @@ def compute_gas_compressibility_factor(
             co2_mole_fraction=co2_mole_fraction,
             n2_mole_fraction=n2_mole_fraction,
         )
-        Z = np.where(medium_pressure_mask, Z_hy, Z)
+        Z = np.where(medium_pressure_mask, Z_hy, Z)  # type: ignore[assignment]
 
     # Low pressure: Use Papay
     if np.any(low_pressure_mask):
@@ -1230,7 +1230,7 @@ def compute_gas_compressibility_factor(
             co2_mole_fraction=co2_mole_fraction,
             n2_mole_fraction=n2_mole_fraction,
         )
-        Z = np.where(low_pressure_mask, Z_papay, Z)
+        Z = np.where(low_pressure_mask, Z_papay, Z)  # type: ignore[assignment]
 
     # Validate and apply fallbacks where needed
     invalid_mask = (Z < 0.2) | (Z > 3.0)
@@ -1244,7 +1244,7 @@ def compute_gas_compressibility_factor(
             co2_mole_fraction=co2_mole_fraction,
             n2_mole_fraction=n2_mole_fraction,
         )
-        Z = np.where(invalid_mask & ((Z_hy >= 0.2) & (Z_hy <= 3.0)), Z_hy, Z)
+        Z = np.where(invalid_mask & ((Z_hy >= 0.2) & (Z_hy <= 3.0)), Z_hy, Z)  # type: ignore[assignment]
 
         # Update invalid mask
         invalid_mask = (Z < 0.2) | (Z > 3.0)
@@ -1259,7 +1259,7 @@ def compute_gas_compressibility_factor(
                 co2_mole_fraction=co2_mole_fraction,
                 n2_mole_fraction=n2_mole_fraction,
             )
-            Z = np.where(invalid_mask, Z_papay, Z)
+            Z = np.where(invalid_mask, Z_papay, Z)  # type: ignore[assignment]
 
     # Ensure consistent return type matching input pressure dtype
     dtype = pressure.dtype
@@ -2013,7 +2013,7 @@ def _compute_water_viscosity(
         0.9994 + (4.0295e-5 * pressure) + (3.1062e-9 * pressure**2)  # type: ignore
     )
     viscosity_at_pressure = viscosity_at_standard_pressure * pressure_correction_factor
-    return np.maximum(viscosity_at_pressure, 1e-6).astype(pressure.dtype)  # type: ignore[return-value]
+    return np.maximum(viscosity_at_pressure, 1e-6).astype(pressure.dtype)  # type: ignore[union-attr,return-value]
 
 
 def compute_water_viscosity(
@@ -3235,7 +3235,7 @@ def estimate_solution_gor(
             tolerance=tolerance,
         )
 
-    return result.reshape(pressure.shape)
+    return result.reshape(pressure.shape)  # type: ignore[return-value]
 
 
 @numba.njit(cache=True)
@@ -3793,7 +3793,7 @@ def compute_todd_longstaff_effective_density(
         f_s = C_s.astype(dtype)
         f_o = C_o.astype(dtype)
     else:
-        f_s = (C_s * oil_viscosity) / denominator
+        f_s = (C_s * oil_viscosity) / denominator  # type: ignore[assignment]
         f_o = (C_o * solvent_viscosity) / denominator
 
         f_s = f_s.astype(dtype)

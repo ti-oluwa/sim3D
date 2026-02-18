@@ -3,7 +3,7 @@ import typing
 
 import attrs
 import numpy as np
-from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator, interp1d
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator, interp1d  # type: ignore[import-untyped]
 
 from bores._precision import get_dtype
 from bores.constants import c
@@ -266,7 +266,7 @@ class PVTTables:
         self.warn_on_extrapolation = warn_on_extrapolation
 
         # Initialize caches
-        self._interpolators = {}
+        self._interpolators = {}  # type: ignore[var-annotated]
         self._extrapolation_bounds = {}
         self.default_salinity = salinities[0] if salinities is not None else None
         self._pb_ndim = (
@@ -566,7 +566,7 @@ class PVTTables:
             "water_formation_volume_factor": table_data.water_formation_volume_factor_table,
             "gas_solubility_in_water": table_data.gas_solubility_in_water_table,
         }
-        for name, data in property_map_3d.items():
+        for name, data in property_map_3d.items():  # type: ignore[assignment]
             if data is not None:
                 self._interpolators[name] = RegularGridInterpolator(
                     points=(
@@ -1578,7 +1578,7 @@ def build_pvt_table_data(
         # Gas formation volume factor
         if gas_formation_volume_factor_table is None:
             gas_formation_volume_factor_table = build_gas_formation_volume_factor_grid(  # type: ignore[arg-type]
-                pressure_grid=pressure_grid_2d,
+                pressure_grid=pressure_grid_2d,  # type: ignore[arg-type]
                 temperature_grid=temperature_grid_2d,
                 gas_compressibility_factor_grid=gas_compressibility_factor_table,  # type: ignore[arg-type]
             )
@@ -1790,7 +1790,9 @@ def build_pvt_table_data(
             # Create temperature grid matching `solution_gas_to_oil_ratio_table` shape
             t_grid = np.broadcast_to(temperatures, (n_p, n_t))
             bubble_point_pressure_grid_2d = (
-                pb_interpolator.ev(solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel())  # type: ignore
+                pb_interpolator.ev(
+                    solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel()
+                )  # type: ignore
                 .reshape(n_p, n_t)
                 .astype(dtype)
             )

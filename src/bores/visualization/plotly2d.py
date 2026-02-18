@@ -9,8 +9,8 @@ import typing
 
 import attrs
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import plotly.graph_objects as go  # type: ignore[import-untyped]
+from plotly.subplots import make_subplots  # type: ignore[import-untyped]
 
 from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
@@ -186,15 +186,15 @@ class BaseRenderer(ABC):
         display_data = data.copy()
         if metadata.log_scale:
             # Apply log transformation, handling zeros and negatives
-            display_data = np.where(display_data > 0, display_data, np.nan)
-            display_data = np.log10(display_data)
+            display_data = np.where(display_data > 0, display_data, np.nan)  # type: ignore[assignment]
+            display_data = np.log10(display_data)  # type: ignore[assignment]
 
         normalized_data = display_data.copy()
         if normalize_range:
             data_min = np.nanmin(display_data)
             data_max = np.nanmax(display_data)
             if data_max > data_min:
-                normalized_data = (display_data - data_min) / (data_max - data_min)
+                normalized_data = (display_data - data_min) / (data_max - data_min)  # type: ignore[assignment]
             else:
                 normalized_data = np.zeros_like(display_data)
 

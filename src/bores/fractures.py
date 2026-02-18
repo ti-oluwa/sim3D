@@ -6,7 +6,7 @@ import logging
 import typing
 
 import attrs
-import numba
+import numba  # type: ignore[import-untyped]
 import numpy as np
 
 from bores._precision import get_dtype

@@ -17,8 +17,12 @@ def _():
     store = bores.ZarrStore(
         store=Path("./scenarios/runs/co2_injection/results/co2_injection.zarr")
     )
-    stream = bores.StateStream(store=store, lazy_load=False)
-    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 20 == 0))
+    stream = bores.StateStream(store=store, auto_replay=True)
+
+    def steps(step: int):
+        return step == 0 or step % 4 == 0
+
+    states = list(stream.replay(steps=steps))
     return bores, itertools, np, states
 
 

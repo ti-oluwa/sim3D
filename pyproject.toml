@@ -33,6 +33,9 @@ dependencies = [
     "zarr>=2.18.3",
     "cattrs>=25.3.0",
     "orjson>=3.11.5",
+    "types-pyyaml>=6.0.12.20250915",
+    "types-cachetools>=6.2.0.20251022",
+    "scipy-stubs>=1.15.3.0",
 ]
 
 [tool.marimo.runtime]

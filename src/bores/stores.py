@@ -9,15 +9,15 @@ from pathlib import Path
 import sys
 import typing
 
-import h5py
+import h5py  # type: ignore[import-untyped]
 from numcodecs import Blosc
 import numpy as np
 import orjson
 from typing_extensions import Self
 from typing_extensions import ParamSpec
 import yaml
-import zarr
-from zarr.storage import StoreLike
+import zarr  # type: ignore[import-untyped]
+from zarr.storage import StoreLike  # type: ignore[import-untyped]
 
 from bores.errors import StorageError, ValidationError
 from bores.serialization import Serializable, SerializableT
@@ -94,8 +94,23 @@ class DataStore(typing.Generic[SerializableT], ABC):
         ] = None,
     ) -> None:
         """
-        Persist *data*.  Always overwrites existing content.
+        Persist *data*, always overwriting any existing content in the store.
 
+        Every item in *data* is written in iteration order.  If the backing
+        file or directory already exists it is truncated first, so calling
+        `dump` twice is equivalent to calling it once with the second dataset.
+        Use `append` when you need to add items to an existing store without
+        discarding what is already there.
+
+        :param data: Iterable of `Serializable` instances to persist.
+        :param validator: Optional callable applied to each item before it is
+            written.  Receives the item and must return a (possibly transformed)
+            item of the same type.  Raise to abort persistence of that item.
+        :param meta: Optional callable that receives each item and returns a
+            plain `dict` of JSON-serialisable values (str, int, float, bool).
+            The returned dict is stored alongside the entry and surfaced on
+            `EntryMeta.meta`, making it available for zero-deserialisation
+            filtering in `load` and `entries`.
         """
         ...
 
@@ -108,14 +123,24 @@ class DataStore(typing.Generic[SerializableT], ABC):
         validator: typing.Optional[DataValidator[SerializableT]] = None,
     ) -> typing.Generator[SerializableT, None, None]:
         """
-        Load items from the store.
+        Load and yield items from the store in insertion order.
 
-        :param typ: The `Serializable` subclass to deserialise into.
-        :param indices: If given, only load items at these zero-based positions.
-            Takes priority over *predicate* when both are supplied.
-        :param predicate: If given (and *indices* is `None`), only load items whose
-            `EntryMeta` satisfies the predicate.
-        :param validator: Optional callable applied to each loaded item before yielding.
+        Filtering is applied before any array data is deserialised, so entries
+        that do not match have no I/O cost beyond reading their metadata.
+        When both `indices` and `predicate` are supplied, `indices` takes
+        priority and `predicate` is ignored.
+
+        :param typ: The `Serializable` subclass to deserialise each entry into.
+        :param indices: If given, load only the entries at these zero-based
+            insertion-order positions.  Out-of-range indices raise `IndexError`.
+        :param predicate: If given (and `indices` is `None`), yield only entries
+            for which `predicate(entry_meta)` returns `True`.  The predicate
+            receives an `EntryMeta` instance and may inspect `entry_meta.meta`
+            to filter on stored metadata without touching array data.
+        :param validator: Optional callable applied to each deserialised item
+            before it is yielded.  Receives the item and must return a
+            (possibly transformed) item of the same type.
+        :return: Generator yielding deserialised items matching the filter.
         """
         ...
 
@@ -128,7 +153,26 @@ class DataStore(typing.Generic[SerializableT], ABC):
         ] = None,
     ) -> EntryMeta:
         """
-        Append a single item without rewriting the store entry record/file.
+        Append a single item to the store without rewriting existing entries.
+
+        The item is assigned the next available insertion-order index.  Unlike
+        `dump`, existing entries are never touched.  Backends that do not
+        support append-style writes (e.g. `JSONStore`, `YAMLStore`) raise
+        `NotImplementedError` at call time rather than at construction time;
+        check `supports_append` before calling if in doubt.
+
+        :param item: The `Serializable` instance to persist.
+        :param validator: Optional callable applied to *item* before it is
+            written.  Receives the item and must return a (possibly transformed)
+            item of the same type.  Raise to abort the write.
+        :param meta: Optional callable that receives *item* and returns a plain
+            `dict` of JSON-serialisable values stored on `EntryMeta.meta`.
+            Use this to record lightweight metadata (e.g. `{"step": state.step}`)
+            that can later be used to filter entries via `load(predicate=...)`
+            or `entries()` without deserialising array data.
+        :return: The `EntryMeta` record created for the appended item, including
+            its assigned index, group name, and any stored metadata.
+        :raises NotImplementedError: If the backend does not support appending.
         """
         raise NotImplementedError(
             f"{self.__class__.__name__!r} does not implement `append(...)`"
@@ -139,17 +183,38 @@ class DataStore(typing.Generic[SerializableT], ABC):
         """
         Return metadata for every stored item in insertion order.
 
-        This method must not deserialise any payload data. Only consult the metadata
-        index (group names / file keys).
+        This method must not deserialise any payload data.  Implementations
+        should read only group names, file keys, and lightweight attributes —
+        never array datasets.  The returned list can therefore be used for
+        cheap introspection (counts, step lookups, predicate filtering) without
+        triggering any significant I/O.
+
+        :return: List of `EntryMeta` instances in insertion order.
         """
         ...
 
     def count(self) -> int:
-        """Number of items currently stored."""
+        """
+        Return the number of items currently stored.
+
+        Delegates to `entries()` and returns its length.  No payload data is
+        deserialised.
+
+        :return: Total number of stored entries.
+        """
         return len(self.entries())
 
     def max_index(self) -> typing.Optional[int]:
-        """Highest stored index, or `None` if the store is empty."""
+        """
+        Return the highest insertion-order index in the store, or `None` if empty.
+
+        Useful for targeting the last written entry via
+        `store.load(typ, indices=[store.max_index()])` without replaying
+        the entire store.  No payload data is deserialised.
+
+        :return: The highest `EntryMeta.index` value, or `None` if the store
+            contains no entries.
+        """
         metas = self.entries()
         return max(e.idx for e in metas) if metas else None
 
@@ -285,7 +350,7 @@ P = ParamSpec("P")
 R = typing.TypeVar("R")
 
 
-def reraise_as_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+def reraise_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
     """
     Wraps a function to raise `StorageError` on exceptions.
 
@@ -666,7 +731,7 @@ class ZarrStore(DataStore[SerializableT]):
         item_group.attrs["_group_name"] = group_name
         return EntryMeta(idx=index, group_name=group_name)
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def dump(
         self,
         data: typing.Iterable[SerializableT],
@@ -687,7 +752,7 @@ class ZarrStore(DataStore[SerializableT]):
         root.attrs["count"] = count
         logger.debug(f"{self.__class__.__name__}: dump complete, {count} entries")
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def append(
         self,
         item: SerializableT,
@@ -696,7 +761,6 @@ class ZarrStore(DataStore[SerializableT]):
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> EntryMeta:
-        """Append a single item without rewriting the store.  Used by `StateStream`."""
         root = self._open_root("a")
         current_count = int(root.attrs.get("count", 0))
         if validator is not None:
@@ -706,7 +770,7 @@ class ZarrStore(DataStore[SerializableT]):
         logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
         return entry
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
         try:
             root = self._open_root("r")
@@ -727,7 +791,7 @@ class ZarrStore(DataStore[SerializableT]):
                 )
         return metas
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def load(
         self,
         typ: typing.Type[SerializableT],
@@ -940,7 +1004,7 @@ class HDF5Store(DataStore[SerializableT]):
         item_group.attrs["_group_name"] = group_name
         return EntryMeta(idx=index, group_name=group_name)
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def dump(
         self,
         data: typing.Iterable[SerializableT],
@@ -963,7 +1027,7 @@ class HDF5Store(DataStore[SerializableT]):
             f"{self.__class__.__name__}: dump complete, {count} entries → {self.filepath}"
         )
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def append(
         self,
         item: SerializableT,
@@ -972,7 +1036,6 @@ class HDF5Store(DataStore[SerializableT]):
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> EntryMeta:
-        """Append a single item without rewriting the file.  Used by ``StateStream``."""
         mode = "a" if self.filepath.exists() else "w"
         with h5py.File(str(self.filepath), mode) as f:
             current_count = int(f.attrs.get("count", 0))
@@ -984,7 +1047,7 @@ class HDF5Store(DataStore[SerializableT]):
         logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
         return entry
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
         if not self.filepath.exists():
             return []
@@ -1003,7 +1066,7 @@ class HDF5Store(DataStore[SerializableT]):
                     )
         return metas
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def load(
         self,
         typ: typing.Type[SerializableT],
@@ -1072,7 +1135,7 @@ class JSONStore(DataStore[SerializableT]):
             filepath, expected_extension=".json", create_if_not_exists=True
         )
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def dump(
         self,
         data: typing.Iterable[SerializableT],
@@ -1101,7 +1164,7 @@ class JSONStore(DataStore[SerializableT]):
                 )
             )
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
         if not self.filepath.exists():
             return []
@@ -1117,7 +1180,7 @@ class JSONStore(DataStore[SerializableT]):
             for e in items
         ]
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def load(
         self,
         typ: typing.Type[SerializableT],
@@ -1176,7 +1239,7 @@ class YAMLStore(DataStore[SerializableT]):
             filepath, expected_extension=".yaml", create_if_not_exists=True
         )
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def dump(
         self,
         data: typing.Iterable[SerializableT],
@@ -1200,7 +1263,7 @@ class YAMLStore(DataStore[SerializableT]):
         with open(self.filepath, "w", encoding="utf-8") as f:
             yaml.safe_dump(items, f, sort_keys=False)
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
         if not self.filepath.exists():
             return []
@@ -1216,7 +1279,7 @@ class YAMLStore(DataStore[SerializableT]):
             for e in items
         ]
 
-    @reraise_as_storage_error
+    @reraise_storage_error
     def load(
         self,
         typ: typing.Type[SerializableT],
