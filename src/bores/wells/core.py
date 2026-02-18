@@ -79,6 +79,7 @@ def compute_well_index(
     well flow rate to the pressure drop across the well.
 
     The formula for the well index is:
+    
     W = (k * h) / (ln(re/rw) + s)
 
     where:
@@ -112,7 +113,7 @@ def compute_3D_effective_drainage_radius(
     Compute the effective drainage radius for a well ina 3D reservoir model using
     Peaceman's effective drainage radius formula.
 
-    The formula for is given by:
+    The formula for this is given by:
 
     For x-direction:
 
@@ -123,9 +124,10 @@ def compute_3D_effective_drainage_radius(
         r_y = 0.28 * √[ (∆x² + ∆z²) / (√(k_x / k_z) + √(k_z / k_x)) ]
 
     For z-direction:
+
         r_z = 0.28 * √[ (∆x² + ∆y²) / (√(k_x / k_y) + √(k_y / k_x)) ]
 
-    where:
+    Where:
         - r_x, r_y, r_z are the effective drainage radii in the x, y, and z directions respectively.
         - ∆x, ∆y, ∆z are the thicknesses of the reservoir interval in the x, y, and z directions respectively.
         - k_x, k_y, k_z are the permeabilities of the reservoir rock in the x, y, and z directions respectively.
@@ -368,7 +370,7 @@ def compute_required_bhp_for_oil_rate(
     """
     Compute the required bottom-hole pressure to achieve a target oil/water rate.
 
-    This is the inverse of `compute_oil_well_rate()`.
+    This is the inverse of `compute_oil_well_rate(...)`.
 
     For incompressible fluids:
         Q = 7.08e-3 * W * M * (P_bhp - P)

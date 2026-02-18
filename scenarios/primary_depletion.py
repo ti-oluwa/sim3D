@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -100,7 +100,6 @@ def save_run(Path, run):
 def create_store(Path, bores):
     store = bores.ZarrStore(
         store=Path("./scenarios/runs/primary_depletion/results/primary_depletion.zarr"),
-        group_name_gen=bores.state_group_name_gen,
     )
     return (store,)
 

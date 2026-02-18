@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full")
 
 
@@ -19,8 +19,13 @@ def _():
             "./scenarios/runs/primary_depletion/results/primary_depletion.zarr"
         )
     )
-    stream = bores.StateStream(store=store, lazy_load=False)
-    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 10 == 0))
+    stream = bores.StateStream(store=store, auto_replay=True)
+
+    def steps(step: int):
+        return step == 0 or step % 4 == 0
+
+
+    states = list(stream.replay(steps=steps))
     return bores, itertools, np, states
 
 
@@ -693,11 +698,6 @@ def _(bores, states, viz):
         #     figure.show()
     else:
         figures[0].show()
-    return
-
-
-@app.cell
-def _():
     return
 
 

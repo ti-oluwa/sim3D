@@ -315,7 +315,7 @@ well_type = make_serializable_type_registrar(
 )
 """Decorator to register a new well type."""
 
-# Build and register serializers/deserializers for Well base class
+# Build and register serializers/deserializers for `Well` base class
 serialize_well = make_registry_serializer(
     base_cls=Well,
     registry=_WELL_TYPES,

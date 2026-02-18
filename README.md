@@ -1429,14 +1429,14 @@ states = bores.run(model, config=config)
 ### Boundary Directions
 
 ```python
-from bores.boundary_conditions import BoundaryDirection
+from bores.boundary_conditions import Boundary
 
-BoundaryDirection.X_MINUS  # Left face
-BoundaryDirection.X_PLUS   # Right face
-BoundaryDirection.Y_MINUS  # Front face
-BoundaryDirection.Y_PLUS   # Back face
-BoundaryDirection.Z_MINUS  # Bottom face
-BoundaryDirection.Z_PLUS   # Top face
+Boundary.LEFT  # Left face
+Boundary.RIGHT   # Right face
+Boundary.FRONT  # Front face
+Boundary.BACK   # Back face
+Boundary.BOTTOM  # Bottom face
+Boundary.TOP   # Top face
 ```
 
 ### Boundary Types

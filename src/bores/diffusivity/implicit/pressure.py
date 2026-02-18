@@ -881,6 +881,7 @@ def add_well_contributions(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
             )
+            phase_fvf = typing.cast(float, phase_fvf)
             # Get phase mobility
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
@@ -907,6 +908,7 @@ def add_well_contributions(
                 temperature=cell_temperature,
                 **compressibility_kwargs,
             )
+            phase_compressibility = typing.cast(float, phase_compressibility)
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS

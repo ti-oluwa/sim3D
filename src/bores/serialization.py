@@ -7,7 +7,7 @@ import warnings
 
 import attrs
 import cattrs
-from typing_extensions import Self
+from typing_extensions import Self, TypeGuard
 
 from bores.errors import DeserializationError, SerializationError, ValidationError
 
@@ -100,7 +100,7 @@ def _is_optional_type(typ: typing.Any) -> bool:
     return type(None) in args
 
 
-def _is_typed_dict_type(typ: typing.Any) -> bool:
+def _is_typed_dict_type(typ: typing.Any) -> TypeGuard[typing.Type[typing.Dict]]:
     return (
         isinstance(typ, type)
         and issubclass(typ, dict)
@@ -118,7 +118,7 @@ def _is_namedtuple_type(typ: typing.Any) -> bool:
     )
 
 
-def _is_enum_type(typ: typing.Any) -> bool:
+def _is_enum_type(typ: typing.Any) -> TypeGuard[typing.Type[Enum]]:
     return isinstance(typ, type) and issubclass(typ, Enum)
 
 
@@ -170,6 +170,38 @@ def _unwrap_type(typ: typing.Any) -> typing.List[typing.Type[typing.Any]]:
 def _is_primitive_type(typ: type) -> bool:
     """Check if a type is a primitive built-in type."""
     return typ in (str, int, float, bool, bytes, type(None))
+
+
+def _sort_types_by_specificity(
+    types: typing.Iterable[typing.Type[typing.Any]],
+) -> typing.List[typing.Type[typing.Any]]:
+    """
+    Sort types by specificity: more specific types (subclasses) come before general ones.
+
+    This helps in prioritizing serializers/deserializers for more specific types first.
+    """
+
+    def specificity_key(typ: typing.Type[typing.Any]) -> int:
+        if not isinstance(typ, type):
+            return 0
+        return len(typ.__mro__)  # More base classes = more general
+
+    return sorted(types, key=specificity_key, reverse=True)
+
+
+def _sort_types_by_primitivity(
+    types: typing.Iterable[typing.Type[typing.Any]],
+) -> typing.List[typing.Type[typing.Any]]:
+    """
+    Sort types by primitivity: non-primitive types come before primitive ones.
+
+    This helps in prioritizing serializers/deserializers for complex types first.
+    """
+
+    def primitivity_key(typ: typing.Type[typing.Any]) -> int:
+        return 0 if not _is_primitive_type(typ) else 1
+
+    return sorted(types, key=primitivity_key)
 
 
 def _get_primary_types(typ: typing.Any) -> typing.List[typing.Type[typing.Any]]:
@@ -320,7 +352,7 @@ def _serialize(
             return _serialize(value, recurse, serializers, non_none_args[0])
         else:
             # Try each non-None type in the Union
-            for arg in non_none_args:
+            for arg in _sort_types_by_primitivity(non_none_args):
                 try:
                     return _serialize(value, recurse, serializers, arg)
                 except Exception:
@@ -334,14 +366,24 @@ def _serialize(
         return origin_cls.dump(value, recurse)  # type: ignore
 
     if _is_enum_type(typ):
-        return value.value
+        return typ(value).value
 
     # Handle generic types (List, Dict, etc.)
     if _is_generic_alias(typ):
         origin = typing.get_origin(typ)
         args = typing.get_args(typ)
 
-        # Handle sequence types (List, Tuple, etc.)
+        # Handle typing.Union and other special forms
+        if origin is typing.Union:
+            for arg in _sort_types_by_primitivity(args):
+                try:
+                    return _serialize(value, recurse, serializers, arg)
+                except Exception:
+                    continue
+            raise SerializationError(
+                f"Value {value!r} does not match any type in {typ}"
+            )
+
         if origin in (list, tuple, Sequence) or (
             origin and isinstance(origin, type) and issubclass(origin, Sequence)
         ):
@@ -351,7 +393,6 @@ def _serialize(
                     _serialize(v, recurse, serializers, element_type) for v in value
                 ]
 
-        # Handle mapping types (Dict, etc.)
         if origin in (dict, Mapping) or (
             origin and isinstance(origin, type) and issubclass(origin, Mapping)
         ):
@@ -423,7 +464,7 @@ def _deserialize(
         if len(non_none_args) == 1:
             return _deserialize(value, non_none_args[0], deserializers)
         else:
-            for arg in non_none_args:
+            for arg in _sort_types_by_primitivity(non_none_args):
                 try:
                     return _deserialize(value, arg, deserializers)
                 except Exception:
@@ -443,6 +484,16 @@ def _deserialize(
         origin = typing.get_origin(typ)
         args = typing.get_args(typ)
 
+        if origin is typing.Union:
+            for arg in _sort_types_by_primitivity(args):
+                try:
+                    return _deserialize(value, arg, deserializers)
+                except Exception:
+                    continue
+            raise DeserializationError(
+                f"Value {value!r} does not match any type in {typ}"
+            )
+
         if origin in (list, tuple, Sequence) or (
             origin and isinstance(origin, type) and issubclass(origin, Sequence)
         ):
@@ -461,6 +512,9 @@ def _deserialize(
             {
                 k: _deserialize(v, annotations[k], deserializers)
                 for k, v in value.items()
+                # Ignore keys not found in existing annotations incase typed-dict
+                # structure changed for backwards compatibility
+                if k in annotations
             }
         )
 
@@ -470,6 +524,9 @@ def _deserialize(
             **{
                 k: _deserialize(v, annotations[k], deserializers)
                 for k, v in value.items()
+                # Ignore keys not found in existing annotations incase namedtuple
+                # structure changed for backwards compatibility
+                if k in annotations
             }
         )
 
@@ -569,7 +626,7 @@ def _build_serializer(
                     result[field] = _serialize(
                         value=value,
                         recurse=recurse,
-                        active_serializers=active_serializers,  # type: ignore[arg-type]
+                        serializers=active_serializers,
                         typ=typ,
                         check_serializers=False,
                     )
@@ -680,7 +737,7 @@ def _build_deserializer(
                     init_kwargs[field] = _deserialize(
                         value=value,
                         typ=typ,
-                        active_deserializers=active_deserializers,  # type: ignore[arg-type]
+                        deserializers=active_deserializers,
                         check_deserializers=False,
                     )
                 except Exception as exc:

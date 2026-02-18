@@ -8,7 +8,6 @@ from os import PathLike
 from pathlib import Path
 import sys
 import typing
-import uuid
 
 import h5py
 from numcodecs import Blosc
@@ -22,14 +21,11 @@ from zarr.storage import StoreLike
 
 from bores.errors import StorageError, ValidationError
 from bores.serialization import Serializable, SerializableT
-from bores.utils import Lazy, load_pickle, save_as_pickle
-
 
 __all__ = [
     "new_store",
     "storage_backend",
     "ZarrStore",
-    "PickleStore",
     "HDF5Store",
     "JSONStore",
     "YAMLStore",
@@ -40,23 +36,125 @@ IS_PYTHON_310_OR_LOWER = sys.version_info < (3, 11)
 logger = logging.getLogger(__name__)
 
 
+DataValidator = typing.Callable[[SerializableT], SerializableT]
+
+
+class EntryMeta(typing.NamedTuple):
+    """
+    Lightweight record describing one persisted item.
+
+    Stored alongside each entry so the store can answer index-based and
+    predicate-based queries without deserialising any payload data.
+    """
+
+    idx: int
+    """Zero-based position in insertion order."""
+    group_name: str
+    """Internal storage key (opaque to callers)."""
+    meta: typing.Dict[str, str] = {}
+    """JSON serializable metadata dictionary"""
+
+
 class DataStore(typing.Generic[SerializableT], ABC):
-    """Abstract base class for data storage classes."""
+    """
+    Abstract base class for all storage backends.
+
+    Every backend maintains a compact metadata index (``list[EntryMeta]``) so
+    callers can inspect stored entries and jump directly to specific ones without
+    a full scan.  Group naming is internal and fixed — callers never supply it.
+    All writes overwrite existing content.
+
+    **Interface**
+    `dump(data)`
+        Persist an iterable of `Serializable` items.  Always overwrites.
+
+    `load(typ)`
+        Load every item.  Returns a generator.
+
+    `load(typ, indices=[0, 3, 7])`
+        Load only the items at the given positional indices.
+
+    `load(typ, predicate=lambda e: e.idx < 10)`
+        Load only items whose `EntryMeta` satisfies *predicate*.
+
+    `entries()`
+        Return the full `list[EntryMeta]` without deserialising any payload.
+        Use this for `count()`, `max_index()`, membership checks, etc.
+    """
 
     supports_append: bool = False
-    """Indicates if the store supports appending data."""
+
+    @abstractmethod
+    def dump(
+        self,
+        data: typing.Iterable[SerializableT],
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> None:
+        """
+        Persist *data*.  Always overwrites existing content.
+
+        """
+        ...
 
     @abstractmethod
     def load(
-        self, typ: typing.Type[SerializableT], *args, **kwargs
-    ) -> typing.Iterable[SerializableT]: ...
+        self,
+        typ: typing.Type[SerializableT],
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+    ) -> typing.Generator[SerializableT, None, None]:
+        """
+        Load items from the store.
+
+        :param typ: The `Serializable` subclass to deserialise into.
+        :param indices: If given, only load items at these zero-based positions.
+            Takes priority over *predicate* when both are supplied.
+        :param predicate: If given (and *indices* is `None`), only load items whose
+            `EntryMeta` satisfies the predicate.
+        :param validator: Optional callable applied to each loaded item before yielding.
+        """
+        ...
+
+    def append(
+        self,
+        item: SerializableT,
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> EntryMeta:
+        """
+        Append a single item without rewriting the store entry record/file.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__!r} does not implement `append(...)`"
+        )
 
     @abstractmethod
-    def dump(self, data: typing.Iterable[SerializableT], *args, **kwargs) -> None: ...
+    def entries(self) -> typing.List[EntryMeta]:
+        """
+        Return metadata for every stored item in insertion order.
+
+        This method must not deserialise any payload data. Only consult the metadata
+        index (group names / file keys).
+        """
+        ...
+
+    def count(self) -> int:
+        """Number of items currently stored."""
+        return len(self.entries())
+
+    def max_index(self) -> typing.Optional[int]:
+        """Highest stored index, or `None` if the store is empty."""
+        metas = self.entries()
+        return max(e.idx for e in metas) if metas else None
 
 
 StoreT = typing.TypeVar("StoreT", bound=DataStore)
-DataValidator = typing.Callable[[SerializableT], SerializableT]
 
 _STORAGE_BACKENDS: typing.Dict[str, typing.Type[DataStore]] = {}
 
@@ -187,9 +285,9 @@ P = ParamSpec("P")
 R = typing.TypeVar("R")
 
 
-def _raise_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+def reraise_as_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
     """
-    Wraps a function to raise StorageError on exceptions.
+    Wraps a function to raise `StorageError` on exceptions.
 
     :param func: Function to wrap
     """
@@ -330,98 +428,24 @@ def _normalize_loaded_mapping_sequence(value: typing.Any) -> typing.Any:
     return value
 
 
-@storage_backend("pickle", "pkl")
-class PickleStore(DataStore[SerializableT]):
+def _get_group_name(index: int) -> str:
     """
-    Pickle-based storage.
+    Returns a group name using fixed naming scheme: `entry_{index:010d}`.
 
-    Python-native, simple, easy to use store. Does not support appending.
+    Zero-padded to 10 digits so lexicographic order == insertion order,
+    meaning `sorted(keys)` always gives the correct traversal order.
     """
+    return f"entry_{index:010d}"
 
-    supports_append: bool = False
 
-    def __init__(
-        self,
-        filepath: typing.Union[PathLike, str],
-        compression: typing.Optional[typing.Literal["gzip", "lzma"]] = "gzip",
-        compression_level: int = 5,
-    ):
-        """
-        Initialize the store
-
-        :param filepath: Path to the pickle file
-        :param compression: Compression method - "gzip" (fast, good compression),
-            "lzma" (slower, better compression), or None
-        :param compression_level: Compression level (1-9 for gzip, 0-9 for lzma)
-        :raises StorageError: If filepath is invalid or has wrong extension
-        """
-        self.filepath = _validate_filepath(
-            filepath, expected_extension=".pkl", create_if_not_exists=True
-        )
-        self.compression = compression
-        self.compression_level = compression_level
-
-    @_raise_storage_error
-    def dump(  # type: ignore[override]
-        self,
-        data: typing.Iterable[SerializableT],
-        exist_ok: bool = True,
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
-    ) -> None:
-        """
-        Dump states using pickle with compression.
-
-        :param states: Iterable of serializable instances to dump
-        :param exist_ok: If True, will overwrite existing files safely
-        :param validator: Optional callable to validate/transform each item before dumping
-        """
-        if validator:
-            data_list = [validator(item).dump(recurse=True) for item in data]
-        else:
-            data_list = [item.dump(recurse=True) for item in data]
-
-        save_as_pickle(
-            data_list,
-            self.filepath,
-            exist_ok=exist_ok,
-            compression=self.compression,  # type: ignore
-            compression_level=self.compression_level,
-        )
-        return
-
-    @_raise_storage_error
-    def load(  # type: ignore[override]
-        self,
-        typ: typing.Type[SerializableT],
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
-    ) -> typing.Generator[SerializableT, None, None]:
-        """
-        Load states from pickle file.
-
-        :param typ: Type of the serializable objects to load
-        :param validator: Optional callable to validate/transform each item after loading
-        :return: Generator yielding instances of the specified type
-        """
-        data = load_pickle(self.filepath)
-        if isinstance(data, dict):
-            for item in data.values():
-                obj = typ.load(item)
-                if validator is not None:
-                    yield validator(obj)
-                else:
-                    yield obj
-        else:
-            for item in data:
-                obj = typ.load(item)
-                if validator is not None:
-                    yield validator(obj)
-                else:
-                    yield obj
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(filepath={self.filepath}, compression={self.compression})"
+def _get_index_from_group_name(name: str) -> typing.Optional[int]:
+    """Parse group name of form `entry_NNNNNNNNNN` to integer index, or `None` if not our format."""
+    if name.startswith("entry_") and len(name) == 16:
+        try:
+            return int(name[6:])
+        except ValueError:
+            return None
+    return None
 
 
 @storage_backend("zarr")
@@ -432,6 +456,18 @@ class ZarrStore(DataStore[SerializableT]):
     Fast, efficient compression with lazy loading.
     Best for large 3D numpy arrays.
     Best lazy loading support among available formats.
+
+    Layout:
+    ```mermaid
+    <root.zarr>/
+        entry_0000000000/      ← one group per item
+            <field>            ← zarr array  (numpy arrays)
+            <nested>/          ← zarr subgroup (mappings / sequences of mappings)
+                                    attrs hold scalars, strings, None sentinels
+        entry_0000000001/
+        ...
+        (root attrs: count)
+    ```
     """
 
     supports_append: bool = True
@@ -442,9 +478,6 @@ class ZarrStore(DataStore[SerializableT]):
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
         compression_level: int = 3,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
-        group_name_gen: typing.Optional[
-            typing.Callable[[int, SerializableT], str]
-        ] = None,
     ):
         """
         Initialize the store
@@ -476,18 +509,6 @@ class ZarrStore(DataStore[SerializableT]):
                 clevel=compression_level,
                 shuffle=BloscShuffle.bitshuffle,
             )
-        self.group_name_gen = group_name_gen or self._default_group_name_gen
-
-    @staticmethod
-    def _default_group_name_gen(idx: int, item: SerializableT) -> str:
-        """
-        Default group name generator based on step number.
-
-        :param step: Step number
-        :param state: ModelState instance
-        :return: Group name string
-        """
-        return f"item_{uuid.uuid4().hex[:12]}"
 
     def _get_chunks(
         self, shape: typing.Tuple[int, ...]
@@ -596,51 +617,7 @@ class ZarrStore(DataStore[SerializableT]):
             else:
                 group.attrs[key] = value
 
-    @_raise_storage_error
-    def dump(  # type: ignore[override]
-        self,
-        data: typing.Iterable[SerializableT],
-        exist_ok: bool = True,
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
-    ) -> None:
-        """
-        Dump data to Zarr store with compression.
-
-        :param data: Iterable of serializable instances to dump
-        :param exist_ok: If True, will append to existing storage or create new
-        :param validator: Optional callable to validate/transform each item before dumping
-        """
-        # Use 'a' (append) mode to reuse existing store, or 'w-' to fail if exists
-        # This allows streaming to work properly without overwriting on each flush
-        mode = "a" if exist_ok else "w-"
-        root = zarr.open_group(
-            store=self.store,  # type: ignore
-            mode=mode,
-            zarr_version=2,
-        )
-
-        count = 0
-        for idx, item in enumerate(data):
-            if validator is not None:
-                item = validator(item)
-
-            group_name = self.group_name_gen(idx, item)
-            item_group = root.require_group(group_name)
-
-            dump = item.dump(recurse=True)
-            self._write_data(group=item_group, data=dump)
-            logger.debug(f"Wrote item {idx} to group '{group_name}' in store")
-            count += 1
-
-        # Store global metadata
-        root.attrs["version"] = 2
-        root.attrs["count"] = count
-        logger.debug(f"Completed dump of {count} items to {self.store}")
-
-    def _load_data(
-        self, group: zarr.Group, lazy: bool = False
-    ) -> typing.Dict[str, typing.Any]:
+    def _load_data(self, group: zarr.Group) -> typing.Dict[str, typing.Any]:
         """
         Load data from a Zarr group with nested structure support.
 
@@ -653,17 +630,12 @@ class ZarrStore(DataStore[SerializableT]):
         # Load datasets
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
-            if lazy:
-                data[key] = Lazy.defer(  # type: ignore
-                    lambda arr=array: _normalize_loaded_value(arr[:])
-                )
-            else:
-                data[key] = _normalize_loaded_value(array[:])  # type: ignore
+            data[key] = _normalize_loaded_value(array[:])  # type: ignore
 
         # Load subgroups
         for key in group.group_keys():  # type: ignore
             sub_group = typing.cast(zarr.Group, group[key])  # type: ignore
-            loaded = self._load_data(group=sub_group, lazy=lazy)
+            loaded = self._load_data(group=sub_group)
             # Check if subgroup represents a sequence
             data[key] = _normalize_loaded_mapping_sequence(loaded)
 
@@ -673,33 +645,133 @@ class ZarrStore(DataStore[SerializableT]):
 
         return data
 
-    @_raise_storage_error
-    def load(  # type: ignore[override]
+    def _open_root(self, mode: str) -> zarr.Group:
+        return zarr.open_group(store=self.store, mode=mode, zarr_version=2)  # type: ignore[arg-type]
+
+    def _write_entry(
+        self,
+        root: zarr.Group,
+        index: int,
+        item: SerializableT,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> EntryMeta:
+        group_name = _get_group_name(index)
+        item_group = root.require_group(group_name)
+        self._write_data(item_group, item.dump(recurse=True))
+
+        item_group.attrs["_meta"] = meta(item) if meta is not None else {}
+        item_group.attrs["_index"] = index
+        item_group.attrs["_group_name"] = group_name
+        return EntryMeta(idx=index, group_name=group_name)
+
+    @reraise_as_storage_error
+    def dump(
+        self,
+        data: typing.Iterable[SerializableT],
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> None:
+        root = self._open_root("w")  # always overwrite
+        count = 0
+        for index, item in enumerate(data):
+            if validator is not None:
+                item = validator(item)
+
+            self._write_entry(root, index, item, meta)
+            logger.debug(f"{self.__class__.__name__}: wrote entry {index}")
+            count += 1
+        root.attrs["count"] = count
+        logger.debug(f"{self.__class__.__name__}: dump complete, {count} entries")
+
+    @reraise_as_storage_error
+    def append(
+        self,
+        item: SerializableT,
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> EntryMeta:
+        """Append a single item without rewriting the store.  Used by `StateStream`."""
+        root = self._open_root("a")
+        current_count = int(root.attrs.get("count", 0))
+        if validator is not None:
+            item = validator(item)
+        entry = self._write_entry(root, current_count, item, meta)
+        root.attrs["count"] = current_count + 1
+        logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
+        return entry
+
+    @reraise_as_storage_error
+    def entries(self) -> typing.List[EntryMeta]:
+        try:
+            root = self._open_root("r")
+        except Exception:
+            return []
+
+        metas = []
+        for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
+            idx = _get_index_from_group_name(name)
+            if idx is not None:
+                group = root[name]
+                metas.append(
+                    EntryMeta(
+                        idx=idx,
+                        group_name=name,
+                        meta=dict(group.attrs.get("_meta", {})),
+                    )
+                )
+        return metas
+
+    @reraise_as_storage_error
+    def load(
         self,
         typ: typing.Type[SerializableT],
-        lazy: bool = True,
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
     ) -> typing.Generator[SerializableT, None, None]:
-        """
-        Load data instances from Zarr format.
-        """
-        root = zarr.open_group(store=self.store, mode="r", zarr_version=2)
+        root = self._open_root("r")
 
-        for key in sorted(root.group_keys()):
-            item_group = typing.cast(zarr.Group, root[key])
-            logger.debug(f"Loading item from group '{key}'")
-            dump = self._load_data(group=item_group, lazy=lazy)
-            dump.pop("count", None)  # Remove any stored count metadata
-            dump.pop("version", None)  # Remove any stored version metadata
-            obj = typ.load(dump)
-            if validator is not None:
-                yield validator(obj)
-            else:
-                yield obj
+        all_entries = []
+        for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
+            idx = _get_index_from_group_name(name)
+            if idx is not None:
+                group = root[name]
+                all_entries.append(
+                    EntryMeta(
+                        idx=idx,
+                        group_name=name,
+                        meta=dict(group.attrs.get("_meta", {})),
+                    )
+                )
+
+        if indices is not None:
+            index_set = set(indices)
+            target = [e for e in all_entries if e.idx in index_set]
+        elif predicate is not None:
+            target = [e for e in all_entries if predicate(e)]
+        else:
+            target = all_entries
+
+        for entry in target:
+            item_group = typing.cast(zarr.Group, root[entry.group_name])  # type: ignore[index]
+            logger.debug(f"{self.__class__.__name__}: loading entry {entry.idx}")
+            raw = self._load_data(item_group)
+            raw.pop("_index", None)
+            raw.pop("_group_name", None)
+            raw.pop("count", None)
+            raw.pop("version", None)
+            obj = typ.load(raw)
+            yield validator(obj) if validator is not None else obj
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(store={self.store}, compressor={self.compressor.cname})"
+        cname = getattr(self.compressor, "cname", str(self.compressor))
+        return f"{self.__class__.__name__}(store={self.store!r}, compressor={cname!r})"
 
 
 @storage_backend("hdf5", "h5")
@@ -709,6 +781,18 @@ class HDF5Store(DataStore[SerializableT]):
 
     Industry standard, good compression, wide tool support.
     Slightly slower than Zarr for many small writes.
+
+    Layout:
+    ```mermaid
+    <file.h5>
+        /entry_0000000000      ← one group per item
+            <field>            ← dataset  (numpy arrays)
+            <nested>/          ← subgroup (mappings / sequences of mappings)
+                                    attrs hold scalars, strings, None sentinels
+        /entry_0000000001
+        ...
+        (file attrs: count)
+    ```
     """
 
     supports_append: bool = True
@@ -718,9 +802,6 @@ class HDF5Store(DataStore[SerializableT]):
         filepath: typing.Union[PathLike, str],
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
         compression_opts: int = 3,
-        group_name_gen: typing.Optional[
-            typing.Callable[[int, SerializableT], str]
-        ] = None,
     ):
         """
         Initialize the store
@@ -735,18 +816,6 @@ class HDF5Store(DataStore[SerializableT]):
         )
         self.compression = compression
         self.compression_opts = compression_opts  # 1-9 for gzip
-        self.group_name_gen = group_name_gen or self._default_group_name_gen
-
-    @staticmethod
-    def _default_group_name_gen(idx: int, item: SerializableT) -> str:
-        """
-        Default group name generator based on step number.
-
-        :param step: Step number
-        :param state: ModelState instance
-        :return: Group name string
-        """
-        return f"item_{uuid.uuid4().hex[:12]}"
 
     def _create_dataset(self, group: h5py.Group, name: str, data: np.ndarray):
         """
@@ -828,42 +897,6 @@ class HDF5Store(DataStore[SerializableT]):
             else:
                 group.attrs[key] = value
 
-    @_raise_storage_error
-    def dump(  # type: ignore[override]
-        self,
-        data: typing.Iterable[SerializableT],
-        exist_ok: bool = True,
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
-    ) -> None:
-        """
-        Dump data to HDF5 store with compression.
-
-        :param data: Iterable of serializable instances to dump
-        :param exist_ok: If True, will append to existing storage or create new
-        :param validator: Optional callable to validate/transform each item before dumping
-        :raises StorageError: If unable to write to file
-        """
-        mode = "a" if exist_ok else "w-"
-
-        with h5py.File(name=str(self.filepath), mode=mode) as f:
-            count = 0
-            for item in data:
-                if validator is not None:
-                    item = validator(item)
-
-                group_name = self.group_name_gen(count, item)
-                item_group = f.require_group(group_name)
-
-                dump = item.dump(recurse=True)
-                self._write_data(group=item_group, data=dump)
-                logger.debug(f"Wrote item {count} to group '{group_name}' in store")
-                count += 1
-
-            # Store global metadata
-            f.attrs["count"] = count
-            logger.debug(f"Completed dump of {count} states to {self.filepath}")
-
     def _load_data(self, group: h5py.Group) -> typing.Dict[str, typing.Any]:
         """
         Load data from an HDF5 group with nested structure support.
@@ -889,44 +922,140 @@ class HDF5Store(DataStore[SerializableT]):
 
         return data
 
-    @_raise_storage_error
-    def load(  # type: ignore[override]
+    def _write_entry(
+        self,
+        f: h5py.File,
+        index: int,
+        item: SerializableT,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> EntryMeta:
+        group_name = _get_group_name(index)
+        item_group = f.require_group(group_name)
+        self._write_data(item_group, item.dump(recurse=True))
+
+        item_group.attrs["_meta"] = orjson.dumps(meta(item) if meta is not None else {})
+        item_group.attrs["_index"] = index
+        item_group.attrs["_group_name"] = group_name
+        return EntryMeta(idx=index, group_name=group_name)
+
+    @reraise_as_storage_error
+    def dump(
+        self,
+        data: typing.Iterable[SerializableT],
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> None:
+        with h5py.File(str(self.filepath), "w") as f:  # always truncate
+            count = 0
+            for index, item in enumerate(data):
+                if validator is not None:
+                    item = validator(item)
+
+                self._write_entry(f, index, item, meta)
+                logger.debug(f"{self.__class__.__name__}: wrote entry {index}")
+                count += 1
+            f.attrs["count"] = count
+        logger.debug(
+            f"{self.__class__.__name__}: dump complete, {count} entries → {self.filepath}"
+        )
+
+    @reraise_as_storage_error
+    def append(
+        self,
+        item: SerializableT,
+        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
+    ) -> EntryMeta:
+        """Append a single item without rewriting the file.  Used by ``StateStream``."""
+        mode = "a" if self.filepath.exists() else "w"
+        with h5py.File(str(self.filepath), mode) as f:
+            current_count = int(f.attrs.get("count", 0))
+            if validator is not None:
+                item = validator(item)
+
+            entry = self._write_entry(f, current_count, item, meta)
+            f.attrs["count"] = current_count + 1
+        logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
+        return entry
+
+    @reraise_as_storage_error
+    def entries(self) -> typing.List[EntryMeta]:
+        if not self.filepath.exists():
+            return []
+        metas = []
+        with h5py.File(str(self.filepath), "r") as f:
+            for name in sorted(f.keys()):
+                idx = _get_index_from_group_name(name)
+                if idx is not None:
+                    group = f[name]
+                    metas.append(
+                        EntryMeta(
+                            idx=idx,
+                            group_name=name,
+                            meta=orjson.loads(group.attrs.get("_meta", "{}")),
+                        )
+                    )
+        return metas
+
+    @reraise_as_storage_error
+    def load(
         self,
         typ: typing.Type[SerializableT],
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
     ) -> typing.Generator[SerializableT, None, None]:
-        """
-        Load data instances from HDF5 format.
+        with h5py.File(str(self.filepath), "r") as f:
+            all_entries = []
+            for name in sorted(f.keys()):
+                idx = _get_index_from_group_name(name)
+                if idx is not None:
+                    group = f[name]
+                    all_entries.append(
+                        EntryMeta(
+                            idx=idx,
+                            group_name=name,
+                            meta=orjson.loads(group.attrs.get("_meta", "{}")),
+                        )
+                    )
 
-        :param typ: Type of the serializable objects to load
-        :param validator: Optional callable to validate/transform each item after loading
-        :return: Generator yielding instances of the specified type
-        """
-        filepath = str(self.filepath)  # Capture for lazy closures
+            if indices is not None:
+                index_set = set(indices)
+                target = [e for e in all_entries if e.idx in index_set]
+            elif predicate is not None:
+                target = [e for e in all_entries if predicate(e)]
+            else:
+                target = all_entries
 
-        with h5py.File(name=filepath, mode="r") as f:
-            for key in sorted(f.keys()):
-                item_group = typing.cast(h5py.Group, f[key])
-
-                logger.debug(f"Loading item from group '{key}'")
-                dump = self._load_data(group=item_group)
-                dump.pop("count", None)  # Remove any stored count metadata
-                obj = typ.load(dump)
-                if validator is not None:
-                    yield validator(obj)
-                else:
-                    yield obj
+            for entry in target:
+                item_group = typing.cast(h5py.Group, f[entry.group_name])
+                logger.debug(f"{self.__class__.__name__}: loading entry {entry.idx}")
+                raw = self._load_data(item_group)
+                raw.pop("_index", None)
+                raw.pop("_group_name", None)
+                raw.pop("count", None)
+                obj = typ.load(raw)
+                yield validator(obj) if validator is not None else obj
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__name__}(filepath={self.filepath}, "
-            f"compression={self.compression}, compression_opts={self.compression_opts})"
+            f"{self.__class__.__name__}("
+            f"filepath={self.filepath!r}, "
+            f"compression={self.compression!r}, "
+            f"compression_opts={self.compression_opts})"
         )
 
 
 @storage_backend("json")
 class JSONStore(DataStore[SerializableT]):
+    """JSON-based storage.  Human-readable, no compression.  Good for configs."""
+
     supports_append: bool = False
 
     def __init__(
@@ -943,56 +1072,84 @@ class JSONStore(DataStore[SerializableT]):
             filepath, expected_extension=".json", create_if_not_exists=True
         )
 
-    @_raise_storage_error
-    def dump(  # type: ignore[override]
+    @reraise_as_storage_error
+    def dump(
         self,
         data: typing.Iterable[SerializableT],
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
     ) -> None:
-        """
-        Dump states using JSON.
-
-        :param states: Iterable of serializable instances to dump
-        :param validator: Optional callable to validate/transform each item before dumping
-        """
-        data_list = []
-        for item in data:
-            if validator:
+        items = []
+        for index, item in enumerate(data):
+            if validator is not None:
                 item = validator(item)
-            data_list.append(item.dump(recurse=True))
+            items.append(
+                {
+                    "_index": index,
+                    "_group_name": _get_group_name(index),
+                    "_meta": meta(item) if meta is not None else {},
+                    "data": item.dump(recurse=True),
+                }
+            )
 
         with open(self.filepath, "wb") as f:
             f.write(
                 orjson.dumps(
-                    data_list, option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_INDENT_2
+                    items, option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_INDENT_2
                 )
             )
-        return
 
-    @_raise_storage_error
-    def load(  # type: ignore[override]
+    @reraise_as_storage_error
+    def entries(self) -> typing.List[EntryMeta]:
+        if not self.filepath.exists():
+            return []
+
+        with open(self.filepath, "rb") as f:
+            items = orjson.loads(f.read())
+        return [
+            EntryMeta(
+                idx=e["_index"],
+                group_name=e["_group_name"],
+                meta=e["_meta"],
+            )
+            for e in items
+        ]
+
+    @reraise_as_storage_error
+    def load(
         self,
         typ: typing.Type[SerializableT],
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
     ) -> typing.Generator[SerializableT, None, None]:
-        """
-        Load states from JSON file.
-
-        :param typ: Type of the serializable objects to load
-        :param validator: Optional callable to validate/transform each item after loading
-        :return: Generator yielding instances of the specified type
-        """
         with open(self.filepath, "rb") as f:
-            data = orjson.loads(f.read())
+            items = orjson.loads(f.read())
 
-        for item in data:
-            obj = typ.load(item)
-            if validator is not None:
-                yield validator(obj)
-            else:
-                yield obj
+        if indices is not None:
+            index_set = set(indices)
+            items = [e for e in items if e["_index"] in index_set]
+        elif predicate is not None:
+            items = [
+                e
+                for e in items
+                if predicate(
+                    EntryMeta(
+                        idx=e["_index"],
+                        group_name=e["_group_name"],
+                        meta=e["_meta"],
+                    )
+                )
+            ]
+
+        for entry in items:
+            obj = typ.load(entry["data"])
+            yield validator(obj) if validator is not None else obj
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(filepath={self.filepath!r})"
 
 
 @storage_backend("yaml", "yml")
@@ -1019,59 +1176,83 @@ class YAMLStore(DataStore[SerializableT]):
             filepath, expected_extension=".yaml", create_if_not_exists=True
         )
 
-    @_raise_storage_error
-    def dump(  # type: ignore[override]
+    @reraise_as_storage_error
+    def dump(
         self,
         data: typing.Iterable[SerializableT],
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
+        meta: typing.Optional[
+            typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
+        ] = None,
     ) -> None:
-        """
-        Dump states using YAML.
-
-        :param states: Iterable of serializable instances to dump
-        :param exist_ok: If True, will overwrite existing files safely
-        :param validator: Optional callable to validate/transform each item before dumping
-        """
-        data_list = []
-        for item in data:
-            if validator:
+        items = []
+        for index, item in enumerate(data):
+            if validator is not None:
                 item = validator(item)
-            data_list.append(item.dump(recurse=True))
-
+            items.append(
+                {
+                    "_index": index,
+                    "_group_name": _get_group_name(index),
+                    "_meta": meta(item) if meta is not None else {},
+                    "data": item.dump(recurse=True),
+                }
+            )
         with open(self.filepath, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data_list, f, sort_keys=False)
-        return
+            yaml.safe_dump(items, f, sort_keys=False)
 
-    @_raise_storage_error
-    def load(  # type: ignore[override]
+    @reraise_as_storage_error
+    def entries(self) -> typing.List[EntryMeta]:
+        if not self.filepath.exists():
+            return []
+
+        with open(self.filepath, "r", encoding="utf-8") as f:
+            items = yaml.safe_load(f) or []
+        return [
+            EntryMeta(
+                idx=e["_index"],
+                group_name=e["_group_name"],
+                meta=e["_meta"],
+            )
+            for e in items
+        ]
+
+    @reraise_as_storage_error
+    def load(
         self,
         typ: typing.Type[SerializableT],
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
-        **kwargs: typing.Any,
     ) -> typing.Generator[SerializableT, None, None]:
-        """
-        Load states from YAML file.
-
-        :param typ: Type of the serializable objects to load
-        :param validator: Optional callable to validate/transform each item after loading
-        :return: Generator yielding instances of the specified type
-        """
         with open(self.filepath, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            items = yaml.safe_load(f) or []
 
-        for item in data:
-            obj = typ.load(item)
-            if validator is not None:
-                yield validator(obj)
-            else:
-                yield obj
+        if indices is not None:
+            index_set = set(indices)
+            items = [e for e in items if e["_index"] in index_set]
+        elif predicate is not None:
+            items = [
+                e
+                for e in items
+                if predicate(
+                    EntryMeta(
+                        idx=e["_index"],
+                        group_name=e["_group_name"],
+                        meta=e["_meta"],
+                    )
+                )
+            ]
+
+        for entry in items:
+            obj = typ.load(entry["data"])
+            yield validator(obj) if validator is not None else obj
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(filepath={self.filepath!r})"
 
 
 def new_store(
-    backend: typing.Union[
-        str, typing.Literal["zarr", "hdf5", "json", "pickle", "yaml"]
-    ] = "zarr",
+    backend: typing.Union[str, typing.Literal["zarr", "hdf5", "json", "yaml"]] = "zarr",
     *args: typing.Any,
     **kwargs: typing.Any,
 ) -> DataStore:
@@ -1109,18 +1290,18 @@ class StoreSerializable(Serializable):
         cls, store: DataStore[Self], **load_kwargs: typing.Any
     ) -> typing.Optional[Self]:
         """
-        Load a `Config` instance from a `DataStore`.
+        Load a `Serializable` instance from a `DataStore`.
 
-        :param store: `DataStore` to load the `Config` from.
-        :return: Loaded `Config` instance.
+        :param store: `DataStore` to load the `Serializable` from.
+        :return: Loaded `Serializable` instance.
         """
         return next(iter(store.load(cls, **load_kwargs)), None)
 
     def to_store(self, store: DataStore[Self], **dump_kwargs: typing.Any) -> None:
         """
-        Dump the `Config` instance to a `DataStore`.
+        Dump the `Serializable` instance to a `DataStore`.
 
-        :param store: `DataStore` to dump the Config to.
+        :param store: `DataStore` to dump the Serializable to.
         """
         store.dump([self], **dump_kwargs)
 
@@ -1129,10 +1310,10 @@ class StoreSerializable(Serializable):
         cls, filepath: typing.Union[str, PathLike], **load_kwargs: typing.Any
     ) -> typing.Optional[Self]:
         """
-        Load a `Config` instance from a file.
+        Load a `Serializable` instance from a file.
 
-        :param filepath: Path to the file to load the `Config` from.
-        :return: Loaded `Config` instance.
+        :param filepath: Path to the file to load the `Serializable` from.
+        :return: Loaded `Serializable` instance.
         """
         path = Path(filepath)
         ext = path.suffix.lower().lstrip(".")
@@ -1143,9 +1324,9 @@ class StoreSerializable(Serializable):
         self, filepath: typing.Union[str, PathLike], **dump_kwargs: typing.Any
     ) -> None:
         """
-        Dump the `Config` instance to a file.
+        Dump the `Serializable` instance to a file.
 
-        :param filepath: Path to the file to dump the `Config` to.
+        :param filepath: Path to the file to dump the `Serializable` to.
         """
         path = Path(filepath)
         ext = path.suffix.lower().lstrip(".")

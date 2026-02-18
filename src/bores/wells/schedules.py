@@ -380,13 +380,12 @@ def event_predicate(
     """
     Register a well predicate function for serialization.
 
-
     A well predicate is a callable that takes a well and the model state as arguments
     and returns a boolean indicating whether to apply a scheduled event.
 
     :param func: The predicate function to register.
     :param name: The name to register the predicate under. If None, the function's
-        __name__ attribute is used.
+        `__name__` attribute is used.
     :param override: If True, override any existing predicate with the same name.
     :return: The registered predicate function or a decorator to register the function.
     """

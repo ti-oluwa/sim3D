@@ -725,7 +725,7 @@ def _(bores, states, viz):
 
     property = "oil-effective-viscosity"
     figures = []
-    timesteps = [-1]
+    timesteps = [5]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

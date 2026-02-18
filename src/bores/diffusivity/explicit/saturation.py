@@ -27,7 +27,7 @@ from bores.wells import Wells
 import numba
 import numpy as np
 
-__all__ = ["evolve_saturation_explicitly", "evolve_miscible_saturation"]
+__all__ = ["evolve_saturation", "evolve_miscible_saturation"]
 
 logger = logging.getLogger(__name__)
 
@@ -950,6 +950,7 @@ def compute_well_rate_grids(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
             )
+            phase_fvf = typing.cast(float, phase_fvf)
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
                 compressibility_kwargs = {}
@@ -971,6 +972,7 @@ def compute_well_rate_grids(
                 temperature=cell_temperature,
                 **compressibility_kwargs,
             )
+            phase_compressibility = typing.cast(float, phase_compressibility)
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
@@ -2237,6 +2239,7 @@ def compute_miscible_well_rate_grids(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
             )
+            phase_fvf = typing.cast(float, phase_fvf)
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = gas_relative_mobility_grid[i, j, k]
                 compressibility_kwargs = {}
@@ -2258,6 +2261,7 @@ def compute_miscible_well_rate_grids(
                 temperature=cell_temperature,
                 **compressibility_kwargs,
             )
+            phase_compressibility = typing.cast(float, phase_compressibility)
 
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS

@@ -20,7 +20,7 @@ from bores.types import NDimension, NDimensionalGrid
 __all__ = [
     "boundary_function",
     "ParameterizedBoundaryFunction",
-    "BoundaryDirection",
+    "Boundary",
     "BoundaryMetadata",
     "BoundaryCondition",
     "NoFlowBoundary",
@@ -281,25 +281,25 @@ class ParameterizedBoundaryFunction(
         return self._func(*args, **merged_kwargs)
 
 
-class BoundaryDirection(enum.Enum):
-    """Enumeration for boundary directions."""
+class Boundary(enum.Enum):
+    """Enumeration of possible boundary directions."""
 
-    X_MINUS = "left"
+    LEFT = "left"
     """The negative X direction (left/west face)."""
-    X_PLUS = "right"
+    RIGHT = "right"
     """The positive X direction (right/east face)."""
-    Y_MINUS = "front"
+    FRONT = "front"
     """The negative Y direction (bottom/south face)."""
-    Y_PLUS = "back"
+    BACK = "back"
     """The positive Y direction (top/north face)."""
-    Z_MINUS = "bottom"
+    BOTTOM = "bottom"
     """The negative Z direction (bottom face)."""
-    Z_PLUS = "top"
+    TOP = "top"
     """The positive Z direction (top face)."""
 
 
 def get_neighbor_indices(
-    boundary_indices: typing.Tuple[slice, ...], direction: BoundaryDirection
+    boundary_indices: typing.Tuple[slice, ...], direction: Boundary
 ) -> typing.Tuple[slice, ...]:
     """
     Get the indices of neighboring cells for a given boundary direction.
@@ -314,16 +314,16 @@ def get_neighbor_indices(
 
     Example usage:
     ```python
-    from bores.boundary_conditions import get_neighbor_indices, BoundaryDirection
+    from bores.boundary_conditions import get_neighbor_indices, Boundary
 
     # For left boundary (x=0 ghost cells)
     boundary_slice = (slice(0, 1), slice(None))
-    neighbor_slice = get_neighbor_indices(boundary_slice, BoundaryDirection.X_MINUS)
+    neighbor_slice = get_neighbor_indices(boundary_slice, Boundary.LEFT)
     # Returns: (slice(1, 2), slice(None))  # x=1 interior cells
 
     # For right boundary (x=-1 ghost cells)
     boundary_slice = (slice(-1, None), slice(None))
-    neighbor_slice = get_neighbor_indices(boundary_slice, BoundaryDirection.X_PLUS)
+    neighbor_slice = get_neighbor_indices(boundary_slice, Boundary.RIGHT)
     # Returns: (slice(-2, -1), slice(None))  # x=-2 interior cells
     ```
     """
@@ -331,28 +331,28 @@ def get_neighbor_indices(
     ndim = len(boundary_indices)
 
     # Validate Z-direction usage with grid dimensionality
-    if direction in [BoundaryDirection.Z_MINUS, BoundaryDirection.Z_PLUS] and ndim < 3:
+    if direction in [Boundary.BOTTOM, Boundary.TOP] and ndim < 3:
         raise ValidationError(
             f"Cannot use {direction.name} boundary direction with {ndim}D grid. "
             "Z-direction boundaries require 3D grids."
         )
 
-    if direction == BoundaryDirection.X_MINUS:
+    if direction == Boundary.LEFT:
         # Left boundary: neighbor is at x=1
         neighbor_indices[0] = slice(1, 2)
-    elif direction == BoundaryDirection.X_PLUS:
+    elif direction == Boundary.RIGHT:
         # Right boundary: neighbor is at x=-2
         neighbor_indices[0] = slice(-2, -1)
-    elif direction == BoundaryDirection.Y_MINUS:
+    elif direction == Boundary.FRONT:
         # Front boundary: neighbor is at y=1
         neighbor_indices[1] = slice(1, 2)
-    elif direction == BoundaryDirection.Y_PLUS:
+    elif direction == Boundary.BACK:
         # Back boundary: neighbor is at y=-2
         neighbor_indices[1] = slice(-2, -1)
-    elif direction == BoundaryDirection.Z_MINUS:
+    elif direction == Boundary.BOTTOM:
         # Bottom boundary: neighbor is at z=1
         neighbor_indices[2] = slice(1, 2)
-    elif direction == BoundaryDirection.Z_PLUS:
+    elif direction == Boundary.TOP:
         # Top boundary: neighbor is at z=-2
         neighbor_indices[2] = slice(-2, -1)
 
@@ -419,7 +419,7 @@ class BoundaryMetadata:
     spatial_bc.apply(
         grid=grid,
         boundary_indices=boundary_indices,
-        direction=BoundaryDirection.X_MINUS,
+        direction=Boundary.LEFT,
         metadata=metadata_2d
     )
     ```
@@ -553,7 +553,7 @@ class BoundaryCondition(
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """
@@ -623,7 +623,7 @@ class NoFlowBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply no-flow boundary by copying values from neighboring cells."""
@@ -685,7 +685,7 @@ class ConstantBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply constant boundary condition, preserving grid dtype."""
@@ -705,14 +705,14 @@ class VariableBoundary(BoundaryCondition[NDimension]):
     Example usage:
     ```python
     import numpy as np
-    from bores.boundary_conditions import VariableBoundary, BoundaryDirection, get_neighbor_indices, boundary_function, GridBoundaryCondition
+    from bores.boundary_conditions import VariableBoundary, Boundary, get_neighbor_indices, boundary_function, GridBoundaryCondition
 
     @boundary_function
     def pressure_gradient_func(grid, boundary_indices, direction, metadata):
         # Example: Pressure increases with depth
-        if direction == BoundaryDirection.Y_PLUS:  # Top boundary
+        if direction == Boundary.BACK:  # Top boundary
             return np.full(grid[boundary_indices].shape, 1000.0)  # Low pressure
-        elif direction == BoundaryDirection.Y_MINUS:  # Bottom boundary
+        elif direction == Boundary.FRONT:  # Bottom boundary
             return np.full(grid[boundary_indices].shape, 3000.0)  # High pressure
 
         # For sides, implement no-flow (Neumann) by copying neighbor values
@@ -744,7 +744,7 @@ class VariableBoundary(BoundaryCondition[NDimension]):
         [
             NDimensionalGrid[NDimension],
             typing.Tuple[slice, ...],
-            BoundaryDirection,
+            Boundary,
             typing.Optional[BoundaryMetadata],
         ],
         NDimensionalGrid[NDimension],
@@ -760,7 +760,7 @@ class VariableBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply variable boundary condition using the provided function."""
@@ -837,7 +837,7 @@ class SpatialBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply spatial boundary condition using coordinate-based function."""
@@ -943,7 +943,7 @@ class TimeDependentBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply time-dependent boundary condition."""
@@ -1033,7 +1033,7 @@ class LinearGradientBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply linear gradient boundary condition."""
@@ -1140,7 +1140,7 @@ class FluxBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply flux boundary condition.
@@ -1152,7 +1152,7 @@ class FluxBoundary(BoundaryCondition[NDimension]):
         - Negative flux = flow OUT OF the domain (production)
 
         Note: In this codebase, k=0 is the TOP (shallowest) layer, and k increases
-        downward. So `Z_PLUS` (top) corresponds to k=0, and `Z_MINUS` (bottom) to k=-1.
+        downward. So `TOP` (top) corresponds to k=0, and `BOTTOM` (bottom) to k=-1.
         """
         if metadata is None or metadata.cell_dimension is None:
             raise ValidationError(
@@ -1166,11 +1166,11 @@ class FluxBoundary(BoundaryCondition[NDimension]):
         # Calculate distance between boundary and neighbor (half cell spacing)
         dx, dy = metadata.cell_dimension
 
-        if direction in [BoundaryDirection.X_MINUS, BoundaryDirection.X_PLUS]:
+        if direction in [Boundary.LEFT, Boundary.RIGHT]:
             spacing = dx / 2.0
-        elif direction in [BoundaryDirection.Y_MINUS, BoundaryDirection.Y_PLUS]:
+        elif direction in [Boundary.FRONT, Boundary.BACK]:
             spacing = dy / 2.0
-        elif direction in [BoundaryDirection.Z_MINUS, BoundaryDirection.Z_PLUS]:
+        elif direction in [Boundary.BOTTOM, Boundary.TOP]:
             # For 3D, use thickness_grid if available for z-direction spacing
             # Note: k=0 is TOP, k=-1 is BOTTOM in this codebase
             if (
@@ -1179,10 +1179,10 @@ class FluxBoundary(BoundaryCondition[NDimension]):
             ):
                 # Use average thickness at boundary layer for spacing
                 # thickness_grid has no ghost cells, so we need to map boundary to interior
-                if direction == BoundaryDirection.Z_MINUS:
+                if direction == Boundary.BOTTOM:
                     # Bottom boundary (deepest) - use last layer thickness (k=-1)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, -1])
-                else:  # Z_PLUS
+                else:  # TOP
                     # Top boundary (shallowest) - use first layer thickness (k=0)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
                 spacing = avg_thickness / 2.0
@@ -1198,9 +1198,9 @@ class FluxBoundary(BoundaryCondition[NDimension]):
         # φ_boundary = φ_neighbor + flux * spacing * sign
         # where sign accounts for the direction of the outward normal
         if direction in [
-            BoundaryDirection.X_MINUS,
-            BoundaryDirection.Y_MINUS,
-            BoundaryDirection.Z_MINUS,
+            Boundary.LEFT,
+            Boundary.FRONT,
+            Boundary.BOTTOM,
         ]:
             # Outward normal points in negative direction
             # Positive flux (into domain) means gradient points inward (negative outward)
@@ -1292,13 +1292,13 @@ class RobinBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply Robin boundary condition: α*φ + β*∂φ/∂n = γ
 
         Note: In this codebase, k=0 is the TOP (shallowest) layer, and k increases
-        downward. So Z_PLUS (top) corresponds to k=0, and Z_MINUS (bottom) to k=-1.
+        downward. So TOP (top) corresponds to k=0, and BOTTOM (bottom) to k=-1.
         """
         if metadata is None or metadata.cell_dimension is None:
             raise ValidationError(
@@ -1311,9 +1311,9 @@ class RobinBoundary(BoundaryCondition[NDimension]):
 
         # Calculate spacing
         dx, dy = metadata.cell_dimension
-        if direction in [BoundaryDirection.X_MINUS, BoundaryDirection.X_PLUS]:
+        if direction in [Boundary.LEFT, Boundary.RIGHT]:
             spacing = dx / 2.0
-        elif direction in [BoundaryDirection.Y_MINUS, BoundaryDirection.Y_PLUS]:
+        elif direction in [Boundary.FRONT, Boundary.BACK]:
             spacing = dy / 2.0
         else:
             # Z-direction: use thickness if available
@@ -1322,10 +1322,10 @@ class RobinBoundary(BoundaryCondition[NDimension]):
                 metadata.thickness_grid is not None
                 and metadata.thickness_grid.ndim == 3
             ):
-                if direction == BoundaryDirection.Z_MINUS:
+                if direction == Boundary.BOTTOM:
                     # Bottom boundary (deepest) - use last layer thickness (k=-1)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, -1])
-                else:  # Z_PLUS
+                else:  # TOP
                     # Top boundary (shallowest) - use first layer thickness (k=0)
                     avg_thickness = np.mean(metadata.thickness_grid[:, :, 0])
                 spacing = avg_thickness / 2.0
@@ -1334,9 +1334,9 @@ class RobinBoundary(BoundaryCondition[NDimension]):
 
         # Direction sign for gradient (outward normal convention)
         if direction in [
-            BoundaryDirection.X_MINUS,
-            BoundaryDirection.Y_MINUS,
-            BoundaryDirection.Z_MINUS,
+            Boundary.LEFT,
+            Boundary.FRONT,
+            Boundary.BOTTOM,
         ]:
             sign = -1.0
         else:
@@ -1410,33 +1410,33 @@ class PeriodicBoundary(BoundaryCondition[NDimension]):
         *,
         grid: NDimensionalGrid[NDimension],
         boundary_indices: typing.Tuple[slice, ...],
-        direction: BoundaryDirection,
+        direction: Boundary,
         metadata: typing.Optional[BoundaryMetadata] = None,
     ) -> None:
         """Apply periodic boundary by copying from opposite interior boundary."""
         # Get indices of the opposite interior cells
         opposite_indices = list(boundary_indices)
 
-        if direction == BoundaryDirection.X_MINUS:
+        if direction == Boundary.LEFT:
             # Left boundary copies from right interior (second-to-last)
             opposite_indices[0] = slice(-2, -1)
-        elif direction == BoundaryDirection.X_PLUS:
+        elif direction == Boundary.RIGHT:
             # Right boundary copies from left interior (second from start)
             opposite_indices[0] = slice(1, 2)
-        elif direction == BoundaryDirection.Y_MINUS:
+        elif direction == Boundary.FRONT:
             # Front boundary copies from back interior
             opposite_indices[1] = slice(-2, -1)
-        elif direction == BoundaryDirection.Y_PLUS:
+        elif direction == Boundary.BACK:
             # Back boundary copies from front interior
             opposite_indices[1] = slice(1, 2)
-        elif direction == BoundaryDirection.Z_MINUS:
+        elif direction == Boundary.BOTTOM:
             # Bottom boundary copies from top interior
             if len(boundary_indices) < 3:
                 raise ValidationError(
                     f"Cannot apply {direction.name} to {len(boundary_indices)}D grid"
                 )
             opposite_indices[2] = slice(-2, -1)
-        elif direction == BoundaryDirection.Z_PLUS:
+        elif direction == Boundary.TOP:
             # Top boundary copies from bottom interior
             if len(boundary_indices) < 3:
                 raise ValidationError(
@@ -1544,62 +1544,62 @@ class GridBoundaryCondition(typing.Generic[NDimension], Serializable):
             self.left.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(0, 1), slice(None)),
-                direction=BoundaryDirection.X_MINUS,
+                direction=Boundary.LEFT,
                 metadata=metadata,
             )
             self.right.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(-1, None), slice(None)),
-                direction=BoundaryDirection.X_PLUS,
+                direction=Boundary.RIGHT,
                 metadata=metadata,
             )
             self.front.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(0, 1)),
-                direction=BoundaryDirection.Y_MINUS,
+                direction=Boundary.FRONT,
                 metadata=metadata,
             )
             self.back.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(-1, None)),
-                direction=BoundaryDirection.Y_PLUS,
+                direction=Boundary.BACK,
                 metadata=metadata,
             )
         elif padded_grid.ndim == 3:
             self.left.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(0, 1), slice(None), slice(None)),
-                direction=BoundaryDirection.X_MINUS,
+                direction=Boundary.LEFT,
                 metadata=metadata,
             )
             self.right.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(-1, None), slice(None), slice(None)),
-                direction=BoundaryDirection.X_PLUS,
+                direction=Boundary.RIGHT,
                 metadata=metadata,
             )
             self.front.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(0, 1), slice(None)),
-                direction=BoundaryDirection.Y_MINUS,
+                direction=Boundary.FRONT,
                 metadata=metadata,
             )
             self.back.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(-1, None), slice(None)),
-                direction=BoundaryDirection.Y_PLUS,
+                direction=Boundary.BACK,
                 metadata=metadata,
             )
             self.bottom.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(None), slice(0, 1)),
-                direction=BoundaryDirection.Z_MINUS,
+                direction=Boundary.BOTTOM,
                 metadata=metadata,
             )
             self.top.apply(
                 grid=padded_grid,
                 boundary_indices=(slice(None), slice(None), slice(-1, None)),
-                direction=BoundaryDirection.Z_PLUS,
+                direction=Boundary.TOP,
                 metadata=metadata,
             )
         else:

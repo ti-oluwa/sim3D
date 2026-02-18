@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.19.6"
 app = marimo.App(width="full")
 
 
@@ -15,14 +15,17 @@ def _():
     bores.image_config(scale=3)
 
     store = bores.ZarrStore(
-        store=Path.cwd() / "scenarios/states/stabilization.zarr"
+        store=Path.cwd()
+        / "scenarios/runs/stabilization/results/stabilization.zarr"
     )
-    stream = bores.StateStream(
-        store=store,
-        lazy_load=False,
-        auto_replay=True,
-    )
-    states = list(stream.collect(key=lambda s: s.step == 0 or s.step % 2 == 0))
+    stream = bores.StateStream(store=store, auto_replay=True)
+
+
+    def steps(step):
+        return step == 0 or step % 4 == 0
+
+
+    states = list(stream.replay(steps=steps))
     return bores, itertools, np, states
 
 
@@ -371,9 +374,9 @@ def _(bores, states, viz):
         # isomin=0.05
     )
 
-    property = "residual-oil-saturation-gas"
+    property = "oil-saturation"
     figures = []
-    timesteps = [20]
+    timesteps = [10]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

@@ -17,3 +17,5 @@ __marimo__/
 WELL_VISUALIZATION_GUIDE.md
 scenarios/**/
 .ruff_cache/
+CLAUDE.md
+.claude/

@@ -24,16 +24,13 @@ from bores.models import (
 )
 from bores.serialization import Serializable
 from bores.timing import TimerState
-from bores.types import NDimension, T
-from bores.utils import Lazy, LazyField
+from bores.types import NDimension
 from bores.wells.base import Wells
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = ["ModelState", "validate_state"]
-
-_Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
 
 
 @typing.final
@@ -58,26 +55,18 @@ class ModelState(
     A captured state of the reservoir model at a specific time step during a simulation run.
     """
 
-    model = LazyField[ReservoirModel[NDimension]]()
-    wells = LazyField[Wells[NDimension]]()
-    injection = LazyField[RateGrids[NDimension]]()
-    production = LazyField[RateGrids[NDimension]]()
-    relative_permeabilities = LazyField[RelPermGrids[NDimension]]()
-    relative_mobilities = LazyField[RelativeMobilityGrids[NDimension]]()
-    capillary_pressures = LazyField[CapillaryPressureGrids[NDimension]]()
-
     def __init__(
         self,
         step: int,
         step_size: float,
         time: float,
-        model: _Lazy[ReservoirModel[NDimension]],
-        wells: _Lazy[Wells[NDimension]],
-        injection: _Lazy[RateGrids[NDimension]],
-        production: _Lazy[RateGrids[NDimension]],
-        relative_permeabilities: _Lazy[RelPermGrids[NDimension]],
-        relative_mobilities: _Lazy[RelativeMobilityGrids[NDimension]],
-        capillary_pressures: _Lazy[CapillaryPressureGrids[NDimension]],
+        model: ReservoirModel[NDimension],
+        wells: Wells[NDimension],
+        injection: RateGrids[NDimension],
+        production: RateGrids[NDimension],
+        relative_permeabilities: RelPermGrids[NDimension],
+        relative_mobilities: RelativeMobilityGrids[NDimension],
+        capillary_pressures: CapillaryPressureGrids[NDimension],
         timer_state: typing.Optional[TimerState] = None,
     ) -> None:
         """
@@ -98,19 +87,13 @@ class ModelState(
         self.step = step
         self.step_size = step_size
         self.time = time
-        self.model = typing.cast(ReservoirModel[NDimension], model)
-        self.wells = typing.cast(Wells[NDimension], wells)
-        self.injection = typing.cast(RateGrids[NDimension], injection)
-        self.production = typing.cast(RateGrids[NDimension], production)
-        self.relative_permeabilities = typing.cast(
-            RelPermGrids[NDimension], relative_permeabilities
-        )
-        self.relative_mobilities = typing.cast(
-            RelativeMobilityGrids[NDimension], relative_mobilities
-        )
-        self.capillary_pressures = typing.cast(
-            CapillaryPressureGrids[NDimension], capillary_pressures
-        )
+        self.model = model
+        self.wells = wells
+        self.injection = injection
+        self.production = production
+        self.relative_permeabilities = relative_permeabilities
+        self.relative_mobilities = relative_mobilities
+        self.capillary_pressures = capillary_pressures
         self.timer_state = timer_state
 
     @functools.cache
@@ -410,24 +393,24 @@ def validate_state(
             grid_shape=model.grid_shape,
             cell_dimension=model.cell_dimension,
             thickness_grid=thickness_grid,
-            fluid_properties=fluid_properties,  # type: ignore
-            rock_properties=rock_properties,  # type: ignore
+            fluid_properties=fluid_properties,
+            rock_properties=rock_properties,
             saturation_history=saturation_history,
             boundary_conditions=model.boundary_conditions,  # type: ignore
             dip_angle=model.dip_angle,
             dip_azimuth=model.dip_azimuth,
         )
-        state = ModelState(  # type: ignore
+        state = ModelState(
             step=state.step,
             step_size=state.step_size,
             time=state.time,
             model=model,
-            wells=state.wells,  # type: ignore
-            injection=injection,  # type: ignore
-            production=production,  # type: ignore
-            relative_permeabilities=relative_permeabilities,  # type: ignore
-            relative_mobilities=relative_mobilities,  # type: ignore
-            capillary_pressures=capillary_pressures,  # type: ignore
-            timer_state=state.timer_state,  # type: ignore
+            wells=state.wells,
+            injection=injection,
+            production=production,
+            relative_permeabilities=relative_permeabilities,
+            relative_mobilities=relative_mobilities,
+            capillary_pressures=capillary_pressures,
+            timer_state=state.timer_state,
         )
     return state

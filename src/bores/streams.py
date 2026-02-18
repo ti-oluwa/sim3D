@@ -5,20 +5,18 @@ Stream model state with optional persistence for memory-efficient simulation wor
 import logging
 import queue
 import threading
-from pathlib import Path
 import typing
-from os import PathLike
 
 import numpy as np
 from typing_extensions import Self
 
 from bores.errors import StreamError
 from bores.states import ModelState, validate_state
-from bores.stores import DataStore, HDF5Store
+from bores.stores import DataStore, EntryMeta
 from bores.types import NDimension
 
 
-__all__ = ["StateStream", "StreamProgress", "state_group_name_gen"]
+__all__ = ["StateStream", "StreamProgress"]
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +35,6 @@ class StreamProgress(typing.TypedDict):
 _stop_io = object()  # Sentinel for stopping I/O thread
 
 
-def state_group_name_gen(idx: int, state: ModelState[NDimension]) -> str:
-    """Generate group name for a state based on index and step number."""
-    return f"step_{state.step:08d}_idx_{idx:06d}"
-
-
 class StateStream(typing.Generic[NDimension]):
     """
     Memory-efficient stream for model state iteration with optional persistence.
@@ -50,71 +43,58 @@ class StateStream(typing.Generic[NDimension]):
     immediately freeing memory. Supports batching for I/O efficiency and async I/O for
     non-blocking disk writes.
 
-    Why stream states?
-        - Low memory overhead (states persisted immediately/eventually after yield)
-        - Batch persistence for I/O efficiency
-        - Optional async I/O (2-3x speedup when I/O slower than simulation)
-        - Optional validation before save
-        - Progress tracking and logging
-        - Auto-save on context exit (no lost data)
-        - Replay from store (load previously saved states)
-        - Selective persistence (save only states matching predicate)
-        - Checkpointing for crash recovery
-        - Memory monitoring with automatic flushing
+    **Why stream states?**
+    - Low memory overhead (states persisted immediately/eventually after yield)
+    - Batch persistence for I/O efficiency
+    - Optional async I/O (2-3x speedup when I/O slower than simulation)
+    - Optional validation before save
+    - Progress tracking and logging
+    - Auto-save on context exit (no lost data)
+    - Replay from store (load previously saved states)
+    - Selective persistence (save only states matching predicate)
+    - Checkpointing for crash recovery
+    - Memory monitoring with automatic flushing
 
-    Async I/O:
-        When `async_io=True`, disk writes happen in a background thread, allowing the
-        simulation to continue without blocking on I/O. Particularly effective when
-        simulation timesteps are faster than disk write times. Includes backpressure
-        mechanism to prevent unbounded memory growth.
+    **Async I/O**
+    When `async_io=True` disk writes happen in a background thread.  The
+    simulation fills a queue; the I/O worker drains it.  `max_queue_size`
+    applies back-pressure so memory stays bounded when the simulation is faster
+    than disk.
 
-    Important: The underlying iterable (typically a generator) can only be consumed once.
-    After the first iteration, either:
-        - Use `replay()` to load states from the store
-        - Create a new stream with a fresh iterable
-        - Let `__iter__` automatically use `replay()` if a store exists
+    **Persistence model**
+    States are accumulated in a local batch buffer.  When the buffer reaches
+    `batch_size` (or the memory limit), `flush(...)` is called:
 
-    Example (Sync I/O):
+    * **Sync path** — each item in the batch is appended to the store directly.
+    * **Async path** — the batch list is enqueued; the I/O worker appends each
+      item to the store and then discards the list.
+
+    The store's `append` method is used (not `dump`) so existing entries are
+    never overwritten.  The store must have `supports_append = True`.
+
+    **Replay**
+    After the generator is exhausted, `replay(...)` loads all saved states back
+    from the store.  `__iter__` does this automatically when
+    `auto_replay=True` (the default).
+
+    Example Usage:
     ```python
-    store = new_store(store="simulation.zarr", backend="zarr")
-    stream = StateStream(
-        states=run_simulation(...),
-        store=store,
-        batch_size=10,
-    )
-    with stream:
+    store = ZarrStore("run01.zarr")
+    with StateStream(states=simulate(), store=store, async_io=True) as stream:
         for state in stream:
-            process_state(state)  # State saved to disk after processing
+            analyse(state)          # background thread writes while we analyse
+
+    # Replay the whole run later
+    for state in stream.replay():
+        plot(state)
+
+    # Load only specific entries
+    for state in stream.replay(indices=[0, 50, 99]):
         ...
 
-    # Later: replay from disk (automatically or explicitly)
-    for state in stream:  # Auto-replays if store exists
-        analyze_state(state)
-
-    # Or explicitly:
-    for state in stream.replay():
-        analyze_state(state)
-
-    ```
-
-    Example Usage (Async I/O):
-    ```python
-    stream = StateStream(
-        states=run_simulation(...),
-        store=store,
-        async_io=True,           # Enable background I/O
-        batch_size=10,
-        max_queue_size=50,       # Limit memory usage
-    )
-    with stream:
-        for state in stream:
-            # Simulation continues while previous states written in background
-            process_state(state)
-
-        # Force all pending I/O to complete before analysis
-        stream.flush(block=True)
-    # Auto-cleanup ensures all data written
-
+    # Load entries matching a predicate on EntryMeta
+    for state in stream.replay(predicate=lambda e: e.index % 10 == 0):
+        ...
     ```
     """
 
@@ -126,12 +106,11 @@ class StateStream(typing.Generic[NDimension]):
         validate: bool = False,
         auto_save: bool = True,
         auto_replay: bool = True,
-        lazy_load: bool = True,
         save_predicate: typing.Optional[
             typing.Callable[[ModelState[NDimension]], bool]
         ] = None,
+        checkpoint_store: typing.Optional[DataStore[ModelState[NDimension]]] = None,
         checkpoint_interval: typing.Optional[int] = None,
-        checkpoint_dir: typing.Optional[PathLike] = None,
         max_batch_memory_usage: typing.Optional[float] = None,
         async_io: bool = False,
         max_queue_size: int = 50,
@@ -155,7 +134,8 @@ class StateStream(typing.Generic[NDimension]):
             Example: ```lambda s: s.step % 10 == 0``` (save every 10th state)
         :param checkpoint_interval: Optional interval for checkpointing. If provided,
             creates a checkpoint every N states for crash recovery. Example: 100
-        :param checkpoint_dir: Directory to save checkpoints. Required if `checkpoint_interval` is set.
+        :param checkpoint_store: Optional `DataStore` for checkpointing. This must be provide if `checkpoint_interval` is set.
+            The data store must support appending new states. that is, `store.supports_append` must be True.
         :param max_batch_memory_usage: Maximum batch memory in MB before forcing flush.
             Estimated by sampling first state's memory footprint. Batch flushes when either
             `batch_size` or `max_batch_memory_usage` threshold is reached. Example: 50.0 MB
@@ -175,8 +155,8 @@ class StateStream(typing.Generic[NDimension]):
         self.validate = validate
         self.auto_save = auto_save
         self.auto_replay = auto_replay
-        self.lazy_load = lazy_load
         self.save_predicate = save_predicate
+        self.checkpoint_store = checkpoint_store
         self.checkpoint_interval = checkpoint_interval
         self.max_batch_memory_usage = max_batch_memory_usage
 
@@ -185,6 +165,7 @@ class StateStream(typing.Generic[NDimension]):
         self.io_thread_name = io_thread_name
         self.queue_timeout = queue_timeout
 
+        # Incompatible option warnings
         if self.store is None:
             if self.validate:
                 logger.warning(
@@ -212,10 +193,20 @@ class StateStream(typing.Generic[NDimension]):
 
         if store is not None and not store.supports_append:
             raise StreamError(
-                f"Provided store {store} does not support appending new states. "
-                "stream requires a store that supports appending."
+                f"Store {store!r} does not support appending. {self.__class__.__name__} requires `supports_append=True`."
             )
 
+        if checkpoint_interval is not None and checkpoint_store is None:
+            raise StreamError(
+                "`checkpoint_store` must be provided when `checkpoint_interval` is set."
+            )
+
+        if checkpoint_store is not None and not checkpoint_store.supports_append:
+            raise StreamError(
+                f"`checkpoint_store` {checkpoint_store!r} does not support appending."
+            )
+
+        # Internal state
         self._batch: typing.List[ModelState[NDimension]] = []
         self._yield_count: int = 0
         self._saved_count: int = 0
@@ -223,35 +214,23 @@ class StateStream(typing.Generic[NDimension]):
         self._started: bool = False
         self._consumed: bool = False
         self._state_size_mb: typing.Optional[float] = None
-        self._checkpoint_dir = (
-            Path(checkpoint_dir) if checkpoint_dir is not None else None
-        )
 
+        # Async I/O infrastructure
         self._io_queue: typing.Optional[queue.Queue] = None
         self._io_thread: typing.Optional[threading.Thread] = None
         self._io_error: typing.Optional[Exception] = None
         self._shutdown_event: typing.Optional[threading.Event] = None
         self._saved_count_lock = threading.Lock()  # Protects _saved_count in async mode
 
-        if self.checkpoint_interval is not None:
-            if self._checkpoint_dir is None:
-                raise StreamError(
-                    "`checkpoint_dir` must be provided when `checkpoint_interval` is set"
-                )
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
-
+        # Store-only (replay) mode
         if self.states is None and self.store is None:
-            raise StreamError(
-                "Either `states` or `store` must be provided. "
-                "Cannot create a stream with neither a state source nor a store for replay."
-            )
+            raise StreamError("Either `states` or `store` must be provided.")
 
         if self.states is None and self.store is not None:
             # Store-only mode is intended for replay
             if not self.auto_replay:
                 logger.warning(
-                    "Creating stream with `store` but no `states`. "
-                    "Setting `auto_replay=True` since replay is the only available operation."
+                    "Creating stream with `store` but no `states`. forcing `auto_replay=True`."
                 )
                 self.auto_replay = True
             # Mark as already consumed since there's no states to iterate
@@ -280,7 +259,7 @@ class StateStream(typing.Generic[NDimension]):
         Background thread worker that handles all I/O operations.
 
         Continuously pulls batches from queue and writes to store.
-        Exits when SENTINEL is received or shutdown event is set.
+        Exits when stop IO signal is received or shutdown event is set.
         """
         logger.debug(f"I/O worker thread started (tid={threading.get_ident()})")
         if self._io_queue is None or self.store is None or self._shutdown_event is None:
@@ -302,17 +281,19 @@ class StateStream(typing.Generic[NDimension]):
                     logger.debug(f"I/O worker writing batch of {len(batch)} states")
 
                     try:
-                        self.store.dump(
-                            batch,
-                            exist_ok=True,
-                            validator=validate_state if self.validate else None,
-                        )
+                        for state in batch:
+                            self.store.append(
+                                state,
+                                validator=validate_state if self.validate else None,
+                                meta=lambda s: {"step": s.step},
+                            )
+
                         with self._saved_count_lock:
                             self._saved_count += len(batch)
+
                         del batch  # Free memory immediately
                         logger.debug(
-                            f"I/O worker completed batch "
-                            f"(total saved: {self._saved_count})"
+                            f"I/O worker completed batch (total saved: {self._saved_count})"
                         )
                     except Exception as exc:
                         logger.error(f"I/O worker error during write: {exc}")
@@ -411,13 +392,12 @@ class StateStream(typing.Generic[NDimension]):
 
             elif self.store is not None:
                 raise StreamError(
-                    "Cannot iterate again: the underlying iterable has been exhausted. "
-                    "Use `replay()` to load from store or set auto_replay=True."
+                    "Stream already consumed. The underlying iterable has been exhausted. "
+                    "Use `replay()` or set `auto_replay=True`."
                 )
             else:
                 raise StreamError(
-                    "Cannot iterate again: the underlying iterable has been exhausted. "
-                    "Either provide a fresh iterable or use a store with replay capability."
+                    "Stream already consumed and no store available for replay."
                 )
 
         # No states provided, this shouldn't happen as `_consumed` should already be set to false
@@ -438,13 +418,13 @@ class StateStream(typing.Generic[NDimension]):
 
         io_mode = "async" if self.async_io else "sync"
         logger.debug(
-            f"Streaming to {self.store} ({io_mode} I/O, batch_size={self.batch_size})"
+            f"Streaming -> {self.store} ({io_mode}, batch_size={self.batch_size})"
         )
 
         for state in self.states:
             self._yield_count += 1
 
-            # Check for I/O errors before yielding
+            # Surface any background I/O errors before continuing/yielding
             if self.async_io:
                 self._check_io_error()
 
@@ -459,6 +439,7 @@ class StateStream(typing.Generic[NDimension]):
                 if self._should_checkpoint(state=state):
                     self._save_checkpoint(state=state)
 
+        # Flush whatever is left
         if self._batch and self.auto_save:
             logger.debug(f"Flushing final batch of {len(self._batch)} states")
             self.flush(block=False)
@@ -466,7 +447,7 @@ class StateStream(typing.Generic[NDimension]):
         # Mark the stream as consumed
         self._consumed = True
         logger.debug(
-            f"Completed stream: {self._yield_count} yielded, {self._saved_count} saved"
+            f"Stream exhausted: {self._yield_count} yielded, {self._saved_count} saved"
         )
 
     def __enter__(self) -> Self:
@@ -476,10 +457,11 @@ class StateStream(typing.Generic[NDimension]):
         :return: Self for context manager usage
         """
         self._started = True
-        if self.store is not None:
-            logger.info(f"Started stream session to {self.store!r}")
-        else:
-            logger.info("Started stream session (no persistence)")
+        logger.info(
+            f"Started stream session ({self.store!r})"
+            if self.store
+            else "Started stream session (no persistence)"
+        )
         return self
 
     def __exit__(
@@ -526,85 +508,6 @@ class StateStream(typing.Generic[NDimension]):
                 f"Stream interrupted after {self._saved_count} states have been saved: {exc_val}"
             )
 
-    def collect(
-        self,
-        *steps: int,
-        key: typing.Optional[typing.Callable[[ModelState[NDimension]], bool]] = None,
-    ) -> typing.Iterator[ModelState[NDimension]]:
-        """
-        Iterate over states from the stream, optionally filtering by step numbers or a predicate.
-
-        This method provides flexible filtering capabilities:
-        - Filter by specific step numbers (positional arguments)
-        - Filter by a custom predicate function (key argument)
-        - Combine both filters (state must match step AND predicate)
-        - No filtering (iterate through all states)
-
-        When filtering by steps, iteration stops early once all requested steps have been
-        collected, which can significantly improve performance for large streams.
-
-        :param steps: Optional step numbers to filter. If provided, only states with
-            matching step numbers are yielded. Supports any number of step values.
-            Example: ``collect(0, 10, 20)`` yields only steps 0, 10, and 20.
-        :param key: Optional predicate function to filter states. If provided, only states
-            for which ``key(state)`` returns ``True`` are yielded. When combined with
-            ``steps``, both conditions must be satisfied.
-        :return: Iterator of ``ModelState`` instances matching the filter criteria.
-
-        Examples:
-        ```python
-        # Iterate through entire stream (no filtering)
-        for state in stream.collect():
-            process(state)
-
-        # Collect specific steps only
-        for state in stream.collect(0, 100, 200):
-            process(state)
-
-        # Collect states matching a predicate
-        for state in stream.collect(key=lambda s: s.step % 50 == 0):
-            process(state)
-
-        # Combine step filter with predicate (both must match)
-        for state in stream.collect(0, 50, 100, key=lambda s: s.model.pressure_grid.mean() > 3000):
-            process(state)
-
-        # Collect first and last states
-        for state in stream.collect(0, -1):  # Note: -1 won't work, use key instead
-            process(state)
-        ```
-
-        Note:
-            - When using ``steps``, the method stops early once all requested steps are found.
-            - The ``key`` predicate is evaluated for every state, even those not in ``steps``.
-            - For replaying from store with filtering, consider using store's native filtering
-              if available for better performance.
-        """
-        if steps:
-            logger.debug(f"Collecting states from stream (filtering steps: {steps})")
-            remaining_steps = set(steps)
-        else:
-            logger.debug("Iterating through entire stream")
-            remaining_steps = None
-
-        for state in self:
-            # Apply key filter first (if provided)
-            if key is not None and not key(state):
-                continue
-
-            # Apply step filter (if provided)
-            if remaining_steps is not None:
-                if state.step in remaining_steps:
-                    yield state
-                    remaining_steps.discard(state.step)
-                    if not remaining_steps:
-                        logger.debug(
-                            f"Collected all {len(steps)} requested steps, stopping early"
-                        )
-                        break
-            else:
-                yield state
-
     def last(self) -> typing.Optional[ModelState[NDimension]]:
         """
         Get the last state from the stream.
@@ -612,17 +515,19 @@ class StateStream(typing.Generic[NDimension]):
         Iterates through the entire stream and returns the final state.
         Useful for quickly accessing the end result of a simulation.
 
-        :return: The last `ModelState` instance, or None if stream is empty
+        :return: The last `ModelState` instance, or None if the stream is empty
         """
-        last_state: typing.Optional[ModelState[NDimension]] = None
         logger.debug("Retrieving last state from stream")
+        if self._consumed and self.store is not None:
+            max_idx = self.store.max_index()
+            if max_idx is None:
+                return None
+            results = list(self.store.load(ModelState, indices=[max_idx]))
+            return results[0] if results else None
 
-        iterator = iter(self)
-        while True:
-            try:
-                last_state = next(iterator)
-            except StopIteration:
-                break
+        last_state: typing.Optional[ModelState[NDimension]] = None
+        for state in self:
+            last_state = state
 
         if last_state is not None:
             logger.debug(f"Last state retrieved: step {last_state.step}")
@@ -632,7 +537,7 @@ class StateStream(typing.Generic[NDimension]):
 
     def consume(self) -> None:
         """
-        Consume the entire stream without yielding states to the caller.
+        Exhaust the entire stream without yielding states.
 
         This method iterates through all states, triggering any configured side effects
         (persistence, checkpointing, validation) without returning states. Useful when
@@ -652,57 +557,113 @@ class StateStream(typing.Generic[NDimension]):
         stream = StateStream(
             states=simulation(),
             checkpoint_interval=100,
-            checkpoint_dir=Path("checkpoints")
+            checkpoint_store=HDF5Store("./checkpoints.h5")
         )
         stream.consume()  # Checkpoints created, stream exhausted
         ```
 
-        Note: After calling consume(), the stream is exhausted. Use replay() or set
-        auto_replay=True to iterate again.
+        Note: After calling `consume()`, the stream is exhausted. Calling it again has no effect.
         """
+        if self._consumed:
+            logger.debug("Stream already consumed")
+            return
+
         logger.debug("Consuming stream (no yield to caller)")
         for _ in self:
             pass  # Iterate through, triggering side effects but not yielding
         logger.debug(f"Stream consumed: {self._yield_count} states processed")
 
-    def replay(self) -> typing.Iterator[ModelState[NDimension]]:
+    def replay(
+        self,
+        indices: typing.Optional[typing.Sequence[int]] = None,
+        predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
+        steps: typing.Optional[
+            typing.Union[typing.Sequence[int], typing.Callable[[int], bool]]
+        ] = None,
+        validator: typing.Optional[
+            typing.Callable[[ModelState[NDimension]], ModelState[NDimension]]
+        ] = None,
+    ) -> typing.Iterator[ModelState[NDimension]]:
         """
-        Load and iterate over previously saved states from store.
+        Load and iterate over previously saved states from the store.
 
-        Useful for:
-            - Post-processing saved results
-            - Resuming from checkpoint
-            - Debugging specific timesteps
+        All filtering happens before any array data is deserialised, so skipped
+        entries have no I/O cost.  `indices`, `steps`, and `predicate` can
+        be combined: `indices` always takes priority and bypasses the other two;
+        `steps` and `predicate` are composed with a logical AND when both are
+        supplied.
 
-        Note: Replaying continues to increment `yield_count` counter. If you replay
-        100 states after initially streaming 100 states, `yield_count` will be 200.
-        This tracks total states yielded across all operations.
+        Note: each call to `replay(...)` continues to increment `yield_count`.
+        Replaying 100 states after streaming 100 states gives `yield_count == 200`.
 
-        :return: Iterator over loaded ModelState instances
-        :raises `StreamError`: If no store provided
-        :raises `StorageError`: If store file doesn't exist or is corrupted
+        :param indices: Load only the entries at these zero-based insertion-order
+            positions.  When given, `steps` and `predicate` are ignored.
+        :param steps: Filter by simulation step number.  Accepts either a sequence
+            of exact step numbers (`steps=[0, 100, 200]`) or a callable that
+            receives a step number and returns `bool`
+            (`steps=lambda s: s % 50 == 0`).  Composed with `predicate` when
+            both are provided.
+        :param predicate: `(EntryMeta) -> bool` filter evaluated against stored
+            entry metadata.  Use this for any metadata beyond step number, e.g.
+            `predicate=lambda e: e.meta.get("converged")`.  Composed with
+            `steps` when both are provided.
+        :param validator: Optional post-load callable applied to each deserialised
+            state before it is yielded.  Defaults to `validate_state` when the
+            stream was constructed with `validate=True`.
+        :return: Iterator over `ModelState` instances matching the filter criteria,
+            in insertion order.
+        :raises StreamError: If no store was provided at construction time.
+        :raises StorageError: If the store file is missing or corrupted.
         """
         if self.store is None:
             raise StreamError("Cannot replay: no store provided")
 
-        logger.debug(f"Replaying states from {self.store}")
+        logger.debug(f"Replaying from {self.store}")
+
+        pred = predicate
+        if steps:
+            if callable(steps):
+
+                def _predicate(entry: EntryMeta) -> bool:
+                    step = int(entry.meta.get("step", -1))
+                    if predicate is not None:
+                        return steps(step) and predicate(entry)
+                    return steps(step)
+            else:
+                steps_set = set(steps)
+
+                def _predicate(entry: EntryMeta) -> bool:
+                    step = int(entry.meta.get("step", -1))
+                    in_steps = step in steps_set
+                    if predicate is not None:
+                        return in_steps and predicate(entry)
+                    return in_steps
+
+            pred = _predicate
 
         for state in self.store.load(
             ModelState,
-            lazy=self.lazy_load,
-            validate=validate_state if self.validate else None,
+            indices=indices,
+            predicate=pred,
+            validator=validator or (validate_state if self.validate else None),
         ):
             self._yield_count += 1
             yield state
 
-        logger.debug(f"Replay complete: {self._yield_count} states loaded")
+        logger.debug(f"Replay complete: {self._yield_count} total yielded")
 
     def flush(self, block: bool = False) -> None:
         """
         Manually flush accumulated batch to store.
 
-        For sync I/O: Writes batch immediately to disk.
-        For async I/O: Enqueues batch for background writing.
+        Sync path:
+            Each item in the batch is appended to the store in sequence, then
+            the batch buffer is cleared.
+
+        Async path
+            The batch list is handed off to the I/O worker queue and the
+            buffer is cleared immediately so the simulation can keep running.
+            Pass `block=True` to wait until the queue has fully drained.
 
         :param block: If True, wait for I/O thread to complete all pending writes.
             If False (default), just enqueue and return immediately (async behavior).
@@ -751,20 +712,22 @@ class StateStream(typing.Generic[NDimension]):
 
             except queue.Full:
                 logger.error(
-                    f"I/O queue full ({self.max_queue_size}) for >10s. "
-                    f"Consider increasing `max_queue_size` or ensure `max_queue_size` is a certain magnitude larger than "
-                    f"`batch_size` ({self.batch_size})."
+                    f"I/O queue full ({self.max_queue_size}) "
+                    f"Consider increasing `max_queue_size`, ensure `max_queue_size` is a certain magnitude larger than "
+                    f"`batch_size` ({self.batch_size}), or slow down the simulation."
                 )
                 raise StreamError("I/O queue full. Backpressure limit reached")
         else:
             logger.debug(f"Flushing batch of {batch_size} states to {self.store}")
 
             try:
-                self.store.dump(
-                    self._batch,
-                    exist_ok=True,
-                    validator=validate_state if self.validate else None,
-                )
+                for state in self._batch:
+                    self.store.append(
+                        state,
+                        validator=validate_state if self.validate else None,
+                        meta=lambda s: {"step": s.step},
+                    )
+
                 self._saved_count += batch_size
                 logger.debug(
                     f"Flushed {batch_size} states (total saved: {self._saved_count})"
@@ -850,7 +813,7 @@ class StateStream(typing.Generic[NDimension]):
             if batch_memory_usage > self.max_batch_memory_usage:
                 logger.warning(
                     f"Batch memory limit reached ({batch_memory_usage:.1f} MB > "
-                    f"{self.max_batch_memory_usage:.1f} MB) with {len(self._batch)} states, "
+                    f"{self.max_batch_memory_usage:.1f} MB) with {len(self._batch)} states - "
                     f"flushing early"
                 )
                 return True
@@ -864,9 +827,12 @@ class StateStream(typing.Generic[NDimension]):
         :param state: Current state
         :return: True if checkpoint should be created, False otherwise
         """
-        if self.checkpoint_interval is None:
-            return False
-        return state.step > 0 and state.step % self.checkpoint_interval == 0
+        return (
+            self.checkpoint_interval is not None
+            and self.checkpoint_store is not None
+            and state.step > 0
+            and state.step % self.checkpoint_interval == 0
+        )
 
     def _save_checkpoint(self, state: ModelState[NDimension]) -> None:
         """
@@ -877,22 +843,18 @@ class StateStream(typing.Generic[NDimension]):
 
         :param state: State to checkpoint
         """
-        if self._checkpoint_dir is None:
+        if self.checkpoint_store is None:
             return
-
-        checkpoint_path = self._checkpoint_dir / f"checkpoint_{state.step:06d}.h5"
         try:
-            store = HDF5Store(
-                filepath=checkpoint_path, compression="gzip", compression_opts=6
+            self.checkpoint_store.append(
+                state,
+                validator=validate_state if self.validate else None,
+                meta=lambda s: {"step": s.step},
             )
-            store.dump([state], exist_ok=True, validator=None)
-
             self._checkpoints_count += 1
-            logger.info(
-                f"Created checkpoint at step {state.step} ({checkpoint_path.name})"
-            )
+            logger.info(f"Checkpoint saved at step {state.step}")
         except Exception as exc:
-            logger.error(f"Failed to create checkpoint at step {state.step}: {exc}")
+            logger.error(f"Failed to save checkpoint at step {state.step}: {exc}")
 
     def checkpoint(self, step: int) -> ModelState[NDimension]:
         """
@@ -903,43 +865,31 @@ class StateStream(typing.Generic[NDimension]):
         :raises `StreamError`: If checkpointing not configured
         :raises `FileNotFoundError`: If checkpoint doesn't exist
         """
-        if self._checkpoint_dir is None:
-            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
+        if self.checkpoint_store is None:
+            raise StreamError(
+                "Checkpointing not configured. No `checkpoint_store` found."
+            )
 
-        checkpoint_files = self._checkpoint_dir.glob(f"checkpoint_{step:06d}.h5*")
-        checkpoint_path = next(checkpoint_files, None)
-        if checkpoint_path is None:
-            raise FileNotFoundError(f"Checkpoint not found for step {step}")
-
-        store = HDF5Store(filepath=checkpoint_path)
-        state = next(store.load(ModelState, validator=None), None)
-        if state is None:
-            raise StreamError(f"Checkpoint file is empty: {checkpoint_path}")
-
-        logger.debug(f"Loaded checkpoint from step {step}")
-        return state
+        results = list(
+            self.checkpoint_store.load(
+                ModelState,
+                predicate=lambda e: e.meta.get("step") == step,
+            )
+        )
+        if not results:
+            raise StreamError(f"No checkpoint found for step {step}.")
+        return results[0]
 
     def checkpoints(self) -> typing.Generator[ModelState[NDimension], None, None]:
         """
-        Load all available checkpoints in order.
+        Yield all checkpointed states in insertion order.
 
-        :return: Generator yielding ModelState instances from checkpoints
+        :return: Generator yielding state checkpoints
         :raises `StreamError`: If checkpointing not configured
         """
-        if self._checkpoint_dir is None:
-            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
-
-        checkpoint_files = sorted(
-            self._checkpoint_dir.glob("checkpoint_*.h5*"),
-            key=lambda p: int(p.stem.split("_")[1].split(".")[0]),
-        )
-        for checkpoint_path in checkpoint_files:
-            store = HDF5Store(filepath=checkpoint_path)
-            state = next(store.load(ModelState, validator=None), None)
-            if state is not None:
-                yield state
-            else:
-                logger.warning(f"Checkpoint file is empty: {checkpoint_path}")
+        if self.checkpoint_store is None:
+            raise StreamError("No checkpoint_store configured.")
+        yield from self.checkpoint_store.load(ModelState)
 
     def list_checkpoints(self) -> typing.List[int]:
         """
@@ -948,21 +898,16 @@ class StateStream(typing.Generic[NDimension]):
         :return: Sorted list of checkpoint step numbers
         :raises `StreamError`: If checkpointing not configured
         """
-        if self._checkpoint_dir is None:
-            raise StreamError("Checkpointing not configured (no checkpoint_interval)")
+        if self.checkpoint_store is None:
+            raise StreamError(
+                "Checkpointing not configured. No `checkpoint_store` found"
+            )
 
-        if not self._checkpoint_dir.exists():
-            return []
-
-        checkpoints = []
-        for path in self._checkpoint_dir.glob("checkpoint_*.h5*"):
-            try:
-                step = int(path.stem.split("_")[1].split(".")[0])
-                checkpoints.append(step)
-            except (ValueError, IndexError):
-                logger.warning(f"Invalid checkpoint filename: {path.name}")
-
-        return sorted(checkpoints)
+        return sorted(
+            int(e.meta["step"])
+            for e in self.checkpoint_store.entries()
+            if "step" in e.meta
+        )
 
     @property
     def progress(self) -> StreamProgress:

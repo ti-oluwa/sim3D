@@ -628,9 +628,8 @@ class PVTTables:
                     f"Incompatible shapes: pressure {p.shape}, temperature {t.shape}"
                 )
 
-        # RectBivariateSpline.ev is optimized for vectorized evaluation
+        # `RectBivariateSpline.ev` is optimized for vectorized evaluation
         result = interp.ev(p, t)
-
         # Return scalar if inputs were scalar
         return float(result) if result.size == 1 else result
 
@@ -1408,102 +1407,108 @@ def build_pvt_table_data(
     n_s = len(salinities)  # type: ignore[arg-type]
 
     # Validate pre-computed 2D table shapes (n_p, n_t)
-    expected_2d = (n_p, n_t)
+    expected_2d_shape = (n_p, n_t)
     _validate_table_shape(
         table=oil_viscosity_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="oil_viscosity_table",
     )
     _validate_table_shape(
         table=oil_compressibility_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="oil_compressibility_table",
     )
     _validate_table_shape(
         table=oil_specific_gravity_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="oil_specific_gravity_table",
     )
     _validate_table_shape(
         table=oil_api_gravity_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="oil_api_gravity_table",
     )
     _validate_table_shape(
-        table=oil_density_table, expected_shape=expected_2d, name="oil_density_table"
+        table=oil_density_table,
+        expected_shape=expected_2d_shape,
+        name="oil_density_table",
     )
     _validate_table_shape(
         table=oil_formation_volume_factor_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="oil_formation_volume_factor_table",
     )
     _validate_table_shape(
         table=solution_gas_to_oil_ratio_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="solution_gas_to_oil_ratio_table",
     )
     _validate_table_shape(
         table=gas_viscosity_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="gas_viscosity_table",
     )
     _validate_table_shape(
         table=gas_compressibility_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="gas_compressibility_table",
     )
     _validate_table_shape(
-        table=gas_gravity_table, expected_shape=expected_2d, name="gas_gravity_table"
+        table=gas_gravity_table,
+        expected_shape=expected_2d_shape,
+        name="gas_gravity_table",
     )
     _validate_table_shape(
         table=gas_molecular_weight_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="gas_molecular_weight_table",
     )
     _validate_table_shape(
-        table=gas_density_table, expected_shape=expected_2d, name="gas_density_table"
+        table=gas_density_table,
+        expected_shape=expected_2d_shape,
+        name="gas_density_table",
     )
     _validate_table_shape(
         table=gas_formation_volume_factor_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="gas_formation_volume_factor_table",
     )
     _validate_table_shape(
         table=gas_compressibility_factor_table,
-        expected_shape=expected_2d,
+        expected_shape=expected_2d_shape,
         name="gas_compressibility_factor_table",
     )
 
     # Validate pre-computed 3D table shapes (n_p, n_t, n_s)
-    expected_3d = (n_p, n_t, n_s)
+    expected_3d_shape = (n_p, n_t, n_s)
     _validate_table_shape(
         table=water_bubble_point_pressure_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="water_bubble_point_pressure_table",
     )
     _validate_table_shape(
         table=water_viscosity_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="water_viscosity_table",
     )
     _validate_table_shape(
         table=water_compressibility_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="water_compressibility_table",
     )
     _validate_table_shape(
         table=water_density_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="water_density_table",
     )
     _validate_table_shape(
         table=water_formation_volume_factor_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="water_formation_volume_factor_table",
     )
     _validate_table_shape(
         table=gas_solubility_in_water_table,
-        expected_shape=expected_3d,
+        expected_shape=expected_3d_shape,
         name="gas_solubility_in_water_table",
     )
 
@@ -1774,7 +1779,7 @@ def build_pvt_table_data(
             # Use the Rs(P,T) table to determine Pb at each (P,T)
             # For each (P, T), interpolate Pb from the 2D table Pb(Rs, T)
             bubble_point_pressure_grid_2d = np.zeros((n_p, n_t), dtype=dtype)
-            pb_interp = RectBivariateSpline(
+            pb_interpolator = RectBivariateSpline(
                 x=solution_gas_to_oil_ratios,
                 y=temperatures,
                 z=bubble_point_pressures,
@@ -1785,7 +1790,7 @@ def build_pvt_table_data(
             # Create temperature grid matching `solution_gas_to_oil_ratio_table` shape
             t_grid = np.broadcast_to(temperatures, (n_p, n_t))
             bubble_point_pressure_grid_2d = (
-                pb_interp.ev(solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel())  # type: ignore
+                pb_interpolator.ev(solution_gas_to_oil_ratio_table.ravel(), t_grid.ravel())  # type: ignore
                 .reshape(n_p, n_t)
                 .astype(dtype)
             )
@@ -1843,7 +1848,7 @@ def build_pvt_table_data(
 
         # Compute actual Co using initial Bo estimate
         if need_co:
-            assert rs_at_bp_grid is not None  # Guaranteed by need_co check above
+            assert rs_at_bp_grid is not None  # Guaranteed by `need_co` check above
             assert gas_fvf_for_co is not None
             oil_compressibility_table = build_oil_compressibility_grid(  # type: ignore[arg-type]
                 pressure_grid=pressure_grid_2d,
