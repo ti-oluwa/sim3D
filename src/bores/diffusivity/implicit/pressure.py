@@ -861,7 +861,7 @@ def add_well_contributions(
         well_index_cache = []
         total_well_index = 0.0
 
-        # for the first pass over perforated cells, we compute total WI and cache well indices
+        # For the first pass over perforated cells, we compute total WI and cache well indices
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
                 range(start[0], end[0] + 1),
@@ -946,7 +946,8 @@ def add_well_contributions(
                 allocation_fraction=allocation_fraction,
                 use_pseudo_pressure=use_pseudo_pressure,
                 fluid_compressibility=phase_compressibility,
-                pvt_tables=config.pvt_tables,
+                # Do not pass reservoir fluid PVT tables for injected fluid
+                pvt_tables=None,
             )
 
             # Check for backflow (cell pressure > BHP)
@@ -970,7 +971,7 @@ def add_well_contributions(
             A[cell_1D_index, cell_1D_index] += phase_productivity_index
             b[cell_1D_index] += phase_productivity_index * effective_bhp
 
-    # Loop 2: Process production wells
+    # Process production wells
     for well in wells.production_wells:
         if not well.is_open:
             continue

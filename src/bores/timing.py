@@ -185,7 +185,7 @@ class Timer(StoreSerializable):
         If True, simulation has reached it end.
         """
         # Use small tolerance for floating-point comparison
-        if self.elapsed_time >= self.simulation_time - 1e-9:
+        if self.elapsed_time >= (self.simulation_time - 1e-9):
             return True
 
         if self.max_steps is not None and self.step >= self.max_steps:

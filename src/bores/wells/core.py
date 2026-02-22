@@ -636,10 +636,18 @@ class WellFluid(Serializable):
         Example:
         ```python
         # These two fluids will share the same cached table:
-        methane1 = WellFluid(name="CH4-1", phase=FluidPhase.GAS,
-                             specific_gravity=0.65, molecular_weight=16.04)
-        methane2 = WellFluid(name="CH4-2", phase=FluidPhase.GAS,
-                             specific_gravity=0.65, molecular_weight=16.04)
+        methane1 = WellFluid(
+            name="CH4-1", 
+            phase=FluidPhase.GAS,
+            specific_gravity=0.65, 
+            molecular_weight=16.04
+        )
+        methane2 = WellFluid(
+            name="CH4-2", 
+            phase=FluidPhase.GAS,
+            specific_gravity=0.65, 
+            molecular_weight=16.04
+        )
 
         table1 = methane1.get_pseudo_pressure_table(temperature=150)
         table2 = methane2.get_pseudo_pressure_table(temperature=150)

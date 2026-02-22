@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.6"
+__generated_with = "0.19.11"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -16,6 +16,14 @@ def setup_run():
     np.set_printoptions(threshold=np.inf)  # type: ignore
     bores.use_32bit_precision()
 
+
+    ilu_preconditioner = bores.CachedPreconditionerFactory(
+        factory="ilu",
+        name="cached_ilu",
+        update_frequency=10,
+        recompute_threshold=0.3,
+    )
+    ilu_preconditioner.register(override=True)
     # Load the new run with the resulting model state from the stabilization run
     run = bores.Run.from_files(
         model_path=Path("./scenarios/runs/stabilization/results/model.h5"),

@@ -18,7 +18,7 @@ __all__ = [
 
 
 class ColorScheme(str, Enum):
-    """Professional color schemes for reservoir visualization."""
+    """Color schemes for reservoir visualization."""
 
     VIRIDIS = "viridis"
     PLASMA = "plasma"
@@ -101,7 +101,7 @@ class PropertyMeta:
 
 
 class PropertyRegistry:
-    """Registry of all available properties available on a `ModelState` for visualization."""
+    """Registry of all reservoir model and model state properties available for visualization."""
 
     _defaults = dict(
         # Pressure and Temperature
@@ -179,7 +179,7 @@ class PropertyRegistry:
             name="model.fluid_properties.oil_bubble_point_pressure_grid",
             display_name="Oil Bubble Point Pressure",
             unit="psi",
-            color_scheme=ColorScheme.SPECTRAL,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["oil_bpp"],
         ),
         # Water Properties
@@ -196,7 +196,7 @@ class PropertyRegistry:
             name="model.fluid_properties.water_viscosity_grid",
             display_name="Water Viscosity",
             unit="cP",
-            color_scheme=ColorScheme.BALANCE,
+            color_scheme=ColorScheme.CIVIDIS,
             log_scale=True,
         ),
         water_density=PropertyMeta(
@@ -223,7 +223,7 @@ class PropertyRegistry:
             name="model.fluid_properties.water_bubble_point_pressure_grid",
             display_name="Water Bubble Point Pressure",
             unit="psi",
-            color_scheme=ColorScheme.INFERNO,
+            color_scheme=ColorScheme.RdBu,
             aliases=["water_bpp"],
         ),
         water_salinity=PropertyMeta(
@@ -280,7 +280,7 @@ class PropertyRegistry:
             name="model.fluid_properties.solution_gas_to_oil_ratio_grid",
             display_name="Gas-Oil Ratio",
             unit="SCF/STB",
-            color_scheme=ColorScheme.BALANCE,
+            color_scheme=ColorScheme.TURBO,
             aliases=[
                 "gor",
                 "gas_oil_ratio",
@@ -328,7 +328,7 @@ class PropertyRegistry:
             name="model.rock_properties.absolute_permeability.x",
             display_name="Permeability X",
             unit="mD",
-            color_scheme=ColorScheme.MAGMA,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["kx", "perm_x"],
         ),
         permeability_y=PropertyMeta(
@@ -349,7 +349,7 @@ class PropertyRegistry:
             name="model.rock_properties.porosity_grid",
             display_name="Porosity",
             unit="fraction",
-            color_scheme=ColorScheme.PLASMA,
+            color_scheme=ColorScheme.CIVIDIS,
         ),
         net_to_gross_ratio=PropertyMeta(
             name="model.rock_properties.net_to_gross_ratio_grid",
@@ -418,56 +418,56 @@ class PropertyRegistry:
             name="injection.oil",
             display_name="Oil Injection Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.PLASMA,
             aliases=["oil_injection"],
         ),
         water_injection_rate=PropertyMeta(
             name="injection.water",
             display_name="Water Injection Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.PLASMA,
             aliases=["water_injection"],
         ),
         gas_injection_rate=PropertyMeta(
             name="injection.gas",
             display_name="Gas Injection Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.PLASMA,
             aliases=["gas_injection"],
         ),
         total_injection_rate=PropertyMeta(
             name="injection.total",
             display_name="Total Injection Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.PLASMA,
             aliases=["total_injection"],
         ),
         oil_production_rate=PropertyMeta(
             name="production.oil",
             display_name="Oil Production Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["oil_production"],
         ),
         water_production_rate=PropertyMeta(
             name="production.water",
             display_name="Water Production Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["water_production"],
         ),
         gas_production_rate=PropertyMeta(
             name="production.gas",
             display_name="Gas Production Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["gas_production"],
         ),
         total_production_rate=PropertyMeta(
             name="production.total",
             display_name="Total Production Rate",
             unit="ft³/day",
-            color_scheme=ColorScheme.RdYlBu,
+            color_scheme=ColorScheme.VIRIDIS,
             aliases=["total_production"],
         ),
         oil_relative_permeability=PropertyMeta(
@@ -516,14 +516,14 @@ class PropertyRegistry:
             name="capillary_pressures.oil_water_capillary_pressure",
             display_name="Oil-Water Capillary Pressure",
             unit="psi",
-            color_scheme=ColorScheme.MAGMA,
+            color_scheme=ColorScheme.TURBO,
             aliases=["ow_cap", "oil_water_capillary", "pcow"],
         ),
         gas_oil_capillary_pressure=PropertyMeta(
             name="capillary_pressures.gas_oil_capillary_pressure",
             display_name="Gas-Oil Capillary Pressure",
             unit="psi",
-            color_scheme=ColorScheme.MAGMA,
+            color_scheme=ColorScheme.TURBO,
             aliases=["go_cap", "gas_oil_capillary", "pcgo"],
         ),
     )

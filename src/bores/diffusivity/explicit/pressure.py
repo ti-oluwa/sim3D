@@ -780,7 +780,8 @@ def compute_well_rate_grid(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
                 allocation_fraction=allocation_fraction,
-                pvt_tables=config.pvt_tables,
+                # Do not pass reservoir fluid PVT tables for injected fluid
+                pvt_tables=None,
             )
 
             # Check for backflow (negative injection)

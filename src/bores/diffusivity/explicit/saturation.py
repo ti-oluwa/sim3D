@@ -1005,7 +1005,8 @@ def compute_well_rate_grids(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
                 allocation_fraction=allocation_fraction,
-                pvt_tables=config.pvt_tables,
+                # Do not pass reservoir fluid PVT tables for injected fluid
+                pvt_tables=None,
             )
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
@@ -2368,6 +2369,8 @@ def compute_miscible_well_rate_grids(
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
                 allocation_fraction=allocation_fraction,
+                # Do not pass reservoir fluid PVT tables for injected fluid
+                pvt_tables=None,
             )
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
@@ -2514,6 +2517,7 @@ def compute_miscible_well_rate_grids(
                     and produced_phase == FluidPhase.GAS,
                     formation_volume_factor=fluid_formation_volume_factor,
                     allocation_fraction=allocation_fraction,
+                    pvt_tables=config.pvt_tables,
                 )
 
                 if production_rate > 0.0 and config.warn_well_anomalies:

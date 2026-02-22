@@ -801,37 +801,45 @@ class ZarrStore(DataStore[SerializableT]):
     ) -> typing.Generator[SerializableT, None, None]:
         root = self._open_root("r")
 
-        all_entries = []
-        for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
-            idx = _get_index_from_group_name(name)
-            if idx is not None:
-                group = root[name]
-                all_entries.append(
-                    EntryMeta(
+        if indices is not None:
+            index_set = set(indices)
+            for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
+                idx = _get_index_from_group_name(name)
+                if idx is not None and idx in index_set:
+                    item_group = typing.cast(zarr.Group, root[name])  # type: ignore[index]
+                    logger.debug(f"{self.__class__.__name__}: loading entry {idx}")
+                    raw = self._load_data(item_group)
+                    raw.pop("_index", None)
+                    raw.pop("_group_name", None)
+                    raw.pop("count", None)
+                    raw.pop("version", None)
+                    obj = typ.load(raw)
+                    yield validator(obj) if validator is not None else obj
+        else:
+            for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
+                idx = _get_index_from_group_name(name)
+                if idx is not None:
+                    group = root[name]
+                    entry_meta = EntryMeta(
                         idx=idx,
                         group_name=name,
                         meta=dict(group.attrs.get("_meta", {})),
                     )
-                )
 
-        if indices is not None:
-            index_set = set(indices)
-            target = [e for e in all_entries if e.idx in index_set]
-        elif predicate is not None:
-            target = [e for e in all_entries if predicate(e)]
-        else:
-            target = all_entries
-
-        for entry in target:
-            item_group = typing.cast(zarr.Group, root[entry.group_name])  # type: ignore[index]
-            logger.debug(f"{self.__class__.__name__}: loading entry {entry.idx}")
-            raw = self._load_data(item_group)
-            raw.pop("_index", None)
-            raw.pop("_group_name", None)
-            raw.pop("count", None)
-            raw.pop("version", None)
-            obj = typ.load(raw)
-            yield validator(obj) if validator is not None else obj
+                    if predicate is None or predicate(entry_meta):
+                        item_group = typing.cast(
+                            zarr.Group, root[entry_meta.group_name]
+                        )  # type: ignore[index]
+                        logger.debug(
+                            f"{self.__class__.__name__}: loading entry {entry_meta.idx}"
+                        )
+                        raw = self._load_data(item_group)
+                        raw.pop("_index", None)
+                        raw.pop("_group_name", None)
+                        raw.pop("count", None)
+                        raw.pop("version", None)
+                        obj = typ.load(raw)
+                        yield validator(obj) if validator is not None else obj
 
     def __repr__(self) -> str:
         cname = getattr(self.compressor, "cname", str(self.compressor))
@@ -866,6 +874,7 @@ class HDF5Store(DataStore[SerializableT]):
         filepath: typing.Union[PathLike, str],
         compression: typing.Literal["gzip", "lzf", "szip"] = "gzip",
         compression_opts: int = 3,
+        chunks: typing.Optional[typing.Tuple[int, ...]] = None,
     ):
         """
         Initialize the store
@@ -873,6 +882,7 @@ class HDF5Store(DataStore[SerializableT]):
         :param filepath: Path to the HDF5 file
         :param compression: Compression algorithm - 'gzip', 'lzf', or 'szip'
         :param compression_opts: Compression level (1-9 for gzip)
+        :param chunks: Custom chunk shape for datasets. If None, uses optimized defaults based on array dimensions.
         :raises StorageError: If filepath is invalid or has wrong extension
         """
         self.filepath = _validate_filepath(
@@ -880,10 +890,38 @@ class HDF5Store(DataStore[SerializableT]):
         )
         self.compression = compression
         self.compression_opts = compression_opts  # 1-9 for gzip
+        self.chunks = chunks
+
+    def _get_chunks(
+        self, shape: typing.Tuple[int, ...]
+    ) -> typing.Optional[typing.Tuple[int, ...]]:
+        """
+        Determine optimal chunk size if not provided.
+
+        :param shape: Shape of the array to chunk
+        :return: Optimal chunk shape or None for auto-chunking
+        """
+        if self.chunks:
+            return self.chunks
+
+        # As a rule of thumb, use chunks of ~1-10 MB for good performance
+        # For 3D grids, use smaller chunks for better I/O
+        if len(shape) == 3:
+            return (
+                min(20, shape[0]),
+                min(20, shape[1]),
+                min(20, shape[2]),
+            )
+        elif len(shape) == 2:
+            return (
+                min(100, shape[0]),
+                min(100, shape[1]),
+            )
+        return None  # Auto-chunking
 
     def _create_dataset(self, group: h5py.Group, name: str, data: np.ndarray):
         """
-        Create a compressed dataset. Deletes the dataset if it already exists to recreate a new one.
+        Create a compressed dataset with optimized chunking. Deletes the dataset if it already exists to recreate a new one.
 
         :param group: HDF5 group to create dataset in
         :param name: Name of the dataset
@@ -892,12 +930,14 @@ class HDF5Store(DataStore[SerializableT]):
         """
         if group.get(name) is not None:
             del group[name]
+
+        chunks = self._get_chunks(shape=data.shape)
         return group.create_dataset(
             name=name,
             data=data,
             compression=self.compression,
             compression_opts=self.compression_opts,
-            chunks=True,
+            chunks=chunks if chunks is not None else True,
         )
 
     def _write_data(self, group: h5py.Group, data: Mapping[str, typing.Any]) -> None:
@@ -1075,36 +1115,43 @@ class HDF5Store(DataStore[SerializableT]):
         validator: typing.Optional[DataValidator[SerializableT]] = None,
     ) -> typing.Generator[SerializableT, None, None]:
         with h5py.File(str(self.filepath), "r") as f:
-            all_entries = []
-            for name in sorted(f.keys()):
-                idx = _get_index_from_group_name(name)
-                if idx is not None:
-                    group = f[name]
-                    all_entries.append(
-                        EntryMeta(
+            if indices is not None:
+                index_set = set(indices)
+                for name in sorted(f.keys()):
+                    idx = _get_index_from_group_name(name)
+                    if idx is not None and idx in index_set:
+                        item_group = typing.cast(h5py.Group, f[name])
+                        logger.debug(f"{self.__class__.__name__}: loading entry {idx}")
+                        raw = self._load_data(item_group)
+                        raw.pop("_index", None)
+                        raw.pop("_group_name", None)
+                        raw.pop("count", None)
+                        obj = typ.load(raw)
+                        yield validator(obj) if validator is not None else obj
+            else:
+                for name in sorted(f.keys()):
+                    idx = _get_index_from_group_name(name)
+                    if idx is not None:
+                        group = f[name]
+                        entry_meta = EntryMeta(
                             idx=idx,
                             group_name=name,
                             meta=orjson.loads(group.attrs.get("_meta", "{}")),
                         )
-                    )
 
-            if indices is not None:
-                index_set = set(indices)
-                target = [e for e in all_entries if e.idx in index_set]
-            elif predicate is not None:
-                target = [e for e in all_entries if predicate(e)]
-            else:
-                target = all_entries
-
-            for entry in target:
-                item_group = typing.cast(h5py.Group, f[entry.group_name])
-                logger.debug(f"{self.__class__.__name__}: loading entry {entry.idx}")
-                raw = self._load_data(item_group)
-                raw.pop("_index", None)
-                raw.pop("_group_name", None)
-                raw.pop("count", None)
-                obj = typ.load(raw)
-                yield validator(obj) if validator is not None else obj
+                        if predicate is None or predicate(entry_meta):
+                            item_group = typing.cast(
+                                h5py.Group, f[entry_meta.group_name]
+                            )
+                            logger.debug(
+                                f"{self.__class__.__name__}: loading entry {entry_meta.idx}"
+                            )
+                            raw = self._load_data(item_group)
+                            raw.pop("_index", None)
+                            raw.pop("_group_name", None)
+                            raw.pop("count", None)
+                            obj = typ.load(raw)
+                            yield validator(obj) if validator is not None else obj
 
     def __repr__(self) -> str:
         return (

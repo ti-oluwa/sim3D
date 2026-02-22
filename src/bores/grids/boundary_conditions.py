@@ -1,6 +1,7 @@
 import logging
 import typing
 
+import attrs
 import numpy as np
 
 from bores._precision import get_dtype
@@ -108,12 +109,22 @@ def apply_boundary_conditions(
         + fluid_properties.water_saturation_grid
         + fluid_properties.gas_saturation_grid
     )
-    # Avoid division by zero - if total is near zero, distribute equally
+    # Avoid division by zero. If total is near zero, distribute equally
     safe_total = np.where(total_saturation > 1e-12, total_saturation, 1.0)
 
-    fluid_properties.oil_saturation_grid /= safe_total
-    fluid_properties.water_saturation_grid /= safe_total
-    fluid_properties.gas_saturation_grid /= safe_total
+    normalized_oil = fluid_properties.oil_saturation_grid.copy()
+    normalized_water = fluid_properties.water_saturation_grid.copy()
+    normalized_gas = fluid_properties.gas_saturation_grid.copy()
+    np.divide(normalized_oil, safe_total, out=normalized_oil)
+    np.divide(normalized_water, safe_total, out=normalized_water)
+    np.divide(normalized_gas, safe_total, out=normalized_gas)
+
+    fluid_properties = attrs.evolve(
+        fluid_properties,
+        oil_saturation_grid=normalized_oil,
+        water_saturation_grid=normalized_water,
+        gas_saturation_grid=normalized_gas,
+    )
     excluded_fluid_properties = (
         "pressure_grid",
         "oil_saturation_grid",

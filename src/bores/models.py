@@ -26,7 +26,7 @@ __all__ = [
 
 
 @typing.final
-@attrs.define(slots=True)
+@attrs.frozen(slots=True)
 class FluidProperties(PadMixin[NDimension], StoreSerializable):
     """
     Fluid properties of a reservoir model.

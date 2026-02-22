@@ -314,10 +314,11 @@ class StateStream(typing.Generic[NDimension]):
 
     def _check_io_error(self) -> None:
         """Check if I/O thread encountered an error and raise it."""
-        if self._io_error is not None:
-            raise StreamError(
-                f"Background I/O thread failed: {self._io_error}"
-            ) from self._io_error
+        with self._saved_count_lock:
+            if self._io_error is not None:
+                raise StreamError(
+                    f"Background I/O thread failed: {self._io_error}"
+                ) from self._io_error
 
     def _wait_for_queue(self) -> None:
         """Wait for all pending I/O operations to complete."""
