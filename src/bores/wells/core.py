@@ -749,6 +749,10 @@ class InjectedFluid(WellFluid):
         ),
     )
     """Concentration (preferrably volume-based) of the fluid in the mixture (0 to 1). Relevant for miscible fluids."""
+    density: typing.Optional[float] = None
+    """Override density (lbm/ft³). If provided, bypasses table/correlation-based density calculations. Useful for non-ideal gases like CO2."""
+    viscosity: typing.Optional[float] = None
+    """Override viscosity (cP). If provided, bypasses table/correlation-based viscosity calculations. Useful for non-ideal gases like CO2."""
 
     def __attrs_post_init__(self) -> None:
         """Validate the fluid properties."""
@@ -774,6 +778,11 @@ class InjectedFluid(WellFluid):
         :kwargs: Additional parameters for phase density calculations.
         :return: The density of the fluid (lbm/ft³).
         """
+        if self.density is not None:
+            if isinstance(pressure, np.ndarray):
+                return np.full_like(pressure, self.density)
+            return self.density
+
         vectorize_pressure = isinstance(pressure, np.ndarray)
         vectorize_temperature = isinstance(temperature, np.ndarray)
         use_vectorization = vectorize_pressure or vectorize_temperature
@@ -861,6 +870,11 @@ class InjectedFluid(WellFluid):
         :kwargs: Additional parameters for viscosity calculations.
         :return: The viscosity of the fluid (cP).
         """
+        if self.viscosity is not None:
+            if isinstance(pressure, np.ndarray):
+                return np.full_like(pressure, self.viscosity)
+            return self.viscosity
+
         vectorize_pressure = isinstance(pressure, np.ndarray)
         vectorize_temperature = isinstance(temperature, np.ndarray)
         use_vectorization = vectorize_pressure or vectorize_temperature

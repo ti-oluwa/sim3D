@@ -104,7 +104,7 @@ def setup_run():
             ),
         ),
         skin_factor=2.5,
-        is_active=False,
+        is_active=False,  # Start inactive, schedule will activate at 100 days
     )
 
     # We use a well schedule to activate the producer after some time
@@ -129,7 +129,7 @@ def setup_run():
         backoff_factor=0.5,
         aggressive_backoff_factor=0.25,
     )
-    run.config.update(
+    run.config = run.config.with_updates(
         wells=wells,
         well_schedules=well_schedules,
         timer=timer,

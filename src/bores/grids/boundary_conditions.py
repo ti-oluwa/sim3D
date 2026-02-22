@@ -1,6 +1,8 @@
 import logging
 import typing
 
+import numpy as np
+
 from bores._precision import get_dtype
 from bores.boundary_conditions import BoundaryConditions, BoundaryMetadata, default_bc
 from bores.models import FluidProperties, RockProperties
@@ -98,6 +100,20 @@ def apply_boundary_conditions(
     fluid_properties.gas_saturation_grid.clip(
         min=0.0, max=1.0, out=fluid_properties.gas_saturation_grid, dtype=dtype
     )
+
+    # Normalize saturations to ensure So + Sw + Sg = 1.0
+    # This is critical for mass balance after boundary conditions are applied
+    total_saturation = (
+        fluid_properties.oil_saturation_grid
+        + fluid_properties.water_saturation_grid
+        + fluid_properties.gas_saturation_grid
+    )
+    # Avoid division by zero - if total is near zero, distribute equally
+    safe_total = np.where(total_saturation > 1e-12, total_saturation, 1.0)
+
+    fluid_properties.oil_saturation_grid /= safe_total
+    fluid_properties.water_saturation_grid /= safe_total
+    fluid_properties.gas_saturation_grid /= safe_total
     excluded_fluid_properties = (
         "pressure_grid",
         "oil_saturation_grid",

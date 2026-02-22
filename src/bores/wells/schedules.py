@@ -1038,6 +1038,7 @@ class TimePredicate(
             raise ValidationError("Either time_step or time must be provided.")
         self.time_step = time_step
         self.time = time
+        self._triggered = False  # Internal state to prevent duplicate triggers
 
     def __call__(self, well: Well, state: ModelState[Coordinates]) -> bool:
         """
@@ -1047,10 +1048,20 @@ class TimePredicate(
         :param state: The current model state in the simulation.
         :return: A boolean indicating whether to apply the event.
         """
-        if self.time_step is not None and state.step == self.time_step:
+        # If already triggered, don't trigger again
+        if self._triggered:
+            return False
+
+        # Check time step threshold
+        if self.time_step is not None and state.step >= self.time_step:
+            self._triggered = True
             return True
-        if self.time is not None and state.time == self.time:
+
+        # Check simulation time threshold (use >= to handle adaptive time stepping)
+        if self.time is not None and state.time >= self.time:
+            self._triggered = True
             return True
+
         return False
 
 

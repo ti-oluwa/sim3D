@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.6"
+__generated_with = "0.19.11"
 app = marimo.App(width="full")
 
 
@@ -19,10 +19,7 @@ def _():
     )
     stream = bores.StateStream(store=store, auto_replay=True)
 
-    def steps(step):
-        return step == 0 or step % 2 == 0
-
-    states = list(stream.replay(steps=steps))
+    states = list(stream.replay(steps=lambda step: step == 0 or step % 2 == 0))
     return bores, itertools, np, states
 
 
@@ -371,7 +368,7 @@ def _(bores, states, viz):
         # isomin=0.05
     )
 
-    property = "residual-gas-saturation"
+    property = "gas-compressibility-factor"
     figures = []
     timesteps = [10]
     for timestep in timesteps:

@@ -745,7 +745,7 @@ def pressure_less_than_2200(well: bores.Well, state: bores.ModelState) -> bool:
 @bores.event_predicate(name="Q_oil < 500STB/day") # Make sure to register as event predicate
 def avg_production_rate_below_500STB(well: bores.Well, state: bores.ModelState) -> bool:
     production_in_ft3_per_day = state.production.oil
-    production_in_bbl_per_day = production_in_ft3_per_day * bores.c.FT3_TO_BBL
+    production_in_bbl_per_day = production_in_ft3_per_day * bores.c.CUBIC_FEET_TO_BARRELS
     oil_fvf = state.model.fluid_properties.oil_formation_volume_factor_grid # bbl/STB
     production_in_stb_per_day = production_in_bbl_per_day / oil_fvf
     return abs(production_in_stb_per_day.mean()) < 500.0  # Note: production rates are negative
@@ -1375,8 +1375,8 @@ c.STANDARD_WATER_DENSITY_IMPERIAL  # 62.37 lb/ft³
 c.IDEAL_GAS_CONSTANT_IMPERIAL            # 10.73 (psia·ft³)/(lbmol·°R)
 
 # Conversion factors
-c.PSI_TO_PA            # 6894.76
-c.BBL_TO_FT3     # 5.6146
+c.PSI_TO_PASCAL            # 6894.76
+c.BARRELS_TO_CUBIC_FEET     # 5.6146
 
 # And many others...
 ```

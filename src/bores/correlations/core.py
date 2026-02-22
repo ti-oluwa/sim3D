@@ -41,14 +41,14 @@ def validate_input_temperature(temperature: FloatOrArray) -> None:
     :raises ValidationError: If any temperature is outside the valid range.
     """
     temp_array = np.asarray(temperature)
-    invalid_mask = (temp_array < c.MIN_VALID_TEMPERATURE) | (
-        temp_array > c.MAX_VALID_TEMPERATURE
+    invalid_mask = (temp_array < c.MINIMUM_VALID_TEMPERATURE) | (
+        temp_array > c.MAXIMUM_VALID_TEMPERATURE
     )
 
     if np.any(invalid_mask):
         invalid: np.ndarray = temp_array[invalid_mask]
         raise ValidationError(
-            f"Temperature(s) out of valid range [{c.MIN_VALID_TEMPERATURE}, {c.MAX_VALID_TEMPERATURE}] K: "
+            f"Temperature(s) out of valid range [{c.MINIMUM_VALID_TEMPERATURE}, {c.MAXIMUM_VALID_TEMPERATURE}] K: "
             f"{invalid}"
         )
 
@@ -63,13 +63,13 @@ def validate_input_pressure(pressure: FloatOrArray) -> None:
     :raises ValidationError: If any pressure is outside the valid range.
     """
     pressure_array = np.asarray(pressure)
-    invalid = (pressure_array < c.MIN_VALID_PRESSURE) | (
-        pressure_array > c.MAX_VALID_PRESSURE
+    invalid = (pressure_array < c.MINIMUM_VALID_PRESSURE) | (
+        pressure_array > c.MAXIMUM_VALID_PRESSURE
     )
 
     if np.any(invalid):
         raise ValidationError(
-            f"Pressure(s) out of valid range [{c.MIN_VALID_PRESSURE}, {c.MAX_VALID_PRESSURE}] Pa: "
+            f"Pressure(s) out of valid range [{c.MINIMUM_VALID_PRESSURE}, {c.MAXIMUM_VALID_PRESSURE}] Pa: "
             f"{pressure_array[invalid]}"
         )
 
@@ -154,7 +154,7 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
     :return: Density in lbm/ft³
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PASCAL
     density: float = PropsSI(
         "D",
         "P",
@@ -163,7 +163,7 @@ def compute_fluid_density(pressure: float, temperature: float, fluid: str) -> fl
         clip_temperature(temperature_in_kelvin, fluid),
         fluid,
     )
-    return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
+    return density * c.KILOGRAM_PER_CUBIC_METER_TO_POUNDS_PER_CUBIC_FEET
 
 
 def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> float:
@@ -176,7 +176,7 @@ def compute_fluid_viscosity(pressure: float, temperature: float, fluid: str) -> 
     :return: Viscosity in centipoise (cP)
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PASCAL
     viscosity = PropsSI(
         "V",
         "P",
@@ -200,7 +200,7 @@ def compute_fluid_compressibility_factor(
     :return: Compressibility factor Z (dimensionless)
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PASCAL
     return PropsSI(
         "Z",
         "P",
@@ -229,7 +229,7 @@ def compute_fluid_compressibility(
     :return: Compressibility in psi⁻¹
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PASCAL
     return (
         PropsSI(
             "ISOTHERMAL_COMPRESSIBILITY",
@@ -239,7 +239,7 @@ def compute_fluid_compressibility(
             clip_temperature(temperature_in_kelvin, fluid),
             fluid,
         )
-        / c.PA_TO_PSI
+        / c.PASCAL_TO_PSI
     )
 
 
@@ -284,11 +284,11 @@ def compute_gas_gravity_from_density(
     """
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
     temperature_in_kelvin = typing.cast(float, temperature_in_kelvin)
-    pressure_in_pascals = pressure * c.PSI_TO_PA
+    pressure_in_pascals = pressure * c.PSI_TO_PASCAL
     air_density = compute_fluid_density(
         pressure_in_pascals, temperature_in_kelvin, fluid="Air"
     )
-    return density / (air_density * c.KG_PER_M3_TO_POUNDS_PER_FT3)
+    return density / (air_density * c.KILOGRAM_PER_CUBIC_METER_TO_POUNDS_PER_CUBIC_FEET)
 
 
 @numba.njit(cache=True)
@@ -691,12 +691,12 @@ def compute_gas_formation_volume_factor(
         B_g = (Z * T * P_std) / (P * T_std)
 
     Where:
-        - B_g: Gas formation volume factor (ft³/SCF)
-        - Z: Gas compressibility factor (dimensionless)
-        - T: Reservoir temperature (°F)
-        - P: Reservoir pressure (psi)
-        - P_std: Standard pressure = 14.696 psi
-        - T_std: Standard temperature = 60°F
+    - B_g: Gas formation volume factor (ft³/SCF)
+    - Z: Gas compressibility factor (dimensionless)
+    - T: Reservoir temperature (°F)
+    - P: Reservoir pressure (psi)
+    - P_std: Standard pressure = 14.696 psi
+    - T_std: Standard temperature = 60°F
 
     Assumes ideal gas law corrected with Z-factor (real gas behavior).
 
@@ -739,7 +739,7 @@ def compute_gas_compressibility_factor_papay(
 
         Z = 1 - ((3.52 * P_r * exp(-0.869 * T_r)) / T_r) + ((0.274 * P_r**2)/T_r**2)
 
-    where:
+    Where:
     - Z is the compressibility factor (dimensionless)
     - P_r is the pseudo-reduced pressure (dimensionless)
     - T_r is the pseudo-reduced temperature (dimensionless)
@@ -752,11 +752,11 @@ def compute_gas_compressibility_factor_papay(
     - P_pc and T_pc are calculated based on the gas specific gravity (gas_gravity).
 
     Valid Range:
-        - Pseudo-reduced pressure (Pr): 0.2 < Pr < 15
-        - Pseudo-reduced temperature (Tr): 1.05 < Tr < 3.0
-        - Gas gravity: 0.55 < γg < 1.0
-        - H₂S + CO₂ < 40 mol%
-        - H₂S alone < 25 mol%
+    - Pseudo-reduced pressure (Pr): 0.2 < Pr < 15
+    - Pseudo-reduced temperature (Tr): 1.05 < Tr < 3.0
+    - Gas gravity: 0.55 < γg < 1.0
+    - H₂S + CO₂ < 40 mol%
+    - H₂S alone < 25 mol%
 
     :param gas_gravity: Gas specific gravity (dimensionless)
     :param pressure: Pressure in Pascals (psi)
@@ -837,14 +837,14 @@ def compute_gas_compressibility_factor_hall_yarborough(
     Then: Z = A * Pr / y
 
     Valid Range:
-        - Pr: 0.2 < Pr < 30 (wider than Papay)
-        - Tr: 1.0 < Tr < 3.0
-        - Most accurate for Pr > 1.0
+    - Pr: 0.2 < Pr < 30 (wider than Papay)
+    - Tr: 1.0 < Tr < 3.0
+    - Most accurate for Pr > 1.0
 
     Advantages:
-        - More accurate than Papay, especially at high pressure
-        - Widely used in industry simulators
-        - Explicit at low pressure (Pr < 0.5)
+    - More accurate than Papay, especially at high pressure
+    - Widely used in industry simulators
+    - Explicit at low pressure (Pr < 0.5)
 
     :param pressure: Pressure (psi)
     :param temperature: Temperature (°F)
@@ -1111,17 +1111,17 @@ def compute_gas_compressibility_factor(
     based on pressure conditions, with fallback to alternative methods.
 
     Selection Strategy:
-        1. **High Pressure (Pr > 15)**: Use DAK (most accurate for Pr up to 30)
-        2. **Medium Pressure (1 < Pr ≤ 15)**: Use Hall-Yarborough (best balance)
-        3. **Low Pressure (Pr ≤ 1)**: Use Papay (fast, accurate for low Pr)
-        4. **Fallback**: If any method fails validation, try others in order:
-           DAK → Hall-Yarborough → Papay
+    1. **High Pressure (Pr > 15)**: Use DAK (most accurate for Pr up to 30)
+    2. **Medium Pressure (1 < Pr ≤ 15)**: Use Hall-Yarborough (best balance)
+    3. **Low Pressure (Pr ≤ 1)**: Use Papay (fast, accurate for low Pr)
+    4. **Fallback**: If any method fails validation, try others in order:
+        DAK → Hall-Yarborough → Papay
 
     Available Methods:
-        - "auto": Automatic selection based on pressure (recommended)
-        - "papay": Papay's correlation (fastest, valid Pr: 0.2-15)
-        - "hall-yarborough": Hall-Yarborough (accurate, valid Pr: 0.2-30)
-        - "dak": Dranchuk-Abou-Kassem (most accurate, valid Pr: 0.2-30)
+    - "auto": Automatic selection based on pressure (recommended)
+    - "papay": Papay's correlation (fastest, valid Pr: 0.2-15)
+    - "hall-yarborough": Hall-Yarborough (accurate, valid Pr: 0.2-30)
+    - "dak": Dranchuk-Abou-Kassem (most accurate, valid Pr: 0.2-30)
 
     :param pressure: Pressure (psi)
     :param temperature: Temperature (°F)
@@ -1142,18 +1142,10 @@ def compute_gas_compressibility_factor(
     ```
 
     References:
-        - Papay, J. (1985). "A Termelestechnologiai Parametereinek Valtozasa..."
-        - Hall, K.R. and Yarborough, L. (1973). "A New Equation of State..."
-        - Dranchuk, P.M. and Abou-Kassem, J.H. (1975). "Calculation of Z Factors..."
+    - Papay, J. (1985). "A Termelestechnologiai Parametereinek Valtozasa..."
+    - Hall, K.R. and Yarborough, L. (1973). "A New Equation of State..."
+    - Dranchuk, P.M. and Abou-Kassem, J.H. (1975). "Calculation of Z Factors..."
     """
-    # Compute pseudo-reduced properties for selection
-    pseudo_critical_pressure, _ = compute_gas_pseudocritical_properties(
-        gas_gravity=gas_gravity,
-        h2s_mole_fraction=h2s_mole_fraction,
-        co2_mole_fraction=co2_mole_fraction,
-        n2_mole_fraction=n2_mole_fraction,
-    )
-
     # Manual method selection
     if method == "papay":
         return compute_gas_compressibility_factor_papay(
@@ -1183,6 +1175,13 @@ def compute_gas_compressibility_factor(
             n2_mole_fraction=n2_mole_fraction,
         )
 
+    # Compute pseudo-reduced properties for selection
+    pseudo_critical_pressure, _ = compute_gas_pseudocritical_properties(
+        gas_gravity=gas_gravity,
+        h2s_mole_fraction=h2s_mole_fraction,
+        co2_mole_fraction=co2_mole_fraction,
+        n2_mole_fraction=n2_mole_fraction,
+    )
     Pr = pressure / pseudo_critical_pressure
     # Auto-selection based on Pr
     if Pr > 15.0:
@@ -1277,8 +1276,8 @@ def compute_oil_api_gravity(oil_specific_gravity: float) -> float:
         API = (141.5 / SG) - 131.5
 
     Where:
-        - API: API gravity (degrees)
-        - SG: Specific gravity of oil (dimensionless, relative to water at 60°F)
+    - API: API gravity (degrees)
+    - SG: Specific gravity of oil (dimensionless, relative to water at 60°F)
 
     :param oil_specific_gravity: Oil specific gravity (dimensionless)
     :return: API gravity in degrees (°API)
@@ -1305,7 +1304,7 @@ def _get_vazquez_beggs_oil_bubble_point_pressure_coefficients(
             C₁ = 0.0178, C₂ = 1.1870, C₃ = 23.9310
 
     :param oil_api_gravity: Oil API gravity (°API)
-    :return: Tuple (C₁, C₂, C₃)
+    :return: Tuple of (C₁, C₂, C₃)
     """
     if oil_api_gravity <= 30.0:
         return 0.0362, 1.0937, 25.7240
@@ -1416,8 +1415,8 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    lower_bound_pressure = c.MIN_VALID_PRESSURE
-    upper_bound_pressure = c.MAX_VALID_PRESSURE
+    lower_bound_pressure = c.MINIMUM_VALID_PRESSURE
+    upper_bound_pressure = c.MAXIMUM_VALID_PRESSURE
 
     lower_bound_solubility = (
         compute_gas_solubility_in_water(
@@ -1833,7 +1832,9 @@ def compute_gas_viscosity(
     temperature_in_rankine = temperature + 459.67
     # NO CONVERSION NEEDED - g/mol is numerically equal to lb/lbmol
     gas_molecular_weight_lbm_per_lbmole = gas_molecular_weight
-    density_in_grams_per_cm3 = gas_density * c.POUNDS_PER_FT3_TO_GRAMS_PER_CM3
+    density_in_grams_per_cm3 = (
+        gas_density * c.POUNDS_PER_CUBIC_FEET_TO_GRAMS_PER_CUBIC_METER
+    )
 
     k = (
         (9.4 + (0.02 * gas_molecular_weight_lbm_per_lbmole))
@@ -2353,7 +2354,7 @@ SETSCHENOW_CONSTANTS = {
     "h2": 0.07,
 }
 
-__GAS_ALIASES = {
+_GAS_ALIASES = {
     "methane": "ch4",
     "carbondioxide": "co2",
     "nitrogen": "n2",
@@ -2366,7 +2367,7 @@ __GAS_ALIASES = {
 
 def _get_gas_symbol(gas_name: str) -> str:
     gas_name = gas_name.lower().replace(" ", "").replace("-", "")
-    return __GAS_ALIASES.get(gas_name, gas_name)
+    return _GAS_ALIASES.get(gas_name, gas_name)
 
 
 def _gas_solubility_in_water_henry_law(
@@ -2422,7 +2423,7 @@ def _gas_solubility_in_water_henry_law(
     try:
         water_density = (
             compute_fluid_density(pressure, temperature, "Water")
-            * c.POUNDS_PER_FT3_TO_KG_PER_M3
+            * c.POUNDS_PER_CUBIC_FEET_TO_KILOGRAM_PER_CUBIC_METER
         )
     except Exception:
         water_density = c.STANDARD_WATER_DENSITY
@@ -2437,7 +2438,7 @@ def _gas_solubility_in_water_henry_law(
     gas_solubility = (
         (pressure / H) * (M / water_density) * salinity_factor
     )  # m³ gas / m³ water
-    return gas_solubility * c.M3_PER_M3_TO_SCF_PER_STB
+    return gas_solubility * c.CUBIC_METER_PER_CUBIC_METER_TO_SCF_PER_STB
 
 
 def compute_gas_solubility_in_water(
@@ -2608,7 +2609,7 @@ def compute_water_compressibility(
     :param salinity: Salinity in parts per million (ppm).
     :return: Water compressibility (C_w) in (psi⁻¹).
     """
-    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * c.FT3_TO_BBL
+    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * c.CUBIC_FEET_TO_BARRELS
     dBw_gas_free_dP = _compute_dBw_gas_free_dp_mccain(
         pressure=pressure,
         temperature=temperature,
@@ -2672,7 +2673,7 @@ def compute_live_oil_density(
     ) * c.STANDARD_WATER_DENSITY_IMPERIAL
 
     # Mass of oil per STB (lb)
-    mass_stock_tank_oil = stock_tank_oil_density_lb_per_ft3 / c.FT3_TO_STB
+    mass_stock_tank_oil = stock_tank_oil_density_lb_per_ft3 / c.CUBIC_FEET_TO_STB
 
     # Mass of dissolved gas per STB (lb)
     # Approx: 1 scf = gas_gravity * (molecular weight of air) / 379.49 lb
@@ -2682,7 +2683,7 @@ def compute_live_oil_density(
     # Total mass and volume
     total_mass_lb_per_stb = mass_stock_tank_oil + mass_dissolved_gas
     # print(formation_volume_factor)
-    total_volume_ft3_per_stb = formation_volume_factor * c.BBL_TO_FT3
+    total_volume_ft3_per_stb = formation_volume_factor * c.BARRELS_TO_CUBIC_FEET
 
     # Live oil density in lb/ft³
     live_oil_density_lb_per_ft3 = total_mass_lb_per_stb / total_volume_ft3_per_stb
@@ -2843,7 +2844,7 @@ def compute_water_density(
     # Calculate Live Water Density (Imperial units first)
     # Mass of standard water per STB (volume of STB is 1 STB, density lb/ft3 * 5.615 ft3/bbl)
     standard_mass_water_in_lb_per_stb = (
-        standard_water_density_in_lb_per_ft3 * c.BBL_TO_FT3
+        standard_water_density_in_lb_per_ft3 * c.BARRELS_TO_CUBIC_FEET
     )  # lb/STB
 
     # Mass of dissolved gas per STB
@@ -2862,7 +2863,7 @@ def compute_water_density(
 
     # Volume of live water at reservoir conditions (ft^3 per STB)
     volume_of_live_water_in_ft3_per_stb = (
-        gas_free_water_formation_volume_factor * c.BBL_TO_FT3
+        gas_free_water_formation_volume_factor * c.BARRELS_TO_CUBIC_FEET
     )  # res bbl/STB * ft^3/bbl = ft^3/STB
     live_water_density_in_lb_per_ft3 = (
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
@@ -2953,7 +2954,7 @@ def estimate_bubble_point_pressure_standing(
         )
         return gor - observed_gas_to_oil_ratio
 
-    solver = root_scalar(residual, bracket=[14.696, 10000], method="brentq")
+    solver = root_scalar(residual, bracket=(14.696, 10000), method="brentq")
     if not solver.converged:
         raise ComputationError("Could not converge to a bubble point pressure.")
 
@@ -3602,7 +3603,7 @@ def compute_todd_longstaff_effective_density(
     denominator = C_s * oil_viscosity + C_o * solvent_viscosity
 
     # Avoid division by zero (though should never happen with positive viscosities)
-    if np.any(denominator < 1e-15):
+    if denominator < 1e-15:
         # If both viscosities are essentially zero, fall back to volume weighting
         f_s = C_s
         f_o = C_o

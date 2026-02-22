@@ -203,9 +203,7 @@ def setup_3d_model():
         gas_gravity=0.65,
         reservoir_gas="methane",
     )
-    pvt_tables = bores.PVTTables(
-        data=pvt_table_data, interpolation_method="linear"
-    )
+    pvt_tables = bores.PVTTables(data=pvt_table_data, interpolation_method="linear")
 
     model = bores.reservoir_model(
         grid_shape=grid_shape,
@@ -256,12 +254,21 @@ def setup_3d_model():
 
 @app.cell
 def setup_config(Path, bores, pvt_tables):
-    # Boundary conditions - aquifer support from bottom
+    # Boundary conditions. Realistic bottom water drive using Carter-Tracy aquifer
+    bottom_aquifer = bores.CarterTracyAquifer(
+        aquifer_permeability=450.0,  # mD - moderate permeability sandstone aquifer
+        aquifer_porosity=0.22,  # fraction - typical for aquifer rock
+        aquifer_compressibility=5e-6,  # psi⁻¹ - total compressibility (rock + water)
+        water_viscosity=0.5,  # cP - at reservoir temperature (~180°F)
+        inner_radius=1400.0,  # ft - effective reservoir-aquifer contact radius
+        outer_radius=14000.0,  # ft - aquifer extent (10x inner radius = moderate)
+        aquifer_thickness=80.0,  # ft - thick bottom aquifer
+        initial_pressure=3117.0,  # psi - matches reservoir bottom pressure
+        angle=360.0,  # degrees - full circular contact (bottom water drive)
+    )
     boundary_conditions = bores.BoundaryConditions(
         conditions={
-            "pressure": bores.GridBoundaryCondition(
-                bottom=bores.ConstantBoundary(3500),  # Aquifer pressure
-            ),
+            "pressure": bores.GridBoundaryCondition(bottom=bottom_aquifer),
         }
     )
 
@@ -301,6 +308,13 @@ def setup_config(Path, bores, pvt_tables):
         capillary_pressure_table=capillary_pressure_table,
     )
 
+    ilu_preconditioner = bores.CachedPreconditionerFactory(
+        factory="ilu",
+        name="cached_ilu",
+        update_frequency=10,
+        recompute_threshold=0.3,
+    )
+    ilu_preconditioner.register(override=True)
     config = bores.Config(
         timer=timer,
         rock_fluid_tables=rock_fluid_tables,
@@ -308,7 +322,7 @@ def setup_config(Path, bores, pvt_tables):
         output_frequency=1,
         max_iterations=200,
         pressure_solver="bicgstab",
-        pressure_preconditioner="ilu",
+        pressure_preconditioner="cached_ilu",
         log_interval=5,
         pvt_tables=pvt_tables,
         wells=None,

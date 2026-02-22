@@ -232,15 +232,20 @@ class Config(
     """Internal lock for thread-safe operations."""
 
     def copy(self, **kwargs: typing.Any) -> Self:
-        """Create a deep copy of the Config instance."""
+        """Create a deep copy of the `Config` instance."""
         with self._lock:
             return attrs.evolve(self, **kwargs)
 
-    def update(self, **kwargs: typing.Any) -> None:
-        """Update configuration parameters in a thread-safe manner."""
+    def with_updates(self, **kwargs: typing.Any) -> Self:
+        """
+        Return a new `Config` with updated parameters (immutable pattern).
+
+        :param kwargs: Keyword arguments for fields to update
+        :return: New `Config` instance with updated values
+        :raises AttributeError: If any key is not a valid `Config` attribute
+        """
         with self._lock:
-            for key, value in kwargs.items():
-                if hasattr(self, key):
-                    object.__setattr__(self, key, value)
-                else:
+            for key in kwargs:
+                if not hasattr(self, key):
                     raise AttributeError(f"Config has no attribute '{key}'")
+            return attrs.evolve(self, **kwargs)

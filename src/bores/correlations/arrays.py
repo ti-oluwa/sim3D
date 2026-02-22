@@ -49,7 +49,7 @@ def compute_fluid_density(
     """
     dtype = pressure.dtype
     temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
+    pressure_array = np.multiply(pressure, c.PSI_TO_PASCAL, dtype=dtype)
 
     def _compute_density(
         pressure_in_pascals: float,
@@ -64,7 +64,7 @@ def compute_fluid_density(
             clip_temperature(temperature_in_kelvin, fluid),
             fluid,
         )
-        return density * c.KG_PER_M3_TO_POUNDS_PER_FT3
+        return density * c.KILOGRAM_PER_CUBIC_METER_TO_POUNDS_PER_CUBIC_FEET
 
     density_array = np.empty_like(pressure_array)
     for idx in np.ndindex(pressure_array.shape):
@@ -91,7 +91,7 @@ def compute_fluid_viscosity(
     """
     dtype = pressure.dtype
     temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
+    pressure_array = np.multiply(pressure, c.PSI_TO_PASCAL, dtype=dtype)
 
     def _compute_viscosity(pressure_in_pascals, temperature_in_kelvin, fluid: str):
         viscosity = PropsSI(
@@ -129,7 +129,7 @@ def compute_fluid_compressibility_factor(
     """
     dtype = pressure.dtype
     temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
+    pressure_array = np.multiply(pressure, c.PSI_TO_PASCAL, dtype=dtype)
 
     def _compute_z(
         pressure_in_pascals,
@@ -174,7 +174,7 @@ def compute_fluid_compressibility(
     """
     dtype = pressure.dtype
     temperature_array = fahrenheit_to_kelvin(temperature)  # type: ignore[arg-type]
-    pressure_array = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
+    pressure_array = np.multiply(pressure, c.PSI_TO_PASCAL, dtype=dtype)
 
     def _compute_compressibility(
         pressure_in_pascals, temperature_in_kelvin, fluid: str
@@ -188,7 +188,7 @@ def compute_fluid_compressibility(
                 clip_temperature(temperature_in_kelvin, fluid),
                 fluid,
             )
-            / c.PA_TO_PSI
+            / c.PASCAL_TO_PSI
         )
 
     compressibility_array = np.empty_like(pressure_array)
@@ -243,7 +243,7 @@ def compute_gas_gravity_from_density(
     """
     dtype = pressure.dtype
     temperature_in_kelvin = fahrenheit_to_kelvin(temperature)
-    pressure_in_pascals = np.multiply(pressure, c.PSI_TO_PA, dtype=dtype)
+    pressure_in_pascals = np.multiply(pressure, c.PSI_TO_PASCAL, dtype=dtype)
     air_density = compute_fluid_density(
         pressure=pressure_in_pascals,
         temperature=temperature_in_kelvin,  # type: ignore
@@ -251,7 +251,11 @@ def compute_gas_gravity_from_density(
     )
     return np.divide(  # type: ignore[return-value]
         density,
-        np.multiply(air_density, c.KG_PER_M3_TO_POUNDS_PER_FT3, dtype=dtype),
+        np.multiply(
+            air_density,
+            c.KILOGRAM_PER_CUBIC_METER_TO_POUNDS_PER_CUBIC_FEET,
+            dtype=dtype,
+        ),
         dtype=dtype,
     )
 
@@ -1115,17 +1119,17 @@ def compute_gas_compressibility_factor(
     based on pressure conditions, with fallback to alternative methods.
 
     Selection Strategy (applied element-wise):
-        1. **High Pressure (Pr > 15)**: Use DAK (most accurate for Pr up to 30)
-        2. **Medium Pressure (1 < Pr ≤ 15)**: Use Hall-Yarborough (best balance)
-        3. **Low Pressure (Pr ≤ 1)**: Use Papay (fast, accurate for low Pr)
-        4. **Fallback**: If any method produces invalid results (Z < 0.2 or Z > 3.0),
-           try alternative methods
+    1. **High Pressure (Pr > 15)**: Use DAK (most accurate for Pr up to 30)
+    2. **Medium Pressure (1 < Pr ≤ 15)**: Use Hall-Yarborough (best balance)
+    3. **Low Pressure (Pr ≤ 1)**: Use Papay (fast, accurate for low Pr)
+    4. **Fallback**: If any method produces invalid results (Z < 0.2 or Z > 3.0),
+        try alternative methods
 
     Available Methods:
-        - "auto": Automatic selection based on pressure (recommended)
-        - "papay": Papay's correlation (fastest, valid Pr: 0.2-15)
-        - "hall-yarborough": Hall-Yarborough (accurate, valid Pr: 0.2-30)
-        - "dak": Dranchuk-Abou-Kassem (most accurate, valid Pr: 0.2-30)
+    - "auto": Automatic selection based on pressure (recommended)
+    - "papay": Papay's correlation (fastest, valid Pr: 0.2-15)
+    - "hall-yarborough": Hall-Yarborough (accurate, valid Pr: 0.2-30)
+    - "dak": Dranchuk-Abou-Kassem (most accurate, valid Pr: 0.2-30)
 
     :param pressure: Pressure array (psi)
     :param temperature: Temperature array (°F)
@@ -1146,9 +1150,9 @@ def compute_gas_compressibility_factor(
     ```
 
     References:
-        - Papay, J. (1985). "A Termelestechnologiai Parametereinek Valtozasa..."
-        - Hall, K.R. and Yarborough, L. (1973). "A New Equation of State..."
-        - Dranchuk, P.M. and Abou-Kassem, J.H. (1975). "Calculation of Z Factors..."
+    - Papay, J. (1985). "A Termelestechnologiai Parametereinek Valtozasa..."
+    - Hall, K.R. and Yarborough, L. (1973). "A New Equation of State..."
+    - Dranchuk, P.M. and Abou-Kassem, J.H. (1975). "Calculation of Z Factors..."
     """
     # Manual method selection
     if method == "papay":
@@ -1187,7 +1191,6 @@ def compute_gas_compressibility_factor(
         co2_mole_fraction=co2_mole_fraction,
         n2_mole_fraction=n2_mole_fraction,
     )
-
     Pr = pressure / pseudo_critical_pressure
 
     # Create masks for different pressure regimes
@@ -1250,7 +1253,6 @@ def compute_gas_compressibility_factor(
 
         # Update invalid mask
         invalid_mask = (Z < 0.2) | (Z > 3.0)
-
         if np.any(invalid_mask):
             # Try Papay as final fallback
             Z_papay = compute_gas_compressibility_factor_papay(
@@ -1452,8 +1454,8 @@ def compute_water_bubble_point_pressure(
             salinity=salinity,
         )
 
-    min_pressure = np.full_like(temperature, c.MIN_VALID_PRESSURE)
-    max_pressure = np.full_like(temperature, c.MAX_VALID_PRESSURE)
+    min_pressure = np.full_like(temperature, c.MINIMUM_VALID_PRESSURE)
+    max_pressure = np.full_like(temperature, c.MAXIMUM_VALID_PRESSURE)
 
     min_solubility = compute_gas_solubility_in_water(
         pressure=min_pressure,
@@ -1970,9 +1972,11 @@ def compute_gas_viscosity(
     :return: Gas viscosity in (cP)
     """
     temperature_in_rankine = temperature + 459.67
-    # NO CONVERSION NEEDED - g/mol is numerically equal to lb/lbmol
+    # g/mol is numerically equal to lb/lbmol
     gas_molecular_weight_lbm_per_lbmole = gas_molecular_weight
-    density_in_grams_per_cm3 = gas_density * c.POUNDS_PER_FT3_TO_GRAMS_PER_CM3
+    density_in_grams_per_cm3 = (
+        gas_density * c.POUNDS_PER_CUBIC_FEET_TO_GRAMS_PER_CUBIC_METER
+    )
 
     k = (
         (9.4 + (0.02 * gas_molecular_weight_lbm_per_lbmole))
@@ -2475,7 +2479,7 @@ def _gas_solubility_in_water_duan_sun_co2(
             "Pressure is out of the valid range for this model (0-2000 bar)."
         )
 
-    # Calculate CO₂ molality in PURE WATER
+    # Calculate CO₂ molality in pure water
     # Using the equation from Duan & Sun (2003) for the fugacity of CO2
     c1 = 16.3869
     c2 = -3013.95
@@ -2566,7 +2570,7 @@ def _gas_solubility_in_water_henry_law(
     try:
         water_density = (
             compute_fluid_density(pressure, temperature, "Water")
-            * c.POUNDS_PER_FT3_TO_KG_PER_M3
+            * c.POUNDS_PER_CUBIC_FEET_TO_KILOGRAM_PER_CUBIC_METER
         )
     except Exception:
         water_density = c.STANDARD_WATER_DENSITY
@@ -2582,7 +2586,9 @@ def _gas_solubility_in_water_henry_law(
         (pressure / H) * (M / water_density) * salinity_factor
     )  # m³ gas / m³ water
     dtype = pressure.dtype
-    return np.multiply(gas_solubility, c.M3_PER_M3_TO_SCF_PER_STB, dtype=dtype)
+    return np.multiply(
+        gas_solubility, c.CUBIC_METER_PER_CUBIC_METER_TO_SCF_PER_STB, dtype=dtype
+    )
 
 
 def compute_gas_solubility_in_water(
@@ -2813,7 +2819,7 @@ def compute_water_compressibility(
     :param salinity: Salinity in parts per million (ppm).
     :return: Water compressibility (C_w) in (psi⁻¹).
     """
-    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * c.FT3_TO_BBL
+    gas_fvf_in_bbl_per_scf = gas_formation_volume_factor * c.CUBIC_FEET_TO_BARRELS
     dBw_gas_free_dP = _compute_dBw_gas_free_dp_mccain(
         pressure=pressure,
         temperature=temperature,
@@ -2892,9 +2898,9 @@ def compute_live_oil_density(
     and temperature, considering dissolved gas and oil compressibility.
 
     Based on:
-        - Stock tank oil density from API gravity.
-        - Contribution of dissolved gas mass.
-        - Volume expansion/compression via FVF.
+    - Stock tank oil density from API gravity.
+    - Contribution of dissolved gas mass.
+    - Volume expansion/compression via FVF.
 
     :param pressure: Reservoir pressure (psi)
     :param bubble_point_pressure: Bubble point pressure (psi)
@@ -2915,7 +2921,7 @@ def compute_live_oil_density(
 
     # Mass of oil per STB (lb)
     mass_stock_tank_oil = np.divide(
-        stock_tank_oil_density_lb_per_ft3, c.FT3_TO_STB, dtype=dtype
+        stock_tank_oil_density_lb_per_ft3, c.CUBIC_FEET_TO_STB, dtype=dtype
     )
 
     # Mass of dissolved gas per STB (lb)
@@ -2929,7 +2935,7 @@ def compute_live_oil_density(
     total_mass_lb_per_stb = mass_stock_tank_oil + mass_dissolved_gas
     # print(formation_volume_factor)
     total_volume_ft3_per_stb = np.multiply(
-        formation_volume_factor, c.BBL_TO_FT3, dtype=dtype
+        formation_volume_factor, c.BARRELS_TO_CUBIC_FEET, dtype=dtype
     )
 
     # Live oil density in lb/ft³
@@ -3097,7 +3103,7 @@ def compute_water_density(
     # Calculate Live Water Density (Imperial units first)
     # Mass of standard water per STB (volume of STB is 1 STB, density lb/ft3 * 5.615 ft3/bbl)
     standard_mass_water_in_lb_per_stb = (
-        standard_water_density_in_lb_per_ft3 * c.BBL_TO_FT3
+        standard_water_density_in_lb_per_ft3 * c.BARRELS_TO_CUBIC_FEET
     )  # lb/STB
 
     # Mass of dissolved gas per STB
@@ -3116,7 +3122,7 @@ def compute_water_density(
 
     # Volume of live water at reservoir conditions (ft^3 per STB)
     volume_of_live_water_in_ft3_per_stb = (
-        gas_free_water_formation_volume_factor * c.BBL_TO_FT3
+        gas_free_water_formation_volume_factor * c.BARRELS_TO_CUBIC_FEET
     )  # res bbl/STB * ft^3/bbl = ft^3/STB
     live_water_density_in_lb_per_ft3 = (
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
@@ -3224,7 +3230,7 @@ def estimate_solution_gor(
     api_gravity_flat = oil_api_gravity.ravel()
     gas_gravity_flat = gas_gravity.ravel()
 
-    for i in numba.prange(flat_size):
+    for i in numba.prange(flat_size):  # type: ignore
         result[i] = estimate_solution_gor_scalar(
             pressure=pressure_flat[i],
             temperature=temperature_flat[i],
@@ -3289,8 +3295,8 @@ def estimate_bubble_point_pressure_standing(
     # Allocate output
     bubble_point_pressure = np.empty_like(oil_api_gravity)
 
-    min_pressure = c.MIN_VALID_PRESSURE
-    max_pressure = c.MAX_VALID_PRESSURE
+    min_pressure = c.MINIMUM_VALID_PRESSURE
+    max_pressure = c.MAXIMUM_VALID_PRESSURE
     # Loop over all cells
     it = np.nditer(oil_api_gravity, flags=["multi_index"])  # type: ignore
     while not it.finished:
@@ -3337,7 +3343,7 @@ def compute_hydrocarbon_in_place(
     S_o = 1 - S_w - S_g (oil saturation)
     S_g = 1 - S_w - S_o (gas saturation)
 
-    where:
+    Where:
     - OIP is the oil in place in stock tank barrels (STB).
     - GIP is the free gas in place in standard cubic feet (SCF).
     - A is the area in acres.
@@ -3581,8 +3587,7 @@ def compute_todd_longstaff_effective_viscosity(
         This should be the EFFECTIVE omega if considering pressure effects.
     :return: Effective mixture viscosity (cP)
 
-    Raises:
-        ValidationError: If concentrations or omega are outside [0,1], or viscosities ≤ 0
+    :raises ValidationError: If concentrations or omega are outside [0,1], or viscosities ≤ 0
 
     Example:
     ```python
@@ -3615,9 +3620,9 @@ def compute_todd_longstaff_effective_viscosity(
     ```
 
     References:
-        Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
-        Application of a Numerical Simulator for Predicting Miscible Flood Performance."
-        JPT, July 1972, pp. 874-882.
+    Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
+    Application of a Numerical Simulator for Predicting Miscible Flood Performance."
+    JPT, July 1972, pp. 874-882.
     """
     # Validate inputs
     if min_(solvent_concentration) < 0.0 or max_(solvent_concentration) > 1.0:
@@ -3633,11 +3638,6 @@ def compute_todd_longstaff_effective_viscosity(
     C_o = 1.0 - C_s
 
     dtype = oil_viscosity.dtype
-    # Handle edge cases
-    if np.any(C_s >= 1.0):
-        return solvent_viscosity.astype(dtype)
-    if np.any(C_s <= 0.0):
-        return oil_viscosity.astype(dtype)
 
     # Fully mixed viscosity (arithmetic/linear mean)
     # Represents ideal miscibility - single homogeneous phase
@@ -3654,6 +3654,14 @@ def compute_todd_longstaff_effective_viscosity(
     #   ω = 1: μ_eff = μ_mix (fully mixed, arithmetic mean)
     #   ω = 0.5: μ_eff = sqrt(μ_mix * μ_segregated) (geometric mean)
     mu_effective = (mu_mix**omega) * (mu_segregated ** (1.0 - omega))
+
+    # Handle edge cases element-wise (pure solvent or pure oil cells)
+    # Use element-wise masking to avoid affecting all cells when any cell is pure
+    pure_solvent_mask = C_s >= 1.0 - 1e-12
+    pure_oil_mask = C_s <= 1e-12
+    mu_effective[pure_solvent_mask] = solvent_viscosity[pure_solvent_mask]
+    mu_effective[pure_oil_mask] = oil_viscosity[pure_oil_mask]
+
     return mu_effective.astype(dtype)  # type: ignore[return-value]
 
 
@@ -3743,9 +3751,9 @@ def compute_todd_longstaff_effective_density(
     ```
 
     References:
-        Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
-        Application of a Numerical Simulator for Predicting Miscible Flood Performance."
-        JPT, July 1972, pp. 874-882.
+    Todd, M.R. and Longstaff, W.J. (1972). "The Development, Testing and
+    Application of a Numerical Simulator for Predicting Miscible Flood Performance."
+    JPT, July 1972, pp. 874-882.
     """
     if min_(solvent_concentration) < 0.0 or max_(solvent_concentration) > 1.0:
         raise ValidationError(
@@ -3763,12 +3771,6 @@ def compute_todd_longstaff_effective_density(
 
     dtype = C_s.dtype
 
-    # Handle edge cases
-    if np.any(C_s >= 1.0):
-        return solvent_density.astype(dtype)
-    if np.any(C_s <= 0.0):
-        return oil_density.astype(dtype)
-
     # Fully mixed density (volume-weighted, arithmetic mean)
     # This is the density if phases are perfectly mixed by volume
     rho_mix = (C_s * solvent_density) + (C_o * oil_density)
@@ -3780,23 +3782,25 @@ def compute_todd_longstaff_effective_density(
     # Note: More mobile phase (lower viscosity) gets higher flow fraction
     denominator = (C_s * oil_viscosity) + (C_o * solvent_viscosity)
 
-    # Avoid division by zero (though should never happen with positive viscosities)
-    if np.any(denominator < 1e-15):
-        # If both viscosities are essentially zero, fall back to volume weighting
-        f_s = C_s.astype(dtype)
-        f_o = C_o.astype(dtype)
-    else:
-        f_s = (C_s * oil_viscosity) / denominator  # type: ignore[assignment]
-        f_o = (C_o * solvent_viscosity) / denominator
+    # Initialize flow fractions
+    f_s = np.zeros_like(C_s, dtype=dtype)
+    f_o = np.zeros_like(C_o, dtype=dtype)
 
-        f_s = f_s.astype(dtype)
-        f_o = f_o.astype(dtype)
+    # Compute flow fractions element-wise, handling near-zero denominators
+    # Avoid division by zero (though should never happen with positive viscosities)
+    zero_denom_mask = denominator < 1e-15
+    valid_mask = ~zero_denom_mask
+
+    # For valid cells, compute mobility-weighted flow fractions
+    f_s[valid_mask] = ((C_s * oil_viscosity) / denominator)[valid_mask]
+    f_o[valid_mask] = ((C_o * solvent_viscosity) / denominator)[valid_mask]
+
+    # For near-zero denominator cells, fall back to volume weighting
+    f_s[zero_denom_mask] = C_s[zero_denom_mask]
+    f_o[zero_denom_mask] = C_o[zero_denom_mask]
 
     # Fully segregated density (flow-weighted)
     # This is the density if phases flow separately, weighted by their mobilities
-    # print(
-    #     f"Fs shape: {f_s.shape}, Fo shape: {f_o.shape}, Solvent conc shape: {solvent_concentration.shape}, Solvent density shape: {solvent_density.shape}, Oil density shape: {oil_density.shape}"
-    # )
     rho_segregated = (f_s * solvent_density) + (f_o * oil_density)
 
     # Todd-Longstaff interpolation (weighted geometric mean)
@@ -3804,4 +3808,12 @@ def compute_todd_longstaff_effective_density(
     #   ω = 0: ρ_eff = ρ_segregated (flow-weighted, immiscible)
     #   ω = 1: ρ_eff = ρ_mix (volume-weighted, fully mixed)
     rho_effective = (rho_mix**omega) * (rho_segregated ** (1.0 - omega))
+
+    # Handle edge cases element-wise (pure solvent or pure oil cells)
+    # Use element-wise masking to avoid affecting all cells when any cell is pure
+    pure_solvent_mask = C_s >= 1.0
+    pure_oil_mask = C_s <= 0.0
+    rho_effective[pure_solvent_mask] = solvent_density[pure_solvent_mask]
+    rho_effective[pure_oil_mask] = oil_density[pure_oil_mask]
+
     return rho_effective.astype(dtype)  # type: ignore[return-value]

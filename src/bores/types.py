@@ -135,7 +135,9 @@ class ArrayLike(typing.Generic[Tco], typing.Protocol):
 Interpolator = typing.Callable[[float], float]
 
 
-PreconditionerStr = typing.Union[typing.Literal["cpr", "ilu", "amg", "diagonal"], str]
+PreconditionerStr = typing.Union[
+    typing.Literal["cpr", "ilu", "amg", "block_jacobi", "polynomial", "diagonal"], str
+]
 PreconditionerFactory = typing.Callable[
     [typing.Union[csr_array, csr_matrix]], LinearOperator
 ]

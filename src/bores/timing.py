@@ -314,6 +314,18 @@ class Timer(StoreSerializable):
                 "Maximum number of consecutive time step rejections exceeded"
             )
 
+        # Warn when approaching rejection limit
+        rejection_threshold = int(0.7 * self.max_rejects)
+        if (
+            self.rejection_count >= rejection_threshold
+            and self.rejection_count < self.max_rejects
+        ):
+            logger.warning(
+                f"Time step rejection count ({self.rejection_count}) is approaching "
+                f"maximum allowed ({self.max_rejects}). Consider adjusting simulation "
+                f"parameters or initial conditions."
+            )
+
         if self.use_constant_step_size:
             return self.initial_step_size
 
@@ -460,49 +472,49 @@ class Timer(StoreSerializable):
 
                 if overshoot_ratio > 3.0:
                     # Very large pressure changes
-                    pres_factor = 0.25
+                    pressure_factor = 0.25
                     logger.debug(
                         f"Severe pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
                     )
                 elif overshoot_ratio > 2.0:
                     # Large pressure changes
-                    pres_factor = 0.4
+                    pressure_factor = 0.4
                     logger.debug(
                         f"Large pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
                     )
                 else:
                     # Moderate overshoot
-                    pres_factor = max_allowed_pressure_change / max_pressure_change
-                    pres_factor = max(pres_factor, 0.5)
+                    pressure_factor = max_allowed_pressure_change / max_pressure_change
+                    pressure_factor = max(pressure_factor, 0.5)
                     logger.debug(
                         f"Moderate pressure change: {max_pressure_change:.4e} > {max_allowed_pressure_change:.4e} (ratio: {overshoot_ratio:.4f})"
                     )
 
-                factors.append(pres_factor)
+                factors.append(pressure_factor)
 
         # Newton iteration failure backoff
         if newton_iterations is not None:
             if newton_iterations > 20:
                 # Solver really struggling. Apply aggressive reduction
-                newton_factor = 0.3
+                newton_iter_factor = 0.3
                 logger.debug(
                     f"Newton solver struggling severely: {newton_iterations} iterations"
                 )
-                factors.append(newton_factor)
+                factors.append(newton_iter_factor)
             elif newton_iterations > 15:
                 # Solver struggling. Apply moderate reduction
-                newton_factor = 0.5
+                newton_iter_factor = 0.5
                 logger.debug(
                     f"Newton solver struggling: {newton_iterations} iterations"
                 )
-                factors.append(newton_factor)
+                factors.append(newton_iter_factor)
             elif newton_iterations > 10:
                 # Solver having some difficulty
-                newton_factor = 0.7
+                newton_iter_factor = 0.7
                 logger.debug(
                     f"Newton solver having difficulty: {newton_iterations} iterations"
                 )
-                factors.append(newton_factor)
+                factors.append(newton_iter_factor)
 
         # If we have specific information, use the most conservative (smallest) factor
         if factors:
@@ -687,25 +699,25 @@ class Timer(StoreSerializable):
 
                 if pres_utilization > 0.95:
                     # Very close to limit. Reduce step size
-                    pres_factor = 0.85
+                    pressure_factor = 0.85
                     logger.debug(
                         f"Pressure change very high ({pres_utilization:.2%}), reducing step"
                     )
                 elif pres_utilization > 0.85:
                     # Getting close. Maintain or slightly reduce
-                    pres_factor = 0.95
+                    pressure_factor = 0.95
                     logger.debug(
                         f"Pressure change high ({pres_utilization:.2%}), maintaining step"
                     )
                 elif pres_utilization > 0.7:
                     # Moderate usage. Allow modest growth
-                    pres_factor = 1.05
+                    pressure_factor = 1.05
                     logger.debug(
                         f"Pressure change moderate ({pres_utilization:.2%}), modest growth"
                     )
                 elif pres_utilization < 0.3:
                     # Very low usage, could grow more aggressively
-                    pres_factor = min(
+                    pressure_factor = min(
                         1.3, max_allowed_pressure_change / max_pressure_change * 0.8
                     )
                     logger.debug(
@@ -713,13 +725,13 @@ class Timer(StoreSerializable):
                     )
                 else:
                     # Normal range. Apply proportional adjustment
-                    pres_factor = min(
+                    pressure_factor = min(
                         1.15, max_allowed_pressure_change / max_pressure_change * 0.9
                     )
                     logger.debug(
                         f"Pressure change normal ({pres_utilization:.2%}), proportional growth"
                     )
-                adjustment_factors.append(("Pressure", pres_factor))
+                adjustment_factors.append(("Pressure", pressure_factor))
 
         # Performance-based factor from historical trends
         performance_factor = self._compute_performance_factor()
@@ -730,17 +742,17 @@ class Timer(StoreSerializable):
         # Newton iteration-based adjustment
         if newton_iterations is not None:
             if newton_iterations > 10:
-                newton_factor = 0.7
+                newton_iter_factor = 0.7
                 logger.debug(
                     f"High Newton iterations ({newton_iterations}), reducing step"
                 )
-                adjustment_factors.append(("Newton", newton_factor))
+                adjustment_factors.append(("Newton", newton_iter_factor))
             elif newton_iterations < 4 and self.steps_since_last_failure >= 3:
-                newton_factor = 1.2
+                newton_iter_factor = 1.2
                 logger.debug(
                     f"Low Newton iterations ({newton_iterations}), allowing growth"
                 )
-                adjustment_factors.append(("Newton", newton_factor))
+                adjustment_factors.append(("Newton", newton_iter_factor))
 
         # Apply all adjustment factors
         if adjustment_factors:
@@ -797,7 +809,8 @@ class Timer(StoreSerializable):
         dt = max(dt, self.min_step_size)
 
         # Apply smoothing via EMA
-        if self.ema_step_size == 0.0:
+        # Initialize EMA on first step (more robust than checking == 0.0)
+        if self.step == 0:
             self.ema_step_size = dt
         else:
             self.ema_step_size = (

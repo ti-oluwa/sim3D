@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.6"
+__generated_with = "0.19.11"
 app = marimo.App(width="full")
 
 
@@ -19,10 +19,7 @@ def _():
     )
     stream = bores.StateStream(store=store, auto_replay=True)
 
-    def steps(step: int):
-        return step == 0 or step % 4 == 0
-
-    states = list(stream.replay(steps=steps))
+    states = list(stream.replay(steps=lambda step: step == 0 or step % 2 == 0))
     return bores, itertools, np, states
 
 
@@ -680,7 +677,7 @@ def _(analyst, bores, np):
         print(error)
     else:
         production_forecast = analyst.forecast_production(
-            decline_result=decline_curve, time_steps=500
+            decline_result=decline_curve, steps=500
         )
         production_forecast_fig = bores.make_series_plot(
             data={
@@ -729,7 +726,7 @@ def _(bores, states, viz):
 
     property = "oil-effective-viscosity"
     figures = []
-    timesteps = [5]
+    timesteps = [150]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

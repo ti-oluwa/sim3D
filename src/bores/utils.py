@@ -5,13 +5,22 @@ from pathlib import Path
 import pickle
 import typing
 
-import attrs
 import numba  # type: ignore[import-untyped]
 from numba.extending import overload  # type: ignore[import-untyped]
 import numpy as np
-from typing_extensions import Self
 
-from bores.types import T
+
+__all__ = [
+    "clip",
+    "clip_scalar",
+    "is_array",
+    "apply_mask",
+    "get_mask",
+    "min_",
+    "max_",
+    "save_as_pickle",
+    "load_pickle",
+]
 
 
 @numba.vectorize(cache=True)
@@ -314,100 +323,3 @@ def load_pickle(filepath: PathLike) -> typing.Any:
     else:
         with filepath.open("rb") as f:
             return pickle.load(f)
-
-
-@attrs.frozen(slots=True)
-class Lazy(typing.Generic[T]):
-    """
-    A lazy wrapper that defers computation until accessed.
-
-    Example:
-    ```python
-    lazy = Lazy(lambda: expensive_computation())
-    result = lazy.get()  # Evaluates here
-    result2 = lazy.get()  # Returns cached value
-    ```
-    """
-
-    _factory: typing.Union[T, typing.Callable[[], T]] = attrs.field(repr=False)
-    _cached: bool = attrs.field(default=False, init=False, repr=False)
-    _value: typing.Optional[T] = attrs.field(default=None, init=False, repr=False)
-
-    @classmethod
-    def of(cls, value: T) -> Self:
-        """Create a `Lazy` wrapper from an already-computed value."""
-        instance = cls(value)
-        object.__setattr__(instance, "_cached", True)
-        object.__setattr__(instance, "_value", value)
-        return instance
-
-    @classmethod
-    def defer(cls, factory: typing.Callable[[], T]) -> Self:
-        """Create a `Lazy` wrapper from a factory function."""
-        return cls(factory)
-
-    def get(self) -> T:
-        """Get the value, computing it if necessary."""
-        if not self._cached:
-            if callable(self._factory):
-                value = self._factory()
-            else:
-                value = self._factory
-            object.__setattr__(self, "_value", value)
-            object.__setattr__(self, "_cached", True)
-        return typing.cast(T, self._value)
-
-    def __getattr__(self, item: str) -> typing.Any:
-        if item in {"_factory", "_cached", "_value"}:
-            return object.__getattribute__(self, item)
-        value = self.get()
-        return getattr(value, item)
-
-    def __call__(self, *args, **kwargs) -> typing.Any:
-        value = self.get()
-        return value(*args, **kwargs)  # type: ignore
-
-    def __getitem__(self, item: typing.Any) -> typing.Any:
-        value = self.get()
-        return value[item]  # type: ignore
-
-    def __setitem__(self, key: typing.Any, value: typing.Any) -> None:
-        val = self.get()
-        val[key] = value  # type: ignore
-
-    def is_evaluated(self) -> bool:
-        """Check if the lazy value has been evaluated."""
-        return self._cached
-
-    def __repr__(self) -> str:
-        if self._cached:
-            return f"Lazy({self._value!r})"
-        return "Lazy(<deferred>)"
-
-
-class LazyField(typing.Generic[T]):
-    """`Lazy` object descriptor"""
-
-    def __init__(self, name: typing.Optional[str] = None):
-        self.name = name
-
-    def __set_name__(self, owner, name):
-        if self.name is None:
-            self.name = name
-
-    def __get__(self, instance, owner) -> T:
-        if instance is None:
-            return self  # type: ignore[return-value]
-        lazy_obj: Lazy[T] = instance.__dict__[self.name]
-        return lazy_obj.get()
-
-    def __set__(
-        self, instance, value: typing.Union[T, Lazy[T], typing.Callable[[], T]]
-    ) -> None:
-        if isinstance(value, Lazy):
-            lazy_obj = value
-        elif callable(value):
-            lazy_obj = Lazy.defer(value)
-        else:
-            lazy_obj = Lazy.of(value)
-        instance.__dict__[self.name] = lazy_obj

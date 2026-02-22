@@ -1,4 +1,3 @@
-import functools
 import logging
 import threading
 import typing
@@ -21,6 +20,7 @@ from scipy.sparse.linalg import (  # type: ignore[import-untyped]
     tfqmr,
 )
 
+from bores._precision import get_floating_point_info
 from bores.errors import PreconditionerError, SolverError, ValidationError
 from bores.types import (
     Preconditioner,
@@ -41,9 +41,12 @@ __all__ = [
     "build_ilu_preconditioner",
     "build_diagonal_preconditioner",
     "build_amg_preconditioner",
+    "build_block_jacobi_preconditioner",
+    "build_polynomial_preconditioner",
     "solve_linear_system",
     "to_1D_index_interior_only",
     "from_1D_index_interior_only",
+    "CachedPreconditionerFactory",
     "preconditioner_factory",
     "solver_func",
     "list_preconditioner_factories",
@@ -311,16 +314,19 @@ def compute_mobility_grids(
 
 
 def build_amg_preconditioner(
-    A_csr: typing.Union[csr_array, csr_matrix], **kwargs: typing.Any
+    A_csr: typing.Union[csr_array, csr_matrix], cycle: str = "V", **kwargs: typing.Any
 ) -> LinearOperator:
     """
-    Creates an Algebraic Multigrid (AMG) preconditioner using PyAMG
+    Creates an Algebraic Multigrid (AMG) preconditioner using PyAMG.
 
     :param A_csr: The coefficient matrix in CSR format.
+    :param cycle: Multigrid cycle type ('V', 'W', 'F'). V-cycle is standard,
+        W-cycle offers better convergence for difficult problems but is more expensive.
+    :param kwargs: Additional arguments for `pyamg.smoothed_aggregation_solver`.
     :return: A SciPy `LinearOperator` that represents the AMG preconditioner.
     """
     ml_solver = pyamg.smoothed_aggregation_solver(A_csr, **kwargs)
-    M_amg = ml_solver.aspreconditioner(cycle="V")  # V-cycle is standard
+    M_amg = ml_solver.aspreconditioner(cycle=cycle)
     return M_amg
 
 
@@ -335,9 +341,85 @@ def build_diagonal_preconditioner(
     """
     diag_elements = A_csr.diagonal()
     # Avoid division by zero by replacing zeros with a small number
-    diag_elements = np.where(np.abs(diag_elements) < 1e-10, 1.0, diag_elements)
+    # Use precision-adaptive threshold for float32/float64 compatibility
+    epsilon = get_floating_point_info().eps
+    threshold = max(1e-10, 100 * epsilon)
+    diag_elements = np.where(np.abs(diag_elements) < threshold, 1.0, diag_elements)
     M_diag = diags(1.0 / diag_elements, format="csr")
     return LinearOperator(shape=A_csr.shape, matvec=M_diag.dot)  # type: ignore[arg-type]
+
+
+def build_block_jacobi_preconditioner(
+    A_csr: typing.Union[csr_array, csr_matrix],
+    block_size: int = 3,
+) -> LinearOperator:
+    """
+    Creates a Block Jacobi preconditioner for block-structured systems.
+
+    For black-oil reservoir simulation with 3 variables per cell (pressure, So, Sg),
+    this preconditioner is more effective than diagonal for coupled systems.
+
+    :param A_csr: The coefficient matrix in CSR format.
+    :param block_size: Size of each block (e.g., 3 for black-oil: pressure, So, Sg).
+    :return: A SciPy `LinearOperator` that represents the Block Jacobi preconditioner.
+    """
+    n = A_csr.shape[0]
+    num_blocks = n // block_size
+
+    # Pre-compute inverse of diagonal blocks
+    block_inverses = []
+    epsilon = get_floating_point_info().eps
+    threshold = max(1e-10, 100 * epsilon)
+
+    for i in range(num_blocks):
+        start_idx = i * block_size
+        end_idx = start_idx + block_size
+
+        # Extract diagonal block
+        block = A_csr[start_idx:end_idx, start_idx:end_idx].toarray()  # type: ignore
+
+        try:
+            # Try to invert the block
+            block_inv = np.linalg.inv(block)
+            block_inverses.append(block_inv)
+        except np.linalg.LinAlgError:
+            # Block is singular, fall back to diagonal approximation
+            diag = np.diag(block)
+            diag = np.where(np.abs(diag) < threshold, 1.0, diag)
+            block_inv = np.diag(1.0 / diag)
+            block_inverses.append(block_inv)
+
+    # Handle remainder cells (if n is not divisible by block_size)
+    remainder_start = num_blocks * block_size
+    if remainder_start < n:
+        remainder = n - remainder_start
+        remainder_block = A_csr[remainder_start:n, remainder_start:n].toarray()  # type: ignore
+        try:
+            remainder_inv = np.linalg.inv(remainder_block)
+            block_inverses.append(remainder_inv)
+        except np.linalg.LinAlgError:
+            diag = np.diag(remainder_block)
+            diag = np.where(np.abs(diag) < threshold, 1.0, diag)
+            remainder_inv = np.diag(1.0 / diag)
+            block_inverses.append(remainder_inv)
+
+    def matvec(x: np.typing.NDArray) -> np.typing.NDArray:
+        """Apply Block Jacobi preconditioner."""
+        y = np.zeros_like(x)
+
+        # Apply block inversions
+        for i in range(num_blocks):
+            start_idx = i * block_size
+            end_idx = start_idx + block_size
+            y[start_idx:end_idx] = block_inverses[i] @ x[start_idx:end_idx]
+
+        # Handle remainder
+        if remainder_start < n:
+            y[remainder_start:n] = block_inverses[num_blocks] @ x[remainder_start:n]
+
+        return y
+
+    return LinearOperator(shape=A_csr.shape, matvec=matvec)  # type: ignore[arg-type]
 
 
 def build_ilu_preconditioner(
@@ -362,6 +444,52 @@ def build_ilu_preconditioner(
     # Create a `LinearOperator` that uses the .solve() method as the preconditioning step
     M = LinearOperator(shape=A_csc.shape, matvec=ilu_factor.solve)  # type: ignore[arg-type]
     return M
+
+
+def build_polynomial_preconditioner(
+    A_csr: typing.Union[csr_array, csr_matrix],
+    degree: int = 2,
+) -> LinearOperator:
+    """
+    Creates a polynomial preconditioner M = I + αA + α²A².
+
+    Cheap and effective for well-conditioned systems. Uses Neumann series approximation
+    of (I - A)^{-1} for properly scaled A.
+
+    :param A_csr: The coefficient matrix in CSR format.
+    :param degree: Polynomial degree (1, 2, or 3 recommended).
+    :return: A SciPy `LinearOperator` that represents the polynomial preconditioner.
+    """
+    # Estimate spectral radius for scaling (simple approximation)
+    # Use inverse of diagonal norm as scaling factor
+    diag = A_csr.diagonal()
+    diag_norm = np.max(np.abs(diag))
+    alpha = 1.0 / diag_norm if diag_norm > 1e-10 else 1.0
+
+    # Pre-compute polynomial terms: I, αA, α²A², ...
+    identity_term = np.ones(A_csr.shape[0])
+    terms = [identity_term]
+
+    current_term = alpha
+    A_power = A_csr
+    for _ in range(degree):
+        terms.append(current_term)  # type: ignore
+        current_term *= alpha
+        if _ < degree - 1:
+            A_power = A_power @ A_csr
+
+    def matvec(x: np.typing.NDArray) -> np.typing.NDArray:
+        """Apply polynomial preconditioner: (I + αA + α²A² + ...) x"""
+        result = terms[0] * x  # Identity term
+
+        A_x = x
+        for i in range(1, degree + 1):
+            A_x = A_csr @ A_x
+            result = result + terms[i] * A_x
+
+        return result
+
+    return LinearOperator(shape=A_csr.shape, matvec=matvec)  # type: ignore[arg-type]
 
 
 _CPR_AMG_KWARGS = {
@@ -498,7 +626,190 @@ def _spsolve(
     return spsolve(A, b), 0  # type: ignore[return-value]
 
 
-_lgmres = functools.partial(lgmres, inner_m=50, outer_k=5)
+def _lgmres(
+    A: typing.Any,
+    b: typing.Any,
+    x0: typing.Optional[typing.Any],
+    *,
+    rtol: float,
+    atol: float,
+    maxiter: typing.Optional[int],
+    M: typing.Optional[typing.Any],
+    callback: typing.Optional[typing.Callable[[np.typing.NDArray], None]],
+    inner_m: int = 50,
+    outer_k: int = 5,
+) -> typing.Tuple[np.typing.NDArray, int]:
+    """
+    LGMRES solver with configurable inner/outer iteration parameters.
+
+    :param inner_m: Number of inner GMRES iterations per restart.
+    :param outer_k: Number of vectors to carry between inner GMRES iterations.
+    """
+    return lgmres(  # type: ignore[return-value]
+        A,
+        b,
+        x0=x0,
+        M=M,
+        tol=rtol,
+        atol=atol,
+        maxiter=maxiter,
+        callback=callback,
+        inner_m=inner_m,
+        outer_k=outer_k,
+    )
+
+
+class CachedPreconditionerFactory:
+    """
+    Preconditioner factory
+
+    Caches preconditioner and optionally updates it based on matrix changes.
+
+    For most reservoir simulation, the matrix structure (sparsity pattern) stays constant,
+    but coefficients (mobility, compressibility) change slowly. Hence this class:
+
+    1. Caches expensive preconditioner setup (ILU, AMG)
+    2. Reuses preconditioner across multiple timesteps
+    3. Rebuilds only when matrix changes significantly
+
+    **Usage:**
+    ```python
+    # Option 1: Use string name (recommended for Config integration)
+    cached_ilu = CachedPreconditionerFactory(
+        factory="ilu",
+        update_frequency=10,  # Rebuild every 10 timesteps
+        recompute_threshold=0.3,  # Or when matrix changes by 30%
+    )
+
+    # Option 2: Use factory function directly
+    cached_ilu = CachedPreconditionerFactory(
+        factory=build_ilu_preconditioner,
+        update_frequency=10,
+        recompute_threshold=0.3,
+    )
+
+    # In simulation loop
+    for timestep in range(num_steps):
+        A = build_matrix(...)  # Matrix changes each step
+        M = cached_ilu(A)  # Reuses or rebuilds as needed
+        x = solve(A, b, M=M)
+
+    # Integration with simulation `Config`
+    pressure_preconditioner = CachedPreconditionerFactory("ilu", name="cached_ilu", update_frequency=10)
+    # Register the preconditioner factory as the "new" ILU preconditioner factory
+    pressure_preconditioner.register(override=True)
+    config = Config(pressure_preconditioner="cached_ilu", ...)
+    ```
+    """
+
+    def __init__(
+        self,
+        factory: typing.Union[str, PreconditionerFactory],
+        name: typing.Optional[str] = None,
+        update_frequency: int = 10,
+        recompute_threshold: float = 0.5,
+    ):
+        """
+        Initialize cached preconditioner.
+
+        :param factory: Preconditioner factory function or string name (e.g., "ilu", "amg", "block_jacobi")
+        :param name: The name of the preconditioner factory been cached or a new name for the cahed version of the factory.
+        :param update_frequency: Rebuild preconditioner every N calls (0 = never auto-rebuild)
+        :param recompute_threshold: Rebuild if ||A_new - A_old||/||A_old|| > threshold
+        """
+        # If factory is a string, look it up from the registry
+        if isinstance(factory, str):
+            self.factory = get_preconditioner_factory(factory)
+            self._name = name or factory
+        else:
+            self.factory = factory
+            self._name = name or getattr(factory, "__name__", repr(factory))
+
+        self.update_frequency = update_frequency
+        self.recompute_threshold = recompute_threshold
+
+        self._cached_M: typing.Optional[LinearOperator] = None
+        self._cached_A_data: typing.Optional[np.typing.NDArray] = None
+        self._call_count = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def __call__(
+        self, A_csr: typing.Union[csr_array, csr_matrix]
+    ) -> typing.Optional[LinearOperator]:
+        """
+        Get preconditioner, reusing cache if possible.
+
+        :param A_csr: Current coefficient matrix
+        :return: Preconditioner (cached or newly built)
+        """
+        should_rebuild = self._should_recompute(A_csr)
+
+        if should_rebuild:
+            logger.debug(
+                f"Rebuilding {self._name} preconditioner (call #{self._call_count}, "
+                f"threshold={self.recompute_threshold:.2%})"
+            )
+            self._cached_M = self.factory(A_csr)
+            self._cached_A_data = A_csr.data.copy()
+            self._call_count = 0
+        else:
+            logger.debug(
+                f"Reusing cached {self._name} preconditioner (call #{self._call_count}/"
+                f"{self.update_frequency})"
+            )
+
+        self._call_count += 1
+        return self._cached_M
+
+    def _should_recompute(self, A_csr: typing.Union[csr_array, csr_matrix]) -> bool:
+        """Determine if preconditioner should be rebuilt."""
+        # First call - must build
+        if self._cached_M is None:
+            return True
+
+        # Frequency-based rebuild
+        if self.update_frequency > 0 and self._call_count >= self.update_frequency:
+            return True
+
+        # Change-based rebuild (compare matrix coefficients)
+        if self._cached_A_data is not None and self.recompute_threshold > 0:
+            # Check if matrix data has changed significantly
+            # Use Frobenius norm of difference
+            if A_csr.data.shape != self._cached_A_data.shape:
+                # Structure changed (shouldn't happen in reservoir sim, but handle it)
+                return True
+
+            diff_norm = np.linalg.norm(A_csr.data - self._cached_A_data)
+            old_norm = np.linalg.norm(self._cached_A_data)
+
+            if old_norm > 1e-10:
+                relative_change = diff_norm / old_norm
+                if relative_change > self.recompute_threshold:
+                    logger.debug(
+                        f"Matrix changed by {relative_change:.2%} "
+                        f"(threshold: {self.recompute_threshold:.2%})"
+                    )
+                    return True
+
+        return False
+
+    def reset(self) -> None:
+        """Clear cache and force rebuild on next call."""
+        self._cached_M = None
+        self._cached_A_data = None
+        self._call_count = 0
+
+    def register(self, override: bool = False) -> None:
+        """
+        Register this cached preconditioner (factory) in the preconditioner faactory registry
+
+        :param override: Whether to override exisiting factories with the same name in the registry
+        """
+        factory = typing.cast(PreconditionerFactory, self)
+        preconditioner_factory(factory, name=self._name, override=override)
 
 
 _preconditoner_registry_lock = threading.Lock()
@@ -507,6 +818,8 @@ _PRECONDITIONER_FACTORIES = {
     "amg": build_amg_preconditioner,
     "ilu": build_ilu_preconditioner,
     "diagonal": build_diagonal_preconditioner,
+    "block_jacobi": build_block_jacobi_preconditioner,
+    "polynomial": build_polynomial_preconditioner,
 }
 """Registered preconditioner factory functions."""
 
@@ -700,7 +1013,7 @@ def get_solver_func(name: str) -> typing.Optional[SolverFunc]:
                 f"Use `@solver_func` to register new solvers. "
                 f"Available solvers: {list(_SOLVER_FUNCS.keys())}"
             )
-        return _SOLVER_FUNCS[name]
+        return _SOLVER_FUNCS[name]  # type: ignore[return-value]
 
 
 def _get_preconditioner(
@@ -749,7 +1062,7 @@ def _get_solver_func(
             solver_func = _SOLVER_FUNCS[solver]
             if isinstance(solver_func, (list, tuple)):
                 return list(solver_func)  # type: ignore[return-value]
-            return [solver_func]
+            return [solver_func]  # type: ignore[return-value]
         raise ValidationError(
             f"Unknown solver type: {solver!r}. Available solvers: {list(_SOLVER_FUNCS.keys())}"
         )
@@ -847,6 +1160,14 @@ def solve_linear_system(
         )
 
     logger.info("Falling back to direct solver (spsolve).")
+    n = A_csr.shape[0]
+    if n > 100000:
+        logger.warning(
+            f"Direct solver on large system ({n:,} DOFs) may consume excessive memory "
+            f"(estimated: {n * n * 8 / 1e9:.2f} GB for dense factorization). "
+            f"Consider improving iterative solver settings or preconditioner."
+        )
+
     try:
         x = spsolve(A_csr, b)
     except Exception as exc:

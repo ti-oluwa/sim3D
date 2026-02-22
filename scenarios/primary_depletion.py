@@ -71,7 +71,7 @@ def setup_run():
             ),
         ),
         skin_factor=2.5,
-        is_active=True, 
+        is_active=True,
     )
 
     wells = bores.wells_(injectors=None, producers=[producer])
@@ -86,7 +86,7 @@ def setup_run():
         aggressive_backoff_factor=0.25,
         max_rejects=20,
     )
-    run.config.update(wells=wells, timer=timer)
+    run.config = run.config.with_updates(wells=wells, timer=timer)
     return Path, bores, run
 
 

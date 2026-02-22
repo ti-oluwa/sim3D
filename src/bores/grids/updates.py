@@ -41,7 +41,7 @@ def update_pvt_grids(
     Updates PVT fluid properties grids using the current pressure and temperature values.
     This function recalculates the fluid PVT properties in a physically consistent sequence:
 
-    ```mermaid
+    ```markdown
     ┌────────────┐
     │  PRESSURE  │
     └────┬───────┘
@@ -60,11 +60,11 @@ def update_pvt_grids(
          ▼
     ┌────────────────────────────────────────────────────────────┐
     │ OIL PROPERTIES                                             │
-    │  • Compute oil specific gravity and API gravity            │
-    │  • Recalculate bubble point pressure (Pb)                  │
-    │  • If pressure < Pb: recompute GOR (Rs) using Vazquez-Beggs│
-    │  • Compute FVF using pressure, Rs, Pb                      │
-    │  • Then compute oil compressibility, density, viscosity    │
+    │  - Compute oil specific gravity and API gravity            │
+    │  - Recalculate bubble point pressure (Pb)                  │
+    │  - If pressure < Pb: recompute GOR (Rs) using Vazquez-Beggs│
+    │  - Compute FVF using pressure, Rs, Pb                      │
+    │  - Then compute oil compressibility, density, viscosity    │
     └────────────────────────────────────────────────────────────┘
 
     # GAS PROPERTIES
@@ -91,8 +91,8 @@ def update_pvt_grids(
     - Computes oil specific gravity and API gravity from base density.
     - Recalculates bubble point pressure (Pb) using API, temperature, and gas gravity.
     - Determines GOR:
-        • If current pressure < Pb: compute GOR using Vazquez-Beggs correlation.
-        • If current pressure ≥ Pb: GOR = GOR at Pb (Rs = Rs_b).
+        - If current pressure < Pb: compute GOR using Vazquez-Beggs correlation.
+        - If current pressure ≥ Pb: GOR = GOR at Pb (Rs = Rs_b).
     - Computes:
         - Oil formation volume factor (Bo) using pressure, Pb, GOR, and gravity.
         - Oil compressibility (Co) using updated GOR and Pb.
@@ -163,6 +163,7 @@ def update_pvt_grids(
             gas_formation_volume_factor_grid=fluid_properties.gas_formation_volume_factor_grid,
             gas_solubility_in_water_grid=gas_solubility_in_water_grid,
             gas_free_water_formation_volume_factor_grid=gas_free_water_formation_volume_factor_grid,
+            salinity=fluid_properties.water_salinity_grid,
         )
         new_water_density_grid = build_water_density_grid(
             pressure_grid=pressure_grid,
@@ -410,6 +411,7 @@ def update_pvt_grids(
         gas_formation_volume_factor_grid=new_gas_formation_volume_factor_grid,
         oil_compressibility_grid=new_oil_compressibility_grid,
         water_compressibility_grid=new_water_compressibility_grid,
+        gas_compressibility_factor_grid=gas_compressibility_factor_grid,
         gas_compressibility_grid=new_gas_compressibility_grid,
         oil_density_grid=new_oil_density_grid,
         oil_effective_density_grid=new_oil_effective_density_grid,

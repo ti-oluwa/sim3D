@@ -1,6 +1,6 @@
 [project]
 name = "bores-framework"
-version = "0.0.1b1"
+version = "0.0.1"
 description = "3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework (BORES)."
 authors = [
     { name = "ti-oluwa", email = "tioluwa.dev@gmail.com" },
@@ -63,7 +63,7 @@ scipy = [
 
 [dependency-groups]
 dev = [
-    "marimo>=0.19.6",
+    "marimo>=0.19.11",
     "auto-mix-prep>=0.2.0",
     "mypy>=1.16.1",
     "rich>=14.0.0",

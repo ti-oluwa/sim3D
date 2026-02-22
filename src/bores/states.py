@@ -96,13 +96,13 @@ class ModelState(
         self.capillary_pressures = capillary_pressures
         self.timer_state = timer_state
 
-    @functools.cache
+    @functools.lru_cache(maxsize=32)
     def wells_exists(self) -> bool:
         """Check if there are any wells in this state."""
         return self.wells.exists()
 
 
-def _validate_and_coerce_array(
+def _validate_array(
     model_shape: tuple[int, ...],
     grid: np.ndarray,
     field_name: str,
@@ -155,7 +155,7 @@ def validate_state(
         for field in attrs.fields(fluid_properties.__class__):
             value = getattr(fluid_properties, field.name)
             if isinstance(value, np.ndarray):
-                fluid_dict[field.name] = _validate_and_coerce_array(
+                fluid_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Fluid property grid {field.name}",
@@ -181,7 +181,7 @@ def validate_state(
         for field in attrs.fields(rock_properties.__class__):
             value = getattr(rock_properties, field.name)
             if isinstance(value, np.ndarray):
-                rock_dict[field.name] = _validate_and_coerce_array(
+                rock_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Rock property grid {field.name}",
@@ -190,19 +190,19 @@ def validate_state(
             elif field.name == "absolute_permeability":
                 perm = value
                 rock_dict[field.name] = RockPermeability(
-                    x=_validate_and_coerce_array(
+                    x=_validate_array(
                         model_shape=model_shape,
                         grid=perm.x,
                         field_name="Rock permeability x",
                         dtype=dtype,
                     ),
-                    y=_validate_and_coerce_array(
+                    y=_validate_array(
                         model_shape=model_shape,
                         grid=perm.y,
                         field_name="Rock permeability y",
                         dtype=dtype,
                     ),
-                    z=_validate_and_coerce_array(
+                    z=_validate_array(
                         model_shape=model_shape,
                         grid=perm.z,
                         field_name="Rock permeability z",
@@ -229,7 +229,7 @@ def validate_state(
         for field in attrs.fields(injection.__class__):
             value = getattr(injection, field.name)
             if isinstance(value, np.ndarray):
-                injection_dict[field.name] = _validate_and_coerce_array(
+                injection_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Injection rate grid {field.name}",
@@ -255,7 +255,7 @@ def validate_state(
         for field in attrs.fields(production.__class__):
             value = getattr(production, field.name)
             if isinstance(value, np.ndarray):
-                production_dict[field.name] = _validate_and_coerce_array(
+                production_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Production rate grid {field.name}",
@@ -281,7 +281,7 @@ def validate_state(
         for field in attrs.fields(relative_mobilities.__class__):
             value = getattr(relative_mobilities, field.name)
             if isinstance(value, np.ndarray):
-                mobility_dict[field.name] = _validate_and_coerce_array(
+                mobility_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Relative mobility grid {field.name}",
@@ -307,7 +307,7 @@ def validate_state(
         for field in attrs.fields(relative_permeabilities.__class__):
             value = getattr(relative_permeabilities, field.name)
             if isinstance(value, np.ndarray):
-                relperm_dict[field.name] = _validate_and_coerce_array(
+                relperm_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Relative permeability grid {field.name}",
@@ -333,7 +333,7 @@ def validate_state(
         for field in attrs.fields(capillary_pressures.__class__):
             value = getattr(capillary_pressures, field.name)
             if isinstance(value, np.ndarray):
-                capillary_dict[field.name] = _validate_and_coerce_array(
+                capillary_dict[field.name] = _validate_array(
                     model_shape=model_shape,
                     grid=value,
                     field_name=f"Capillary pressure grid {field.name}",
@@ -355,7 +355,7 @@ def validate_state(
 
     # Validate and coerce thickness grid and saturation history
     if dtype is not None:
-        thickness_grid = _validate_and_coerce_array(
+        thickness_grid = _validate_array(
             model_shape=model_shape,
             grid=thickness_grid,
             field_name="Thickness grid",
@@ -363,25 +363,25 @@ def validate_state(
         )
         sat_hist = model.saturation_history
         saturation_history = SaturationHistory(
-            max_water_saturation_grid=_validate_and_coerce_array(
+            max_water_saturation_grid=_validate_array(
                 model_shape=model_shape,
                 grid=sat_hist.max_water_saturation_grid,
                 field_name="Max water saturation grid",
                 dtype=dtype,
             ),
-            max_gas_saturation_grid=_validate_and_coerce_array(
+            max_gas_saturation_grid=_validate_array(
                 model_shape=model_shape,
                 grid=sat_hist.max_gas_saturation_grid,
                 field_name="Max gas saturation grid",
                 dtype=dtype,
             ),
-            water_imbibition_flag_grid=_validate_and_coerce_array(
+            water_imbibition_flag_grid=_validate_array(
                 model_shape=model_shape,
                 grid=sat_hist.water_imbibition_flag_grid,
                 field_name="Water imbibition flag grid",
                 dtype=dtype,
             ),
-            gas_imbibition_flag_grid=_validate_and_coerce_array(
+            gas_imbibition_flag_grid=_validate_array(
                 model_shape=model_shape,
                 grid=sat_hist.gas_imbibition_flag_grid,
                 field_name="Gas imbibition flag grid",

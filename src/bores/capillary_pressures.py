@@ -367,7 +367,7 @@ def compute_brooks_corey_capillary_pressures(
         sg = np.where(needs_norm, sg / total_saturation, sg)
 
     # Effective pore spaces
-    total_mobile_pore_space_water = 1.0 - swc - sorw - sgr
+    total_mobile_pore_space_water = 1.0 - swc - sorw
     total_mobile_pore_space_gas = 1.0 - swc - sorg - sgr
 
     # Pcow (Po - Pw)
@@ -381,7 +381,6 @@ def compute_brooks_corey_capillary_pressures(
             valid_water, (sw - swc) / total_mobile_pore_space_water, 0.0
         )
         effective_water_saturation = np.clip(effective_water_saturation, 1e-6, 1.0)
-
         # Mask for undersaturated conditions
         undersaturated = valid_water & (effective_water_saturation < 1.0 - 1e-6)
 
@@ -422,7 +421,6 @@ def compute_brooks_corey_capillary_pressures(
 
     # Pcgo (Pg - Po)
     gas_oil_capillary_pressure = np.zeros_like(sg)
-
     valid_gas = total_mobile_pore_space_gas > 1e-9
 
     if np.any(valid_gas):
@@ -686,12 +684,11 @@ def compute_van_genuchten_capillary_pressures(
         sg = np.where(needs_norm, sg / total_saturation, sg)
 
     # Effective pore spaces
-    total_mobile_pore_space_water = 1.0 - swc - sorw - sgr
+    total_mobile_pore_space_water = 1.0 - swc - sorw
     total_mobile_pore_space_gas = 1.0 - swc - sorg - sgr
 
     #  Pcow (Po - Pw)
     oil_water_capillary_pressure = np.zeros_like(sw)
-
     # Mask for valid mobile pore space
     valid_water = total_mobile_pore_space_water > 1e-9
 
@@ -742,7 +739,6 @@ def compute_van_genuchten_capillary_pressures(
 
     #  Pcgo (Pg - Po)
     gas_oil_capillary_pressure = np.zeros_like(sg)
-
     valid_gas = total_mobile_pore_space_gas > 1e-9
 
     if np.any(valid_gas):
@@ -933,6 +929,9 @@ def compute_leverett_j_capillary_pressures(
     gas_oil_interfacial_tension: float,
     contact_angle_oil_water: float = 0.0,
     contact_angle_gas_oil: float = 0.0,
+    j_function_coefficient: float = 0.5,
+    j_function_exponent: float = 0.5,
+    mixed_wet_water_fraction: float = 0.5,
     wettability: WettabilityType = WettabilityType.WATER_WET,
 ) -> typing.Tuple[FloatOrArray, FloatOrArray]:
     """
@@ -968,6 +967,9 @@ def compute_leverett_j_capillary_pressures(
     :param gas_oil_interfacial_tension: Gas-oil interfacial tension (dyne/cm).
     :param contact_angle_oil_water: Oil-water contact angle in degrees (0° = water-wet).
     :param contact_angle_gas_oil: Gas-oil contact angle in degrees (0° = oil-wet).
+    :param j_function_coefficient: Empirical coefficient 'a' in J(Se) = a * Se^(-b). Fit to core data (can be tuned to match experimental data).
+    :param j_function_exponent: Empirical exponent 'b' in J(Se) = a * Se^(-b). Fit to core data (can be tuned to match experimental data).
+    :param mixed_wet_water_fraction: Fraction of pore space that is water-wet in mixed-wet systems (0-1).
     :param wettability: Wettability type (affects sign of capillary pressure).
     :return: Tuple of (oil_water_capillary_pressure, gas_oil_capillary_pressure) in psi.
     """
@@ -1004,12 +1006,11 @@ def compute_leverett_j_capillary_pressures(
         sg = np.where(needs_norm, sg / total_saturation, sg)
 
     # Effective pore spaces
-    total_mobile_pore_space_water = 1.0 - swc - sorw - sgr
+    # Water mobile pore space: excludes connate water and residual oil (to water)
+    # Gas residual doesn't affect water-oil mobile space
+    total_mobile_pore_space_water = 1.0 - swc - sorw
+    # Gas mobile pore space: excludes connate water, residual oil (to gas), and residual gas
     total_mobile_pore_space_gas = 1.0 - swc - sorg - sgr
-
-    # Leverett J-function parameters (can be tuned to match experimental data)
-    j_coeff_a = 0.5  # Empirical coefficient
-    j_coeff_b = 0.5  # Empirical exponent
 
     # Convert contact angles to radians
     theta_ow_rad = np.deg2rad(contact_angle_oil_water)
@@ -1020,9 +1021,8 @@ def compute_leverett_j_capillary_pressures(
     valid_rock = (perm > 0) & (phi > 0)
     leverett_factor = np.where(valid_rock, np.sqrt(phi / perm), 0.0)
 
-    # ---------------- Pcow (Po - Pw) ----------------
+    # Pcow (Po - Pw)
     oil_water_capillary_pressure = np.zeros_like(sw)
-
     valid_water = (total_mobile_pore_space_water > 1e-9) & valid_rock
 
     if np.any(valid_water):
@@ -1034,13 +1034,15 @@ def compute_leverett_j_capillary_pressures(
         )
 
         # J-function value
-        j_value_ow = j_coeff_a * (effective_water_saturation ** (-j_coeff_b))
+        j_value_ow = j_function_coefficient * (
+            effective_water_saturation ** (-j_function_exponent)
+        )
 
         # Capillary pressure (converting dyne/cm to psi: 1 dyne/cm = 0.00145038 psi)
         # Pc = σ * cos(θ) * sqrt(φ/k) * J(Se)
         pc_ow = (
             oil_water_interfacial_tension
-            * 0.00145038  # Convert to psi
+            * 4.725  # Convert to psi
             * np.cos(theta_ow_rad)
             * leverett_factor
             * j_value_ow
@@ -1052,13 +1054,14 @@ def compute_leverett_j_capillary_pressures(
         elif wettability == WettabilityType.OIL_WET:
             oil_water_capillary_pressure = np.where(valid_water, -pc_ow, 0.0)
         else:  # MIXED_WET
-            # For mixed wettability, interpolate based on contact angle
-            mixed_pc_ow = pc_ow * (2.0 * np.cos(theta_ow_rad))
+            # Weighted average: positive (water-wet) and negative (oil-wet) contributions
+            mixed_pc_ow = mixed_wet_water_fraction * pc_ow + (
+                1.0 - mixed_wet_water_fraction
+            ) * (-pc_ow)
             oil_water_capillary_pressure = np.where(valid_water, mixed_pc_ow, 0.0)
 
-    # ---------------- Pcgo (Pg - Po) ----------------
+    # Pcgo (Pg - Po)
     gas_oil_capillary_pressure = np.zeros_like(sg)
-
     valid_gas = (total_mobile_pore_space_gas > 1e-9) & valid_rock
 
     if np.any(valid_gas):
@@ -1068,12 +1071,14 @@ def compute_leverett_j_capillary_pressures(
         effective_gas_saturation = np.clip(effective_gas_saturation, 1e-6, 1.0 - 1e-6)
 
         # J-function value
-        j_value_go = j_coeff_a * (effective_gas_saturation ** (-j_coeff_b))
+        j_value_go = j_function_coefficient * (
+            effective_gas_saturation ** (-j_function_exponent)
+        )
 
         # Capillary pressure
         pcgo = (
             gas_oil_interfacial_tension
-            * 0.00145038  # Convert to psi
+            * 4.725  # Convert to psi
             * np.cos(theta_go_rad)
             * leverett_factor
             * j_value_go
@@ -1126,8 +1131,14 @@ class LeverettJCapillaryPressureModel(
     """Oil-water contact angle in degrees (0° = water-wet, 180° = oil-wet)."""
     contact_angle_gas_oil: float = 0.0
     """Gas-oil contact angle in degrees (0° = oil-wet to gas)."""
+    mixed_wet_water_fraction: float = 0.5
+    """Fraction of pore space that is water-wet in mixed-wet systems (0-1)."""
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (affects sign convention)."""
+    j_function_coefficient: float = 0.5
+    """Empirical coefficient 'a' in J(Se) = a * Se^(-b). Fit to core data (can be tuned to match experimental data)."""
+    j_function_exponent: float = 0.5
+    """Empirical exponent 'b' in J(Se) = a * Se^(-b). Fit to core data (can be tuned to match experimental data)."""
     supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
 
@@ -1207,6 +1218,9 @@ class LeverettJCapillaryPressureModel(
             gas_oil_interfacial_tension=self.gas_oil_interfacial_tension,
             contact_angle_oil_water=self.contact_angle_oil_water,
             contact_angle_gas_oil=self.contact_angle_gas_oil,
+            j_function_coefficient=self.j_function_coefficient,
+            j_function_exponent=self.j_function_exponent,
+            mixed_wet_water_fraction=self.mixed_wet_water_fraction,
             wettability=self.wettability,
         )
         return CapillaryPressures(oil_water=pcow, gas_oil=pcgo)  # type: ignore[typeddict-item]

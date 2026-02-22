@@ -163,7 +163,7 @@ def evolve_saturation(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
     )
 
     dtype = get_dtype()
@@ -174,7 +174,7 @@ def evolve_saturation(
     # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
     # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
     gravitational_constant = (
-        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
     net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
@@ -913,49 +913,60 @@ def compute_well_rate_grids(
         (cell_count_x, cell_count_y, cell_count_z), dtype=dtype
     )
 
-    # Iterate over interior cells
-    for i, j, k in itertools.product(
-        range(1, cell_count_x - 1),
-        range(1, cell_count_y - 1),
-        range(1, cell_count_z - 1),
-    ):
-        cell_temperature = temperature_grid[i, j, k]
-        cell_thickness = thickness_grid[i, j, k]
-        cell_oil_pressure = oil_pressure_grid[i, j, k]
+    # Process all injection wells (compute total WI + rates in single pass)
+    for injection_well in wells.injection_wells:
+        if not injection_well.is_open:
+            continue
+        if injection_well.injected_fluid is None:
+            continue
 
-        injection_well, production_well = wells[i, j, k]
-        cell_water_injection_rate = 0.0
-        cell_water_production_rate = 0.0
-        cell_oil_injection_rate = 0.0
-        cell_oil_production_rate = 0.0
-        cell_gas_injection_rate = 0.0
-        cell_gas_production_rate = 0.0
+        injected_fluid = injection_well.injected_fluid
+        injected_phase = injected_fluid.phase
 
-        permeability = (
-            absolute_permeability.x[i, j, k],
-            absolute_permeability.y[i, j, k],
-            absolute_permeability.z[i, j, k],
-        )
-        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
-        oil_pressure = oil_pressure_grid[i, j, k]
+        # Cache to store (cell_location, well_index) pairs
+        well_index_cache = []
+        total_well_index = 0.0
 
-        # Handle injection well
-        if (
-            injection_well is not None
-            and injection_well.is_open
-            and (injected_fluid := injection_well.injected_fluid) is not None
-        ):
-            injected_phase = injected_fluid.phase
+        # Iterate over perforated cells to compute total WI and cache well indices
+        for start, end in injection_well.perforating_intervals:
+            for i, j, k in itertools.product(
+                range(start[0], end[0] + 1),
+                range(start[1], end[1] + 1),
+                range(start[2], end[2] + 1),
+            ):
+                cell_thickness = thickness_grid[i, j, k]
+                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
+                permeability = (
+                    absolute_permeability.x[i, j, k],
+                    absolute_permeability.y[i, j, k],
+                    absolute_permeability.z[i, j, k],
+                )
+                well_index = injection_well.get_well_index(
+                    interval_thickness=interval_thickness,
+                    permeability=permeability,
+                    skin_factor=injection_well.skin_factor,
+                )
+                well_index_cache.append(((i, j, k), well_index))
+                total_well_index += well_index
+
+        # Now compute rates for each perforated cell using cached well indices
+        for (i, j, k), well_index in well_index_cache:
+            cell_temperature = typing.cast(float, temperature_grid[i, j, k])
+            cell_oil_pressure = typing.cast(float, oil_pressure_grid[i, j, k])
+
             phase_fvf = injected_fluid.get_formation_volume_factor(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
             )
             phase_fvf = typing.cast(float, phase_fvf)
+
             if injected_phase == FluidPhase.GAS:
-                phase_mobility = gas_relative_mobility_grid[i, j, k]
+                phase_mobility = typing.cast(float, gas_relative_mobility_grid[i, j, k])
                 compressibility_kwargs = {}
             else:
-                phase_mobility = water_relative_mobility_grid[i, j, k]
+                phase_mobility = typing.cast(
+                    float, water_relative_mobility_grid[i, j, k]
+                )
                 gas_solubility_in_water = fluid_properties.gas_solubility_in_water_grid[
                     i, j, k
                 ]
@@ -977,15 +988,15 @@ def compute_well_rate_grids(
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
-            well_index = injection_well.get_well_index(
-                interval_thickness=interval_thickness,
-                permeability=permeability,
-                skin_factor=injection_well.skin_factor,
+
+            allocation_fraction = (
+                well_index / total_well_index if total_well_index > 0 else 1.0
             )
+
             # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
             # Since phase relative mobility does not include formation volume factor
             cell_injection_rate = injection_well.get_flow_rate(
-                pressure=oil_pressure,
+                pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 well_index=well_index,
                 phase_mobility=phase_mobility,
@@ -993,6 +1004,7 @@ def compute_well_rate_grids(
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
+                allocation_fraction=allocation_fraction,
                 pvt_tables=config.pvt_tables,
             )
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
@@ -1008,8 +1020,12 @@ def compute_well_rate_grids(
 
             if injected_phase == FluidPhase.GAS:
                 cell_gas_injection_rate = cell_injection_rate
+                cell_water_injection_rate = 0.0
             else:
-                cell_water_injection_rate = cell_injection_rate * c.BBL_TO_FT3
+                cell_water_injection_rate = (
+                    cell_injection_rate * c.BARRELS_TO_CUBIC_FEET
+                )
+                cell_gas_injection_rate = 0.0
 
             # Record injection rates for the cell
             if injection_grid is not None:
@@ -1019,8 +1035,46 @@ def compute_well_rate_grids(
                     cell_gas_injection_rate,
                 )
 
-        # Handle production well
-        if production_well is not None and production_well.is_open:
+            # Update net grids
+            net_water_well_rate_grid[i, j, k] += cell_water_injection_rate
+            net_gas_well_rate_grid[i, j, k] += cell_gas_injection_rate
+
+    # Process all production wells (compute total WI + rates in single pass)
+    for production_well in wells.production_wells:
+        if not production_well.is_open:
+            continue
+
+        # Cache to store (cell_location, well_index) pairs
+        well_index_cache = []
+        total_well_index = 0.0
+
+        # Iterate over perforated cells to compute total WI and cache well indices
+        for start, end in production_well.perforating_intervals:
+            for i, j, k in itertools.product(
+                range(start[0], end[0] + 1),
+                range(start[1], end[1] + 1),
+                range(start[2], end[2] + 1),
+            ):
+                cell_thickness = thickness_grid[i, j, k]
+                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
+                permeability = (
+                    absolute_permeability.x[i, j, k],
+                    absolute_permeability.y[i, j, k],
+                    absolute_permeability.z[i, j, k],
+                )
+                well_index = production_well.get_well_index(
+                    interval_thickness=interval_thickness,
+                    permeability=permeability,
+                    skin_factor=production_well.skin_factor,
+                )
+                well_index_cache.append(((i, j, k), well_index))
+                total_well_index += well_index
+
+        # Now compute rates for each perforated cell using cached well indices
+        for (i, j, k), well_index in well_index_cache:
+            cell_temperature = typing.cast(float, temperature_grid[i, j, k])
+            cell_oil_pressure = typing.cast(float, oil_pressure_grid[i, j, k])
+
             water_formation_volume_factor_grid = (
                 fluid_properties.water_formation_volume_factor_grid
             )
@@ -1030,33 +1084,56 @@ def compute_well_rate_grids(
             gas_formation_volume_factor_grid = (
                 fluid_properties.gas_formation_volume_factor_grid
             )
+
+            allocation_fraction = (
+                well_index / total_well_index if total_well_index > 0 else 1.0
+            )
+
+            cell_water_production_rate = 0.0
+            cell_oil_production_rate = 0.0
+            cell_gas_production_rate = 0.0
+
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
-                    phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    phase_compressibility = gas_compressibility_grid[i, j, k]
-                    phase_fvf = gas_formation_volume_factor_grid[i, j, k]
+                    phase_mobility = typing.cast(
+                        float, gas_relative_mobility_grid[i, j, k]
+                    )
+                    phase_compressibility = typing.cast(
+                        float, gas_compressibility_grid[i, j, k]
+                    )
+                    phase_fvf = typing.cast(
+                        float, gas_formation_volume_factor_grid[i, j, k]
+                    )
                 elif produced_phase == FluidPhase.WATER:
-                    phase_mobility = water_relative_mobility_grid[i, j, k]
-                    phase_compressibility = water_compressibility_grid[i, j, k]
-                    phase_fvf = water_formation_volume_factor_grid[i, j, k]
+                    phase_mobility = typing.cast(
+                        float, water_relative_mobility_grid[i, j, k]
+                    )
+                    phase_compressibility = typing.cast(
+                        float, water_compressibility_grid[i, j, k]
+                    )
+                    phase_fvf = typing.cast(
+                        float, water_formation_volume_factor_grid[i, j, k]
+                    )
                 else:
-                    phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    phase_compressibility = oil_compressibility_grid[i, j, k]
-                    phase_fvf = oil_formation_volume_factor_grid[i, j, k]
+                    phase_mobility = typing.cast(
+                        float, oil_relative_mobility_grid[i, j, k]
+                    )
+                    phase_compressibility = typing.cast(
+                        float, oil_compressibility_grid[i, j, k]
+                    )
+                    phase_fvf = typing.cast(
+                        float, oil_formation_volume_factor_grid[i, j, k]
+                    )
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
-                well_index = production_well.get_well_index(
-                    interval_thickness=interval_thickness,
-                    permeability=permeability,
-                    skin_factor=production_well.skin_factor,
-                )
+
                 # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
                 # Since phase relative mobility does not include formation volume factor
                 production_rate = production_well.get_flow_rate(
-                    pressure=oil_pressure,
+                    pressure=cell_oil_pressure,
                     temperature=cell_temperature,
                     well_index=well_index,
                     phase_mobility=phase_mobility,
@@ -1064,6 +1141,7 @@ def compute_well_rate_grids(
                     fluid_compressibility=phase_compressibility,
                     use_pseudo_pressure=use_pseudo_pressure,
                     formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
                     pvt_tables=config.pvt_tables,
                 )
                 if production_rate > 0.0 and config.warn_well_anomalies:
@@ -1080,9 +1158,13 @@ def compute_well_rate_grids(
                 if produced_fluid.phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
                 elif produced_fluid.phase == FluidPhase.WATER:
-                    cell_water_production_rate += production_rate * c.BBL_TO_FT3
+                    cell_water_production_rate += (
+                        production_rate * c.BARRELS_TO_CUBIC_FEET
+                    )
                 else:
-                    cell_oil_production_rate += production_rate * c.BBL_TO_FT3
+                    cell_oil_production_rate += (
+                        production_rate * c.BARRELS_TO_CUBIC_FEET
+                    )
 
             # Record total production rate for the cell (all phases)
             if production_grid is not None:
@@ -1092,15 +1174,10 @@ def compute_well_rate_grids(
                     cell_gas_production_rate,
                 )
 
-        net_water_well_rate_grid[i, j, k] = (
-            cell_water_injection_rate + cell_water_production_rate
-        )
-        net_oil_well_rate_grid[i, j, k] = (
-            cell_oil_injection_rate + cell_oil_production_rate
-        )
-        net_gas_well_rate_grid[i, j, k] = (
-            cell_gas_injection_rate + cell_gas_production_rate
-        )
+            # Update net grids
+            net_water_well_rate_grid[i, j, k] += cell_water_production_rate
+            net_oil_well_rate_grid[i, j, k] += cell_oil_production_rate
+            net_gas_well_rate_grid[i, j, k] += cell_gas_production_rate
 
     return net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid
 
@@ -1368,7 +1445,7 @@ def evolve_miscible_saturation(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
     )
 
     # Compute net flux contributions for all cells
@@ -1377,7 +1454,7 @@ def evolve_miscible_saturation(
     # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
     # then the conversion factor would be 12.0 / 32.174 = 0.373. Which would scale the gravity terms accordingly.
     gravitational_constant = (
-        c.ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2
+        c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
     (
@@ -2201,50 +2278,60 @@ def compute_miscible_well_rate_grids(
         (cell_count_x, cell_count_y, cell_count_z), dtype=dtype
     )
 
-    # Iterate over interior cells
-    for i, j, k in itertools.product(
-        range(1, cell_count_x - 1),
-        range(1, cell_count_y - 1),
-        range(1, cell_count_z - 1),
-    ):
-        cell_temperature = temperature_grid[i, j, k]
-        cell_thickness = thickness_grid[i, j, k]
-        cell_oil_pressure = oil_pressure_grid[i, j, k]
+    # Process all injection wells (compute total WI + rates in single pass)
+    for injection_well in wells.injection_wells:
+        if not injection_well.is_open:
+            continue
+        if injection_well.injected_fluid is None:
+            continue
 
-        injection_well, production_well = wells[i, j, k]
-        cell_water_injection_rate = 0.0
-        cell_water_production_rate = 0.0
-        cell_oil_injection_rate = 0.0
-        cell_oil_production_rate = 0.0
-        cell_gas_injection_rate = 0.0
-        cell_gas_production_rate = 0.0
-        cell_solvent_injection_concentration = 0.0
+        injected_fluid = injection_well.injected_fluid
+        injected_phase = injected_fluid.phase
 
-        permeability = (
-            absolute_permeability.x[i, j, k],
-            absolute_permeability.y[i, j, k],
-            absolute_permeability.z[i, j, k],
-        )
-        interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
+        # Cache to store (cell_location, well_index) pairs
+        well_index_cache = []
+        total_well_index = 0.0
 
-        # Handle injection well
-        if (
-            injection_well is not None
-            and injection_well.is_open
-            and (injected_fluid := injection_well.injected_fluid) is not None
-        ):
-            # If there is an injection well, add its flow rate to the cell
-            injected_phase = injected_fluid.phase
+        # Iterate over perforated cells to compute total WI and cache well indices
+        for start, end in injection_well.perforating_intervals:
+            for i, j, k in itertools.product(
+                range(start[0], end[0] + 1),
+                range(start[1], end[1] + 1),
+                range(start[2], end[2] + 1),
+            ):
+                cell_thickness = thickness_grid[i, j, k]
+                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
+                permeability = (
+                    absolute_permeability.x[i, j, k],
+                    absolute_permeability.y[i, j, k],
+                    absolute_permeability.z[i, j, k],
+                )
+                well_index = injection_well.get_well_index(
+                    interval_thickness=interval_thickness,
+                    permeability=permeability,
+                    skin_factor=injection_well.skin_factor,
+                )
+                well_index_cache.append(((i, j, k), well_index))
+                total_well_index += well_index
+
+        # Now compute rates for each perforated cell using cached well indices
+        for (i, j, k), well_index in well_index_cache:
+            cell_temperature = typing.cast(float, temperature_grid[i, j, k])
+            cell_oil_pressure = typing.cast(float, oil_pressure_grid[i, j, k])
+
             phase_fvf = injected_fluid.get_formation_volume_factor(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
             )
             phase_fvf = typing.cast(float, phase_fvf)
+
             if injected_phase == FluidPhase.GAS:
-                phase_mobility = gas_relative_mobility_grid[i, j, k]
+                phase_mobility = typing.cast(float, gas_relative_mobility_grid[i, j, k])
                 compressibility_kwargs = {}
             else:
-                phase_mobility = water_relative_mobility_grid[i, j, k]
+                phase_mobility = typing.cast(
+                    float, water_relative_mobility_grid[i, j, k]
+                )
                 gas_solubility_in_water = fluid_properties.gas_solubility_in_water_grid[
                     i, j, k
                 ]
@@ -2266,11 +2353,11 @@ def compute_miscible_well_rate_grids(
             use_pseudo_pressure = (
                 config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
             )
-            well_index = injection_well.get_well_index(
-                interval_thickness=interval_thickness,
-                permeability=permeability,
-                skin_factor=injection_well.skin_factor,
+
+            allocation_fraction = (
+                well_index / total_well_index if total_well_index > 0 else 1.0
             )
+
             cell_injection_rate = injection_well.get_flow_rate(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
@@ -2280,6 +2367,7 @@ def compute_miscible_well_rate_grids(
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
                 formation_volume_factor=phase_fvf,
+                allocation_fraction=allocation_fraction,
             )
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
@@ -2293,18 +2381,25 @@ def compute_miscible_well_rate_grids(
                 )
 
             # Handle miscible solvent injection
+            cell_gas_injection_rate = 0.0
+            cell_water_injection_rate = 0.0
+            cell_oil_injection_rate = 0.0
+            cell_solvent_injection_concentration = 0.0
+
             if injected_phase == FluidPhase.GAS and injected_fluid.is_miscible:
                 # Miscible solvent injection (e.g., CO2)
                 cell_gas_injection_rate = cell_injection_rate  # ft³/day
                 # This will be mixed with existing oil in the mass balance
-                cell_solvent_injection_concentration += injected_fluid.concentration
+                cell_solvent_injection_concentration = injected_fluid.concentration
 
             elif injected_phase == FluidPhase.GAS:
                 # Non-miscible gas injection
                 cell_gas_injection_rate = cell_injection_rate
 
-            else:  # WATER INJECTION
-                cell_water_injection_rate = cell_injection_rate * c.BBL_TO_FT3
+            else:  # Water injection
+                cell_water_injection_rate = (
+                    cell_injection_rate * c.BARRELS_TO_CUBIC_FEET
+                )
 
             if injection_grid is not None:
                 injection_grid[i, j, k] = (
@@ -2313,8 +2408,50 @@ def compute_miscible_well_rate_grids(
                     cell_gas_injection_rate,
                 )
 
-        # Handle production well
-        if production_well is not None and production_well.is_open:
+            # Update net grids
+            net_water_well_rate_grid[i, j, k] += cell_water_injection_rate
+            net_gas_well_rate_grid[i, j, k] += cell_gas_injection_rate
+            solvent_injection_concentration_grid[i, j, k] = (
+                cell_solvent_injection_concentration
+            )
+            gas_injection_rate_grid[i, j, k] = cell_gas_injection_rate
+
+    # Process all production wells (compute total WI + rates in single pass)
+    for production_well in wells.production_wells:
+        if not production_well.is_open:
+            continue
+
+        # Cache to store (cell_location, well_index) pairs
+        well_index_cache = []
+        total_well_index = 0.0
+
+        # Iterate over perforated cells to compute total WI and cache well indices
+        for start, end in production_well.perforating_intervals:
+            for i, j, k in itertools.product(
+                range(start[0], end[0] + 1),
+                range(start[1], end[1] + 1),
+                range(start[2], end[2] + 1),
+            ):
+                cell_thickness = thickness_grid[i, j, k]
+                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
+                permeability = (
+                    absolute_permeability.x[i, j, k],
+                    absolute_permeability.y[i, j, k],
+                    absolute_permeability.z[i, j, k],
+                )
+                well_index = production_well.get_well_index(
+                    interval_thickness=interval_thickness,
+                    permeability=permeability,
+                    skin_factor=production_well.skin_factor,
+                )
+                well_index_cache.append(((i, j, k), well_index))
+                total_well_index += well_index
+
+        # Now compute rates for each perforated cell using cached well indices
+        for (i, j, k), well_index in well_index_cache:
+            cell_temperature = typing.cast(float, temperature_grid[i, j, k])
+            cell_oil_pressure = typing.cast(float, oil_pressure_grid[i, j, k])
+
             water_formation_volume_factor_grid = (
                 fluid_properties.water_formation_volume_factor_grid
             )
@@ -2325,32 +2462,47 @@ def compute_miscible_well_rate_grids(
                 fluid_properties.gas_formation_volume_factor_grid
             )
 
+            allocation_fraction = (
+                well_index / total_well_index if total_well_index > 0 else 1.0
+            )
+
+            cell_water_production_rate = 0.0
+            cell_oil_production_rate = 0.0
+            cell_gas_production_rate = 0.0
+
             for produced_fluid in production_well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
-                    phase_mobility = gas_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = gas_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = gas_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_mobility = typing.cast(
+                        float, gas_relative_mobility_grid[i, j, k]
+                    )
+                    fluid_compressibility = typing.cast(
+                        float, gas_compressibility_grid[i, j, k]
+                    )
+                    fluid_formation_volume_factor = typing.cast(
+                        float, gas_formation_volume_factor_grid[i, j, k]
+                    )
                 elif produced_phase == FluidPhase.WATER:
-                    phase_mobility = water_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = water_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = water_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_mobility = typing.cast(
+                        float, water_relative_mobility_grid[i, j, k]
+                    )
+                    fluid_compressibility = typing.cast(
+                        float, water_compressibility_grid[i, j, k]
+                    )
+                    fluid_formation_volume_factor = typing.cast(
+                        float, water_formation_volume_factor_grid[i, j, k]
+                    )
                 else:  # OIL
-                    phase_mobility = oil_relative_mobility_grid[i, j, k]
-                    fluid_compressibility = oil_compressibility_grid[i, j, k]
-                    fluid_formation_volume_factor = oil_formation_volume_factor_grid[
-                        i, j, k
-                    ]
+                    phase_mobility = typing.cast(
+                        float, oil_relative_mobility_grid[i, j, k]
+                    )
+                    fluid_compressibility = typing.cast(
+                        float, oil_compressibility_grid[i, j, k]
+                    )
+                    fluid_formation_volume_factor = typing.cast(
+                        float, oil_formation_volume_factor_grid[i, j, k]
+                    )
 
-                well_index = production_well.get_well_index(
-                    interval_thickness=interval_thickness,
-                    permeability=permeability,
-                    skin_factor=production_well.skin_factor,
-                )
                 production_rate = production_well.get_flow_rate(
                     pressure=cell_oil_pressure,
                     temperature=cell_temperature,
@@ -2361,6 +2513,7 @@ def compute_miscible_well_rate_grids(
                     use_pseudo_pressure=config.use_pseudo_pressure
                     and produced_phase == FluidPhase.GAS,
                     formation_volume_factor=fluid_formation_volume_factor,
+                    allocation_fraction=allocation_fraction,
                 )
 
                 if production_rate > 0.0 and config.warn_well_anomalies:
@@ -2378,9 +2531,13 @@ def compute_miscible_well_rate_grids(
                 if produced_phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
                 elif produced_phase == FluidPhase.WATER:
-                    cell_water_production_rate += production_rate * c.BBL_TO_FT3
+                    cell_water_production_rate += (
+                        production_rate * c.BARRELS_TO_CUBIC_FEET
+                    )
                 else:  # OIL
-                    cell_oil_production_rate += production_rate * c.BBL_TO_FT3
+                    cell_oil_production_rate += (
+                        production_rate * c.BARRELS_TO_CUBIC_FEET
+                    )
 
             if production_grid is not None:
                 production_grid[i, j, k] = (
@@ -2389,20 +2546,10 @@ def compute_miscible_well_rate_grids(
                     cell_gas_production_rate,
                 )
 
-        # Store net volumetric rates
-        net_water_well_rate_grid[i, j, k] = (
-            cell_water_injection_rate + cell_water_production_rate
-        )
-        net_oil_well_rate_grid[i, j, k] = (
-            cell_oil_injection_rate + cell_oil_production_rate
-        )
-        net_gas_well_rate_grid[i, j, k] = (
-            cell_gas_injection_rate + cell_gas_production_rate
-        )
-        solvent_injection_concentration_grid[i, j, k] = (
-            cell_solvent_injection_concentration
-        )
-        gas_injection_rate_grid[i, j, k] = cell_gas_injection_rate
+            # Update net grids
+            net_water_well_rate_grid[i, j, k] += cell_water_production_rate
+            net_oil_well_rate_grid[i, j, k] += cell_oil_production_rate
+            net_gas_well_rate_grid[i, j, k] += cell_gas_production_rate
 
     return (
         net_water_well_rate_grid,
@@ -2560,6 +2707,9 @@ def apply_saturation_and_solvent_updates(
                 # Mass balance: (C_old * V_oil_old) + (C_in * V_in) = (C_new * V_oil_new)
                 new_oil_saturation = updated_oil_saturation_grid[i, j, k]
                 if new_oil_saturation > 1e-9:  # Avoid division by zero
+                    # New oil volume (after saturation updates)
+                    new_oil_volume = new_oil_saturation * cell_pore_volume
+
                     # Current solvent volume in oil
                     old_solvent_volume = (
                         cell_solvent_concentration * oil_saturation * cell_pore_volume
@@ -2574,10 +2724,19 @@ def apply_saturation_and_solvent_updates(
                         and cell_solvent_injection_concentration > 0.0
                     ):
                         # Miscible solvent dissolves into oil immediately
-                        injected_solvent_volume = (
+                        # Limit dissolved volume to prevent C > 1
+                        potential_injected_volume = (
                             cell_solvent_injection_concentration
                             * cell_gas_injection_rate
                             * time_step_in_days
+                        )
+                        # Maximum solvent that can dissolve without exceeding C=1
+                        max_dissolvable = new_oil_volume - (
+                            old_solvent_volume + advected_solvent_volume
+                        )
+                        # Take minimum to prevent oversaturation
+                        injected_solvent_volume = max(
+                            0.0, min(potential_injected_volume, max_dissolvable)
                         )
 
                     # Total solvent volume in oil
@@ -2586,12 +2745,10 @@ def apply_saturation_and_solvent_updates(
                         + advected_solvent_volume
                         + injected_solvent_volume
                     )
-                    # New oil volume
-                    new_oil_volume = new_oil_saturation * cell_pore_volume
                     # New concentration
                     new_concentration = new_solvent_volume / new_oil_volume
 
-                    # Clamp to [0, 1]
+                    # Clamp to [0, 1] (should already be satisfied, but ensure numerical stability)
                     updated_solvent_concentration_grid[i, j, k] = clip(
                         new_concentration, 0.0, 1.0
                     )

@@ -209,6 +209,7 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
         well_index: float,
         fluid: WellFluidT,
         formation_volume_factor: float,
+        allocation_fraction: float = 1.0,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
@@ -221,9 +222,10 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
         :param phase_mobility: The relative mobility of the fluid phase being produced or injected.
         :param well_index: The well index (md*ft).
         :param fluid: The fluid being produced or injected.
+        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :param allocation_fraction: Fraction of target rate to allocate to this cell (for multi-cell wells).
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
-        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
         :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The flow rate in (bbl/day or ft³/day).
         """
@@ -233,10 +235,11 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
             phase_mobility=phase_mobility,
             well_index=well_index,
             fluid=fluid,
+            formation_volume_factor=formation_volume_factor,
+            allocation_fraction=allocation_fraction,
             is_active=self.is_open,
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
-            formation_volume_factor=formation_volume_factor,
             pvt_tables=pvt_tables,
         )
 
@@ -248,6 +251,7 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
         well_index: float,
         fluid: WellFluidT,
         formation_volume_factor: float,
+        allocation_fraction: float = 1.0,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
@@ -260,9 +264,10 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
         :param phase_mobility: The relative mobility of the fluid phase being produced or injected.
         :param well_index: The well index (md*ft).
         :param fluid: The fluid being produced or injected.
+        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
+        :param allocation_fraction: Fraction of target rate to allocate to this cell (for multi-cell wells).
         :param use_pseudo_pressure: Whether to use pseudo-pressure for gas wells (default is False).
         :param fluid_compressibility: Compressibility of the fluid (psi⁻¹).
-        :param formation_volume_factor: Formation volume factor of the fluid (bbl/STB or ft³/SCF).
         :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: The bottom-hole pressure (psi).
         """
@@ -272,10 +277,11 @@ class Well(typing.Generic[Coordinates, WellFluidT], StoreSerializable):
             phase_mobility=phase_mobility,
             well_index=well_index,
             fluid=fluid,
+            formation_volume_factor=formation_volume_factor,
+            allocation_fraction=allocation_fraction,
             is_active=self.is_open,
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
-            formation_volume_factor=formation_volume_factor,
             pvt_tables=pvt_tables,
         )
 
@@ -358,6 +364,7 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
         well_index: float,
         fluid: InjectedFluid,
         formation_volume_factor: float,
+        allocation_fraction: float = 1.0,
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
@@ -382,9 +389,10 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
             phase_mobility=phase_mobility,
             well_index=well_index,
             fluid=fluid,
+            formation_volume_factor=formation_volume_factor,
+            allocation_fraction=allocation_fraction,
             use_pseudo_pressure=use_pseudo_pressure,
             fluid_compressibility=fluid_compressibility,
-            formation_volume_factor=formation_volume_factor,
             pvt_tables=pvt_tables,
         )
 

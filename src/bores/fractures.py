@@ -1,5 +1,247 @@
 """
-Fracture definition API for 3D reservoir models.
+### Fracture and Fault Modeling for 3D Reservoir Simulation
+
+This module provides a comprehensive API for modeling fractures, faults, and their effects
+on fluid flow in 3D reservoir simulations. Faults can act as barriers, conduits, or both,
+depending on their properties and the reservoir conditions.
+
+### Core Concepts
+
+**Faults vs Fractures:**
+- **Faults**: Geological discontinuities that offset rock layers, typically sealing or
+  partially sealing to fluid flow. Modeled using transmissibility multipliers.
+- **Fractures**: Enhanced permeability pathways (natural or induced) that facilitate
+  fluid flow.
+- **Damage Zones**: Regions of altered rock properties adjacent to major faults.
+
+**Industry-Standard Approach:**
+This module uses transmissibility multipliers (permeability_multiplier) to model fault
+effects, following commercial simulator practices (Eclipse, CMG, tNavigator). This approach
+modifies cross-fault flow without changing grid geometry, making it compatible with wells,
+boundary conditions, and user-defined property distributions.
+
+### Quick Start Examples
+
+**1. Simple Sealing Fault (Vertical Barrier)**
+
+Create a fault that reduces cross-fault flow by 99.99% across the entire reservoir:
+
+```python
+from bores.fractures import vertical_sealing_fault, apply_fracture
+
+# Vertical fault at x=25, spanning entire grid
+fault = vertical_sealing_fault(
+    fault_id="main_fault",
+    orientation="x",
+    index=25,
+    permeability_multiplier=1e-4  # 99.99% sealing
+)
+
+# Apply to reservoir model
+model = apply_fracture(model=reservoir_model, fracture=fault)
+```
+
+**2. Stratigraphically-Bounded Fault (Limited Vertical Extent)**
+
+Model a fault that only affects specific reservoir layers:
+
+```python
+# Fault in shallow layers only (top 15 cells)
+shallow_fault = vertical_sealing_fault(
+    fault_id="shallow_fault",
+    orientation="y",
+    index=40,
+    z_range=(0, 15),  # Only in upper layers
+    permeability_multiplier=5e-5
+)
+```
+
+**3. Partially Sealing Fault (Calibrated from History Match)**
+
+After history matching, you find a fault transmissibility of 0.01:
+
+```python
+# Fault allows 1% of matrix flow across it
+calibrated_fault = vertical_sealing_fault(
+    fault_id="fault_f3",
+    orientation="x",
+    index=50,
+    permeability_multiplier=0.01,  # 1% transmissibility
+    y_range=(0, 60),  # Limited lateral extent
+    z_range=(10, 35)  # Offsetting layers 10-35
+)
+```
+
+**4. Inclined Fault (Non-Vertical Plane)**
+
+Model a dipping fault plane:
+
+```python
+from bores.fractures import inclined_sealing_fault
+
+# Fault dipping at 60° (slope ≈ 1.73 = tan(60°))
+# Intersects at y=30, dips eastward
+dipping_fault = inclined_sealing_fault(
+    fault_id="dipping_fault",
+    orientation="y",  # Strikes in y-direction
+    index=30,  # Intersects at y=30
+    slope=1.73,  # dz/dx (eastward dip)
+    intercept=5.0,  # Fault at z=5 when x=0
+    permeability_multiplier=1e-4
+)
+```
+
+**5. Fault with Damage Zone (Altered Rock Properties)**
+
+Major faults often have damage zones with reduced permeability and porosity:
+
+```python
+from bores.fractures import damage_zone_fault
+
+# Fault with 5-cell-wide damage zone
+fault_with_damage = damage_zone_fault(
+    fault_id="thrust_fault",
+    orientation="x",
+    cell_range=(48, 52),  # 5 cells wide (x=48 to x=52)
+    permeability_multiplier=1e-5,  # Very low cross-fault flow
+    zone_permeability=10.0,  # Damaged rock: 10 mD (vs 100 mD matrix)
+    zone_porosity=0.12,  # Reduced porosity (vs 0.20 matrix)
+    z_range=(15, 45)  # Only in producing interval
+)
+```
+
+**6. Conductive Fracture Network (Enhanced Flow Paths)**
+
+Model natural or hydraulic fractures that enhance permeability:
+
+```python
+from bores.fractures import conductive_fracture_network
+
+# Vertical fracture swarm enhancing flow
+fracture_swarm = conductive_fracture_network(
+    fracture_id="fracture_corridor",
+    orientation="y",
+    cell_range=(15, 18),  # 3-cell-wide corridor
+    fracture_permeability=5000.0,  # High perm: 5 Darcy
+    fracture_porosity=0.01,  # Low storage (fractures)
+    permeability_multiplier=10.0,  # 10x enhanced cross-corridor flow
+    z_range=(20, 40)
+)
+```
+
+**7. Multiple Faults (Compartmentalized Reservoir)**
+
+Apply several faults to create isolated compartments:
+
+```python
+from bores.fractures import apply_fractures
+
+# Define fault system
+faults = [
+    vertical_sealing_fault("fault_1", "x", 25, permeability_multiplier=1e-4),
+    vertical_sealing_fault("fault_2", "y", 35, permeability_multiplier=5e-4),
+    vertical_sealing_fault("fault_3", "x", 60, permeability_multiplier=2e-4),
+]
+
+# Apply all faults at once
+model = apply_fractures(reservoir_model, *faults)
+```
+
+**8. Horizontal Sealing Layer (Stratigraphic Barrier)**
+
+Model an impermeable shale layer:
+
+```python
+# Horizontal shale barrier at depth layer z=12
+shale_barrier = vertical_sealing_fault(
+    fault_id="shale_layer",
+    orientation="z",  # Horizontal orientation
+    index=12,  # At layer 12
+    permeability_multiplier=1e-6,  # Nearly impermeable
+    x_range=(0, 80),  # Lateral extent
+    y_range=(0, 60)
+)
+```
+
+### Best Practices
+
+**Choosing Permeability Multipliers:**
+- **Sealing faults**: 1e-6 to 1e-3 (highly sealing to moderate barrier)
+- **Partially sealing**: 1e-2 to 0.1 (allow some cross-flow)
+- **Open faults/fractures**: 1.0 to 100.0 (no barrier to enhanced flow)
+- **Calibrate from**: history matching, well test interference, or tracer studies
+
+**Fault Extent Control:**
+- Use `x_range`, `y_range`, `z_range` to limit fault extent
+- Segmented faults are common in nature (relay ramps, fault tip zones)
+- Shallow faults may not penetrate deep layers
+
+**Damage Zones:**
+- Typical width: 1-10% of fault displacement
+- Permeability reduction: 10-100x relative to matrix
+- Porosity reduction: 20-40% of matrix values
+
+**Performance Tips:**
+- Fault masks are computed once during model setup
+- Minimal runtime overhead after fracture application
+- Multiple faults are efficiently handled via vectorized operations
+
+### Validation
+
+Before simulation, validate fault configurations:
+
+```python
+from bores.fractures import validate_fracture
+
+errors = validate_fracture(fracture=fault, grid_shape=(100, 80, 50))
+if errors:
+    for error in errors:
+        print(f"Validation error: {error}")
+```
+
+### API Reference
+
+**Factory Functions** (recommended entry points):
+- `vertical_sealing_fault()` - Planar sealing barriers (most common)
+- `inclined_sealing_fault()` - Dipping/inclined fault planes
+- `damage_zone_fault()` - Faults with altered rock properties
+- `conductive_fracture_network()` - Enhanced permeability zones
+
+**Core Classes:**
+- `Fracture` - Main fault/fracture configuration object
+- `FractureGeometry` - Geometric definition (orientation, extent, inclination)
+
+**Application Functions:**
+- `apply_fracture()` - Apply single fault to reservoir model
+- `apply_fractures()` - Apply multiple faults efficiently
+- `validate_fracture()` - Check fault configuration validity
+
+### Technical Details
+
+**Transmissibility Modification:**
+Faults modify inter-block transmissibility across fault planes:
+
+    T_fault = T_matrix x permeability_multiplier
+
+For a sealing fault with multiplier=1e-4, cross-fault flow is reduced by 99.99%.
+
+**Mask-Based Implementation:**
+Each fault creates a 3D boolean mask defining affected cells. Multiple faults combine
+via logical operations. Numba JIT compilation ensures high performance.
+
+**Compatibility:**
+- Preserves grid geometry (no cell displacement)
+- Compatible with wells at any location
+- Works with all boundary condition types
+- Supports all evolution schemes (IMPES, explicit, implicit)
+
+### See Also
+- `bores.models.ReservoirModel` - Reservoir model class
+- `bores.boundary_conditions` - Domain boundary handling
+- `bores.wells` - Well modeling
+
+### Examples Directory
+See `scenarios/` for complete workflow examples including faulted reservoir simulations.
 """
 
 import logging
@@ -9,7 +251,6 @@ import attrs
 import numba  # type: ignore[import-untyped]
 import numpy as np
 
-from bores._precision import get_dtype
 from bores.constants import c
 from bores.errors import ValidationError
 from bores.models import ReservoirModel
@@ -23,14 +264,10 @@ __all__ = [
     "apply_fracture",
     "apply_fractures",
     "validate_fracture",
-    "FractureDefaults",
     "vertical_sealing_fault",
-    "normal_fault_with_throw",
-    "reverse_fault_with_throw",
     "inclined_sealing_fault",
     "damage_zone_fault",
     "conductive_fracture_network",
-    "fault_with_throw_and_damage_zone",
 ]
 
 logger = logging.getLogger(__name__)
@@ -194,286 +431,33 @@ def _scale_permeability_z_boundary(
                     perm_z[i, j, k] *= scale
 
 
-FloatDefault = typing.Union[float, np.floating[typing.Any]]
-StatDefault = typing.Literal[
-    "mean",
-    "median",
-    "min",
-    "max",
-    "zero",
-    "nearest",
-    "linear",
-]
-HookDefault = typing.Callable[[np.typing.NDArray], FloatDefault]
-DefaultDef = typing.Union[FloatDefault, StatDefault, HookDefault]
-
-
-def _compute_nearest_default(
-    grid: np.typing.NDArray,
-    valid_data: np.typing.NDArray,
-    property_type: typing.Optional[str] = None,
-    dtype: typing.Optional[np.typing.DTypeLike] = None,
-) -> np.floating:
-    """
-    Compute nearest-neighbor default using boundary values.
-
-    Extracts values from grid boundaries and uses median for robustness.
-    This provides better spatial continuity than global statistics.
-
-    :param grid: Original grid array
-    :param valid_data: Pre-filtered valid data (fallback)
-    :param property_type: Optional property type for filtering
-    :return: Median of boundary values
-    """
-    # Extract boundary values
-    if grid.ndim == 3:
-        # Get boundary slices (first and last in each dimension)
-        boundary_values = np.concatenate(
-            [
-                grid[0, :, :].flatten(),
-                grid[-1, :, :].flatten(),
-                grid[:, 0, :].flatten(),
-                grid[:, -1, :].flatten(),
-                grid[:, :, 0].flatten(),
-                grid[:, :, -1].flatten(),
-            ]
-        )
-    else:
-        # Fallback for non-3D grids
-        boundary_values = valid_data
-
-    # Filter boundary values
-    boundary_valid = boundary_values[np.isfinite(boundary_values)]
-    if property_type == "saturation":
-        boundary_valid = boundary_valid[(boundary_valid >= 0) & (boundary_valid <= 1)]
-    elif property_type in ("permeability", "porosity", "thickness"):
-        boundary_valid = boundary_valid[boundary_valid > 0]
-
-    # Use median of boundaries (robust to outliers)
-    dtype = dtype if dtype is not None else get_dtype()
-    if len(boundary_valid) > 0:
-        return dtype(np.median(boundary_valid))  # type: ignore
-    return dtype(np.mean(valid_data))  # type: ignore
-
-
-def _compute_linear_default(
-    grid: np.typing.NDArray,
-    valid_data: np.typing.NDArray,
-    property_type: typing.Optional[str] = None,
-    dtype: typing.Optional[np.typing.DTypeLike] = None,
-) -> np.floating:
-    """
-    Compute linear interpolation default using boundary values.
-
-    Extracts values from grid boundaries and uses mean for smooth averaging.
-    This provides smooth transitions appropriate for diffusion-like properties.
-
-    :param grid: Original grid array
-    :param valid_data: Pre-filtered valid data (fallback)
-    :param property_type: Optional property type for filtering
-    :return: Mean of boundary values
-    """
-    # Extract boundary values
-    if grid.ndim == 3:
-        boundary_values = np.concatenate(
-            [
-                grid[0, :, :].flatten(),
-                grid[-1, :, :].flatten(),
-                grid[:, 0, :].flatten(),
-                grid[:, -1, :].flatten(),
-                grid[:, :, 0].flatten(),
-                grid[:, :, -1].flatten(),
-            ]
-        )
-    else:
-        boundary_values = valid_data
-
-    # Filter boundary values
-    boundary_valid = boundary_values[np.isfinite(boundary_values)]
-    if property_type == "saturation":
-        boundary_valid = boundary_valid[(boundary_valid >= 0) & (boundary_valid <= 1)]
-    elif property_type in ("permeability", "porosity", "thickness"):
-        boundary_valid = boundary_valid[boundary_valid > 0]
-
-    # Use mean of boundaries (smooth average)
-    dtype = dtype if dtype is not None else get_dtype()
-    if len(boundary_valid) > 0:
-        return dtype(np.mean(boundary_valid))  # type: ignore
-    return dtype(np.mean(valid_data))  # type: ignore
-
-
-@attrs.define(slots=True, frozen=True)
-class FractureDefaults(Serializable):
-    """
-    Default value provider for reservoir properties.
-
-    Supports multiple modes:
-    1. Constant values (float)
-    2. Callable that generates values based on grid statistics
-    3. Statistical keywords: 'mean', 'median', 'min', 'max', 'zero'
-    4. Interpolation methods: 'nearest', 'linear' (for spatial continuity)
-
-    DEFAULT PHILOSOPHY:
-    For most properties, we use statistical defaults from the existing grid
-    rather than arbitrary constants. This ensures the filled regions are
-    consistent with the rest of the reservoir.
-
-    - Pressure/Temperature: Use 'median' to avoid extremes
-    - Saturations: Use 'mean' to maintain reservoir averages
-    - Permeability/Porosity: Use 'mean' for continuity
-    - Can use 'nearest' or 'linear' for smooth spatial transitions
-    """
-
-    thickness: DefaultDef = "mean"
-    porosity: DefaultDef = "mean"
-    permeability: DefaultDef = "mean"
-    net_to_gross: DefaultDef = "mean"
-    water_saturation: DefaultDef = "mean"
-    oil_saturation: DefaultDef = "mean"
-    gas_saturation: DefaultDef = "mean"
-    irreducible_water_saturation: DefaultDef = "mean"
-    residual_oil_saturation_water: DefaultDef = "mean"
-    residual_oil_saturation_gas: DefaultDef = "mean"
-    residual_gas_saturation: DefaultDef = "mean"
-    pressure: DefaultDef = "median"  # Use median for pressure
-    temperature: DefaultDef = "median"
-    oil_viscosity: DefaultDef = "mean"
-    water_viscosity: DefaultDef = "mean"
-    gas_viscosity: DefaultDef = "mean"
-    oil_density: DefaultDef = "mean"
-    water_density: DefaultDef = "mean"
-    gas_density: DefaultDef = "mean"
-    oil_fvf: DefaultDef = "mean"
-    water_fvf: DefaultDef = "mean"
-    gas_fvf: DefaultDef = "mean"
-    compressibility: DefaultDef = "mean"
-    bubble_point_pressure: DefaultDef = "mean"
-    # Generic fallback for unspecified properties
-    generic: DefaultDef = "mean"
-
-    def get_value(
-        self,
-        property_name: str,
-        grid: np.typing.NDArray,
-        property_type: typing.Optional[str] = None,
-        dtype: typing.Optional[np.typing.DTypeLike] = None,
-    ) -> np.floating:
-        """
-        Compute value for a property based on configuration.
-
-        :param property_name: Name of the property (e.g., 'porosity')
-        :param grid: Original grid array to analyze
-        :param property_type: typing.Optional type hint ('saturation', 'permeability', etc.)
-        :return: Computed default value
-        """
-        # Try to find specific configuration
-        spec = getattr(self, property_name, None)
-        if spec is None:
-            spec = self.generic
-
-        dtype = dtype if dtype is not None else get_dtype()
-        # Handle different specification types
-        if isinstance(spec, (int, float)):
-            return dtype(spec)  # type: ignore
-
-        if callable(spec):
-            return dtype(spec(grid))  # type: ignore
-
-        if isinstance(spec, str):
-            spec = typing.cast(StatDefault, spec)
-            return self._compute_statistical_default(
-                method=spec,
-                grid=grid,
-                property_type=property_type,
-                dtype=dtype,
-            )
-
-        # Fallback to mean if all else fails
-        return self._compute_statistical_default(
-            method="mean",
-            grid=grid,
-            property_type=property_type,
-            dtype=dtype,
-        )
-
-    def _compute_statistical_default(
-        self,
-        method: StatDefault,
-        grid: np.typing.NDArray,
-        property_type: typing.Optional[str] = None,
-        dtype: typing.Optional[np.typing.DTypeLike] = None,
-    ) -> np.floating:
-        """
-        Compute statistical defaults from grid data.
-
-        Supports statistical methods (mean, median, min, max, zero) and
-        interpolation methods (nearest, linear) for spatial continuity.
-
-        For 'nearest' and 'linear', we extract boundary values and compute
-        an average, which provides better spatial continuity than pure statistics.
-        """
-        # Filter out invalid values
-        valid_data = grid[np.isfinite(grid)]
-
-        # Apply property-specific constraints
-        if property_type == "saturation":
-            valid_data = valid_data[(valid_data >= 0) & (valid_data <= 1)]
-        elif property_type in ("permeability", "porosity", "thickness"):
-            valid_data = valid_data[valid_data > 0]
-
-        if len(valid_data) == 0:
-            raise ValidationError(f"No valid data available for {property_type}")
-
-        dtype = dtype if dtype is not None else get_dtype()
-        # Compute based on method
-        if method == "mean":
-            return dtype(np.mean(valid_data))  # type: ignore
-        elif method == "median":
-            return dtype(np.median(valid_data))  # type: ignore
-        elif method == "min":
-            return dtype(np.min(valid_data))  # type: ignore
-        elif method == "max":
-            return dtype(np.max(valid_data))  # type: ignore
-        elif method == "zero":
-            return dtype(0.0)  # type: ignore
-        elif method == "nearest":
-            return _compute_nearest_default(
-                grid, valid_data, property_type, dtype=dtype
-            )
-        elif method == "linear":
-            return _compute_linear_default(grid, valid_data, property_type, dtype=dtype)
-
-        logger.warning(f"Unknown method '{method}', using mean")
-        return dtype(np.mean(valid_data))  # type: ignore
-
-
 @attrs.frozen
 class FractureGeometry(Serializable):
     """
     Fracture geometry specification.
 
     Fracture Orientation:
-    - "x": Fracture plane perpendicular to x-axis (strikes in y-direction)
-    - "y": Fracture plane perpendicular to y-axis (strikes in x-direction)
-    - "z": Fracture plane perpendicular to z-axis (horizontal fracture/bedding slip)
+    - `"x"`: Fracture plane perpendicular to x-axis (strikes in y-direction)
+    - `"y"`: Fracture plane perpendicular to y-axis (strikes in x-direction)
+    - `"z"`: Fracture plane perpendicular to z-axis (horizontal fracture/bedding slip)
 
     Coordinate Specification:
     The fracture is defined by specifying ranges in each dimension:
 
     For x-oriented fracture:
-        - x_range: Location of fracture plane (can be single cell or damage zone)
-        - y_range: Optional lateral extent (None = full extent)
-        - z_range: Optional vertical extent (None = full extent)
+        - `x_range`: Location of fracture plane (can be single cell or damage zone)
+        - `y_range`: Optional lateral extent (None = full extent)
+        - `z_range`: Optional vertical extent (None = full extent)
 
     For y-oriented fracture:
-        - y_range: Location of fracture plane (can be single cell or damage zone)
-        - x_range: Optional lateral extent (None = full extent)
-        - z_range: Optional vertical extent (None = full extent)
+        - `y_range`: Location of fracture plane (can be single cell or damage zone)
+        - `x_range`: Optional lateral extent (None = full extent)
+        - `z_range`: Optional vertical extent (None = full extent)
 
     For z-oriented fracture (horizontal):
-        - z_range: Location of fracture plane (can be single layer or zone)
-        - x_range: Optional lateral extent (None = full extent)
-        - y_range: Optional lateral extent (None = full extent)
+        - `z_range`: Location of fracture plane (can be single layer or zone)
+        - `x_range`: Optional lateral extent (None = full extent)
+        - `y_range`: Optional lateral extent (None = full extent)
 
     Examples:
 
@@ -510,6 +494,7 @@ class FractureGeometry(Serializable):
     x_range: typing.Optional[typing.Tuple[int, int]] = None
     """
     Range of x-indices affected by fracture (inclusive).
+
     - For x-oriented fractures: Location of fracture plane
     - For y/z-oriented fractures: Optional lateral extent
     - None means full x-extent of grid
@@ -518,6 +503,7 @@ class FractureGeometry(Serializable):
     y_range: typing.Optional[typing.Tuple[int, int]] = None
     """
     Range of y-indices affected by fracture (inclusive).
+
     - For y-oriented fractures: Location of fracture plane
     - For x/z-oriented fractures: Optional lateral extent
     - None means full y-extent of grid
@@ -526,54 +512,10 @@ class FractureGeometry(Serializable):
     z_range: typing.Optional[typing.Tuple[int, int]] = None
     """
     Range of z-indices affected by fracture (inclusive).
+
     - For z-oriented fractures: Location of fracture plane
     - For x/y-oriented fractures: Optional vertical extent
     - None means full z-extent of grid
-    """
-
-    displacement_range: typing.Optional[typing.Tuple[int, int]] = None
-    """
-    Optional explicit range of cells to displace (in fracture orientation direction).
-    
-    If specified, Only cells within this range are displaced, independent of
-    the fracture plane location. This provides fine-grained control over which
-    cells experience throw.
-    
-    Bahaviour:
-    - None (default): Displace all cells on the positive side of the fracture plane
-    - (min, max): Only cells with indices in [min, max] are displaced
-    
-    Examples:
-    
-    For x-oriented fracture at x=20:
-        - displacement_range=(25, 50): Only cells with x ∈ [25, 50] are displaced
-        - displacement_range=(10, 19): Only cells with x ∈ [10, 19] are displaced (reverse side)
-        - Useful for: "Displace only a specific block, not everything beyond fault"
-    
-    For y-oriented fracture:
-        - displacement_range=(10, 25): Only cells with y ∈ [10, 25] are displaced
-    
-    For z-oriented fracture:
-        - displacement_range=(5, 15): Only cells with z ∈ [5, 15] are displaced
-    
-    Notable Cases:
-    - If displacement_range doesn't overlap with fracture plane range, displacement
-      still occurs (allows modelling of detached/blind segments)
-    - Can be used to displace fracture zone + adjacent cells:
-      displacement_range = (x_range[0], x_range[1] + 10)
-    """
-
-    geometric_throw: int = 0
-    """
-    Vertical displacement (throw) in number of cells.
-    
-    - Positive values: Displaced block moves DOWN (normal fault)
-    - Negative values: Displaced block moves UP (reverse fault)
-    - Zero (default): No vertical displacement (sealing fault only)
-    
-    The cells to be displaced are determined by displacement_range.
-    If displacement_range is None, all cells on the positive side of the
-    fracture plane are displaced.
     """
 
     slope: float = 0.0
@@ -614,7 +556,6 @@ class FractureGeometry(Serializable):
             ("x_range", self.x_range),
             ("y_range", self.y_range),
             ("z_range", self.z_range),
-            ("displacement_range", self.displacement_range),
         ]:
             if range_val is not None:
                 if range_val[0] > range_val[1]:
@@ -696,7 +637,7 @@ class Fracture(StoreSerializable):
 
     - Values < 1.0 create sealing barriers (typical: 1e-3 to 1e-6)
     - Values > 1.0 create conductive zones (for enhanced fractures)
-    - Must be > `MIN_TRANSMISSIBILITY_FACTOR` for numerical stability
+    - Must be > `MINIMUM_TRANSMISSIBILITY_FACTOR` for numerical stability
     - If None and permeability is also None, defaults to 1e-3 for sealing behavior
     
     This scales the permeability values at the fracture interface, directly
@@ -737,18 +678,6 @@ class Fracture(StoreSerializable):
     Must match the reservoir model grid dimensions.
     """
 
-    preserve_grid_data: bool = False
-    """
-    If True, expand grid dimensions to preserve all displaced data.
-    If False, use traditional displacement with data loss or defaults.
-    """
-
-    defaults: FractureDefaults = attrs.field(factory=lambda: FractureDefaults())
-    """
-    Custom default values for properties in displaced/expanded regions.
-    Uses `FractureDefaults()` with sensible defaults.
-    """
-
     def __attrs_post_init__(self) -> None:
         """Validate fracture configuration parameters."""
         # Mutual exclusivity check
@@ -760,12 +689,12 @@ class Fracture(StoreSerializable):
 
         # Validate permeability_multiplier if set
         if self.permeability_multiplier is not None:
-            if self.permeability_multiplier < c.MIN_TRANSMISSIBILITY_FACTOR:
+            if self.permeability_multiplier < c.MINIMUM_TRANSMISSIBILITY_FACTOR:
                 object.__setattr__(
-                    self, "permeability_multiplier", c.MIN_TRANSMISSIBILITY_FACTOR
+                    self, "permeability_multiplier", c.MINIMUM_TRANSMISSIBILITY_FACTOR
                 )
                 logger.warning(
-                    f"Fracture {self.id!r}: `permeability_multiplier` clamped to {c.MIN_TRANSMISSIBILITY_FACTOR}"
+                    f"Fracture {self.id!r}: `permeability_multiplier` clamped to {c.MINIMUM_TRANSMISSIBILITY_FACTOR}"
                 )
 
             if self.conductive and self.permeability_multiplier < 1.0:
@@ -824,22 +753,18 @@ def apply_fracture(
             fracture=fracture,
         )  # type: ignore[arg-type]
 
-    # Apply fracture effects in proper order
-    # Modify fracture zone properties (before geometric displacement)
+    # Apply fracture effects
+    # Modify fracture zone properties
     if fracture.permeability is not None or fracture.porosity is not None:
         model = _apply_fracture_zone_properties(
             model=model, fracture_mask=fracture_mask, fracture=fracture
         )
 
-    # Scale permeabilities across fracture (before geometric displacement)
+    # Scale permeabilities across fracture
     if fracture.permeability_multiplier is not None:
         model = _scale_permeability(
             model=model, fracture_mask=fracture_mask, fracture=fracture
         )
-
-    # Apply geometric displacement (throw). This may change grid dimensions
-    if fracture.geometry.geometric_throw != 0:
-        model = _apply_geometric_throw(model=model, fracture=fracture)
 
     logger.debug(f"Successfully applied fracture '{fracture.id}'")
     return model
@@ -1059,435 +984,6 @@ def _apply_fracture_zone_properties(
     return model
 
 
-def _apply_geometric_throw(
-    model: ReservoirModel[ThreeDimensions],
-    fracture: Fracture,
-) -> ReservoirModel[ThreeDimensions]:
-    """
-    Apply geometric displacement (throw) using improved block-based algorithm.
-
-    Key improvements:
-    - Block-based displacement (no cell-by-cell jumbling)
-    - Smart property-aware default filling
-    - Clean separation between upthrown and downthrown blocks
-
-    :param model: Reservoir model to modify
-    :param fracture_mask: 3D boolean array marking fracture cells
-    :param fracture: Fracture configuration
-    :return: Modified reservoir model with updated grid dimensions
-    """
-    throw = fracture.geometry.geometric_throw
-    logger.debug(f"Applying geometric throw ({throw} cells)")
-
-    if throw == 0:
-        return model
-
-    displacement_mask = make_displacement_mask(
-        grid_shape=model.grid_shape, fracture=fracture
-    )
-    defaults = fracture.defaults
-
-    # Create displacement context for all grids
-    ctx = DisplacementContext(
-        original_shape=model.grid_shape,
-        throw=throw,
-        displacement_mask=displacement_mask,
-        preserve_data=fracture.preserve_grid_data,
-        defaults=defaults,
-    )
-
-    # Apply displacement to all property grids
-    logger.debug("Displacing all property grids with block-based algorithm")
-
-    # Geometric grids
-    new_thickness = ctx.displace_grid(
-        grid=model.thickness_grid, property_name="thickness", property_type="thickness"
-    )
-
-    # Rock properties
-    rock = model.rock_properties
-    new_rock = attrs.evolve(
-        rock,
-        porosity_grid=ctx.displace_grid(
-            grid=rock.porosity_grid, property_name="porosity", property_type="porosity"
-        ),
-        net_to_gross_ratio_grid=ctx.displace_grid(
-            grid=rock.net_to_gross_ratio_grid, property_name="net_to_gross"
-        ),
-        irreducible_water_saturation_grid=ctx.displace_grid(
-            grid=rock.irreducible_water_saturation_grid,
-            property_name="irreducible_water_saturation",
-            property_type="saturation",
-        ),
-        residual_oil_saturation_water_grid=ctx.displace_grid(
-            grid=rock.residual_oil_saturation_water_grid,
-            property_name="residual_oil_saturation_water",
-            property_type="saturation",
-        ),
-        residual_oil_saturation_gas_grid=ctx.displace_grid(
-            grid=rock.residual_oil_saturation_gas_grid,
-            property_name="residual_oil_saturation_gas",
-            property_type="saturation",
-        ),
-        residual_gas_saturation_grid=ctx.displace_grid(
-            grid=rock.residual_gas_saturation_grid,
-            property_name="residual_gas_saturation",
-            property_type="saturation",
-        ),
-        absolute_permeability=attrs.evolve(
-            rock.absolute_permeability,
-            x=ctx.displace_grid(
-                grid=rock.absolute_permeability.x,
-                property_name="permeability",
-                property_type="permeability",
-            ),
-            y=ctx.displace_grid(
-                grid=rock.absolute_permeability.y,
-                property_name="permeability",
-                property_type="permeability",
-            ),
-            z=ctx.displace_grid(
-                grid=rock.absolute_permeability.z,
-                property_name="permeability",
-                property_type="permeability",
-            ),
-        ),
-    )
-
-    # Fluid properties
-    fluid = model.fluid_properties
-    new_fluid = attrs.evolve(
-        fluid,
-        pressure_grid=ctx.displace_grid(
-            grid=fluid.pressure_grid, property_name="pressure", property_type="pressure"
-        ),
-        temperature_grid=ctx.displace_grid(
-            grid=fluid.temperature_grid,
-            property_name="temperature",
-            property_type="temperature",
-        ),
-        oil_bubble_point_pressure_grid=ctx.displace_grid(
-            grid=fluid.oil_bubble_point_pressure_grid,
-            property_name="bubble_point_pressure",
-            property_type="pressure",
-        ),
-        oil_saturation_grid=ctx.displace_grid(
-            grid=fluid.oil_saturation_grid,
-            property_name="oil_saturation",
-            property_type="saturation",
-        ),
-        water_saturation_grid=ctx.displace_grid(
-            grid=fluid.water_saturation_grid,
-            property_name="water_saturation",
-            property_type="saturation",
-        ),
-        gas_saturation_grid=ctx.displace_grid(
-            grid=fluid.gas_saturation_grid,
-            property_name="gas_saturation",
-            property_type="saturation",
-        ),
-        oil_viscosity_grid=ctx.displace_grid(
-            grid=fluid.oil_viscosity_grid,
-            property_name="oil_viscosity",
-            property_type="viscosity",
-        ),
-        water_viscosity_grid=ctx.displace_grid(
-            grid=fluid.water_viscosity_grid,
-            property_name="water_viscosity",
-            property_type="viscosity",
-        ),
-        gas_viscosity_grid=ctx.displace_grid(
-            grid=fluid.gas_viscosity_grid,
-            property_name="gas_viscosity",
-            property_type="viscosity",
-        ),
-        oil_density_grid=ctx.displace_grid(
-            grid=fluid.oil_density_grid,
-            property_name="oil_density",
-            property_type="density",
-        ),
-        water_density_grid=ctx.displace_grid(
-            grid=fluid.water_density_grid,
-            property_name="water_density",
-            property_type="density",
-        ),
-        gas_density_grid=ctx.displace_grid(
-            grid=fluid.gas_density_grid,
-            property_name="gas_density",
-            property_type="density",
-        ),
-        oil_compressibility_grid=ctx.displace_grid(
-            grid=fluid.oil_compressibility_grid, property_name="compressibility"
-        ),
-        water_compressibility_grid=ctx.displace_grid(
-            grid=fluid.water_compressibility_grid, property_name="compressibility"
-        ),
-        gas_compressibility_grid=ctx.displace_grid(
-            grid=fluid.gas_compressibility_grid, property_name="compressibility"
-        ),
-        oil_formation_volume_factor_grid=ctx.displace_grid(
-            grid=fluid.oil_formation_volume_factor_grid,
-            property_name="oil_fvf",
-            property_type="fvf",
-        ),
-        water_formation_volume_factor_grid=ctx.displace_grid(
-            grid=fluid.water_formation_volume_factor_grid,
-            property_name="water_fvf",
-            property_type="fvf",
-        ),
-        gas_formation_volume_factor_grid=ctx.displace_grid(
-            grid=fluid.gas_formation_volume_factor_grid,
-            property_name="gas_fvf",
-            property_type="fvf",
-        ),
-        # Add remaining fluid properties as needed...
-        oil_specific_gravity_grid=ctx.displace_grid(
-            grid=fluid.oil_specific_gravity_grid, property_name="generic"
-        ),
-        oil_api_gravity_grid=ctx.displace_grid(
-            grid=fluid.oil_api_gravity_grid, property_name="generic"
-        ),
-        water_bubble_point_pressure_grid=ctx.displace_grid(
-            grid=fluid.water_bubble_point_pressure_grid,
-            property_name="bubble_point_pressure",
-            property_type="pressure",
-        ),
-        gas_gravity_grid=ctx.displace_grid(
-            grid=fluid.gas_gravity_grid, property_name="generic"
-        ),
-        gas_molecular_weight_grid=ctx.displace_grid(
-            grid=fluid.gas_molecular_weight_grid, property_name="generic"
-        ),
-        solution_gas_to_oil_ratio_grid=ctx.displace_grid(
-            grid=fluid.solution_gas_to_oil_ratio_grid, property_name="generic"
-        ),
-        gas_solubility_in_water_grid=ctx.displace_grid(
-            grid=fluid.gas_solubility_in_water_grid, property_name="generic"
-        ),
-        water_salinity_grid=ctx.displace_grid(
-            grid=fluid.water_salinity_grid, property_name="generic"
-        ),
-        oil_effective_viscosity_grid=ctx.displace_grid(
-            grid=fluid.oil_effective_viscosity_grid,
-            property_name="oil_viscosity",
-            property_type="viscosity",
-        ),
-        solvent_concentration_grid=ctx.displace_grid(
-            grid=fluid.solvent_concentration_grid, property_name="generic"
-        ),
-    )
-
-    # Update model with new grids and shape
-    new_model = model.evolve(
-        grid_shape=ctx.new_shape,
-        thickness_grid=new_thickness,
-        rock_properties=new_rock,
-        fluid_properties=new_fluid,
-    )
-    logger.debug(f"Grid shape: {model.grid_shape} → {ctx.new_shape}")
-    return new_model
-
-
-@attrs.frozen
-class DisplacementContext:
-    """
-    Context object that handles block-based displacement for all grids.
-
-    This encapsulates the displacement logic and default value computation,
-    making the code cleaner and more maintainable.
-    """
-
-    original_shape: typing.Tuple[int, int, int]
-    throw: int
-    displacement_mask: np.typing.NDArray
-    preserve_data: bool
-    defaults: FractureDefaults
-
-    @property
-    def new_shape(self) -> typing.Tuple[int, int, int]:
-        """Compute new grid shape after displacement."""
-        nx, ny, nz = self.original_shape
-        if self.preserve_data:
-            return (nx, ny, nz + abs(self.throw))
-        return self.original_shape
-
-    def displace_grid(
-        self,
-        grid: np.ndarray,
-        property_name: str,
-        property_type: typing.Optional[str] = None,
-    ) -> np.ndarray:
-        """
-        Displace a single grid using block-based algorithm.
-
-        :param grid: Original grid to displace
-        :param property_name: Name of property (for default value lookup)
-        :param property_type: Type hint for default computation
-        :return: Displaced grid (possibly expanded)
-        """
-        # Handle zero throw case - just return copy with correct shape
-        if self.throw == 0:
-            if self.preserve_data:
-                # Even with preserve_data, no expansion needed for zero throw
-                return grid.copy()
-            return grid.copy()
-
-        if self.preserve_data:
-            return self._displace_with_expansion(
-                grid=grid, property_name=property_name, property_type=property_type
-            )
-        return self._displace_without_expansion(
-            grid=grid, property_name=property_name, property_type=property_type
-        )
-
-    def _displace_with_expansion(
-        self,
-        grid: np.typing.NDArray,
-        property_name: str,
-        property_type: typing.Optional[str],
-    ) -> np.typing.NDArray:
-        """
-        Block-based displacement with grid expansion (preserves all data).
-
-        Algorithm:
-        1. Create expanded grid with smart defaults
-        2. Identify upthrown and downthrown blocks
-        3. Copy upthrown block to new position (stays in place)
-        4. Copy downthrown block to displaced position
-        5. Fill gaps with property-aware defaults
-        """
-        nx, ny, nz = self.original_shape
-        abs_throw = abs(self.throw)
-        new_nz = nz + abs_throw
-
-        # Get smart default value for this property, preserving grid dtype
-        default_value = self.defaults.get_value(
-            property_name=property_name,
-            grid=grid,
-            property_type=property_type,
-            dtype=grid.dtype,
-        )
-
-        # Create expanded grid filled with defaults
-        new_grid = np.full((nx, ny, new_nz), fill_value=default_value, dtype=grid.dtype)
-
-        # Identify upthrown and downthrown blocks
-        upthrown_mask = np.invert(self.displacement_mask)  # Not displaced
-        downthrown_mask = self.displacement_mask  # Displaced
-
-        if self.throw > 0:
-            # Normal fault: downthrown block moves DOWN
-            # Layout: [upthrown at top | gap filled with defaults | downthrown at bottom]
-
-            # Copy upthrown block to top of new grid (unchanged position)
-            for k in range(nz):
-                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
-                    upthrown_mask[:, :, k]
-                ]
-
-            # Copy downthrown block to displaced position (down by throw)
-            for k in range(nz):
-                target_k = k + self.throw
-                if target_k < new_nz:
-                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
-                        downthrown_mask[:, :, k]
-                    ]
-
-            # Gap at top of downthrown block (k to k+throw) already filled with defaults
-
-        else:
-            # Reverse fault: downthrown block moves UP
-            # Layout: [downthrown at top | upthrown at bottom | gap at very bottom]
-
-            # Copy upthrown block to bottom portion (shifted down by abs_throw)
-            for k in range(nz):
-                target_k = k + abs_throw
-                if target_k < new_nz:
-                    new_grid[:, :, target_k][upthrown_mask[:, :, k]] = grid[:, :, k][
-                        upthrown_mask[:, :, k]
-                    ]
-
-            # Copy downthrown block to top (displaced up, so k -> k position in new grid)
-            for k in range(nz):
-                if k < new_nz:
-                    new_grid[:, :, k][downthrown_mask[:, :, k]] = grid[:, :, k][
-                        downthrown_mask[:, :, k]
-                    ]
-
-            # Gap at bottom already filled with defaults
-        return new_grid
-
-    def _displace_without_expansion(
-        self,
-        grid: np.typing.NDArray,
-        property_name: str,
-        property_type: typing.Optional[str],
-    ) -> np.typing.NDArray:
-        """
-        Block-based displacement without grid expansion (data loss at boundaries).
-
-        Algorithm:
-        1. Create new grid same size as original
-        2. Copy upthrown block (stays in place)
-        3. Copy downthrown block to displaced position (may go out of bounds)
-        4. Fill exposed regions with smart defaults
-        """
-        nx, ny, nz = self.original_shape
-        # Get smart default value, preserving grid dtype
-        default_value = self.defaults.get_value(
-            property_name=property_name,
-            grid=grid,
-            property_type=property_type,
-            dtype=grid.dtype,
-        )
-        # Create new grid filled with defaults
-        new_grid = np.full((nx, ny, nz), fill_value=default_value, dtype=grid.dtype)
-
-        # Identify blocks
-        upthrown_mask = np.invert(self.displacement_mask)
-        downthrown_mask = self.displacement_mask
-
-        if self.throw > 0:
-            # Normal fault: downthrown moves down
-            # Copy upthrown block (unchanged)
-            for k in range(nz):
-                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
-                    upthrown_mask[:, :, k]
-                ]
-
-            # Copy downthrown block (displaced down, may lose bottom data)
-            for k in range(nz):
-                target_k = k + self.throw
-                if target_k < nz:  # Only copy if target is in bounds
-                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
-                        downthrown_mask[:, :, k]
-                    ]
-
-            # Top of downthrown block exposed and already filled with defaults
-
-        else:
-            # Reverse fault: downthrown moves up
-            abs_throw = abs(self.throw)
-
-            # Copy upthrown block (unchanged)
-            for k in range(nz):
-                new_grid[:, :, k][upthrown_mask[:, :, k]] = grid[:, :, k][
-                    upthrown_mask[:, :, k]
-                ]
-
-            # Copy downthrown block (displaced up, may lose top data)
-            for k in range(nz):
-                target_k = k - abs_throw
-                if target_k >= 0:  # Only copy if target is in bounds
-                    new_grid[:, :, target_k][downthrown_mask[:, :, k]] = grid[:, :, k][
-                        downthrown_mask[:, :, k]
-                    ]
-
-            # Bottom of downthrown block exposed - already filled with defaults
-
-        return new_grid
-
-
 def vertical_sealing_fault(
     fault_id: str,
     orientation: typing.Literal["x", "y", "z"],
@@ -1496,7 +992,6 @@ def vertical_sealing_fault(
     x_range: typing.Optional[typing.Tuple[int, int]] = None,
     y_range: typing.Optional[typing.Tuple[int, int]] = None,
     z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
 ) -> Fracture:
     """
     Create a sealing barrier at a grid index with optional extent control.
@@ -1518,7 +1013,6 @@ def vertical_sealing_fault(
     :param x_range: Optional lateral extent in x
     :param y_range: Optional lateral extent in y
     :param z_range: Optional vertical extent (for x/y orientation) or layer index (for z orientation)
-    :param defaults: Optional custom defaults for properties
     :return: Configured `Fracture` object
 
     Examples:
@@ -1570,168 +1064,6 @@ def vertical_sealing_fault(
         id=fault_id,
         geometry=geometry,
         permeability_multiplier=permeability_multiplier,
-        defaults=defaults or FractureDefaults(),
-    )
-
-
-def normal_fault_with_throw(
-    fault_id: str,
-    orientation: typing.Literal["x", "y"],
-    index: int,
-    throw_cells: int,
-    permeability_multiplier: float = 1e-4,
-    preserve_data: bool = True,
-    x_range: typing.Optional[typing.Tuple[int, int]] = None,
-    y_range: typing.Optional[typing.Tuple[int, int]] = None,
-    z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
-) -> Fracture:
-    """
-    Create a normal fault with vertical displacement (throw).
-
-    Normal faults occur when the hanging wall (downthrown block) moves down
-    relative to the footwall. This creates juxtaposition of different reservoir
-    layers across the fault. Use positive `throw_cells`.
-
-    Displacement Behaviour:
-    - By default, only the fault plane itself (at the specified index) is displaced
-    - Use `displacement_range` to explicitly control which cells move
-    - This allows for localized faulting or displacing entire blocks
-
-    Flexibility:
-    - Control which cells are displaced with `displacement_range`
-    - Limit fault extent with x_range/y_range/z_range
-    - Create segmented faults or relay ramps
-
-    :param fault_id: Unique identifier for the fault
-    :param orientation: Fault orientation ('x' or 'y')
-    :param index: Grid index where the fault is located
-    :param throw_cells: Number of cells to displace vertically (positive for normal fault)
-    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
-    :param preserve_data: If True, expand grid to preserve all data (recommended)
-    :param x_range: Optional lateral extent in x (for y-oriented faults)
-    :param y_range: Optional lateral extent in y (for x-oriented faults)
-    :param z_range: Optional vertical extent
-    :param displacement_range: Optional explicit control over which cells are displaced.
-        If None, only the fault plane at 'index' is displaced.
-    :param defaults: Optional custom defaults for expanded regions
-    :return: Configured `Fracture` object
-
-    Examples:
-    ```python
-    # Simple fault - only displaces the fault plane at x=25
-    normal_fault_with_throw(fault_id="f1", orientation="x", index=25, throw_cells=3)
-
-    # Fault affecting entire block from x=30 onward
-    normal_fault_with_throw(
-        fault_id="f1",
-        orientation="x",
-        index=25,
-        throw_cells=3,
-        displacement_range=(30, 50)
-    )
-
-    # Shallow fault with limited throw
-    normal_fault_with_throw(
-        fault_id="f1",
-        orientation="x",
-        index=25,
-        throw_cells=2,
-        z_range=(0, 10)
-    )
-    ```
-    """
-    if orientation == "x":
-        geometry = FractureGeometry(
-            orientation="x",
-            x_range=(index, index),
-            y_range=y_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=throw_cells,
-        )
-    else:
-        geometry = FractureGeometry(
-            orientation="y",
-            y_range=(index, index),
-            x_range=x_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=throw_cells,
-        )
-
-    return Fracture(
-        id=fault_id,
-        geometry=geometry,
-        permeability_multiplier=permeability_multiplier,
-        preserve_grid_data=preserve_data,
-        defaults=defaults or FractureDefaults(),
-    )
-
-
-def reverse_fault_with_throw(
-    fault_id: str,
-    orientation: typing.Literal["x", "y"],
-    index: int,
-    throw_cells: int,
-    permeability_multiplier: float = 1e-4,
-    preserve_data: bool = True,
-    x_range: typing.Optional[typing.Tuple[int, int]] = None,
-    y_range: typing.Optional[typing.Tuple[int, int]] = None,
-    z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
-) -> Fracture:
-    """
-    Create a reverse fault with vertical displacement (throw).
-
-    Reverse faults occur when the hanging wall moves up relative to the footwall,
-    typically due to compressional forces. Use negative throw_cells.
-
-    Displacement Behaviour:
-    - By default, only the fault plane itself (at the specified index) is displaced
-    - Use `displacement_range` to explicitly control which cells move
-
-    :param fault_id: Unique identifier for the fault
-    :param orientation: Fault orientation ('x' or 'y')
-    :param index: Grid index where the fault is located
-    :param throw_cells: Number of cells to displace vertically (use negative for reverse)
-    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
-    :param preserve_data: If True, expand grid to preserve all data (recommended)
-    :param x_range: Optional lateral extent in x (for y-oriented faults)
-    :param y_range: Optional lateral extent in y (for x-oriented faults)
-    :param z_range: Optional vertical extent
-    :param displacement_range: Optional explicit control over which cells are displaced.
-        If None, only the fault plane at 'index' is displaced.
-    :param defaults: Optional custom defaults for expanded regions
-    :return: Configured `Fracture` object
-    """
-    if orientation == "x":
-        geometry = FractureGeometry(
-            orientation="x",
-            x_range=(index, index),
-            y_range=y_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=-abs(throw_cells),  # Ensure negative
-        )
-    else:
-        geometry = FractureGeometry(
-            orientation="y",
-            y_range=(index, index),
-            x_range=x_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=-abs(throw_cells),  # Ensure negative
-        )
-
-    return Fracture(
-        id=fault_id,
-        geometry=geometry,
-        permeability_multiplier=permeability_multiplier,
-        preserve_grid_data=preserve_data,
-        defaults=defaults or FractureDefaults(),
     )
 
 
@@ -1745,7 +1077,6 @@ def inclined_sealing_fault(
     x_range: typing.Optional[typing.Tuple[int, int]] = None,
     y_range: typing.Optional[typing.Tuple[int, int]] = None,
     z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
 ) -> Fracture:
     """
     Create an inclined (non-vertical) sealing fault.
@@ -1765,7 +1096,6 @@ def inclined_sealing_fault(
     :param x_range: Optional lateral extent in x (for y-oriented faults)
     :param y_range: Optional lateral extent in y (for x-oriented faults)
     :param z_range: Optional vertical extent to clip the inclined plane
-    :param defaults: Optional custom defaults for properties
     :return: Configured `Fracture` object
     """
     if orientation == "x":
@@ -1791,7 +1121,6 @@ def inclined_sealing_fault(
         id=fault_id,
         geometry=geometry,
         permeability_multiplier=permeability_multiplier,
-        defaults=defaults or FractureDefaults(),
     )
 
 
@@ -1805,7 +1134,6 @@ def damage_zone_fault(
     x_range: typing.Optional[typing.Tuple[int, int]] = None,
     y_range: typing.Optional[typing.Tuple[int, int]] = None,
     z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
 ) -> Fracture:
     """
     Create a fault/barrier with a damage zone (multiple cells wide).
@@ -1824,7 +1152,6 @@ def damage_zone_fault(
     :param x_range: Optional lateral extent in x
     :param y_range: Optional lateral extent in y
     :param z_range: Optional vertical extent (for x/y) or limits for z-orientation
-    :param defaults: Optional custom defaults for properties
     :return: Configured `Fracture` object
 
     Examples:
@@ -1868,7 +1195,6 @@ def damage_zone_fault(
         permeability_multiplier=permeability_multiplier,
         permeability=zone_permeability,
         porosity=zone_porosity,
-        defaults=defaults or FractureDefaults(),
     )
 
 
@@ -1882,7 +1208,6 @@ def conductive_fracture_network(
     x_range: typing.Optional[typing.Tuple[int, int]] = None,
     y_range: typing.Optional[typing.Tuple[int, int]] = None,
     z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
 ) -> Fracture:
     """
     Create a highly conductive fracture network (opposite of sealing fault).
@@ -1899,7 +1224,6 @@ def conductive_fracture_network(
     :param x_range: Optional lateral extent in x
     :param y_range: Optional lateral extent in y
     :param z_range: Optional vertical extent or limits for z-orientation
-    :param defaults: Optional custom defaults for properties
     :return: Configured `Fracture` object
 
     Examples:
@@ -1951,107 +1275,6 @@ def conductive_fracture_network(
         porosity=fracture_porosity,
         permeability_multiplier=permeability_multiplier,
         conductive=True,
-        defaults=defaults or FractureDefaults(),
-    )
-
-
-def fault_with_throw_and_damage_zone(
-    fault_id: str,
-    orientation: typing.Literal["x", "y"],
-    cell_range: typing.Tuple[int, int],
-    throw_cells: int,
-    permeability_multiplier: float = 1e-4,
-    zone_permeability: typing.Optional[float] = None,
-    zone_porosity: typing.Optional[float] = None,
-    preserve_data: bool = True,
-    x_range: typing.Optional[typing.Tuple[int, int]] = None,
-    y_range: typing.Optional[typing.Tuple[int, int]] = None,
-    z_range: typing.Optional[typing.Tuple[int, int]] = None,
-    displacement_range: typing.Optional[typing.Tuple[int, int]] = None,
-    defaults: typing.Optional[FractureDefaults] = None,
-) -> Fracture:
-    """
-    Create a fault with both geometric throw and a damage zone.
-
-    This combines vertical displacement with altered rock properties across
-    multiple cells, representing realistic large-displacement faults.
-
-    Displacement Behaviour:
-    - By default, only the damage zone cells (cell_range) are displaced
-    - Use displacement_range to control which cells move (e.g., displace entire blocks)
-
-    :param fault_id: Unique identifier for the fault
-    :param orientation: Fault orientation ('x' or 'y')
-    :param cell_range: Range of cells defining the damage zone
-    :param throw_cells: Number of cells to displace vertically
-    :param permeability_multiplier: Flow reduction factor (default: 1e-4)
-    :param zone_permeability: Permeability within damage zone (mD)
-    :param zone_porosity: Porosity within damage zone (fraction)
-    :param preserve_data: If True, expand grid to preserve all data
-    :param x_range: Optional lateral extent in x (for y-oriented faults)
-    :param y_range: Optional lateral extent in y (for x-oriented faults)
-    :param z_range: Optional vertical extent
-    :param displacement_range: Optional explicit control over which cells are displaced.
-        If None, only the damage zone (cell_range) is displaced.
-    :param defaults: Optional custom defaults for expanded regions
-    :return: Configured `Fracture` object
-
-    Examples:
-    ```python
-    # Fault with damage zone - by default only displaces the damage zone itself
-    fault_with_throw_and_damage_zone(
-        fault_id="f1",
-        orientation="x",
-        cell_range=(20, 25),
-        throw_cells=3
-    )
-
-    # Fault with damage zone, but displacing entire right side
-    fault_with_throw_and_damage_zone(
-        fault_id="f1",
-        orientation="x",
-        cell_range=(20, 25),
-        throw_cells=3,
-        displacement_range=(26, 50)
-    )
-
-    # Segmented fault in specific layers
-    fault_with_throw_and_damage_zone(
-        fault_id="f1",
-        orientation="x",
-        cell_range=(20, 25),
-        throw_cells=2,
-        z_range=(10, 20)
-    )
-    ```
-    """
-    if orientation == "x":
-        geometry = FractureGeometry(
-            orientation="x",
-            x_range=cell_range,
-            y_range=y_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=throw_cells,
-        )
-    else:
-        geometry = FractureGeometry(
-            orientation="y",
-            y_range=cell_range,
-            x_range=x_range,
-            z_range=z_range,
-            displacement_range=displacement_range,
-            geometric_throw=throw_cells,
-        )
-
-    return Fracture(
-        id=fault_id,
-        geometry=geometry,
-        permeability_multiplier=permeability_multiplier,
-        permeability=zone_permeability,
-        porosity=zone_porosity,
-        preserve_grid_data=preserve_data,
-        defaults=defaults or FractureDefaults(),
     )
 
 
@@ -2129,40 +1352,6 @@ def validate_fracture(
             f"Fracture {fracture.id!r}: intercept {geom.intercept} out of z-range [0, {nz - 1}]"
         )
 
-    # Validate geometric throw
-    if geom.orientation == "z" and geom.geometric_throw != 0:
-        errors.append(
-            f"Fracture {fracture.id!r}: geometric_throw is not supported for z-oriented fractures"
-        )
-    if abs(geom.geometric_throw) >= nz:
-        errors.append(
-            f"Fracture {fracture.id!r}: geometric_throw {geom.geometric_throw} too large for nz={nz}"
-        )
-
-    # Validate displacement_range if specified
-    if geom.displacement_range is not None:
-        disp_min, disp_max = geom.displacement_range
-        if disp_min > disp_max:
-            errors.append(
-                f"Fracture {fracture.id!r}: displacement_range min > max ({disp_min} > {disp_max})"
-            )
-        if geom.orientation == "x" and not (0 <= disp_min < nx and 0 <= disp_max < nx):
-            errors.append(
-                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of x-bounds [0, {nx - 1}]"
-            )
-        elif geom.orientation == "y" and not (
-            0 <= disp_min < ny and 0 <= disp_max < ny
-        ):
-            errors.append(
-                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of y-bounds [0, {ny - 1}]"
-            )
-        elif geom.orientation == "z" and not (
-            0 <= disp_min < nz and 0 <= disp_max < nz
-        ):
-            errors.append(
-                f"Fracture {fracture.id!r}: displacement_range ({disp_min}, {disp_max}) out of z-bounds [0, {nz - 1}]"
-            )
-
     # Validate mask shape if provided
     if fracture.mask is not None and fracture.mask.shape != grid_shape:
         errors.append(
@@ -2170,67 +1359,3 @@ def validate_fracture(
         )
 
     return errors
-
-
-def make_displacement_mask(
-    grid_shape: typing.Tuple[int, int, int], fracture: Fracture
-) -> np.ndarray:
-    """
-    Create a boolean mask indicating which cells should be displaced by the fracture.
-
-    This defines the "downthrown block", i.e., cells that will move vertically.
-
-    DISPLACEMENT LOGIC:
-
-    If displacement_range is specified in geometry:
-        - Only cells within that explicit range are displaced
-        - Provides fine-grained control over which cells move
-
-    If displacement_range is None (default):
-        - Only the fracture zone itself is displaced
-        - For x-oriented: cells within x_range are displaced
-        - For y-oriented: cells within y_range are displaced
-        - For z-oriented: cells within z_range are displaced
-        - This creates localized faulting rather than displacing entire half-grids
-
-    :param grid_shape: Shape of the reservoir grid (nx, ny, nz)
-    :param fracture: Fracture configuration
-    :return: 3D boolean array marking cells to be displaced
-    """
-    nx, ny, nz = grid_shape
-    displacement_mask = np.zeros((nx, ny, nz), dtype=bool)
-
-    geom = fracture.geometry
-
-    # Determine the displacement range
-    if geom.displacement_range is not None:
-        # Explicit displacement_range provided
-        disp_min, disp_max = geom.displacement_range
-    else:
-        # Default: displace only the fracture zone itself
-        fault_plane_range = geom.get_fracture_plane_range()
-        disp_min, disp_max = fault_plane_range
-
-    # Apply displacement based on orientation
-    if geom.orientation == "x":
-        # Displace cells in x-range [disp_min, disp_max]
-        if disp_min < nx and disp_max >= 0:
-            disp_min = max(0, disp_min)
-            disp_max = min(nx - 1, disp_max)
-            displacement_mask[disp_min : disp_max + 1, :, :] = True
-
-    elif geom.orientation == "y":
-        # Displace cells in y-range [disp_min, disp_max]
-        if disp_min < ny and disp_max >= 0:
-            disp_min = max(0, disp_min)
-            disp_max = min(ny - 1, disp_max)
-            displacement_mask[:, disp_min : disp_max + 1, :] = True
-
-    elif geom.orientation == "z":
-        # Displace cells in z-range [disp_min, disp_max]
-        if disp_min < nz and disp_max >= 0:
-            disp_min = max(0, disp_min)
-            disp_max = min(nz - 1, disp_max)
-            displacement_mask[:, :, disp_min : disp_max + 1] = True
-
-    return displacement_mask

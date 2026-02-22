@@ -14,10 +14,7 @@ from bores.grids.base import (
     build_elevation_grid,
 )
 from bores.stores import StoreSerializable
-from bores.types import T
 from bores.types import NDimension, NDimensionalGrid
-from bores.utils import Lazy, LazyField
-
 
 __all__ = [
     "FluidProperties",
@@ -29,7 +26,7 @@ __all__ = [
 
 
 @typing.final
-@attrs.frozen(slots=True)
+@attrs.define(slots=True)
 class FluidProperties(PadMixin[NDimension], StoreSerializable):
     """
     Fluid properties of a reservoir model.
@@ -107,6 +104,8 @@ class FluidProperties(PadMixin[NDimension], StoreSerializable):
     """N-dimensional numpy array representing the reservoir fluid (Gas) viscosity distribution in the reservoir in (cP)."""
     gas_compressibility_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas compressibility distribution (on bulk volume basis) in the reservoir (psi⁻¹)."""
+    gas_compressibility_factor_grid: NDimensionalGrid[NDimension]
+    """N-dimensional numpy array representing the gas compressibility factor distribution in the reservoir (dimensionless)."""
     gas_gravity_grid: NDimensionalGrid[NDimension]
     """N-dimensional numpy array representing the gas gravity distribution in the reservoir (dimensionless). Should be constant for a given gas, e.g., Methane = 0.556)."""
     gas_molecular_weight_grid: NDimensionalGrid[NDimension]
@@ -292,9 +291,6 @@ class SaturationHistory(PadMixin[NDimension], StoreSerializable):
         return attrs.fields(type(self))
 
 
-_Lazy = typing.Union[Lazy[T], T, typing.Callable[[], T]]
-
-
 class ReservoirModel(
     typing.Generic[NDimension],
     StoreSerializable,
@@ -311,21 +307,14 @@ class ReservoirModel(
 ):
     """Models a reservoir in N-dimensional space for simulation."""
 
-    fluid_properties = LazyField[FluidProperties[NDimension]]()
-    """Fluid properties of the reservoir model."""
-    rock_properties = LazyField[RockProperties[NDimension]]()
-    """Rock properties of the reservoir model."""
-    saturation_history = LazyField[SaturationHistory[NDimension]]()
-    """Tracks historical maximum saturations and displacement regimes in the reservoir."""
-
     def __init__(
         self,
         grid_shape: NDimension,
         cell_dimension: typing.Tuple[float, float],
         thickness_grid: NDimensionalGrid[NDimension],
-        fluid_properties: _Lazy[FluidProperties[NDimension]],
-        rock_properties: _Lazy[RockProperties[NDimension]],
-        saturation_history: _Lazy[SaturationHistory[NDimension]],
+        fluid_properties: FluidProperties[NDimension],
+        rock_properties: RockProperties[NDimension],
+        saturation_history: SaturationHistory[NDimension],
         dip_angle: float = 0.0,
         dip_azimuth: float = 0.0,
     ) -> None:
@@ -353,13 +342,9 @@ class ReservoirModel(
         self.grid_shape = grid_shape
         self.cell_dimension = cell_dimension
         self.thickness_grid = thickness_grid
-        self.fluid_properties = typing.cast(
-            FluidProperties[NDimension], fluid_properties
-        )
-        self.rock_properties = typing.cast(RockProperties[NDimension], rock_properties)
-        self.saturation_history = typing.cast(
-            SaturationHistory[NDimension], saturation_history
-        )
+        self.fluid_properties = fluid_properties
+        self.rock_properties = rock_properties
+        self.saturation_history = saturation_history
         self.dip_angle = dip_angle
         self.dip_azimuth = dip_azimuth
 

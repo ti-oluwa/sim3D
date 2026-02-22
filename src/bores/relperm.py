@@ -278,20 +278,60 @@ def stone_II_rule(
     gas_saturation: FloatOrArray,
 ) -> FloatOrArray:
     """
-    Stone II rule (1973) for 3-phase oil relative permeability.
+    Stone II rule (Stone, 1973, JPT) for 3-phase oil relative permeability.
 
-    kro = kro_w * (So / (So + Sg)) + kro_g * (So / (So + Sw))
+    Original Stone II formula (normalized, krocw = 1.0):
+        kro = (krow + krw) * (krog + krg) - krw - krg
 
-    Notes:
-        - Ensures smooth interpolation between the oil-water and oil-gas systems.
-        - If denominators vanish (e.g., So=0), returns 0.0.
+    where:
+        - krow = oil relperm from oil-water table at current Sw
+        - krog = oil relperm from oil-gas table at current Sg
+        - krw = water relperm at current Sw
+        - krg = gas relperm at current Sg
+        - krocw = oil relperm at connate water (typically 1.0 for normalized tables)
+
+    **Approximation Used Here:**
+    Since the mixing rule signature only provides kro_w and kro_g (not krw and krg),
+    this implementation approximates:
+        krw ≈ 1 - kro_w
+        krg ≈ 1 - kro_g
+
+    **When This Approximation is Valid:**
+    - Normalized tables with unit endpoints (krw_max = krg_max = kro_max = 1.0)
+    - Linear or near-linear relative permeability curves
+    - Two-phase systems where krw + kro_w ≈ 1 and krg + kro_g ≈ 1
+
+    **When This Approximation Breaks Down:**
+    - Non-linear Corey/Brooks-Corey models with exponents ≠ 1
+    - Non-normalized tables
+    - When krw + kro_w ≠ 1 (which occurs with Corey exponents)
+
+    **Result:**
+    With the approximation, the formula simplifies to:
+        kro = kro_w + kro_g - 1
+
+    This provides reasonable results for many cases but can be inaccurate with
+    highly non-linear curves. For Corey-type models, consider using Stone I or
+    geometric mean instead.
+
+    **Reference:**
+    Stone, H.L. (1973). "Estimation of Three-Phase Relative Permeability and
+    Residual Oil Data." Journal of Canadian Petroleum Technology, 12(4), 53-61.
     """
-    denom_1 = oil_saturation + gas_saturation
-    term_1 = np.where(denom_1 > 0.0, kro_w * (oil_saturation / denom_1), 0.0)
+    # Approximate krw and krg from two-phase oil relperm values
+    # Note: This assumes krw + kro_w ≈ 1 (valid for unit-endpoint tables)
+    krw_approx = 1.0 - kro_w
+    krg_approx = 1.0 - kro_g
 
-    denom_2 = oil_saturation + water_saturation
-    term_2 = np.where(denom_2 > 0.0, kro_g * (oil_saturation / denom_2), 0.0)
-    return term_1 + term_2
+    # Stone II formula with approximated water and gas relperm
+    result = (kro_w + krw_approx) * (kro_g + krg_approx) - krw_approx - krg_approx
+    # This simplifies to: kro = kro_w + kro_g - 1
+
+    # Clamp negative values (can occur when both kro_w and kro_g are small)
+    result = np.maximum(result, 0.0)
+
+    # Return zero if either two-phase oil relperm is zero (conservative)
+    return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
 @mixing_rule
@@ -353,12 +393,19 @@ def harmonic_mean_rule(
     kro = 2 / (1/kro_w + 1/kro_g)
 
     Notes:
-        - Most conservative of the mean rules
-        - Heavily weighted by the smaller value
-        - Useful for series flow paths
+    - Most conservative of the mean rules
+    - Heavily weighted by the smaller value
+    - Useful for series flow paths
+    - Returns 0 if either input is zero (conservative)
     """
-    result = 2.0 / ((1.0 / kro_w) + (1.0 / kro_g))
-    # Return 0 if either kro_w or kro_g is zero
+    # Protect against division by zero with epsilon
+    epsilon = 1e-30
+    safe_kro_w = np.maximum(kro_w, epsilon)
+    safe_kro_g = np.maximum(kro_g, epsilon)
+
+    result = 2.0 / ((1.0 / safe_kro_w) + (1.0 / safe_kro_g))
+
+    # Return 0 if either original value was zero (conservative for flow)
     return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
@@ -408,23 +455,31 @@ def baker_linear_rule(
     """
     Baker's linear interpolation rule (1988).
 
-    kro = kro_w * (1 - Sg_norm) + kro_g * (1 - Sw_norm)
+    Interpolates three-phase kro as a saturation-weighted combination
+    of the two-phase endpoint values:
 
-    where `Sg_norm` and `Sw_norm` are normalized saturations.
+        kro = (Sw * kro_w + So * kro_ow_endpoint + Sg * kro_g) / (Sw + So + Sg)
 
-    Notes:
-        - Linear interpolation based on normalized saturations
-        - Tends to give higher kro values than Stone methods
-        - Simple to implement and understand
+    where kro_ow_endpoint is approximated as max(kro_w, kro_g) (the oil kr
+    at the oil-water endpoint, i.e. in absence of gas), and kro_g is the
+    oil kr from the gas-oil table.
+
+    Simplification used here (standard Baker linear, no separate endpoint table):
+        kro = (Sw * kro_w + Sg * kro_g) / (Sw + Sg)   when Sw+Sg > 0
+        kro = max(kro_w, kro_g)                         when Sw+Sg = 0 (pure oil)
+
+    This reduces exactly to kro_w at Sg=0 and kro_g at Sw=0.
+
+    Note: This is similar to `saturation_weighted_interpolation_rule`
     """
-    # Normalize saturations
-    total_sat = water_saturation + oil_saturation + gas_saturation
+    total_displacing = water_saturation + gas_saturation
 
-    sg_norm = np.where(total_sat > 0.0, gas_saturation / total_sat, 0.0)
-    sw_norm = np.where(total_sat > 0.0, water_saturation / total_sat, 0.0)
-
-    result = kro_w * (1.0 - sg_norm) + kro_g * (1.0 - sw_norm)
-    return np.where(total_sat > 0.0, result, 0.0)
+    result = np.where(
+        total_displacing > 0.0,
+        (kro_w * water_saturation + kro_g * gas_saturation) / total_displacing,
+        np.maximum(kro_w, kro_g),
+    )
+    return result
 
 
 @mixing_rule
@@ -445,9 +500,14 @@ def blunt_rule(
         - Developed for strongly water-wet systems
         - Accounts for pore-level displacement mechanisms
         - Generally gives conservative estimates
+        - Result is clamped to [0, ∞) to handle edge cases with non-normalized tables
     """
     result = kro_w * kro_g * (2.0 - kro_w - kro_g)
-    # Return 0 if either kro_w or kro_g is zero
+
+    # Clamp to non-negative values (handles edge cases if kro_w + kro_g > 2)
+    result = np.maximum(result, 0.0)
+
+    # Return 0 if either kro_w or kro_g is zero (conservative)
     return np.where((kro_w <= 0.0) | (kro_g <= 0.0), 0.0, result)
 
 
@@ -1085,7 +1145,13 @@ def compute_corey_three_phase_relative_permeabilities(
         krw = effective_water_saturation**water_exponent
 
         # 2. Gas relperm (nonwetting)
-        movable_gas_range = 1.0 - residual_gas_saturation - residual_oil_saturation_gas
+        # Mobile gas range must account for connate water + residual oil + residual gas
+        movable_gas_range = (
+            1.0
+            - irreducible_water_saturation
+            - residual_gas_saturation
+            - residual_oil_saturation_gas
+        )
         effective_gas_saturation = np.where(
             movable_gas_range <= 1e-6,
             np.zeros_like(sg),
@@ -1094,14 +1160,18 @@ def compute_corey_three_phase_relative_permeabilities(
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Oil relperm (intermediate phase) → Stone I blending
+        # Make sure to apply oil curvature to the two-phase oil kr inputs before mixing,
+        # not to the mixed output. (1-krw) and (1-krg) are the two-phase
+        # oil kr approximations; so we shape them with `oil_exponent` before blending.
+        kro_w_shaped = (1.0 - krw) ** oil_exponent
+        kro_g_shaped = (1.0 - krg) ** oil_exponent
         kro = mixing_rule(
-            kro_w=(1.0 - krw),
-            kro_g=(1.0 - krg),
+            kro_w=kro_w_shaped,
+            kro_g=kro_g_shaped,
             water_saturation=sw,
             oil_saturation=so,
             gas_saturation=sg,
         )
-        kro = kro**oil_exponent  # Apply oil Corey exponent as a curvature control
 
     elif wettability == WettabilityType.OIL_WET:
         # Oil is wetting, water becomes intermediate
@@ -1129,17 +1199,18 @@ def compute_corey_three_phase_relative_permeabilities(
         krg = effective_gas_saturation**gas_exponent
 
         # 3. Water relperm (intermediate phase, use Stone I style blending)
+        kro_proxy_shaped = (1.0 - kro) ** water_exponent
+        krg_proxy_shaped = (1.0 - krg) ** water_exponent
         krw = mixing_rule(  # type: ignore[assignment]
-            kro_w=(1.0 - kro),  # treat oil as wetting
-            kro_g=(1.0 - krg),  # treat gas as nonwetting
+            kro_w=kro_proxy_shaped,  # treat oil as wetting
+            kro_g=krg_proxy_shaped,  # treat gas as nonwetting
             water_saturation=sw,
             oil_saturation=so,
             gas_saturation=sg,
         )
-        krw = krw**water_exponent
 
     else:
-        raise ValueError(f"Wettability {wettability} not implemented.")
+        raise ValueError(f"Wettability {wettability!r} not implemented.")
 
     # Clip all results to [0, 1]
     krw = np.clip(krw, 0.0, 1.0)
@@ -1196,7 +1267,7 @@ class BrooksCoreyThreePhaseRelPermModel(
     """
     wettability: WettabilityType = WettabilityType.WATER_WET
     """Wettability type (water-wet or oil-wet)."""
-    mixing_rule: MixingRule = stone_II_rule
+    mixing_rule: MixingRule = eclipse_rule
     """
     Mixing rule function to compute oil relative permeability in three-phase system.
 

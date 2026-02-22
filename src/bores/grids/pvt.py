@@ -1011,6 +1011,7 @@ def build_water_compressibility_grid(
     gas_formation_volume_factor_grid: NDimensionalGrid[NDimension],
     gas_solubility_in_water_grid: NDimensionalGrid[NDimension],
     gas_free_water_formation_volume_factor_grid: NDimensionalGrid[NDimension],
+    salinity: FloatOrArray = 0.0,
 ) -> NDimensionalGrid[NDimension]:
     """
     Computes a N-Dimensional grid of water compressibilities.
@@ -1034,6 +1035,7 @@ def build_water_compressibility_grid(
         gas_formation_volume_factor=gas_formation_volume_factor_grid,
         gas_solubility_in_water=gas_solubility_in_water_grid,
         gas_free_water_formation_volume_factor=gas_free_water_formation_volume_factor_grid,
+        salinity=salinity,
     )
     return result  # type: ignore[return-value]
 

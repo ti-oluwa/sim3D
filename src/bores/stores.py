@@ -1329,14 +1329,14 @@ def new_store(
 
     Example:
     ```python
-    store = new_store('simulation.zarr', backend='zarr')
+    store = new_store('zarr', 'simulation.zarr')
     store.dump(states)
     loaded = list(store.load())
     ```
     """
     if backend not in _STORAGE_BACKENDS:
         raise ValidationError(
-            f"Unknown backend: {backend}. Choose from {list(_STORAGE_BACKENDS.keys())}"
+            f"Unknown backend: {backend}. Available backends are: {list(_STORAGE_BACKENDS.keys())}"
         )
 
     store_class = _STORAGE_BACKENDS[backend]

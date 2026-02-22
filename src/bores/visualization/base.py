@@ -262,6 +262,13 @@ class PropertyRegistry:
             color_scheme=ColorScheme.SPECTRAL,
             log_scale=True,
         ),
+        gas_compressibility_factor=PropertyMeta(
+            name="model.fluid_properties.gas_compressibility_factor_grid",
+            display_name="Gas Compressibility Factor (Z)",
+            unit="dimensionless",
+            color_scheme=ColorScheme.VIRIDIS,
+            aliases=["gas_z_factor", "z_factor", "z"],
+        ),
         gas_formation_volume_factor=PropertyMeta(
             name="model.fluid_properties.gas_formation_volume_factor_grid",
             display_name="Gas FVF",
@@ -1253,7 +1260,7 @@ def merge_plots(
 
 
 def image_config(
-    format: typing.Literal["png", "jpeg", "webp", "svg", "pdf"] = "png",
+    fmt: typing.Literal["png", "jpeg", "webp", "svg", "pdf"] = "png",
     scale: int = 2,
     width: typing.Optional[int] = None,
     height: typing.Optional[int] = None,
@@ -1263,13 +1270,13 @@ def image_config(
 
     :param fig: Plotly Figure object to configure
     :param file_path: Path to the output image file
-    :param format: Image format to save as (e.g., 'png', 'jpeg', 'webp', 'svg', 'pdf')
+    :param fmt: Image format to save as (e.g., 'png', 'jpeg', 'webp', 'svg', 'pdf')
         Default is 'png'.
     :param scale: Scale factor for the image resolution. Default is 2 (double size).
     :param width: Optional width of the output image in pixels. If None, uses figure width.
     :param height: Optional height of the output image in pixels. If None, uses figure height.
     """
-    pio.defaults.default_format = format
+    pio.defaults.default_format = fmt
     pio.defaults.default_scale = scale
     if width is not None:
         pio.defaults.default_width = width

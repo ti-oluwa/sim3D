@@ -1,6 +1,5 @@
 """Model analysis tools for reservoir performance evaluation over simulation states."""
 
-import functools
 import logging
 import typing
 
@@ -10,9 +9,9 @@ from scipy.optimize import curve_fit
 
 from bores.cells import CellFilter, Cells
 from bores.constants import c
+from bores.correlations.arrays import compute_hydrocarbon_in_place
 from bores.errors import ValidationError
 from bores.grids.base import uniform_grid
-from bores.correlations.arrays import compute_hydrocarbon_in_place
 from bores.states import ModelState
 from bores.types import NDimension
 from bores.utils import clip
@@ -33,7 +32,7 @@ def _ensure_cells(cells: typing.Union[Cells, CellFilter]) -> typing.Optional[Cel
     return Cells.from_filter(cells)
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class ReservoirVolumetrics:
     """Reservoir volumetrics analysis results."""
 
@@ -49,7 +48,7 @@ class ReservoirVolumetrics:
     """Hydrocarbon pore volume in cubic feet (ft³)."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class InstantaneousRates:
     """Instantaneous production/injection rates."""
 
@@ -67,7 +66,7 @@ class InstantaneousRates:
     """Water cut as a fraction (0 to 1) of total liquid production."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class CumulativeProduction:
     """Cumulative production analysis results."""
 
@@ -83,7 +82,7 @@ class CumulativeProduction:
     """Gas recovery factor as a fraction (0 to 1) of initial gas in place."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class MaterialBalanceAnalysis:
     """Material balance analysis results."""
 
@@ -103,7 +102,7 @@ class MaterialBalanceAnalysis:
     """Estimated aquifer influx in stock tank barrels (STB)."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class ProductivityAnalysis:
     """Well productivity analysis results based on actual flow rates and reservoir properties."""
 
@@ -121,7 +120,7 @@ class ProductivityAnalysis:
     """Average phase mobility at perforation intervals in 1/cp."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class SweepEfficiencyAnalysis:
     """Sweep efficiency analysis results."""
 
@@ -147,7 +146,7 @@ class SweepEfficiencyAnalysis:
     """Vertical sweep efficiency (0 to 1) computed using saturation-weighted column fractions."""
 
 
-@attrs.frozen
+@attrs.frozen(slots=True)
 class DeclineCurveResult:
     """Decline curve analysis results."""
 
@@ -224,6 +223,29 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 self._max_step,
                 self._state_count,
             )
+
+        # Per-instance memoization caches prevent memory leaks.
+        # Using @functools.cache on instance methods inserts self into a class-level LRU cache,
+        # preventing garbage collection for the lifetime of the class.
+        self._cell_area_cache: typing.Dict[typing.Tuple, float] = {}
+        self._oil_in_place_cache: typing.Dict[int, float] = {}
+        self._gas_in_place_cache: typing.Dict[int, float] = {}
+        self._water_in_place_cache: typing.Dict[int, float] = {}
+        self._oil_produced_cache: typing.Dict[typing.Tuple, float] = {}
+        self._free_gas_produced_cache: typing.Dict[typing.Tuple, float] = {}
+        self._water_produced_cache: typing.Dict[typing.Tuple, float] = {}
+        self._oil_injected_cache: typing.Dict[typing.Tuple, float] = {}
+        self._gas_injected_cache: typing.Dict[typing.Tuple, float] = {}
+        self._water_injected_cache: typing.Dict[typing.Tuple, float] = {}
+        self._instantaneous_production_rates_cache: typing.Dict[
+            typing.Tuple, InstantaneousRates
+        ] = {}
+        self._instantaneous_injection_rates_cache: typing.Dict[
+            typing.Tuple, InstantaneousRates
+        ] = {}
+        self._productivity_analysis_cache: typing.Dict[
+            typing.Tuple, ProductivityAnalysis
+        ] = {}
 
     @property
     def min_step(self) -> int:
@@ -527,9 +549,23 @@ class ModelAnalyst(typing.Generic[NDimension]):
         # Get cumulative free gas produced
         cumulative_free_gas = self.cumulative_free_gas_produced  # scf (free gas only)
 
-        # Get cumulative solution gas produced
-        cumulative_oil = self.cumulative_oil_produced  # STB
-        cumulative_solution_gas = cumulative_oil * avg_initial_gor  # scf
+        # Track per-step Rs weighted by oil production rather than applying avg_initial_gor
+        # uniformly. Solution gas released at each step depends on Rs at that step's pressure.
+        cumulative_solution_gas = 0.0
+        for s in self._sorted_steps:
+            st = self._states[s]
+            rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            oil_production = st.production.oil
+            if oil_production is None:
+                continue
+            step_in_days = st.step_size * c.DAYS_PER_SECOND
+            oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
+            oil_production_stb_day = (
+                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
+            cumulative_solution_gas += float(
+                np.nansum(rs_grid * oil_production_stb_day) * step_in_days
+            )
 
         # Total gas produced
         total_gas_produced = cumulative_free_gas + cumulative_solution_gas
@@ -548,7 +584,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         return self.free_gas_recovery_factor
 
-    @functools.cache
     def _get_cell_area_in_acres(self, x_dim: float, y_dim: float) -> float:
         """
         Computes the area of a grid cell in acres.
@@ -557,10 +592,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param y_dim: The dimension of the cell in the y-direction (ft).
         :return: The area of the cell in acres.
         """
-        cell_area_in_ft2 = x_dim * y_dim
-        return cell_area_in_ft2 * c.FT2_TO_ACRES
+        # Per-instance dict cache instead of @functools.cache
+        key = (x_dim, y_dim)
+        if key not in self._cell_area_cache:
+            cell_area_in_ft2 = x_dim * y_dim
+            self._cell_area_cache[key] = cell_area_in_ft2 * c.SQUARE_FEET_TO_ACRES
+        return self._cell_area_cache[key]
 
-    @functools.cache
     def oil_in_place(self, step: int = -1) -> float:
         """
         Computes the total oil in place at a specific time step.
@@ -568,6 +606,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param step: The time step index to compute oil in place for.
         :return: The total oil in place in STB
         """
+        # Per-instance dict cache prevents memory leaks; resolve step first so cache key is canonical
+        step = self._resolve_step(step)
+        if step in self._oil_in_place_cache:
+            return self._oil_in_place_cache[step]
+
         state = self.get_state(step)
         if state is None:
             logger.debug(
@@ -592,12 +635,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.oil_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="oil",
-            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
         )
-        return np.nansum(stoiip_grid)  # type: ignore[return-value]
+        result = np.nansum(stoiip_grid)  # type: ignore[return-value]
+        self._oil_in_place_cache[step] = float(result)
+        return self._oil_in_place_cache[step]
 
-    @functools.cache
     def gas_in_place(self, step: int = -1) -> float:
         """
         Computes the total free gas in place at a specific time step.
@@ -605,6 +649,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param step: The time step index to compute gas in place for.
         :return: The total free gas in place in SCF
         """
+        # Per-instance dict cache prevents memory leaks
+        step = self._resolve_step(step)
+        if step in self._gas_in_place_cache:
+            return self._gas_in_place_cache[step]
+
         state = self.get_state(step)
         if state is None:
             logger.debug(
@@ -629,12 +678,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="gas",
-            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
         )
-        return np.nansum(stgiip_grid)  # type: ignore[return-value]
+        result = np.nansum(stgiip_grid)  # type: ignore[return-value]
+        self._gas_in_place_cache[step] = float(result)
+        return self._gas_in_place_cache[step]
 
-    @functools.cache
     def water_in_place(self, step: int = -1) -> float:
         """
         Computes the total water in place at a specific time step.
@@ -642,6 +692,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param step: The time step index to compute water in place for.
         :return: The total water in place in STB
         """
+        # Per-instance dict cache prevents memory leaks
+        step = self._resolve_step(step)
+        if step in self._water_in_place_cache:
+            return self._water_in_place_cache[step]
+
         state = self.get_state(step)
         if state is None:
             logger.debug(
@@ -664,10 +719,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             formation_volume_factor=model.fluid_properties.water_formation_volume_factor_grid,
             net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
             hydrocarbon_type="oil",  # Use "oil" since there's no "water" hydrocarbon_type and they use equivalent calculation
-            acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-            acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
         )
-        return np.nansum(water_in_place_grid)  # type: ignore[return-value]
+        result = np.nansum(water_in_place_grid)  # type: ignore[return-value]
+        self._water_in_place_cache[step] = float(result)
+        return self._water_in_place_cache[step]
 
     def oil_in_place_history(
         self, from_step: int = 0, to_step: int = -1, interval: int = 1
@@ -742,11 +799,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - Cells object: Pre-constructed Cells instance
         :return: The cumulative oil produced in STB
         """
-        # Convert to Cells first (hashable) before calling cached implementation
+        # Resolve step in the public method so cache key is canonical
+        # (oil_produced(0, -1) and oil_produced(0, 9) won't be cached separately when 9 is last)
+        to_step = self._resolve_step(to_step)
+        # Convert cells to Cells (hashable) before delegating to cached implementation
         cells_obj = _ensure_cells(cells)
         return self._oil_produced(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _oil_produced(
         self,
         from_step: int,
@@ -754,24 +813,35 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `oil_produced`."""
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._oil_produced_cache:
+            return self._oil_produced_cache[key]
+
         logger.debug(
             f"Computing oil produced from time step {from_step} to {to_step}, cells filter: {cells_obj}"
         )
-        to_step = self._resolve_step(to_step)
-
         total_production = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop; `grid_shape` is constant across steps
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Production is in ft³/day, convert to STB using FVF
             oil_production = state.production.oil
@@ -781,7 +851,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
             # Compute production in STB
-            oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
+            oil_production_stb_day = (
+                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
 
             # Apply mask if filtering
             if mask is not None:
@@ -789,7 +861,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_production += np.nansum(oil_production_stb_day * step_in_days)
 
-        return float(total_production)
+        result = float(total_production)
+        self._oil_produced_cache[key] = result
+        return result
 
     def free_gas_produced(
         self,
@@ -815,10 +889,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: The cumulative gas produced in SCF
         """
+        # Resolve step before building cache key
+        to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
         return self._free_gas_produced(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _free_gas_produced(
         self,
         from_step: int,
@@ -826,21 +901,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `free_gas_produced`."""
-        to_step = self._resolve_step(to_step)
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._free_gas_produced_cache:
+            return self._free_gas_produced_cache[key]
 
         total_production = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Production is in ft³/day, convert to SCF using FVF
             gas_production = state.production.gas
@@ -857,7 +943,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_production += np.nansum(gas_production_SCF_day * step_in_days)
 
-        return float(total_production)
+        result = float(total_production)
+        self._free_gas_produced_cache[key] = result
+        return result
 
     def water_produced(
         self,
@@ -883,10 +971,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: The cumulative water produced in STB
         """
+        # Resolve step before building cache key
+        to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
         return self._water_produced(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _water_produced(
         self,
         from_step: int,
@@ -894,21 +983,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `water_produced`."""
-        to_step = self._resolve_step(to_step)
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._water_produced_cache:
+            return self._water_produced_cache[key]
 
         total_production = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Production is in ft³/day, convert to STB using FVF
             water_production = state.production.water
@@ -919,7 +1019,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_production_stb_day = water_production * c.FT3_TO_BBL / water_fvf_grid
+            water_production_stb_day = (
+                water_production * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+            )
 
             # Apply mask if filtering
             if mask is not None:
@@ -927,9 +1029,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_production += np.nansum(water_production_stb_day * step_in_days)
 
-        return float(total_production)
+        result = float(total_production)
+        self._water_produced_cache[key] = result
+        return result
 
-    @functools.cache
     def oil_injected(
         self,
         from_step: int,
@@ -954,10 +1057,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: The cumulative oil injected in STB
         """
+        # Resolve step and ensure cells in public method before caching
+        to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
         return self._oil_injected(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _oil_injected(
         self,
         from_step: int,
@@ -965,21 +1069,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `oil_injected`."""
-        to_step = self._resolve_step(to_step)
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._oil_injected_cache:
+            return self._oil_injected_cache[key]
 
         total_injection = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Injection is in ft³/day, convert to STB using FVF
             oil_injection = state.injection.oil
@@ -988,7 +1103,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             step_in_days = state.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
+            oil_injection_stb_day = (
+                oil_injection * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
 
             # Apply mask if filtering
             if mask is not None:
@@ -996,7 +1113,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_injection += np.nansum(oil_injection_stb_day * step_in_days)
 
-        return float(total_injection)
+        result = float(total_injection)
+        self._oil_injected_cache[key] = result
+        return result
 
     def gas_injected(
         self,
@@ -1022,10 +1141,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: The cumulative gas injected in SCF
         """
+        # Resolve step before building cache key
+        to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
         return self._gas_injected(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _gas_injected(
         self,
         from_step: int,
@@ -1033,21 +1153,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `gas_injected`."""
-        to_step = self._resolve_step(to_step)
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._gas_injected_cache:
+            return self._gas_injected_cache[key]
 
         total_injection = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Injection is in ft³/day, convert to SCF using FVF
             gas_injection = state.injection.gas
@@ -1065,7 +1196,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_injection += np.nansum(gas_injection_SCF_day * step_in_days)
 
-        return float(total_injection)
+        result = float(total_injection)
+        self._gas_injected_cache[key] = result
+        return result
 
     def water_injected(
         self,
@@ -1091,10 +1224,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: The cumulative water injected in STB
         """
+        # Resolve step before building cache key
+        to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
         return self._water_injected(from_step, to_step, cells_obj)
 
-    @functools.cache
     def _water_injected(
         self,
         from_step: int,
@@ -1102,21 +1236,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         cells_obj: typing.Optional[Cells],
     ) -> float:
         """Internal cached implementation of `water_injected`."""
-        to_step = self._resolve_step(to_step)
+        # Per-instance dict cache prevents memory leaks
+        key = (from_step, to_step, cells_obj)
+        if key in self._water_injected_cache:
+            return self._water_injected_cache[key]
 
         total_injection = 0.0
-        mask = None  # Cache mask across iterations
-        mask_computed = False
+        # Compute mask once before the loop
+        mask = None
+        if cells_obj is not None:
+            first_state = next(
+                (
+                    self._states[t]
+                    for t in range(from_step, to_step + 1)
+                    if t in self._states
+                ),
+                None,
+            )
+            if first_state is not None:
+                mask = cells_obj.get_mask(
+                    first_state.model.grid_shape, first_state.wells
+                )
 
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
             state = self._states[t]
-
-            # Compute mask once using first available state (grid_shape is constant)
-            if cells_obj is not None and not mask_computed:
-                mask = cells_obj.get_mask(state.model.grid_shape, state.wells)
-                mask_computed = True
 
             # Injection is in ft³/day, convert to STB using FVF
             water_injection = state.injection.water
@@ -1128,7 +1273,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
 
-            water_injection_stb_day = water_injection * c.FT3_TO_BBL / water_fvf_grid
+            water_injection_stb_day = (
+                water_injection * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+            )
 
             # Apply mask if filtering
             if mask is not None:
@@ -1136,7 +1283,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
             total_injection += np.nansum(water_injection_stb_day * step_in_days)
 
-        return float(total_injection)
+        result = float(total_injection)
+        self._water_injected_cache[key] = result
+        return result
 
     def oil_production_history(
         self,
@@ -1551,8 +1700,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=oil_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="oil",
-                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+                acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
             )
             if mask is not None:
                 stoiip_grid = np.where(mask, stoiip_grid, 0.0)
@@ -1644,8 +1793,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=gas_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="gas",
-                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+                acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
             )
             if mask is not None:
                 giip_grid = np.where(mask, giip_grid, 0.0)
@@ -1736,8 +1885,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=gas_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="gas",
-                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+                acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
             )
             if mask is not None:
                 giip_grid = np.where(mask, giip_grid, 0.0)
@@ -1754,8 +1903,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 formation_volume_factor=oil_fvf,
                 net_to_gross_ratio=ntg,
                 hydrocarbon_type="oil",
-                acre_ft_to_bbl=c.ACRE_FT_TO_BBL,
-                acre_ft_to_ft3=c.ACRE_FT_TO_FT3,
+                acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
             )
             if mask is not None:
                 stoiip_grid = np.where(mask, stoiip_grid, 0.0)
@@ -1775,8 +1924,37 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 cumulative_free_gas = self.free_gas_produced(
                     self._min_step, t, cells=cells_obj
                 )
-                cumulative_oil = self.oil_produced(self._min_step, t, cells=cells_obj)
-                cumulative_solution_gas = cumulative_oil * avg_initial_gor
+                # Calculate solution gas step-by-step to account for pressure-dependent Rs
+                cumulative_solution_gas = 0.0
+                for s in self._sorted_steps:
+                    if s > t:
+                        break
+                    st = self._states[s]
+                    rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+                    oil_production = st.production.oil
+                    if oil_production is None:
+                        continue
+
+                    step_in_days = st.step_size * c.DAYS_PER_SECOND
+                    oil_fvf_grid = (
+                        st.model.fluid_properties.oil_formation_volume_factor_grid
+                    )
+                    oil_production_stb_day = (
+                        oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+                    )
+                    if cells_obj is not None:
+                        mask = cells_obj.get_mask(st.model.grid_shape, st.wells)
+                        oil_production_stb_day = np.where(
+                            mask,  # type: ignore[arg-type]
+                            oil_production_stb_day,
+                            0.0,
+                        )
+                        rs_grid = np.where(mask, rs_grid, 0.0)  # type: ignore[arg-type]
+
+                    cumulative_solution_gas += float(
+                        np.nansum(rs_grid * oil_production_stb_day) * step_in_days
+                    )
+
                 total_gas_produced = cumulative_free_gas + cumulative_solution_gas
                 rf = float(total_gas_produced / total_initial_gas)
                 yield (t, rf)
@@ -1846,7 +2024,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             * model.thickness_grid
             * model.rock_properties.porosity_grid
             * model.rock_properties.net_to_gross_ratio_grid
-            * c.ACRE_FT_TO_FT3  # Convert acre-ft to ft³
+            * c.ACRE_FOOT_TO_CUBIC_FEET  # Convert acre-ft to ft³
         )
         total_pore_volume = np.nansum(pore_volume_grid)
 
@@ -1865,7 +2043,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             hydrocarbon_pore_volume=hydrocarbon_pore_volume,
         )
 
-    @functools.cache
     def instantaneous_production_rates(
         self, step: int = -1, cells: typing.Union[Cells, CellFilter] = None
     ) -> InstantaneousRates:
@@ -1881,7 +2058,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: `InstantaneousRates` containing detailed rate analysis.
         """
+        # Bug 1 & 13: resolve step and convert cells before building cache key
+        step = self._resolve_step(step)
         cells_obj = _ensure_cells(cells)
+        cache_key = (step, cells_obj)
+        if cache_key in self._instantaneous_production_rates_cache:
+            return self._instantaneous_production_rates_cache[cache_key]
 
         state = self.get_state(step)
         if state is None:
@@ -1912,7 +2094,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if (oil_production := state.production.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_production_stb_day = oil_production * c.FT3_TO_BBL / oil_fvf_grid
+            oil_production_stb_day = (
+                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
             if mask is not None:
                 oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
             oil_rate = np.nansum(oil_production_stb_day)
@@ -1930,7 +2114,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_production_stb_day = water_production * c.FT3_TO_BBL / water_fvf_grid
+            water_production_stb_day = (
+                water_production * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+            )
             if mask is not None:
                 water_production_stb_day = np.where(mask, water_production_stb_day, 0.0)
             water_rate = np.nansum(water_production_stb_day)
@@ -1944,7 +2130,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             f"oil={oil_rate:.2f} STB/day, gas={gas_rate:.2f} SCF/day, water={water_rate:.2f} STB/day, "
             f"GOR={gas_oil_ratio:.2f}, WaterCut={water_cut:.4f}"
         )
-        return InstantaneousRates(
+        result = InstantaneousRates(
             oil_rate=oil_rate,
             gas_rate=gas_rate,
             water_rate=water_rate,
@@ -1952,8 +2138,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_oil_ratio=gas_oil_ratio,
             water_cut=water_cut,
         )
+        self._instantaneous_production_rates_cache[cache_key] = result
+        return result
 
-    @functools.cache
     def instantaneous_injection_rates(
         self, step: int = -1, cells: typing.Union[Cells, CellFilter] = None
     ) -> InstantaneousRates:
@@ -1969,7 +2156,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: `InstantaneousRates` containing detailed injection rate analysis.
         """
+        # Bug 1 & 13: resolve step and convert cells before building cache key
+        step = self._resolve_step(step)
         cells_obj = _ensure_cells(cells)
+        cache_key = (step, cells_obj)
+        if cache_key in self._instantaneous_injection_rates_cache:
+            return self._instantaneous_injection_rates_cache[cache_key]
 
         state = self.get_state(step)
         if state is None:
@@ -2000,7 +2192,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if (oil_injection := state.injection.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_injection_stb_day = oil_injection * c.FT3_TO_BBL / oil_fvf_grid
+            oil_injection_stb_day = (
+                oil_injection * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
             if mask is not None:
                 oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
             oil_rate = np.nansum(oil_injection_stb_day)
@@ -2018,7 +2212,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_injection_stb_day = water_injection * c.FT3_TO_BBL / water_fvf_grid
+            water_injection_stb_day = (
+                water_injection * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+            )
             if mask is not None:
                 water_injection_stb_day = np.where(mask, water_injection_stb_day, 0.0)
             water_rate = np.nansum(water_injection_stb_day)
@@ -2026,7 +2222,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
         water_cut = water_rate / total_liquid_rate if total_liquid_rate > 0 else 0.0
-        return InstantaneousRates(
+        result = InstantaneousRates(
             oil_rate=oil_rate,
             gas_rate=gas_rate,
             water_rate=water_rate,
@@ -2034,6 +2230,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_oil_ratio=gas_oil_ratio,
             water_cut=water_cut,
         )
+        self._instantaneous_injection_rates_cache[cache_key] = result
+        return result
 
     def cumulative_production_analysis(self, step: int = -1) -> CumulativeProduction:
         """
@@ -2171,16 +2369,18 @@ class ModelAnalyst(typing.Generic[NDimension]):
         # Solution Gas Drive (oil expansion + liberated gas)
         # ΔVo = N * (Bo - Boi) + N * (Rsi - Rs) * Bg
         oil_expansion_factor = current_oil_fvf / initial_oil_fvf
+        # Oil expansion contribution (dimensionally consistent: fraction × volume factor)
         oil_expansion_drive = (
-            cumulative_oil * (current_oil_fvf - initial_oil_fvf) / initial_oil
+            (cumulative_oil / initial_oil) * (current_oil_fvf - initial_oil_fvf)
             if initial_oil > 0
             else 0.0
         )
 
-        # Gas liberation from oil
-        gas_liberation_factor = (initial_gor - current_gor) * current_gas_fvf
+        # Gas liberation from oil (solution gas released as pressure drops)
         gas_liberation_drive = (
-            cumulative_oil * gas_liberation_factor / initial_oil
+            (cumulative_oil / initial_oil)
+            * (initial_gor - current_gor)
+            * current_gas_fvf
             if initial_oil > 0
             else 0.0
         )
@@ -2199,8 +2399,16 @@ class ModelAnalyst(typing.Generic[NDimension]):
         water_saturation_change = current_water_sat - initial_water_sat
         water_influx_from_saturation = water_saturation_change * current_water_fvf
         # Natural aquifer influx estimation
+        # Aquifer influx = (Current water - Initial water) + Water produced - Water injected
         current_water = self.water_in_place(step)
-        aquifer_influx = max(0.0, current_water - initial_water + cumulative_water)
+        cumulative_water_injected = self.water_injected(self._min_step, step)
+        aquifer_influx = max(
+            0.0,
+            current_water
+            - initial_water
+            + cumulative_water
+            - cumulative_water_injected,
+        )
         water_drive = (
             (aquifer_influx + water_influx_from_saturation) / initial_oil
             if initial_oil > 0
@@ -2209,23 +2417,30 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # Rock and Fluid Compressibility Drive
         # ΔVc = V * ct * ΔP
+        # Use initial_model pore volume for compaction drive (current state pressure
+        # decline is referenced against initial conditions; using the current state's geometry
+        # double-counts compression effects)
         pore_volume = (
             np.nansum(
-                state.model.thickness_grid
-                * state.model.rock_properties.porosity_grid
-                * state.model.rock_properties.net_to_gross_ratio_grid
+                initial_state.model.thickness_grid
+                * initial_state.model.rock_properties.porosity_grid
+                * initial_state.model.rock_properties.net_to_gross_ratio_grid
             )
-            * self._get_cell_area_in_acres(*state.model.cell_dimension[:2])
-            * c.ACRE_FT_TO_FT3
+            * self._get_cell_area_in_acres(*initial_state.model.cell_dimension[:2])
+            * c.ACRE_FOOT_TO_CUBIC_FEET
         )
         compressibility_expansion = (
-            pore_volume * total_compressibility * pressure_decline * c.FT3_TO_BBL
+            pore_volume
+            * total_compressibility
+            * pressure_decline
+            * c.CUBIC_FEET_TO_BARRELS
         )
         compaction_drive = (
             compressibility_expansion / initial_oil if initial_oil > 0 else 0.0
         )
 
         # Normalize drive contributions to get drive indices
+        # Single normalization pass – dividing by `total_drive` already ensures they sum to 1
         total_drive = (
             solution_gas_drive + gas_cap_drive + water_drive + compaction_drive
         )
@@ -2239,19 +2454,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_cap_drive_index = 0.0
             water_drive_index = 0.0
             compaction_drive_index = 0.0
-
-        # Ensure drive indices sum to 1.0
-        total_indices = (
-            solution_gas_drive_index
-            + gas_cap_drive_index
-            + water_drive_index
-            + compaction_drive_index
-        )
-        if total_indices > 0:
-            solution_gas_drive_index /= total_indices
-            gas_cap_drive_index /= total_indices
-            water_drive_index /= total_indices
-            compaction_drive_index /= total_indices
 
         logger.debug(
             f"Material balance analysis at time step {step}: "
@@ -2319,17 +2521,22 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 vertical_sweep_efficiency=0.0,
             )
 
-        model = initial_state.model
-        state = state.model
-        grid_shape = state.grid_shape
+        # Rename to avoid shadowing – `state` (the ModelState) and `current_model`
+        # (the inner Model) are now distinct names, preventing the original variable from being
+        # overwritten and making debugging far easier.
+        initial_model = initial_state.model
+        current_model = state.model
+        grid_shape = current_model.grid_shape
 
-        initial_oil_saturation = model.fluid_properties.oil_saturation_grid
-        current_oil_saturation = state.fluid_properties.oil_saturation_grid
-        initial_water_saturation = model.fluid_properties.water_saturation_grid
-        current_water_saturation = state.fluid_properties.water_saturation_grid
-        initial_gas_saturation = model.fluid_properties.gas_saturation_grid
-        current_gas_saturation = state.fluid_properties.gas_saturation_grid
-        solvent_concentration_grid = state.fluid_properties.solvent_concentration_grid
+        initial_oil_saturation = initial_model.fluid_properties.oil_saturation_grid
+        current_oil_saturation = current_model.fluid_properties.oil_saturation_grid
+        initial_water_saturation = initial_model.fluid_properties.water_saturation_grid
+        current_water_saturation = current_model.fluid_properties.water_saturation_grid
+        initial_gas_saturation = initial_model.fluid_properties.gas_saturation_grid
+        current_gas_saturation = current_model.fluid_properties.gas_saturation_grid
+        solvent_concentration_grid = (
+            current_model.fluid_properties.solvent_concentration_grid
+        )
 
         # Determine contacted mask based on displacing phase and thresholds
         if displacing_phase == "water":
@@ -2348,26 +2555,26 @@ class ModelAnalyst(typing.Generic[NDimension]):
             contacted_mask = saturation_delta > 0.0
 
         cell_dimension_x, cell_dimension_y = (
-            state.cell_dimension[0],
-            state.cell_dimension[1],
+            current_model.cell_dimension[0],
+            current_model.cell_dimension[1],
         )
         cell_area_ft2 = cell_dimension_x * cell_dimension_y  # ft^2
 
         # thickness grid (ft)
-        thickness_grid = state.thickness_grid
+        thickness_grid = current_model.thickness_grid
 
         # porosity and net-to-gross
-        porosity_grid = state.rock_properties.porosity_grid
-        net_to_gross_grid = state.rock_properties.net_to_gross_ratio_grid
+        porosity_grid = current_model.rock_properties.porosity_grid
+        net_to_gross_grid = current_model.rock_properties.net_to_gross_ratio_grid
 
         # initial Bo (bbl/STB) -> convert to ft^3/STB for volume calculations
         oil_formation_volume_factor_initial_grid = (
-            initial_state.model.fluid_properties.oil_formation_volume_factor_grid
+            initial_model.fluid_properties.oil_formation_volume_factor_grid
         )
 
         # Convert Bo from bbl/STB to ft^3/STB
         initial_oil_formation_volume_factor_grid_ft3_per_stb = (
-            oil_formation_volume_factor_initial_grid * c.BBL_TO_FT3
+            oil_formation_volume_factor_initial_grid * c.BARRELS_TO_CUBIC_FEET
         )
         initial_oil_formation_volume_factor_grid_ft3_per_stb = np.where(
             initial_oil_formation_volume_factor_grid_ft3_per_stb <= 0.0,
@@ -2438,10 +2645,16 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # AREAL SWEEP EFFICIENCY: contacted planform area / total planform area
         # A column is contacted if any cell in that (i,j) column is contacted
-        mask_reshaped = contacted_mask.reshape(grid_shape)
-        column_contacted = np.any(mask_reshaped, axis=2)
-        contacted_planform_cells = int(np.count_nonzero(column_contacted))
-        total_planform_cells = grid_shape[0] * grid_shape[1]
+        # Guard axis=2 operations for 2D grids (where len(grid_shape) < 3)
+        if len(grid_shape) >= 3:
+            mask_reshaped = contacted_mask.reshape(grid_shape)
+            column_contacted = np.any(mask_reshaped, axis=2)
+            contacted_planform_cells = int(np.count_nonzero(column_contacted))
+            total_planform_cells = grid_shape[0] * grid_shape[1]
+        else:
+            # 2D grid: every cell is its own planform column
+            contacted_planform_cells = int(np.count_nonzero(contacted_mask))
+            total_planform_cells = int(np.prod(grid_shape))
         areal_sweep_efficiency = (
             (contacted_planform_cells * cell_area_ft2)
             / (total_planform_cells * cell_area_ft2)
@@ -2464,14 +2677,23 @@ class ModelAnalyst(typing.Generic[NDimension]):
             * np.maximum(initial_oil_saturation - current_oil_saturation, 0.0)
         )
 
-        denominator_per_column = np.sum(
-            porosity_thickness_initial_oil_saturation.reshape(grid_shape),
-            axis=2,
-        )
-        numerator_per_column = np.sum(
-            porosity_thickness_oil_saturation_delta.reshape(grid_shape),
-            axis=2,
-        )
+        # Guard axis=2 for 2D grids
+        if len(grid_shape) >= 3:
+            denominator_per_column = np.sum(
+                porosity_thickness_initial_oil_saturation.reshape(grid_shape),
+                axis=2,
+            )
+            numerator_per_column = np.sum(
+                porosity_thickness_oil_saturation_delta.reshape(grid_shape),
+                axis=2,
+            )
+            oil_initial_stb_per_column = np.nansum(
+                oil_initial_stb.reshape(grid_shape), axis=2
+            )
+        else:
+            denominator_per_column = porosity_thickness_initial_oil_saturation
+            numerator_per_column = porosity_thickness_oil_saturation_delta
+            oil_initial_stb_per_column = oil_initial_stb
 
         # Avoid division by zero
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -2482,8 +2704,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             )
 
         # Weight by initial oil (denominator_per_column * cell_area_ft2 / Bo)
-        # compute initial oil STB per column (sum of oil_initial_stb over z)
-        oil_initial_stb_per_column = np.nansum(oil_initial_stb, axis=2)
+        # oil_initial_stb_per_column already computed above with 2D guard
         total_initial_oil_stb_columns = np.nansum(oil_initial_stb_per_column)
         if total_initial_oil_stb_columns > 0.0:
             vertical_sweep_efficiency = (
@@ -2524,7 +2745,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
         oil_saturation = np.nanmean(state.model.fluid_properties.oil_saturation_grid)
         gas_saturation = np.nanmean(state.model.fluid_properties.gas_saturation_grid)
         reservoir_pressure = np.nanmean(state.model.fluid_properties.pressure_grid)
-
         estimated_bubble_point = np.nanmean(
             state.model.fluid_properties.oil_bubble_point_pressure_grid
         )
@@ -2544,7 +2764,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
         # Default to Vogel for solution gas drive reservoirs
         return "vogel"  # Best for two-phase oil/gas systems
 
-    @functools.cache
     def productivity_analysis(
         self,
         step: int = -1,
@@ -2568,7 +2787,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - (slice, slice, slice): Region
         :return: `ProductivityAnalysis` containing productivity metrics based on actual production data.
         """
+        # Bug 1 & 13: resolve step and ensure cells before building cache key
+        step = self._resolve_step(step)
         cells_obj = _ensure_cells(cells)
+        cache_key = (step, phase, cells_obj)
+        if cache_key in self._productivity_analysis_cache:
+            return self._productivity_analysis_cache[cache_key]
 
         state = self.get_state(step)
         if state is None:
@@ -2638,7 +2862,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             cell_locations = _expand_intervals(
                 well.perforating_intervals, orientation=well.orientation
             )
-
             for cell_location in cell_locations:
                 i, j, k = cell_location
 
@@ -2663,7 +2886,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                         i, j, k
                     ]  # ft³/day (reservoir bbl)
                     cell_flow_rate_stb = (
-                        cell_flow_rate_rb * c.FT3_TO_BBL / oil_fvf
+                        cell_flow_rate_rb * c.CUBIC_FEET_TO_BARRELS / oil_fvf
                     )  # STB/day
 
                 elif phase == "water":
@@ -2676,7 +2899,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     )
                     cell_flow_rate_rb = state.production.water[i, j, k]  # ft³/day
                     cell_flow_rate_stb = (
-                        cell_flow_rate_rb * c.FT3_TO_BBL / water_fvf
+                        cell_flow_rate_rb * c.CUBIC_FEET_TO_BARRELS / water_fvf
                     )  # STB/day
 
                 else:  # gas
@@ -2768,7 +2991,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 "No active production wells or cells found for productivity analysis"
             )
 
-        return ProductivityAnalysis(
+        result = ProductivityAnalysis(
             total_flow_rate=float(avg_flow_rate),
             average_reservoir_pressure=float(avg_reservoir_pressure),
             skin_factor=avg_skin_factor,
@@ -2776,6 +2999,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             well_index=float(avg_well_index),
             average_mobility=float(avg_mobility),
         )
+        self._productivity_analysis_cache[cache_key] = result
+        return result
 
     def voidage_replacement_ratio(
         self, step: int = -1, cells: typing.Union[Cells, CellFilter] = None
@@ -2857,11 +3082,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
         # Get gas formation volume factor for injected gas at reservoir pressure
         avg_gas_fvf_injected = avg_gas_fvf  # Injected gas FVF at reservoir conditions
 
-        # Get average solution GOR (Rs)
-        avg_solution_gor = np.nanmean(
-            state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-        )  # SCF/STB (solution GOR)
-
         # Calculate injected reservoir volumes (numerator)
         injected_water_reservoir_volume = (
             cumulative_water_injected * avg_water_fvf_injected
@@ -2881,24 +3101,33 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # Free gas produced (already free gas only from free_gas_produced)
         # Plus solution gas that came out of the oil
-        solution_free_gas_produced = cumulative_oil_produced * avg_solution_gor  # SCF
+        # Calculate solution gas step-by-step to account for pressure-dependent Rs
+        solution_free_gas_produced = 0.0
+        for s in self._sorted_steps:
+            if s > step:
+                break
+            st = self._states[s]
+            rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            oil_production = st.production.oil
+            if oil_production is None:
+                continue
+            step_in_days = st.step_size * c.DAYS_PER_SECOND
+            oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
+            oil_production_stb_day = (
+                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            )
+            solution_free_gas_produced += float(
+                np.nansum(rs_grid * oil_production_stb_day) * step_in_days
+            )
+
         total_free_gas_produced = (
             cumulative_free_gas_produced + solution_free_gas_produced
         )  # SCF
 
-        # Calculate produced GOR for the equation
-        produced_gor = (
-            total_free_gas_produced / cumulative_oil_produced
-            if cumulative_oil_produced > 0
-            else 0.0
-        )  # SCF/STB
-
-        # Free gas component in produced volumes: Bg * (GOR - Rs) * Np
-        free_gas_component = (
-            produced_gor - avg_solution_gor
-        ) * cumulative_oil_produced  # SCF
-        produced_gas_reservoir_volume = free_gas_component * avg_gas_fvf  # bbl
-
+        # Produced reservoir free gas = cumulative_free_gas_produced * avg_gas_fvf
+        # Directly use the already-computed total_free_gas_produced value rather than
+        # re-deriving from produced GOR, which would introduce floating-point drift.
+        produced_gas_reservoir_volume = total_free_gas_produced * avg_gas_fvf  # bbl
         total_produced_volume = (
             produced_oil_reservoir_volume
             + produced_water_reservoir_volume
@@ -3240,11 +3469,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 else 0.0
             )
 
-            # Use last actual rate for forecasting instead of fitted initial rate
-            last_actual_rate = positive_production_rates[-1]
+            #  return fitted qi as initial_rate (last_actual_rate leads to forecast
+            # discontinuities and doesn't reflect the regression result)
             return DeclineCurveResult(
                 decline_type="exponential",
-                initial_rate=float(last_actual_rate),
+                initial_rate=float(exponential_initial_production_rate),
                 decline_rate_per_timestep=exponential_decline_rate_per_timestep,  # Now per timestep
                 b_factor=0.0,
                 r_squared=exponential_r_squared,
@@ -3283,12 +3512,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 else 0.0
             )
 
-            # Use last actual rate for forecasting instead of fitted initial rate
-            last_actual_rate = positive_production_rates[-1]
-
+            #  return fitted qi as initial_rate
             return DeclineCurveResult(
                 decline_type="harmonic",
-                initial_rate=float(last_actual_rate),
+                initial_rate=float(harmonic_initial_production_rate),
                 decline_rate_per_timestep=harmonic_decline_rate_per_timestep,  # Now per timestep
                 b_factor=1.0,  # Harmonic decline has b=1
                 r_squared=harmonic_r_squared,
@@ -3370,9 +3597,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             else 0.0
         )
 
-        # Use last actual rate for forecasting instead of fitted initial rate
-        last_actual_rate = positive_production_rates[-1]
-
         logger.info(
             f"Decline curve analysis complete: type=hyperbolic, phase={phase}, "
             f"qi={hyperbolic_initial_rate:.2f}, Di={hyperbolic_decline_rate_per_timestep:.6f}/timestep, "
@@ -3380,9 +3604,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
         return DeclineCurveResult(
             decline_type="hyperbolic",
-            initial_rate=float(last_actual_rate),
-            decline_rate_per_timestep=hyperbolic_decline_rate_per_timestep,  # Now per timestep
-            b_factor=hyperbolic_b_factor,
+            initial_rate=float(hyperbolic_initial_rate),  #  use fitted qi
+            decline_rate_per_timestep=float(
+                hyperbolic_decline_rate_per_timestep
+            ),  # Now per timestep
+            b_factor=float(hyperbolic_b_factor),
             r_squared=hyperbolic_r_squared,
             phase=phase,
             error=None,
@@ -3568,8 +3794,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
             else:
                 time_to_limit = 0
 
-            # Use shorter of forecast_steps or time_to_limit
-            effective_steps = min(forecast_steps, int(time_to_limit))
+            # Preserve fractional steps; truncating to int before min() discards
+            # the fractional portion and can undercount EUR by up to one step's production
+            effective_steps = min(float(forecast_steps), time_to_limit)
 
             # Recalculate q_final at effective time
             if decline_result.decline_type == "exponential":

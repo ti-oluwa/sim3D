@@ -32,7 +32,7 @@ class StreamProgress(typing.TypedDict):
     memory_usage: float
 
 
-_stop_io = object()  # Sentinel for stopping I/O thread
+_stop_io = 0  # Signal for stopping I/O thread
 
 
 class StateStream(typing.Generic[NDimension]):

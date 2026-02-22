@@ -227,11 +227,11 @@ def _build_pseudo_pressure_table_vectorized(
 
     if ref_idx == 0:
         # Reference is at or below minimum, hence we integrate forward only
-        pseudo_pressures = cumulative_trapezoid(integrand_array, pressures, initial=0.0)
+        pseudo_pressures = cumulative_trapezoid(integrand_array, pressures, initial=0)
     elif ref_idx >= len(pressures):
         # Reference is at or above maximum, hence we integrate backward only
         pseudo_pressures = -cumulative_trapezoid(
-            integrand_array[::-1], pressures[::-1], initial=0.0
+            integrand_array[::-1], pressures[::-1], initial=0
         )[::-1]
     else:
         # Reference is in the middle so we integrate both directions
@@ -239,12 +239,12 @@ def _build_pseudo_pressure_table_vectorized(
         backward = -cumulative_trapezoid(
             integrand_array[: ref_idx + 1][::-1],
             pressures[: ref_idx + 1][::-1],
-            initial=0.0,
+            initial=0,
         )[::-1]
 
         # Forward from ref to end
         forward = cumulative_trapezoid(
-            integrand_array[ref_idx:], pressures[ref_idx:], initial=0.0
+            integrand_array[ref_idx:], pressures[ref_idx:], initial=0
         )
         # Then we combine
         pseudo_pressures = np.concatenate([backward[:-1], forward])
@@ -361,7 +361,7 @@ class GasPseudoPressureTable:
 
         :param z_factor_func: Z-factor correlation Z(P)
         :param viscosity_func: Gas viscosity correlation μ(P)
-        :param pressure_range: (P_min, P_max) for table. Defaults to the (c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE)
+        :param pressure_range: (P_min, P_max) for table. Defaults to the (c.MINIMUM_VALID_PRESSURE, c.MAXIMUM_VALID_PRESSURE)
             if not provided.
         :param points: Number of points in table. typically 500-2000 for good accuracy. The higher the number, the more accurate the interpolation.
             1000 points is a good balance between accuracy and memory usage.
@@ -370,15 +370,15 @@ class GasPseudoPressureTable:
         :param reference_pressure: Reference pressure (psi)
         """
         self.reference_pressure = typing.cast(
-            float, reference_pressure or c.MIN_VALID_PRESSURE
+            float, reference_pressure or c.MINIMUM_VALID_PRESSURE
         )
         self.z_factor_func = z_factor_func
         self.viscosity_func = viscosity_func
 
         # Create pressure grid (log-spaced for better resolution at low P)
         min_pressure, max_pressure = pressure_range or (
-            c.MIN_VALID_PRESSURE,
-            c.MAX_VALID_PRESSURE,
+            c.MINIMUM_VALID_PRESSURE,
+            c.MAXIMUM_VALID_PRESSURE,
         )
         points = typing.cast(int, points or c.GAS_PSEUDO_PRESSURE_POINTS)
         dtype = get_dtype()

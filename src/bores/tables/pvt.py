@@ -1716,6 +1716,7 @@ def build_pvt_table_data(
                 gas_formation_volume_factor_grid=gas_fvf_3d,
                 gas_solubility_in_water_grid=gas_solubility_in_water_table,  # type: ignore[arg-type]
                 gas_free_water_formation_volume_factor_grid=gas_free_water_fvf_temp,
+                salinity=salinity_grid_3d,
             )
 
         # Water density: ρw(P, T, S)
@@ -2000,7 +2001,7 @@ def build_pvt_table_data(
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
                 oil_specific_gravity_grid=oil_specific_gravity_table,
                 gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
-                solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,
+                solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,  # type: ignore[arg-type]
                 oil_compressibility_grid=oil_compressibility_table,
             )
 

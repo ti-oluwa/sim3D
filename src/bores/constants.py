@@ -43,29 +43,31 @@ class Constant(Serializable):
             parts.append(f"description='{self.description}'")
         if self.unit:
             parts.append(f"unit='{self.unit}'")
-        return f"Constant({', '.join(parts)})"
+        return f"{self.__class__.__name__}({', '.join(parts)})"
 
 
 # Default constants dictionary
 DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     # Standard Conditions
     "STANDARD_PRESSURE": Constant(
-        value=101325, description="Standard atmospheric pressure", unit="Pa"
+        value=101325, description="Standard atmospheric pressure (SI units)", unit="Pa"
     ),
     "STANDARD_PRESSURE_IMPERIAL": Constant(
-        value=14.696, description="Standard atmospheric pressure", unit="psi"
+        value=14.696,
+        description="Standard atmospheric pressure (Imperial units)",
+        unit="psi",
     ),
     "STANDARD_TEMPERATURE": Constant(
-        value=288.7056, description="Standard temperature (15.6°C)", unit="K"
+        value=288.7056, description="Standard temperature (15.6°C) (SI units)", unit="K"
     ),
     "STANDARD_TEMPERATURE_IMPERIAL": Constant(
-        value=60.0, description="Standard temperature", unit="°F"
+        value=60.0, description="Standard temperature (Imperial units)", unit="°F"
     ),
     "STANDARD_TEMPERATURE_RANKINE": Constant(
-        value=518.67, description="Standard temperature (15.6°C)", unit="°R"
+        value=518.67, description="Standard temperature (15.6°C) in Rankine", unit="°R"
     ),
     "STANDARD_TEMPERATURE_CELSIUS": Constant(
-        value=15.6, description="Standard temperature", unit="°C"
+        value=15.6, description="Standard temperature in Celsius", unit="°C"
     ),
     # Thermal and Compressibility Properties
     "OIL_THERMAL_EXPANSION_COEFFICIENT": Constant(
@@ -76,34 +78,44 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     ),
     "WATER_ISOTHERMAL_COMPRESSIBILITY": Constant(
         value=4.6e-10,
-        description="Isothermal compressibility of water at 15.6°C",
+        description="Isothermal compressibility of water at 15.6°C (SI units)",
         unit="1/Pa",
     ),
     "OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
-        value=5.39e-4, description="Thermal expansion coefficient for oil", unit="1/°F"
+        value=5.39e-4,
+        description="Thermal expansion coefficient for oil (Imperial units)",
+        unit="1/°F",
     ),
     "WATER_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL": Constant(
         value=1.67e-4,
-        description="Thermal expansion coefficient for water",
+        description="Thermal expansion coefficient for water (Imperial units)",
         unit="1/°F",
     ),
     "WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL": Constant(
         value=3.17e-6,
-        description="Isothermal compressibility of water at 15.6°C",
+        description="Isothermal compressibility of water at 15.6°C (Imperial units)",
         unit="1/psi",
     ),
     # Standard Densities
     "STANDARD_WATER_DENSITY": Constant(
-        value=998.2, description="Standard water density at 15.6°C", unit="kg/m³"
+        value=998.2,
+        description="Standard water density at 15.6°C (SI units)",
+        unit="kg/m³",
     ),
     "STANDARD_WATER_DENSITY_IMPERIAL": Constant(
-        value=62.37, description="Standard water density at 15.6°C", unit="lb/ft³"
+        value=62.37,
+        description="Standard water density at 15.6°C (Imperial units)",
+        unit="lb/ft³",
     ),
     "STANDARD_AIR_DENSITY": Constant(
-        value=1.225, description="Standard air density at 15.6°C", unit="kg/m³"
+        value=1.225,
+        description="Standard air density at 15.6°C (SI units)",
+        unit="kg/m³",
     ),
     "STANDARD_AIR_DENSITY_IMPERIAL": Constant(
-        value=0.0765, description="Standard air density at 15.6°C", unit="lb/ft³"
+        value=0.0765,
+        description="Standard air density at 15.6°C (Imperial units)",
+        unit="lb/ft³",
     ),
     # Molecular Weights
     "MOLECULAR_WEIGHT_WATER": Constant(
@@ -139,12 +151,12 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         value=2.01588, description="Molecular weight of hydrogen", unit="g/mol"
     ),
     # Pressure Conversions
-    "PSI_TO_PA": Constant(
+    "PSI_TO_PASCAL": Constant(
         value=6894.757,
         description="Conversion factor from psi to Pascals",
         unit="Pa/psi",
     ),
-    "PA_TO_PSI": Constant(
+    "PASCAL_TO_PSI": Constant(
         value=1 / 6894.757,
         description="Conversion factor from Pascals to psi",
         unit="psi/Pa",
@@ -164,12 +176,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="R/K",
     ),
     # Viscosity Conversions
-    "CP_TO_PA_S": Constant(
-        value=0.001,
-        description="Conversion factor from centipoise to Pascal-seconds",
-        unit="Pa·s/cP",
-    ),
-    "CENTIPOISE_TO_PA_S": Constant(
+    "CENTIPOISE_TO_PASCAL_SECONDS": Constant(
         value=0.001,
         description="Conversion factor from centipoise to Pascal-seconds",
         unit="Pa·s/cP",
@@ -180,85 +187,85 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="cP/(Pa·s)",
     ),
     # Permeability Conversions
-    "MD_TO_M2": Constant(
+    "MILLIDARCY_TO_SQUARE_METER": Constant(
         value=9.869233e-16,
         description="Conversion factor from millidarcies to square meters",
         unit="m²/mD",
     ),
     # Gas-Oil Ratio Conversions
-    "SCF_PER_STB_TO_M3_PER_M3": Constant(
+    "SCF_PER_STB_TO_CUBIC_METER_PER_CUBIC_METER": Constant(
         value=0.1781076,
         description="Conversion factor from scf/STB to m³/m³",
         unit="(m³/m³)/(scf/STB)",
     ),
-    "M3_PER_M3_TO_SCF_PER_STB": Constant(
+    "CUBIC_METER_PER_CUBIC_METER_TO_SCF_PER_STB": Constant(
         value=1 / 0.1781076,
         description="Conversion factor from m³/m³ to scf/STB",
         unit="(scf/STB)/(m³/m³)",
     ),
     # Formation Volume Factor Conversions
-    "M3_PER_M3_TO_BBL_PER_SCF": Constant(
+    "CUBIC_METER_PER_CUBIC_METER_TO_BARRELS_PER_SCF": Constant(
         value=5.614583,
         description="Conversion factor from m³/m³ to BBL/scf",
         unit="(BBL/scf)/(m³/m³)",
     ),
-    "BBL_PER_SCF_TO_M3_PER_M3": Constant(
+    "BARRELS_PER_SCF_TO_CUBIC_METER_PER_CUBIC_METER": Constant(
         value=1 / 5.614583,
         description="Conversion factor from BBL/scf to m³/m³",
         unit="(m³/m³)/(BBL/scf)",
     ),
-    "M3_PER_M3_TO_BBL_PER_STB": Constant(
+    "CUBIC_METER_PER_CUBIC_METER_TO_BARRELS_PER_STB": Constant(
         value=1.0,
         description="Conversion factor from m³/m³ to BBL/STB",
         unit="(BBL/STB)/(m³/m³)",
     ),
-    "BBL_PER_STB_TO_M3_PER_M3": Constant(
+    "BARRELS_PER_STB_TO_CUBIC_METER_PER_CUBIC_METER": Constant(
         value=1.0,
         description="Conversion factor from BBL/STB to m³/m³",
         unit="(m³/m³)/(BBL/STB)",
     ),
     # Volume Conversions
-    "M3_TO_SCF": Constant(
+    "CUBIC_METER_TO_SCF": Constant(
         value=35.3147,
         description="Conversion factor from cubic meters to standard cubic feet",
         unit="scf/m³",
     ),
-    "SCF_TO_BBL": Constant(
+    "SCF_TO_BARRELS": Constant(
         value=0.1781076,
         description="Conversion factor from standard cubic feet to barrels",
         unit="BBL/scf",
     ),
-    "BBL_TO_FT3": Constant(
+    "BARRELS_TO_CUBIC_FEET": Constant(
         value=5.614583,
         description="Conversion factor from barrels to cubic feet",
         unit="ft³/BBL",
     ),
-    "FT3_TO_BBL": Constant(
+    "CUBIC_FEET_TO_BARRELS": Constant(
         value=1 / 5.614583,
         description="Conversion factor from cubic feet to barrels",
         unit="BBL/ft³",
     ),
-    "STB_TO_FT3": Constant(
+    "STB_TO_CUBIC_FEET": Constant(
         value=5.614583,
         description="Conversion factor from stock tank barrels to cubic feet",
         unit="ft³/STB",
     ),
-    "FT3_TO_STB": Constant(
+    "CUBIC_FEET_TO_STB": Constant(
         value=1 / 5.614583,
         description="Conversion factor from cubic feet to stock tank barrels",
         unit="STB/ft³",
     ),
-    "STB_TO_M3": Constant(
+    "STB_TO_CUBIC_METER": Constant(
         value=0.158987,
         description="Conversion factor from stock tank barrels to cubic meters",
         unit="m³/STB",
     ),
-    "BBL_TO_M3": Constant(
+    "BARRELS_TO_CUBIC_METER": Constant(
         value=0.158987,
         description="Conversion factor from barrels to cubic meters",
         unit="m³/BBL",
     ),
-    "M3_TO_BBL": Constant(
+    "CUBIC_METER_TO_BARRELS": Constant(
         value=1 / 0.158987,
         description="Conversion factor from cubic meters to barrels",
         unit="BBL/m³",
@@ -274,24 +281,26 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
     ),
     "IDEAL_GAS_CONSTANT_SI": Constant(
         value=8.31446261815324e-3,
-        description="Universal gas constant",
+        description="Universal gas constant (SI units)",
         unit="kJ/(mol·K)",
     ),
     "IDEAL_GAS_CONSTANT_IMPERIAL": Constant(
-        value=10.73159, description="Universal gas constant", unit="ft³·psi/(lb·mol·°R)"
+        value=10.73159,
+        description="Universal gas constant (Imperial units)",
+        unit="ft³·psi/(lb·mol·°R)",
     ),
     # Density Conversions
-    "POUNDS_PER_FT3_TO_KG_PER_M3": Constant(
+    "POUNDS_PER_CUBIC_FEET_TO_KILOGRAM_PER_CUBIC_METER": Constant(
         value=16.0185,
         description="Conversion factor from lb/ft³ to kg/m³",
         unit="(kg/m³)/(lb/ft³)",
     ),
-    "KG_PER_M3_TO_POUNDS_PER_FT3": Constant(
+    "KILOGRAM_PER_CUBIC_METER_TO_POUNDS_PER_CUBIC_FEET": Constant(
         value=1 / 16.0185,
         description="Conversion factor from kg/m³ to lb/ft³",
         unit="(lb/ft³)/(kg/m³)",
     ),
-    "POUNDS_PER_FT3_TO_GRAMS_PER_CM3": Constant(
+    "POUNDS_PER_CUBIC_FEET_TO_GRAMS_PER_CUBIC_METER": Constant(
         value=0.01601846,
         description="Conversion factor from lb/ft³ to g/cm³",
         unit="(g/cm³)/(lb/ft³)",
@@ -342,54 +351,54 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="ft/m",
     ),
     # Area Conversions
-    "ACRES_TO_FT2": Constant(
+    "ACRES_TO_SQUARE_FEET": Constant(
         value=43560,
         description="Conversion factor from acres to square feet",
         unit="ft²/acre",
     ),
-    "FT2_TO_ACRES": Constant(
+    "SQUARE_FEET_TO_ACRES": Constant(
         value=1 / 43560,
         description="Conversion factor from square feet to acres",
         unit="acre/ft²",
     ),
     # Volume-Area Conversions
-    "ACRE_FT_TO_FT3": Constant(
+    "ACRE_FOOT_TO_CUBIC_FEET": Constant(
         value=43560,
         description="Conversion factor from acre-feet to cubic feet",
         unit="ft³/(acre·ft)",
     ),
-    "FT3_TO_ACRE_FT": Constant(
+    "CUBIC_FEET_TO_ACRE_FOOT": Constant(
         value=1 / 43560,
         description="Conversion factor from cubic feet to acre-feet",
         unit="(acre·ft)/ft³",
     ),
-    "ACRE_FT_TO_BBL": Constant(
+    "ACRE_FOOT_TO_BARRELS": Constant(
         value=7758,
         description="Conversion factor from acre-feet to barrels",
         unit="BBL/(acre·ft)",
     ),
-    "BBL_TO_ACRE_FT": Constant(
+    "BARRELS_TO_ACRE_FOOT": Constant(
         value=1 / 7758,
         description="Conversion factor from barrels to acre-feet",
         unit="(acre·ft)/BBL",
     ),
     # Flow Rate Conversions
-    "M3_PER_SECOND_TO_STB_PER_DAY": Constant(
+    "CUBIC_METER_PER_SECOND_TO_STB_PER_DAY": Constant(
         value=543168.384,
         description="Conversion factor from m³/s to STB/day",
         unit="(STB/day)/(m³/s)",
     ),
-    "STB_PER_DAY_TO_M3_PER_SECOND": Constant(
+    "STB_PER_DAY_TO_CUBIC_METER_PER_SECOND": Constant(
         value=1 / 543168.384,
         description="Conversion factor from STB/day to m³/s",
         unit="(m³/s)/(STB/day)",
     ),
-    "M3_PER_SECOND_TO_SCF_PER_DAY": Constant(
+    "CUBIC_METER_PER_SECOND_TO_SCF_PER_DAY": Constant(
         value=3049492.8,
         description="Conversion factor from m³/s to scf/day",
         unit="(scf/day)/(m³/s)",
     ),
-    "SCF_PER_DAY_TO_M3_PER_SECOND": Constant(
+    "SCF_PER_DAY_TO_CUBIC_METER_PER_SECOND": Constant(
         value=1 / 3049492.8,
         description="Conversion factor from scf/day to m³/s",
         unit="(m³/s)/(scf/day)",
@@ -408,31 +417,35 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         value=365.25 * 86400.0, description="Number of seconds in a year", unit="s/year"
     ),
     # Transmissibility Conversions
-    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_DAY": Constant(
+    "MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY": Constant(
         value=0.001127,
         description="Conversion factor from mD/cP to ft²/(psi·day)",
         unit="(ft²/(psi·day))/(mD/cP)",
     ),
-    "MILLIDARCIES_PER_CENTIPOISE_TO_FT2_PER_PSI_PER_SECOND": Constant(
+    "MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_SECOND": Constant(
         value=0.001127 / 86400.0,
         description="Conversion factor from mD/cP to ft²/(psi·s)",
         unit="(ft²/(psi·s))/(mD/cP)",
     ),
-    "MILLIDARCIES_FT_PER_CENTIPOISE_TO_FT3_PER_PSI_PER_DAY": Constant(
+    "MILLIDARCIES_FT_PER_CENTIPOISE_TO_CUBIC_FEET_PER_PSI_PER_DAY": Constant(
         value=0.001127,
         unit="(ft³/(psi·day))/(mD·ft/cP)",
         description="Conversion factor from mD·ft/cP to ft³/(psi·day)",
     ),
     # Gravity
-    "ACCELERATION_DUE_TO_GRAVITY_M_PER_S2": Constant(
-        value=9.80665, description="Standard acceleration due to gravity", unit="m/s²"
+    "ACCELERATION_DUE_TO_GRAVITY_METER_PER_SECONDS_SQUARE": Constant(
+        value=9.80665,
+        description="Standard acceleration due to gravity in m/s²",
+        unit="m/s²",
     ),
-    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_S2": Constant(
-        value=32.174, description="Standard acceleration due to gravity", unit="ft/s²"
+    "ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE": Constant(
+        value=32.174,
+        description="Standard acceleration due to gravity in ft/s²",
+        unit="ft/s²",
     ),
-    "ACCELERATION_DUE_TO_GRAVITY_FT_PER_DAY2": Constant(
+    "ACCELERATION_DUE_TO_GRAVITY_FEET_PER_DAY_SQUARE": Constant(
         value=32.174 * 86400.0**2,
-        description="Standard acceleration due to gravity",
+        description="Standard acceleration due to gravity in ft/day²",
         unit="ft/day²",
     ),
     "GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2": Constant(
@@ -452,22 +465,22 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit=None,
     ),
     # Valid Ranges
-    "MIN_VALID_PRESSURE": Constant(
+    "MINIMUM_VALID_PRESSURE": Constant(
         value=14.5,
         description="Minimum valid pressure (below this, fluid model may be non-reservoir like)",
         unit="psi",
     ),
-    "MAX_VALID_PRESSURE": Constant(
+    "MAXIMUM_VALID_PRESSURE": Constant(
         value=14_700.0,
         description="Maximum valid pressure (above this, fluid model may be non-reservoir like)",
         unit="psi",
     ),
-    "MIN_VALID_TEMPERATURE": Constant(
+    "MINIMUM_VALID_TEMPERATURE": Constant(
         value=32.0,
         description="Minimum valid temperature (below this, fluid model may be non-reservoir like)",
         unit="°F",
     ),
-    "MAX_VALID_TEMPERATURE": Constant(
+    "MAXIMUM_VALID_TEMPERATURE": Constant(
         value=482.0,
         description="Maximum valid temperature (above this, fluid model may be non-reservoir like)",
         unit="°F",
@@ -487,7 +500,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Small epsilon value to prevent numerical issues with saturations at 0 or 1",
         unit="fraction",
     ),
-    "MIN_TRANSMISSIBILITY_FACTOR": Constant(
+    "MINIMUM_TRANSMISSIBILITY_FACTOR": Constant(
         value=1e-12,
         description="Minimum transmissibility factor to prevent numerical issues with very low transmissibility",
         unit="fraction",

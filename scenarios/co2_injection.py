@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.19.6"
+__generated_with = "0.19.11"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -23,7 +23,7 @@ def setup_run():
         pvt_table_path=Path("./scenarios/runs/setup/pvt.h5"),
     )
 
-    # Gas injection wells, 5-spot pattern
+    # Gas injection wells, 3-spot pattern
     injection_clamp = bores.InjectionClamp()
     control = bores.AdaptiveBHPRateControl(
         target_rate=1_000_000,
@@ -39,11 +39,14 @@ def setup_run():
         injected_fluid=bores.InjectedFluid(
             name="CO2",
             phase=bores.FluidPhase.GAS,
-            specific_gravity=0.65,
+            specific_gravity=0.818,
             molecular_weight=44.0,
-            minimum_miscibility_pressure=3250.0,
+            viscosity=0.05,  # cP at reservoir conditions
+            density=35.0,  # lbm/ft³ at reservoir P&T (NOT 3-7!)
+            minimum_miscibility_pressure=2200.0,
             todd_longstaff_omega=0.67,
             is_miscible=True,
+            concentration=1.0,
         ),
         is_active=True,
         skin_factor=2.0,
@@ -103,7 +106,7 @@ def setup_run():
             ),
         ),
         skin_factor=2.5,
-        is_active=False,
+        is_active=False,  # Start inactive, schedule will activate at 100 days
     )
     # We use a well schedule to activate the producer after some time
     well_schedule = bores.WellSchedule()
@@ -131,11 +134,12 @@ def setup_run():
         aggressive_backoff_factor=0.25,
         max_rejects=20,
     )
-    run.config.update(
+    run.config = run.config.with_updates(
         wells=wells,
         well_schedules=well_schedules,
         timer=timer,
         miscibility_model="todd_longstaff",
+        constants=bores.Constants(),
     )
     run.config.to_file(Path("./scenarios/runs/co2_injection/config.yaml"))
     return Path, bores, run

@@ -669,7 +669,7 @@ def _build_deserializer(
         if not _deserializers_discovered:
             discovered = _discover_type_deserializers(fields)
             # Merge: explicit deserializers take precedence over discovered
-            _lazy_deserializers_cache = {**discovered, **(deserializers or {})} # type: ignore[dict-item]
+            _lazy_deserializers_cache = {**discovered, **(deserializers or {})}  # type: ignore[dict-item]
             _deserializers_discovered = True
 
         # Use the cached/discovered deserializers

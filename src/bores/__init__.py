@@ -28,8 +28,9 @@ from .stores import *  # noqa
 from .streams import *  # noqa
 from .serialization import *  # noqa
 from .errors import *  # noqa
+from .diffusivity import * # noqa
 
 use_32bit_precision()  # noqa
 
 
-__version__ = "0.0.1b1"
+__version__ = "0.0.1"

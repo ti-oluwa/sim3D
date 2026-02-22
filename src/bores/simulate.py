@@ -1,5 +1,4 @@
 """Run a simulation workflow on a 3-Dimensional reservoir model."""
-
 import copy
 from datetime import datetime, timezone
 import logging
@@ -9,6 +8,7 @@ import warnings
 
 import attrs
 import numpy as np
+from typing_extensions import Self
 
 from bores._precision import get_dtype
 from bores.boundary_conditions import (
@@ -119,6 +119,67 @@ class SaturationChangeCheckResult:
     max_phase_saturation_change: float
     max_allowed_phase_saturation_change: float
     message: typing.Optional[str] = None
+
+
+def _validate_pressure_range(
+    padded_pressure_grid: NDimensionalGrid[ThreeDimensions],
+    time_step: int,
+    zeros_grid: NDimensionalGrid[ThreeDimensions],
+    padded_fluid_properties: FluidProperties[ThreeDimensions],
+    padded_rock_properties: RockProperties[ThreeDimensions],
+    padded_saturation_history: SaturationHistory[ThreeDimensions],
+) -> typing.Optional[StepResult[ThreeDimensions]]:
+    """
+    Check for out-of-range pressures and return failure StepResult if found.
+
+    :param padded_pressure_grid: Pressure grid to validate.
+    :param time_step: Current time step index.
+    :param zeros_grid: Grid of zeros for rate tracking.
+    :param padded_fluid_properties: Padded fluid properties.
+    :param padded_rock_properties: Padded rock properties.
+    :param padded_saturation_history: Padded saturation history.
+    :return: StepResult with failure if pressures are out of range, None otherwise.
+    """
+    min_allowable_pressure = c.MINIMUM_VALID_PRESSURE - 1e-3
+    max_allowable_pressure = c.MAXIMUM_VALID_PRESSURE + 1e-3
+    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
+        padded_pressure_grid > max_allowable_pressure
+    )
+    out_of_range_indices = np.argwhere(out_of_range_mask)
+
+    if out_of_range_indices.size > 0:
+        min_pressure = np.min(padded_pressure_grid)
+        max_pressure = np.max(padded_pressure_grid)
+        logger.warning(
+            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
+            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. "
+            f"Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
+        )
+        message = ""
+        if min_pressure < min_allowable_pressure:
+            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
+        if max_pressure > max_allowable_pressure:
+            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
+
+        message += (
+            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
+            + f"\nAt Time Step {time_step}."
+        )
+        return StepResult(
+            oil_injection_grid=zeros_grid,
+            water_injection_grid=zeros_grid,
+            gas_injection_grid=zeros_grid,
+            oil_production_grid=zeros_grid,
+            water_production_grid=zeros_grid,
+            gas_production_grid=zeros_grid,
+            fluid_properties=padded_fluid_properties,
+            rock_properties=padded_rock_properties,
+            saturation_history=padded_saturation_history,
+            success=False,
+            message=message,
+        )
+
+    return None
 
 
 def _check_saturation_changes(
@@ -299,47 +360,21 @@ def _run_impes_step(
         )
 
     # Check for any out-of-range pressures
-    min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
-    max_allowable_pressure = c.MAX_VALID_PRESSURE + 1e-3
-    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
-        padded_pressure_grid > max_allowable_pressure
+    pressure_validation_result = _validate_pressure_range(
+        padded_pressure_grid=padded_pressure_grid,
+        time_step=time_step,
+        zeros_grid=zeros_grid,
+        padded_fluid_properties=padded_fluid_properties,
+        padded_rock_properties=padded_rock_properties,
+        padded_saturation_history=padded_saturation_history,
     )
-    out_of_range_indices = np.argwhere(out_of_range_mask)
-    if out_of_range_indices.size > 0:
-        min_pressure = np.min(padded_pressure_grid)
-        max_pressure = np.max(padded_pressure_grid)
-        logger.warning(
-            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
-            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
-        )
-        message = ""
-        if min_pressure < min_allowable_pressure:
-            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
-        if max_pressure > max_allowable_pressure:
-            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
-
-        message += (
-            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
-            + f"\nAt Time Step {time_step}."
-        )
-        return StepResult(
-            oil_injection_grid=zeros_grid,
-            water_injection_grid=zeros_grid,
-            gas_injection_grid=zeros_grid,
-            oil_production_grid=zeros_grid,
-            water_production_grid=zeros_grid,
-            gas_production_grid=zeros_grid,
-            fluid_properties=padded_fluid_properties,
-            rock_properties=padded_rock_properties,
-            saturation_history=padded_saturation_history,
-            success=False,
-            message=message,
-        )
+    if pressure_validation_result is not None:
+        return pressure_validation_result
 
     dtype = get_dtype()
     # Clamp pressures to valid range just for additional safety and to remove numerical noise
     padded_pressure_grid = clip(
-        padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
+        padded_pressure_grid, c.MINIMUM_VALID_PRESSURE, c.MAXIMUM_VALID_PRESSURE
     ).astype(dtype, copy=False)
 
     # Update fluid properties with new pressure grid
@@ -349,8 +384,10 @@ def _run_impes_step(
     )
     logger.debug("Pressure evolution completed!")
 
-    # For IMPES, we need to update the fluid properties
-    # before proceeding to saturation evolution.
+    # IMPES specific: Update PVT properties after implicit pressure solve
+    # but before explicit saturation evolution.
+    # This ensures saturation transport uses the correct fluid properties at the new pressure.
+    # Pressure changes affect viscosity, density, compressibility → affects mobility → affects transport.
     logger.debug("Updating PVT fluid properties for saturation evolution")
     padded_fluid_properties = update_pvt_grids(
         fluid_properties=padded_fluid_properties,
@@ -666,54 +703,42 @@ def _run_explicit_step(
     padded_pressure_grid = pressure_solution.pressure_grid
 
     # Check for any out-of-range pressures
-    min_allowable_pressure = c.MIN_VALID_PRESSURE - 1e-3
-    max_allowable_pressure = c.MAX_VALID_PRESSURE + 1e-3
-    out_of_range_mask = (padded_pressure_grid < min_allowable_pressure) | (
-        padded_pressure_grid > max_allowable_pressure
+    pressure_validation_result = _validate_pressure_range(
+        padded_pressure_grid=padded_pressure_grid,
+        time_step=time_step,
+        zeros_grid=zeros_grid,
+        padded_fluid_properties=padded_fluid_properties,
+        padded_rock_properties=padded_rock_properties,
+        padded_saturation_history=padded_saturation_history,
     )
-    out_of_range_indices = np.argwhere(out_of_range_mask)
-    if out_of_range_indices.size > 0:
-        min_pressure = np.min(padded_pressure_grid)
-        max_pressure = np.max(padded_pressure_grid)
-        logger.warning(
-            f"Unphysical pressure detected at {out_of_range_indices.size} cells. "
-            f"Range: [{min_pressure:.4f}, {max_pressure:.4f}] psi. Allowed: [{min_allowable_pressure}, {max_allowable_pressure}]."
-        )
-        message = ""
-        if min_pressure < min_allowable_pressure:
-            message += f"Pressure dropped below {min_allowable_pressure} psi (Min: {min_pressure:.4f}).\n"
-        if max_pressure > max_allowable_pressure:
-            message += f"Pressure exceeded {max_allowable_pressure} psi (Max: {max_pressure:.4f}).\n"
-
-        message += (
-            UNPHYSICAL_PRESSURE_ERROR_MSG.format(indices=out_of_range_indices.tolist())
-            + f"\nAt Time Step {time_step}."
-        )
+    if pressure_validation_result is not None:
+        # Add `timer_kwargs` to the result for explicit scheme
         return StepResult(
-            oil_injection_grid=zeros_grid,
-            water_injection_grid=zeros_grid,
-            gas_injection_grid=zeros_grid,
-            oil_production_grid=zeros_grid,
-            water_production_grid=zeros_grid,
-            gas_production_grid=zeros_grid,
-            fluid_properties=padded_fluid_properties,
-            rock_properties=padded_rock_properties,
-            saturation_history=padded_saturation_history,
+            oil_injection_grid=pressure_validation_result.oil_injection_grid,
+            water_injection_grid=pressure_validation_result.water_injection_grid,
+            gas_injection_grid=pressure_validation_result.gas_injection_grid,
+            oil_production_grid=pressure_validation_result.oil_production_grid,
+            water_production_grid=pressure_validation_result.water_production_grid,
+            gas_production_grid=pressure_validation_result.gas_production_grid,
+            fluid_properties=pressure_validation_result.fluid_properties,
+            rock_properties=pressure_validation_result.rock_properties,
+            saturation_history=pressure_validation_result.saturation_history,
             success=False,
-            message=message,
+            message=pressure_validation_result.message,
             timer_kwargs=timer_kwargs,
         )
 
     dtype = get_dtype()
     # Clamp pressures to valid range just for additional safety and to remove numerical noise
     padded_pressure_grid = clip(
-        padded_pressure_grid, c.MIN_VALID_PRESSURE, c.MAX_VALID_PRESSURE
+        padded_pressure_grid, c.MINIMUM_VALID_PRESSURE, c.MAXIMUM_VALID_PRESSURE
     ).astype(dtype, copy=False)
     logger.debug("Pressure evolution completed!")
 
-    # For explicit schemes, we can re-use the current fluid properties
-    # in the saturation evolution step.
-    # Explicit pressure is fully decoupled from saturation update.
+    # Explicit specific: Re-use current fluid properties for saturation evolution.
+    # Unlike IMPES, explicit pressure and saturation are fully decoupled at the current timestep.
+    # PVT is updated after both pressure and saturation evolve (below at line ~866).
+    # This is acceptable because explicit schemes use old-time values for transport coefficients.
     logger.debug(
         "Using current PVT fluid properties for saturation evolution (explicit scheme)"
     )
@@ -915,7 +940,7 @@ def log_progress(
         )
 
 
-@attrs.frozen
+@attrs.define
 class Run(StoreSerializable):
     """
     Simulation run specification.
@@ -973,7 +998,7 @@ class Run(StoreSerializable):
         model_path: typing.Union[str, PathLike],
         config_path: typing.Union[str, PathLike],
         pvt_table_path: typing.Optional[typing.Union[str, PathLike]] = None,
-    ) -> "Run":
+    ) -> Self:
         """
         Load run from separate model and config files.
 
@@ -998,7 +1023,7 @@ class Run(StoreSerializable):
                 raise ValidationError("Failed to load PVT table data from file.")
 
             pvt_tables = PVTTables(pvt_table_data)
-            config.update(pvt_tables=pvt_tables)
+            config = config.with_updates(pvt_tables=pvt_tables)
         return cls(model=model, config=config)
 
 
@@ -1070,7 +1095,7 @@ def run(
 
     if boundary_conditions is None:
         logger.debug("No boundary conditions provided, applying no-flow boundaries.")
-        boundary_conditions = BoundaryConditions(
+        boundary_conditions = BoundaryConditions[ThreeDimensions](
             conditions={
                 "pressure": GridBoundaryCondition(),
                 "oil_saturation": GridBoundaryCondition(),
@@ -1372,7 +1397,7 @@ def run(
                         config=config,
                     )
 
-                # IF THE STEP WAS SUCCESSFUL, ACCEPT THAT STEP PROPOSAL
+                # If the step was successful, accept that step proposal
                 if result.success:
                     # Now we can accept the proposed time step size and we now agree that this is a new step
                     logger.debug(f"Time step {new_step} completed successfully.")
@@ -1387,7 +1412,7 @@ def run(
                             interval=config.log_interval,
                         )
                 else:
-                    # REJECT AND ADJUST THE TIME STEP SIZE AND RETRY
+                    # Reject the step, adjust the time step size, and retry
                     logger.debug(
                         f"Time step {new_step} failed with step size {step_size}. Retrying with smaller step size."
                     )
@@ -1421,7 +1446,6 @@ def run(
                     logger.debug(
                         "Preparing injection and production rate grids for output"
                     )
-                    # Unpack results
                     oil_injection_grid = result.oil_injection_grid
                     water_injection_grid = result.water_injection_grid
                     gas_injection_grid = result.gas_injection_grid
@@ -1429,18 +1453,10 @@ def run(
                     water_production_grid = result.water_production_grid
                     gas_production_grid = result.gas_production_grid
 
-                    oil_production_grid = typing.cast(
-                        NDimensionalGrid[ThreeDimensions],
-                        np.negative(oil_production_grid),
-                    )
-                    water_production_grid = typing.cast(
-                        NDimensionalGrid[ThreeDimensions],
-                        np.negative(water_production_grid),
-                    )
-                    gas_production_grid = typing.cast(
-                        NDimensionalGrid[ThreeDimensions],
-                        np.negative(gas_production_grid),
-                    )
+                    # Negate production rates in-place (use out parameter to avoid -0.0 issues)
+                    np.negative(oil_production_grid, out=oil_production_grid)
+                    np.negative(water_production_grid, out=water_production_grid)
+                    np.negative(gas_production_grid, out=gas_production_grid)
                     injection_rates = RateGrids(
                         oil=oil_injection_grid,
                         water=water_injection_grid,
