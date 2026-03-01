@@ -228,6 +228,7 @@ def compute_oil_well_rate(
     bottom_hole_pressure: float,
     phase_mobility: float,
     fluid_compressibility: typing.Optional[float] = None,
+    incompressibility_threshold: float = 1e-6,
 ) -> float:
     """
     Compute the well rate using the well index and pressure drop.
@@ -257,14 +258,22 @@ def compute_oil_well_rate(
     :param bottom_hole_pressure: The bottom-hole pressure (psi).
     :param phase_mobility: The phase relative mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
     :param fluid_compressibility: The fluid compressibility (1/psi). For slightly compressible fluids.
+    :param incompressibility_threshold: If fluid compressibility is less than this threshold
+        it is considered incompressible. This is to avoid numerical instability when fluid with very smail
+        compressibility is used with compressible fluid formula.
     :return: The well rate in bbl/day.
     """
     if well_index <= 0:
         raise ValidationError("Well index must be a positive value.")
+    if phase_mobility <= 0:
+        raise ValidationError("Phase mobility must be a positive value.")
 
     pressure_difference = bottom_hole_pressure - pressure
-    if fluid_compressibility:
-        # THis can be inaccurate fro large pressure differences,
+    is_compressible = (
+        fluid_compressibility and fluid_compressibility >= incompressibility_threshold
+    )
+    if is_compressible:
+        # Old: This can be inaccurate for large pressure differences,
         # as it assume compressibility effect is small (c * ΔP << 1)
         # which may not always be the case
         # well_rate = (
@@ -274,17 +283,21 @@ def compute_oil_well_rate(
         #     * np.log(1 + (fluid_compressibility * pressure_difference))
         #     / fluid_compressibility
         # )
+
         # So we use the exact solution to: dq/dP = k * λ * (1 + c * P)
         # Integrated to give: q = (k * λ / c) * [exp(c * ΔP) - 1]
-        well_rate = (
-            7.08e-3
-            * well_index
-            * phase_mobility
-            * (np.exp(fluid_compressibility * pressure_difference) - 1)
-            / fluid_compressibility
-        )
-    else:
-        well_rate = 7.08e-3 * well_index * phase_mobility * pressure_difference
+        argument = fluid_compressibility * pressure_difference  # type: ignore
+        if abs(argument) <= 50:
+            well_rate = (
+                7.08e-3
+                * well_index
+                * phase_mobility
+                * (np.exp(argument) - 1)
+                / fluid_compressibility
+            )
+            return well_rate
+
+    well_rate = 7.08e-3 * well_index * phase_mobility * pressure_difference
     return well_rate
 
 
@@ -345,6 +358,9 @@ def compute_gas_well_rate(
     if well_index <= 0:
         raise ValidationError("Well index must be a positive value.")
 
+    if phase_mobility <= 0:
+        raise ValidationError("Phase mobility must be a positive value.")
+
     Tsc = c.STANDARD_TEMPERATURE_RANKINE
     Psc = c.STANDARD_PRESSURE_IMPERIAL
     temperature_rankine = fahrenheit_to_rankine(temperature)
@@ -402,6 +418,7 @@ def compute_required_bhp_for_oil_rate(
     pressure: float,
     phase_mobility: float,
     fluid_compressibility: typing.Optional[float] = None,
+    incompressibility_threshold: float = 1e-6,
 ) -> float:
     """
     Compute the required bottom-hole pressure to achieve a target oil/water rate.
@@ -413,14 +430,17 @@ def compute_required_bhp_for_oil_rate(
         => P_bhp = P + Q / (7.08e-3 * W * M)
 
     For slightly compressible fluids:
-        Q = 7.08e-3 * W * M * ln(1 + c_f * (P_bhp - P)) / c_f
-        => P_bhp = P + (exp(Q * c_f / (7.08e-3 * W * M)) - 1) / c_f
+        Q = 7.08e-3 * W * M * [exp(c_f * (P_bhp - P)) - 1] / c_f
+        => P_bhp = P + ln(Q * c_f / (7.08e-3 * W * M) + 1) / c_f
 
     :param target_rate: Target well rate (bbl/day). Positive for injection, negative for production.
     :param well_index: The well index (mD*ft).
     :param pressure: The reservoir pressure (psi).
     :param phase_mobility: The phase relative mobility (cP⁻¹) (k_r / μ) or (k_r / (μ * B)).
     :param fluid_compressibility: The fluid compressibility (1/psi) for slightly compressible fluids.
+    :param incompressibility_threshold: If fluid compressibility is less than this threshold
+        it is considered incompressible. This is to avoid numerical instability when fluid with very smail
+        compressibility is used with compressible fluid formula.
     :return: Required bottom-hole pressure (psi).
     """
     if well_index <= 0:
@@ -428,22 +448,29 @@ def compute_required_bhp_for_oil_rate(
     if phase_mobility <= 0:
         raise ValidationError("Phase mobility must be a positive value.")
 
-    conversion_factor = 7.08e-3
+    is_compressible = (
+        fluid_compressibility and fluid_compressibility >= incompressibility_threshold
+    )
+    if is_compressible:
+        # Old Slightly compressible: P_bhp = P + (exp(Q * c_f / (conversion * W * M)) - 1) / c_f
+        # exponent = (
+        #     target_rate
+        #     * fluid_compressibility
+        #     / (conversion_factor * well_index * phase_mobility)
+        # )
+        # required_bhp = pressure + (np.exp(exponent) - 1.0) / fluid_compressibility
 
-    if fluid_compressibility:
-        # Slightly compressible: P_bhp = P + (exp(Q * c_f / (conversion * W * M)) - 1) / c_f
-        exponent = (
-            target_rate
-            * fluid_compressibility
-            / (conversion_factor * well_index * phase_mobility)
-        )
-        required_bhp = pressure + (np.exp(exponent) - 1.0) / fluid_compressibility
-    else:
-        # Incompressible: P_bhp = P + Q / (conversion * W * M)
-        required_bhp = pressure + target_rate / (
-            conversion_factor * well_index * phase_mobility
-        )
+        # Slightly compressible: P_bhp = P + ln(Q * c_f / (7.08e-3 * W * M) + 1) / c_f
+        denominator = 7.08e-3 * well_index * phase_mobility
+        argument = target_rate * fluid_compressibility / denominator + 1.0  # type: ignore
+        # Check if ln() argument is reasonable (not too large), must be positive for ln()
+        # ln(x) for x > 1e15 can cause numerical issues
+        if 0 < argument < 1e10:
+            required_bhp = pressure + np.log(argument) / fluid_compressibility
+            return float(required_bhp)
 
+    # Incompressible: P_bhp = P + Q / (conversion * W * M)
+    required_bhp = pressure + target_rate / (7.08e-3 * well_index * phase_mobility)
     return float(required_bhp)
 
 

@@ -22,3 +22,4 @@ CLAUDE.md
 site/
 benchmarks/runs/
 .pytest_cache/
+videos/

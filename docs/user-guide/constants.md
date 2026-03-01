@@ -196,6 +196,7 @@ if const is not None:
 | `GAS_PSEUDO_PRESSURE_POINTS` | 200 | Points in pseudo-pressure table |
 | `DEFAULT_WATER_SALINITY_PPM` | 35000 | Default water salinity (ppm NaCl) |
 | `MIN_OIL_ZONE_THICKNESS` | 5 | Minimum oil zone thickness warning (ft) |
+| `FLUID_INCOMPRESSIBILITY_THRESHOLD` | 1e-6 | Minimum fluid compressibility below which the fluid should be considered incompressible |
 
 ### Valid Ranges
 

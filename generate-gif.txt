@@ -1,0 +1,5 @@
+1. First generate a palette for the video
+ffmpeg -i simulation.mp4 -vf "fps=15,scale=1200:-1:flags=lanczos,palettegen" palette.png
+
+2. Generate GIF with palette
+ffmpeg -i simulation.mp4 -i palette.png -filter_complex "fps=15,scale=1200:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer" simulation.gif

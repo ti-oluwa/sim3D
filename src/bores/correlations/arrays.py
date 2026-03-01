@@ -1559,7 +1559,7 @@ def compute_dead_oil_viscosity_modified_beggs(
     oil_api_gravity = compute_oil_api_gravity(oil_specific_gravity)
     if min_(oil_api_gravity) < 5 or max_(oil_api_gravity) > 75:
         warnings.warn(
-            f"API gravity {oil_api_gravity:.6f} is outside typical range [5, 75]. "
+            f"API gravity min={min_(oil_api_gravity):.6f}, max={max_(oil_api_gravity):.6f} is outside typical range [5, 75]. "
             f"Dead oil viscosity may be inaccurate."
         )
     return _compute_dead_oil_viscosity_modified_beggs(temperature, oil_api_gravity)

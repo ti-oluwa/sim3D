@@ -38,6 +38,9 @@ theme:
         icon: material/brightness-4
         name: Switch to system preference
 
+  logo: images/logo.svg
+  favicon: images/logo.svg
+
   font:
     text: DM Sans
     code: Roboto Mono

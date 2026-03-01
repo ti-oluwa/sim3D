@@ -527,6 +527,11 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         description="Minimum oil zone thickness below which a warning is raised to notify that the oil zone is too thin",
         unit="ft",
     ),
+    "FLUID_INCOMPRESSIBILITY_THRESHOLD": Constant(
+        value=1e-6,
+        description="Minimum fluid compressibility below which the fluid should be considered incompressible",
+        unit="1/psi",
+    ),
 }
 
 
@@ -709,6 +714,14 @@ class Constants(
         """
         return self._store.get(name, default)
 
+    def __dir__(self):
+        default = super().__dir__()
+        constants = list(self.keys())
+        return sorted({*default, *constants})
+
+    def _ipython_key_completions_(self) -> typing.List[str]:
+        return sorted(self.keys())
+
     def __repr__(self) -> str:
         """Return a string representation of the Constants object."""
         return f"{type(self).__name__}(constants={len(self._store)})"
@@ -817,6 +830,13 @@ class _ConstantsProxy:
         :raises KeyError: If the constant does not exist
         """
         return self._constants[name]
+
+    def __dir__(self):
+        default = super().__dir__()
+        return sorted({*default, *self._constants.__dir__()})
+
+    def _ipython_key_completions_(self) -> typing.List[str]:
+        return self._constants._ipython_key_completions_()
 
 
 c = _ConstantsProxy()

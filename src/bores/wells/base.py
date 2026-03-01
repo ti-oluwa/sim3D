@@ -374,6 +374,7 @@ class InjectionWell(Well[Coordinates, InjectedFluid]):
         use_pseudo_pressure: bool = False,
         fluid_compressibility: typing.Optional[float] = None,
         pvt_tables: typing.Optional[PVTTables] = None,
+        **kwargs: typing.Any,
     ) -> float:
         """
         Compute the flow rate for the injection well using the configured control strategy.

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 116">
+  <style>
+    .face-top { fill: #80CBC4; }
+    .face-right { fill: #4DB6AC; }
+    .face-left { fill: #00897B; }
+    .grid-line { stroke: rgba(255,255,255,0.35); stroke-width: 0.75; fill: none; }
+    .outline { stroke: #004D40; stroke-width: 1.5; stroke-linejoin: round; fill: none; }
+    .inner-edge { stroke: #004D40; stroke-width: 1; fill: none; }
+    .well-dot { fill: #FFB300; }
+    @media (prefers-color-scheme: dark) {
+      .outline { stroke: #E0F2F1; }
+      .inner-edge { stroke: #E0F2F1; }
+    }
+  </style>
+
+  <!-- Left face (darkest - least light) -->
+  <polygon class="face-left" points="64,112 17.2,85 17.2,31 64,58"/>
+
+  <!-- Right face (medium light) -->
+  <polygon class="face-right" points="64,112 110.8,85 110.8,31 64,58"/>
+
+  <!-- Top face (lightest - most light) -->
+  <polygon class="face-top" points="64,58 110.8,31 64,4 17.2,31"/>
+
+  <!-- Grid lines: left face -->
+  <line class="grid-line" x1="64" y1="94" x2="17.2" y2="67"/>
+  <line class="grid-line" x1="64" y1="76" x2="17.2" y2="49"/>
+  <line class="grid-line" x1="48.4" y1="103" x2="48.4" y2="49"/>
+  <line class="grid-line" x1="32.8" y1="94" x2="32.8" y2="40"/>
+
+  <!-- Grid lines: right face -->
+  <line class="grid-line" x1="64" y1="94" x2="110.8" y2="67"/>
+  <line class="grid-line" x1="64" y1="76" x2="110.8" y2="49"/>
+  <line class="grid-line" x1="79.6" y1="103" x2="79.6" y2="49"/>
+  <line class="grid-line" x1="95.2" y1="94" x2="95.2" y2="40"/>
+
+  <!-- Grid lines: top face -->
+  <line class="grid-line" x1="48.4" y1="49" x2="95.2" y2="22"/>
+  <line class="grid-line" x1="32.8" y1="40" x2="79.6" y2="13"/>
+  <line class="grid-line" x1="79.6" y1="49" x2="32.8" y2="22"/>
+  <line class="grid-line" x1="95.2" y1="40" x2="48.4" y2="13"/>
+
+  <!-- Outer silhouette -->
+  <polygon class="outline" points="64,112 110.8,85 110.8,31 64,4 17.2,31 17.2,85"/>
+
+  <!-- Inner visible edges (where faces meet) -->
+  <line class="inner-edge" x1="64" y1="112" x2="64" y2="58"/>
+  <line class="inner-edge" x1="64" y1="58" x2="110.8" y2="31"/>
+  <line class="inner-edge" x1="64" y1="58" x2="17.2" y2="31"/>
+
+  <!-- Well indicator dot -->
+  <circle class="well-dot" cx="79.6" cy="31" r="2.5"/>
+</svg>

@@ -953,6 +953,21 @@ def add_well_contributions(
                 # Do not pass reservoir fluid PVT tables for injected fluid
                 pvt_tables=None,
             )
+            # Check for non-finite BHP before using it
+            if not np.isfinite(effective_bhp):
+                logger.error(
+                    f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
+                    f"Skipping this perforation. Check for low mobility or numerical issues."
+                )
+                continue  # Skip this perforation
+
+            # Check for unrealistic BHP (orders of magnitude off)
+            if abs(effective_bhp - cell_oil_pressure) > 1e6:
+                logger.warning(
+                    f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                    f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
+                    f"This may indicate numerical instability or inappropriate well control."
+                )
 
             # Check for backflow (cell pressure > BHP)
             if cell_oil_pressure > effective_bhp and config.warn_well_anomalies:
@@ -1113,6 +1128,22 @@ def add_well_contributions(
                     pvt_tables=config.pvt_tables,
                     **primary_phase_kwargs,
                 )
+
+                # Check for non-finite BHP before using it
+                if not np.isfinite(effective_bhp):
+                    logger.error(
+                        f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
+                        f"Skipping this perforation. Check for low mobility or numerical issues."
+                    )
+                    continue  # Skip this perforation
+
+                # Check for unrealistic BHP (orders of magnitude off)
+                if abs(effective_bhp - cell_oil_pressure) > 1e6:
+                    logger.warning(
+                        f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                        f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
+                        f"This may indicate numerical instability or inappropriate well control."
+                    )
 
                 # Check for backflow (positive production = injection)
                 if cell_oil_pressure < effective_bhp and config.warn_well_anomalies:

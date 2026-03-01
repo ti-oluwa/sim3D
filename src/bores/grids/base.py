@@ -6,7 +6,6 @@ import numba  # type: ignore[import-untyped]
 import numpy as np
 from typing_extensions import Self
 
-from bores import ThreeDimensions, TwoDimensions
 from bores._precision import get_dtype
 from bores.errors import ValidationError
 from bores.serialization import Serializable
@@ -14,10 +13,11 @@ from bores.types import (
     ArrayLike,
     NDimension,
     NDimensionalGrid,
-    OneDimension,
     Orientation,
     ThreeDimensionalGrid,
+    ThreeDimensions,
     TwoDimensionalGrid,
+    TwoDimensions,
 )
 
 __all__ = [
