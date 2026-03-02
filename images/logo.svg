@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 116">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 130">
   <style>
     .face-top { fill: #80CBC4; }
     .face-right { fill: #4DB6AC; }
@@ -7,19 +7,28 @@
     .outline { stroke: #004D40; stroke-width: 1.5; stroke-linejoin: round; fill: none; }
     .inner-edge { stroke: #004D40; stroke-width: 1; fill: none; }
     .well-dot { fill: #FFB300; }
+
+    /* Oil droplet - light mode */
+    .drop-body { fill: #5C2E00; }
+    .drop-shine { fill: rgba(255, 200, 100, 0.30); }
+    .drop-outline { stroke: #3B1A00; stroke-width: 1; fill: none; }
     @media (prefers-color-scheme: dark) {
       .outline { stroke: #E0F2F1; }
       .inner-edge { stroke: #E0F2F1; }
+      /* Richer golden-brown in dark mode */
+      .drop-body { fill: #C17A2A; }
+      .drop-shine { fill: rgba(255, 230, 150, 0.35); }
+      .drop-outline { stroke: #7A4A10; stroke-width: 1; fill: none; }
     }
   </style>
 
-  <!-- Left face (darkest - least light) -->
+  <!-- Left face (darkest) -->
   <polygon class="face-left" points="64,112 17.2,85 17.2,31 64,58"/>
 
-  <!-- Right face (medium light) -->
+  <!-- Right face (medium) -->
   <polygon class="face-right" points="64,112 110.8,85 110.8,31 64,58"/>
 
-  <!-- Top face (lightest - most light) -->
+  <!-- Top face (lightest) -->
   <polygon class="face-top" points="64,58 110.8,31 64,4 17.2,31"/>
 
   <!-- Grid lines: left face -->
@@ -43,11 +52,25 @@
   <!-- Outer silhouette -->
   <polygon class="outline" points="64,112 110.8,85 110.8,31 64,4 17.2,31 17.2,85"/>
 
-  <!-- Inner visible edges (where faces meet) -->
+  <!-- Inner visible edges -->
   <line class="inner-edge" x1="64" y1="112" x2="64" y2="58"/>
   <line class="inner-edge" x1="64" y1="58" x2="110.8" y2="31"/>
   <line class="inner-edge" x1="64" y1="58" x2="17.2" y2="31"/>
 
   <!-- Well indicator dot -->
   <circle class="well-dot" cx="79.6" cy="31" r="2.5"/>
+
+  <!-- Oil droplet — positioned bottom-right, slightly overlapping the cube corner -->
+  <!-- Droplet path: teardrop shape, point at top -->
+  <g transform="translate(97, 96)">
+    <!-- Main drop body -->
+    <path class="drop-body"
+      d="M0,-14 C5,-8 11,0 11,7 A11,11 0 1,1 -11,7 C-11,0 -5,-8 0,-14 Z"/>
+    <!-- Specular shine -->
+    <ellipse class="drop-shine" cx="-3.5" cy="1" rx="3.5" ry="5.5" transform="rotate(-20,-3.5,1)"/>
+    <!-- Outline -->
+    <path class="drop-outline"
+      d="M0,-14 C5,-8 11,0 11,7 A11,11 0 1,1 -11,7 C-11,0 -5,-8 0,-14 Z"/>
+
+  </g>
 </svg>
