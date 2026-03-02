@@ -1041,7 +1041,9 @@ def coarsen_permeability_grids(
 
 
 FlattenStrategy = typing.Union[
-    typing.Callable[[np.ndarray], typing.Union[float, np.floating]],
+    typing.Callable[
+        [np.typing.NDArray], typing.Union[float, np.floating, np.typing.NDArray]
+    ],
     typing.Literal["max", "min", "mean", "sum", "top", "bottom", "weighted_mean"],
 ]
 
@@ -1130,10 +1132,10 @@ def flatten_multilayer_grid_to_surface(
         if ignore_nan:
             # Handle NaN in both data and weights
             weighted_sum = np.nansum(weights * multilayer_grid, axis=2)
-            weight_sum = np.nansum(weights, axis=2)
+            weight_sum = np.nansum(weights, axis=2)  # type: ignore[arg-type]
         else:
             weighted_sum = np.sum(weights * multilayer_grid, axis=2)
-            weight_sum = np.sum(weights, axis=2)
+            weight_sum = np.sum(weights, axis=2)  # type: ignore[arg-type]
 
         # Avoid division by zero
         result = np.divide(
@@ -1196,8 +1198,8 @@ def flatten_multilayer_grid_to_surface(
             try:
                 # Some numpy functions can handle 2D input
                 result_flat = strategy(reshaped)
-                if result_flat.shape == (nx * ny,):
-                    return result_flat.reshape(nx, ny).astype(dtype)
+                if result_flat.shape == (nx * ny,):  # type: ignore[union-attr]
+                    return result_flat.reshape(nx, ny).astype(dtype)  # type: ignore[union-attr]
             except (ValueError, TypeError):
                 pass  # Fall back to `apply_along_axis`
 

@@ -49,7 +49,7 @@ This configuration tries BiCGSTAB first, then LGMRES, then GMRES for the pressur
 You can also enable a final fallback to the direct solver:
 
 ```python
-# In solve_linear_system, set fallback_to_direct=True
+# In `solve_linear_system(...)`, set `fallback_to_direct=True`
 # The Config doesn't expose this directly, but the solver infrastructure supports it
 ```
 

@@ -58,7 +58,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=1),
         simulation_time=bores.Time(days=365),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )
@@ -134,7 +134,7 @@ The full 3D simulation pipeline (`bores.run()`) currently operates on `ThreeDime
 ```python
 import bores
 
-# 1D model for rapid prototyping
+# 1D model for rapid prototyping (Not yet supported)
 model_1d = bores.reservoir_model(grid_shape=(100,), ...)
 
 # 3D model for production studies
@@ -160,10 +160,10 @@ BORES uses **field units** throughout the entire codebase. If you work in field 
 | Liquid rate | stock-tank barrels per day | STB/day |
 | Gas rate | standard cubic feet per day | SCF/day |
 | Temperature | degrees Fahrenheit | deg F |
-| Density | pounds mass per cubic foot | lbm/ft^3 |
-| Compressibility | per psi | psi^-1 |
+| Density | pounds mass per cubic foot | lbm/ft³ |
+| Compressibility | per psi | psi⁻¹ |
 | Formation volume factor (oil, water) | reservoir barrels per stock-tank barrel | bbl/STB |
-| Formation volume factor (gas) | reservoir cubic feet per standard cubic foot | ft^3/SCF |
+| Formation volume factor (gas) | reservoir cubic feet per standard cubic foot | ft³/SCF |
 | Solution GOR | standard cubic feet per stock-tank barrel | SCF/STB |
 | Porosity | fraction | - |
 | Saturation | fraction | - |
@@ -171,7 +171,7 @@ BORES uses **field units** throughout the entire codebase. If you work in field 
 
 The choice of field units is deliberate. The vast majority of reservoir engineering literature, well reports, and commercial simulator inputs use field units. By aligning with this convention, BORES reduces the friction of importing real-world data and comparing results against published benchmarks.
 
-All PVT correlations, well models, and solver equations inside BORES assume field units. The conversion constants (such as the 5.615 ft^3/bbl factor and the 0.001127 Darcy-to-field transmissibility constant) are embedded in the numerical kernels. You do not need to apply them yourself.
+All PVT correlations, well models, and solver equations inside BORES assume field units. The conversion constants (such as the 5.615 ft³/bbl factor and the 0.001127 Darcy-to-field transmissibility constant) are embedded in the numerical kernels. You do not need to apply them yourself.
 
 !!! warning "SI Units"
 
@@ -194,7 +194,10 @@ When defining a production well, specify a negative target rate. When defining a
 import bores
 
 # Injection well: positive rate means fluid flows INTO the reservoir
-injector_control = bores.ConstantRateControl(target_rate=500.0)   # +500 STB/day
+injector_control = bores.ConstantRateControl(
+    target_rate=500.0,  # +500 STB/day
+    clamp=bores.InjectionClamp(),
+)
 
 # Production well: fix the oil rate, let other phases flow naturally
 producer_control = bores.PrimaryPhaseRateControl(
@@ -203,6 +206,7 @@ producer_control = bores.PrimaryPhaseRateControl(
         target_rate=-500.0,       # -500 STB/day of oil (production)
         target_phase="oil",
         bhp_limit=1000.0,         # minimum BHP constraint
+        clamp=bores.ProductionClamp(),
     ),
     secondary_clamp=bores.ProductionClamp(),
 )
@@ -229,7 +233,7 @@ import bores
 bores.use_64bit_precision()
 
 # Or temporary precision change
-with bores.with_precision(bores.np.float64):
+with bores.with_precision("float64"):
     model = bores.reservoir_model(...)
     states = list(bores.run(model, config))
 
@@ -245,7 +249,7 @@ print(bores.get_dtype())  # <class 'numpy.float32'> (back to default outside con
 
 ## Serialization and Registration
 
-BORES provides a two-tier serialization system for saving and loading simulation objects. The base tier, `Serializable`, supports dictionary round-tripping via the [cattrs](https://cattrs.readthedocs.io/) library. Any `Serializable` class can be converted to a plain Python dictionary and reconstructed from one. The second tier, `StoreSerializable`, extends this with `dump()` and `load()` methods that write to and read from file-backed storage (HDF5, Zarr, YAML, JSON).
+BORES provides a two-tier serialization system for saving and loading simulation objects. The base tier, `Serializable`, supports dictionary round-tripping via the [cattrs](https://cattrs.readthedocs.io/) library. Any `Serializable` class can be converted to a plain Python dictionary and reconstructed from one. The second tier, `StoreSerializable`, extends this with `to_store(...)`, `from_store(...)`, `to_file(...)`, and `from_file(...)` methods that write to and read from file-backed storage (HDF5, Zarr, YAML, JSON).
 
 All core BORES classes - `ReservoirModel`, `Config`, `FluidProperties`, `RockProperties`, well classes, boundary conditions, and relative permeability models - are serializable out of the box. You can save a model to disk, load it back, and get an identical object.
 
@@ -255,13 +259,13 @@ When you define custom types that should participate in BORES serialization (for
 import bores
 
 # Save a model to HDF5
-model.dump("my_model.h5")
+model.to_file("my_model.h5")
 
 # Load it back
 loaded_model = bores.ReservoirModel.from_file("my_model.h5")
 
 # Save a config to YAML
-config.dump("config.yaml")
+config.to_file("config.yaml") # or config.save("config.yaml")
 
 # Load it back
 loaded_config = bores.Config.from_file("config.yaml")

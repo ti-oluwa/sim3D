@@ -67,8 +67,8 @@ model = bores.reservoir_model(
 
 ### Properties Computed by the Factory
 
-- **Gas compressibility factor** ($Z$): Standing-Katz or Hall-Yarborough correlation.
-- **Gas formation volume factor** ($B_g$): RB/SCF. Computed from $Z$, $p$, and $T$.
+- **Gas compressibility factor** ($Z$): Hall-Yarborough or Dranchuk-Abou-Kazeem correlation.
+- **Gas formation volume factor** ($B_g$): ft³/SCF. Computed from $Z$, $p$, and $T$.
 - **Gas viscosity** ($\mu_g$): Lee-Gonzalez-Eakin correlation.
 - **Gas density**: Computed from molecular weight, $Z$, $p$, and $T$.
 
@@ -122,7 +122,7 @@ These correlations are implemented in `bores.correlations` as both scalar functi
 
 ---
 
-## How reservoir_model() Works
+## How `reservoir_model()` Works
 
 The `bores.reservoir_model()` factory follows this sequence:
 
@@ -149,7 +149,7 @@ model = bores.reservoir_model(...)
 # Oil properties
 Rs = model.fluid_properties.solution_gas_oil_ratio_grid    # SCF/STB
 Bo = model.fluid_properties.oil_formation_volume_factor_grid  # RB/STB
-oil_density = model.fluid_properties.oil_density_grid       # lbm/ft3
+oil_density = model.fluid_properties.oil_density_grid       # lbm/ft³
 
 # Gas properties
 Bg = model.fluid_properties.gas_formation_volume_factor_grid  # RB/SCF

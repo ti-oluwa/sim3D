@@ -42,7 +42,7 @@ import bores
 
 # 10 layers: thin near contacts, thick in the middle
 layer_thicknesses = bores.build_layered_grid(
-    grid_dimensions=(20, 20, 10),
+    grid_shape=(20, 20, 10),
     values=[5.0, 5.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 5.0, 5.0],
 )
 ```

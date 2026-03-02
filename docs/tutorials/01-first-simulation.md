@@ -40,7 +40,11 @@ The single production well sits at grid location (5, 5) - roughly the center of 
 
 ```python
 import bores
+import logging
 import numpy as np
+
+# Set log level
+logging.basicConfig(level=logging.INFO)
 
 # Use 32-bit precision (default, faster computation)
 bores.use_32bit_precision()
@@ -80,7 +84,7 @@ depth = bores.depth_grid(thickness_grid=thickness, datum=5000.0)
 Sw, So, Sg = bores.build_saturation_grids(
     depth_grid=depth,
     gas_oil_contact=4900.0,       # GOC above reservoir (no initial gas cap)
-    oil_water_contact=5100.0,     # OWC near reservoir bottom
+    oil_water_contact=5055.0,     # OWC near reservoir bottom
     connate_water_saturation_grid=Swc,
     residual_oil_saturation_water_grid=Sorw,
     residual_oil_saturation_gas_grid=Sorg,
@@ -128,7 +132,7 @@ model = bores.reservoir_model(
     cell_dimension=cell_dimension,
     thickness_grid=thickness,
     pressure_grid=pressure,
-    rock_compressibility=3e-6,            # psi^-1
+    rock_compressibility=3e-6,            # psi⁻¹
     absolute_permeability=permeability,
     porosity_grid=porosity,
     temperature_grid=temperature,
@@ -171,6 +175,7 @@ producer = bores.production_well(
             target_rate=-200.0,    # produce 200 STB/day of oil
             target_phase="oil",
             bhp_limit=500.0,       # minimum BHP constraint
+            clamp=bores.ProductionClamp(),
         ),
         secondary_clamp=bores.ProductionClamp(),
     ),
@@ -208,7 +213,7 @@ The `wells_()` factory groups wells into a `Wells` container. Since this is a de
 ## Step 6 - Configure Rock-Fluid Properties
 
 ```python
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.0,
         oil_exponent=2.0,
@@ -236,7 +241,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=1),
         simulation_time=bores.Time(days=730),   # 2 years
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )

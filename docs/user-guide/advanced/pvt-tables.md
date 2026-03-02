@@ -150,7 +150,7 @@ By default, interpolated values are clamped to physically reasonable ranges to p
 |---|---|---|
 | Oil viscosity | 1e-6 cP | 10,000 cP |
 | Oil compressibility | 0 | 0.1 psi-1 |
-| Oil density | 1.0 lb/ft3 | 80.0 lb/ft3 |
+| Oil density | 1.0 lb/ft³ | 80.0 lb/ft³ |
 | Oil FVF | 0.5 bbl/STB | 5.0 bbl/STB |
 | Solution GOR | 0 SCF/STB | 5,000 SCF/STB |
 | Gas viscosity | 1e-6 cP | 100 cP |
@@ -181,7 +181,7 @@ Pass the `PVTTables` object to the `Config`:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pvt_tables=pvt_tables,
 )

@@ -25,7 +25,11 @@ This is a single, self-contained script. You can copy it into a Python file or n
 
 ```python
 import bores
+import logging
 import numpy as np
+
+# Set log level
+logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Step 1: Set precision
@@ -93,7 +97,7 @@ model = bores.reservoir_model(
     cell_dimension=cell_dimension,
     thickness_grid=thickness,
     pressure_grid=pressure,
-    rock_compressibility=3e-6,            # psi^-1
+    rock_compressibility=3e-6,            # psi⁻¹
     absolute_permeability=permeability,
     porosity_grid=porosity,
     temperature_grid=temperature,
@@ -108,6 +112,7 @@ model = bores.reservoir_model(
     residual_gas_saturation_grid=Sgr,
     irreducible_water_saturation_grid=Swir,
     connate_water_saturation_grid=Swc,
+    datum_depth=5000,
 )
 
 # ---------------------------------------------------------------------------
@@ -119,7 +124,11 @@ injector = bores.injection_well(
     well_name="INJ-1",
     perforating_intervals=[((0, 0, 0), (0, 0, 2))],
     radius=0.25,  # ft
-    control=bores.ConstantRateControl(target_rate=500.0),  # 500 STB/day
+    control=bores.ConstantRateControl(
+        target_rate=8000.0, # 8000 STB/day
+        bhp_limit=5000,
+        clamp=bores.InjectionClamp(),
+    ),  
     injected_fluid=bores.InjectedFluid(
         name="Water",
         phase=bores.FluidPhase.WATER,
@@ -137,9 +146,10 @@ producer = bores.production_well(
     control=bores.PrimaryPhaseRateControl(
         primary_phase=bores.FluidPhase.OIL,
         primary_control=bores.AdaptiveBHPRateControl(
-            target_rate=-500.0,    # produce 500 STB/day of oil
+            target_rate=-10_000.0,    # produce 10,000 STB/day of oil
             target_phase="oil",
             bhp_limit=1000.0,      # never drop below 1000 psi
+            clamp=bores.ProductionClamp(),
         ),
         secondary_clamp=bores.ProductionClamp(),
     ),
@@ -163,7 +173,7 @@ wells = bores.wells_(injectors=[injector], producers=[producer])
 # ---------------------------------------------------------------------------
 # Brooks-Corey relative permeability model with Corey exponents of 2.0.
 # The capillary pressure model uses default Brooks-Corey parameters.
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.0,
         oil_exponent=2.0,
@@ -175,17 +185,15 @@ rock_fluid = bores.RockFluidTables(
 # ---------------------------------------------------------------------------
 # Step 6: Configure the simulation
 # ---------------------------------------------------------------------------
-# The Time helper converts human-readable durations to seconds.
-Time = bores.Time
-
+# The `Time` helper converts human-readable durations to seconds.
 config = bores.Config(
     timer=bores.Timer(
-        initial_step_size=Time(days=1),
-        max_step_size=Time(days=10),
-        min_step_size=Time(hours=1),
-        simulation_time=Time(days=365),
+        initial_step_size=bores.Time(days=1),
+        max_step_size=bores.Time(days=10),
+        min_step_size=bores.Time(hours=1),
+        simulation_time=bores.Time(days=365),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",  # Implicit Pressure, Explicit Saturation
 )
@@ -292,11 +300,15 @@ For long-running simulations, collecting all states in memory is impractical. BO
 ```python
 import bores
 
-# ... (model and config setup from above) ...
+# ... (model and config setup from above, just after step 6) ...
 
 store = bores.ZarrStore("waterflood_results.zarr")
 
-with bores.StateStream(states=bores.run(model, config), store=store) as stream:
+with bores.StateStream(
+    states=bores.run(model, config), 
+    store=store, 
+    background_io=True,
+) as stream:
     for state in stream:
         # Each state is persisted to disk automatically
         if state.step % 10 == 0:
@@ -315,7 +327,7 @@ BORES includes Plotly-based visualization tools for quick inspection of results.
 import bores
 import numpy as np
 
-# ... (run the simulation and collect states as before) ...
+# ... (run the simulation and collect states as before, from step 7) ...
 
 # Extract average pressure over time
 time_days = np.array([s.time_in_days for s in states])

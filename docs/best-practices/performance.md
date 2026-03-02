@@ -45,6 +45,7 @@ Single precision is faster than double precision for two reasons: it uses half t
 
 ```python
 import bores
+import numpy as np
 
 # Switch to 64-bit for a challenging problem
 bores.use_64bit_precision()
@@ -52,7 +53,7 @@ bores.use_64bit_precision()
 model = bores.reservoir_model(...)
 
 # Or use temporarily with a context manager
-with bores.with_precision(64):
+with bores.with_precision(np.float64):
     model = bores.reservoir_model(...)
     # 64-bit inside this block
 # Back to 32-bit outside

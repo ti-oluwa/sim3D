@@ -21,7 +21,7 @@ import numpy as np
 
 # Extract a 2D slice from a 3D simulation state
 # For a 3D grid with shape (nz, ny, nx), take a horizontal slice at layer k=2
-pressure_slice = states[-1].model.fluid_properties.pressure_grid[2, :, :]
+pressure_slice = states[-1].model.fluid_properties.pressure_grid[:, :, 2]
 
 # Or extract the full 2D grid from a 2D simulation
 pressure_grid = states[-1].model.fluid_properties.pressure_grid

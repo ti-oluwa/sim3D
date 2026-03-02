@@ -254,7 +254,7 @@ data = {
     "Oil Rate": np.column_stack([time_days, oil_rate]),
     "Water Rate": np.column_stack([time_days, water_rate]),
 }
-fig = viz.make_plot(data, x_label="Time (days)", y_label="Rate (ft3/day)")
+fig = viz.make_plot(data, x_label="Time (days)", y_label="Rate (ft³/day)")
 fig.show()
 ```
 

@@ -174,7 +174,7 @@ Well startups create sudden, localized velocity spikes that can violate the CFL 
 
 ### Constant Timestep Mode
 
-For benchmarking or debugging, you may want to disable adaptive control and use a fixed timestep. Set `use_constant_step_size=True` in the `TimerState` or simply set `max_step_size` equal to `initial_step_size` and `min_step_size` to the same value. The controller will use that fixed value for every step.
+For benchmarking or debugging, you may want to disable adaptive control and use a fixed timestep. Simply set `max_step_size` equal to `initial_step_size` and `min_step_size` to the same value. The controller will use that fixed value for every step.
 
 ---
 

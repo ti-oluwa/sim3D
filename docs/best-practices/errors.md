@@ -177,7 +177,7 @@ timer = bores.Timer(
 
 ---
 
-## Using StopSimulation
+## Using `StopSimulation`
 
 `StopSimulation` is not an error. It is a control-flow exception you can raise to halt a simulation early. The simulation loop catches it and stops cleanly, preserving all results up to that point.
 
@@ -210,4 +210,4 @@ When a simulation fails, follow this sequence:
 
 5. **Reduce the timestep.** Set a smaller `max_step_size` and `initial_step_size`. If the simulation works with tiny timesteps, the problem is a CFL or convergence issue that the adaptive controller cannot handle at larger steps.
 
-6. **Check units.** BORES uses oil-field units throughout: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft3, viscosity in cP, length in feet, time in seconds (internally). Mixing SI and oil-field values is a common source of non-physical results.
+6. **Check units.** BORES uses oil-field units throughout: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft³, viscosity in cP, length in feet, time in seconds (internally). Mixing SI and oil-field values is a common source of non-physical results.

@@ -24,17 +24,6 @@ $$
 
 where $\Delta V_{\text{pore}}$ is the change in pore volume occupied by that phase, $Q_{\text{in}}$ and $Q_{\text{out}}$ are the volumetric injection and production rates at reservoir conditions, and $V_{\text{pore,initial}}$ is the initial pore volume of that phase.
 
-You can compute material balance using the `ModelAnalyst` class:
-
-```python
-import bores
-
-analyst = bores.ModelAnalyst(store=store)
-
-# Check oil material balance
-oil_balance = analyst.compute_recovery_factor(phase=bores.FluidPhase.OIL)
-```
-
 ### Acceptable Error Levels
 
 For engineering purposes, material balance errors should be:

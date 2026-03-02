@@ -43,9 +43,9 @@ If you are accustomed to SI units, you will need to convert your input data to o
 
 | Quantity | Unit | Symbol |
 | --- | --- | --- |
-| Cross-sectional area | square feet | ft2 |
+| Cross-sectional area | square feet | ft² |
 | Pore volume | reservoir barrels | bbl |
-| Grid cell volume | cubic feet | ft3 |
+| Grid cell volume | cubic feet | ft³ |
 
 ### Flow Rates
 
@@ -53,7 +53,7 @@ If you are accustomed to SI units, you will need to convert your input data to o
 | --- | --- | --- |
 | Oil rate (reservoir) | barrels per day | bbl/day |
 | Oil rate (surface) | stock-tank barrels per day | STB/day |
-| Gas rate (reservoir) | cubic feet per day | ft3/day |
+| Gas rate (reservoir) | cubic feet per day | ft³/day |
 | Gas rate (surface) | standard cubic feet per day | SCF/day |
 | Water rate | barrels per day | bbl/day |
 
@@ -62,14 +62,14 @@ If you are accustomed to SI units, you will need to convert your input data to o
 | Quantity | Unit | Symbol |
 | --- | --- | --- |
 | Oil formation volume factor | barrels per stock-tank barrel | bbl/STB |
-| Gas formation volume factor | cubic feet per standard cubic foot | ft3/SCF |
+| Gas formation volume factor | cubic feet per standard cubic foot | ft³/SCF |
 | Water formation volume factor | barrels per stock-tank barrel | bbl/STB |
 | Oil viscosity | centipoise | cP |
 | Gas viscosity | centipoise | cP |
 | Water viscosity | centipoise | cP |
-| Oil density | pounds-mass per cubic foot | lbm/ft3 |
-| Gas density | pounds-mass per cubic foot | lbm/ft3 |
-| Water density | pounds-mass per cubic foot | lbm/ft3 |
+| Oil density | pounds-mass per cubic foot | lbm/ft³ |
+| Gas density | pounds-mass per cubic foot | lbm/ft³ |
+| Water density | pounds-mass per cubic foot | lbm/ft³ |
 | Oil compressibility | inverse psi | psi-1 |
 | Gas compressibility | inverse psi | psi-1 |
 | Water compressibility | inverse psi | psi-1 |
@@ -137,16 +137,16 @@ If your data is in SI units, use these conversion factors:
 | Temperature | Kelvin | Fahrenheit | $F = (K - 273.15) \times 9/5 + 32$ |
 | Length | meters | feet | 3.28084 |
 | Length | centimeters | feet | 0.0328084 |
-| Permeability | m2 | mD | 1.01325e+15 |
+| Permeability | m² | mD | 1.01325e+15 |
 | Permeability | Darcy | mD | 1000 |
 | Viscosity | Pa.s | cP | 1000 |
 | Viscosity | mPa.s | cP | 1.0 |
-| Density | kg/m3 | lbm/ft3 | 0.062428 |
-| Volume | m3 | bbl | 6.28981 |
+| Density | kg/m³ | lbm/ft³ | 0.062428 |
+| Volume | m³ | bbl | 6.28981 |
 | Volume | liters | bbl | 0.00628981 |
-| Flow rate | m3/s | bbl/day | 543439.65 |
-| Flow rate | m3/day | bbl/day | 6.28981 |
-| Compressibility | Pa-1 | psi-1 | 6894.757 |
+| Flow rate | m³/s | bbl/day | 543439.65 |
+| Flow rate | m³/day | bbl/day | 6.28981 |
+| Compressibility | Pa⁻¹ | psi-1 | 6894.757 |
 
 ### Example Conversion
 

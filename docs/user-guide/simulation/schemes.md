@@ -13,7 +13,7 @@ import bores
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",  # "impes", "explicit", or "implicit"
 )
@@ -30,7 +30,7 @@ In IMPES, the pressure equation is solved implicitly (using a linear system solv
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )
@@ -55,7 +55,7 @@ The fully explicit scheme treats both pressure and saturation explicitly. Both e
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="explicit",
 )
@@ -70,7 +70,7 @@ The CFL thresholds can be tuned in the `Config`:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="explicit",
     pressure_cfl_threshold=0.9,     # Max pressure CFL number
@@ -93,7 +93,7 @@ The fully implicit scheme treats both pressure and saturation implicitly. Both e
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="implicit",
 )
@@ -115,7 +115,7 @@ You can control convergence behavior with the following `Config` parameters:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="implicit",
     pressure_convergence_tolerance=1e-6,    # Tighter for pressure
@@ -153,7 +153,7 @@ The `Config` provides several parameters that control how the solver behaves wit
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 

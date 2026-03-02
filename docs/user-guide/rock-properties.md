@@ -128,7 +128,7 @@ You pass rock compressibility as a scalar to `bores.reservoir_model()`:
 ```python
 model = bores.reservoir_model(
     # ... other parameters ...
-    rock_compressibility=3e-6,  # psi^-1
+    rock_compressibility=3e-6,  # psi⁻¹
 )
 ```
 

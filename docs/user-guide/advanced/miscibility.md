@@ -52,7 +52,7 @@ config = bores.Config(
         min_step_size=bores.Time(minutes=30),
         simulation_time=bores.Time(years=3),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     miscibility_model="todd_longstaff",
     freeze_saturation_pressure=False,
@@ -109,12 +109,12 @@ co2_fluid = bores.InjectedFluid(
     molecular_weight=44.01,
     is_miscible=True,
     minimum_miscibility_pressure=1200.0,
-    density=35.0,      # lbm/ft3 from lab data or EOS
+    density=35.0,      # lbm/ft³ from lab data or EOS
     viscosity=0.05,    # cP from lab data or EOS
 )
 ```
 
-CO2 density at reservoir conditions is typically around 35 lbm/ft3, while the standard gas correlations predict only 3 to 7 lbm/ft3. Similarly, CO2 viscosity is around 0.05 cP versus the correlation prediction of 0.01 to 0.02 cP. Using the override values improves accuracy by approximately 25%.
+CO2 density at reservoir conditions is typically around 35 lbm/ft³, while the standard gas correlations predict only 3 to 7 lbm/ft³. Similarly, CO2 viscosity is around 0.05 cP versus the correlation prediction of 0.01 to 0.02 cP. Using the override values improves accuracy by approximately 25%.
 
 ---
 

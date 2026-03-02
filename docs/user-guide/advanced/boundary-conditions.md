@@ -161,7 +161,7 @@ boundary_conditions = BoundaryConditions(
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     boundary_conditions=boundary_conditions,
 )

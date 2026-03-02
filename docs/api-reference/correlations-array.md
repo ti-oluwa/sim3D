@@ -6,7 +6,7 @@ The `bores.correlations.arrays` module contains vectorized versions of every sca
 
 Every function in this module accepts `NDimensionalGrid` arrays (typed NumPy arrays parameterized by dimension) and returns arrays of the same shape. The functions use the same correlations, formulas, and valid ranges as their scalar counterparts. Many are compiled with Numba's `@numba.njit` decorator for performance-critical inner loops, while CoolProp-based functions iterate over array elements internally.
 
-All units are the same as the scalar module: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft3, viscosity in cP, and formation volume factors in bbl/STB or ft3/SCF.
+All units are the same as the scalar module: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft³, viscosity in cP, and formation volume factors in bbl/STB or ft³/SCF.
 
 ```python
 from bores.correlations.arrays import (
@@ -81,7 +81,7 @@ The table below lists every public function in the array module. Each function h
 
 | Function | Returns | Unit |
 | --- | --- | --- |
-| `compute_fluid_density(pressure, temperature, fluid)` | Fluid density grid | lbm/ft3 |
+| `compute_fluid_density(pressure, temperature, fluid)` | Fluid density grid | lbm/ft³ |
 | `compute_fluid_viscosity(pressure, temperature, fluid)` | Fluid viscosity grid | cP |
 | `compute_fluid_compressibility_factor(pressure, temperature, fluid)` | Z-factor grid | dimensionless |
 | `compute_fluid_compressibility(pressure, temperature, fluid)` | Compressibility grid | psi-1 |
@@ -112,7 +112,7 @@ These functions iterate over each element of the input arrays and call CoolProp 
 | `compute_dead_oil_viscosity_modified_beggs(temperature, oil_specific_gravity)` | Dead oil viscosity grid | cP |
 | `compute_oil_viscosity(pressure, temperature, bubble_point_pressure, oil_specific_gravity, gas_to_oil_ratio, gor_at_bubble_point_pressure)` | Oil viscosity grid | cP |
 | `compute_oil_compressibility(pressure, temperature, bubble_point_pressure, oil_api_gravity, gas_gravity, gor_at_bubble_point_pressure, ...)` | Oil compressibility grid | psi-1 |
-| `compute_live_oil_density(api_gravity, gas_gravity, gas_to_oil_ratio, formation_volume_factor)` | Live oil density grid | lbm/ft3 |
+| `compute_live_oil_density(api_gravity, gas_gravity, gas_to_oil_ratio, formation_volume_factor)` | Live oil density grid | lbm/ft³ |
 
 ### Gas Properties
 
@@ -120,12 +120,12 @@ These functions iterate over each element of the input arrays and call CoolProp 
 | --- | --- | --- |
 | `compute_gas_molecular_weight(gas_gravity)` | Gas molecular weight grid | g/mol |
 | `compute_gas_pseudocritical_properties(gas_gravity, h2s_mole_fraction, co2_mole_fraction, n2_mole_fraction)` | (Ppc, Tpc) tuple of grids | psi, R |
-| `compute_gas_formation_volume_factor(pressure, temperature, gas_compressibility_factor)` | Bg grid | ft3/SCF |
+| `compute_gas_formation_volume_factor(pressure, temperature, gas_compressibility_factor)` | Bg grid | ft³/SCF |
 | `compute_gas_compressibility_factor_papay(pressure, temperature, gas_gravity, ...)` | Z-factor grid (Papay) | dimensionless |
 | `compute_gas_compressibility_factor_hall_yarborough(pressure, temperature, gas_gravity, ...)` | Z-factor grid (Hall-Yarborough) | dimensionless |
 | `compute_gas_compressibility_factor_dranchuk_abou_kassem(pressure, temperature, gas_gravity, ...)` | Z-factor grid (DAK) | dimensionless |
 | `compute_gas_compressibility_factor(pressure, temperature, gas_gravity, ..., method)` | Z-factor grid (unified) | dimensionless |
-| `compute_gas_density(pressure, temperature, gas_gravity, gas_compressibility_factor)` | Gas density grid | lbm/ft3 |
+| `compute_gas_density(pressure, temperature, gas_gravity, gas_compressibility_factor)` | Gas density grid | lbm/ft³ |
 | `compute_gas_viscosity(temperature, gas_density, gas_molecular_weight)` | Gas viscosity grid (LGE) | cP |
 | `compute_gas_compressibility(pressure, temperature, gas_gravity, ...)` | Gas compressibility grid | psi-1 |
 
@@ -136,9 +136,9 @@ These functions iterate over each element of the input arrays and call CoolProp 
 | `compute_water_formation_volume_factor(water_density, salinity)` | Bw grid | bbl/STB |
 | `compute_water_formation_volume_factor_mccain(pressure, temperature, salinity, gas_solubility)` | Bw grid (McCain) | bbl/STB |
 | `compute_water_viscosity(temperature, salinity, pressure)` | Water viscosity grid | cP |
-| `compute_water_density(pressure, temperature, gas_gravity, salinity, gas_solubility_in_water, gas_free_water_formation_volume_factor)` | Live water density grid | lbm/ft3 |
-| `compute_water_density_mccain(pressure, temperature, salinity)` | Water density grid (McCain) | lbm/ft3 |
-| `compute_water_density_batzle(pressure, temperature, salinity)` | Water density grid (Batzle-Wang) | lbm/ft3 |
+| `compute_water_density(pressure, temperature, gas_gravity, salinity, gas_solubility_in_water, gas_free_water_formation_volume_factor)` | Live water density grid | lbm/ft³ |
+| `compute_water_density_mccain(pressure, temperature, salinity)` | Water density grid (McCain) | lbm/ft³ |
+| `compute_water_density_batzle(pressure, temperature, salinity)` | Water density grid (Batzle-Wang) | lbm/ft³ |
 | `compute_water_compressibility(pressure, temperature, bubble_point_pressure, gas_formation_volume_factor, gas_solubility_in_water, gas_free_water_formation_volume_factor, salinity)` | Water compressibility grid | psi-1 |
 | `compute_gas_free_water_formation_volume_factor(pressure, temperature)` | Gas-free Bw grid | bbl/STB |
 
@@ -170,7 +170,7 @@ These functions iterate over each element of the input arrays and call CoolProp 
 | `compute_miscibility_transition_factor(pressure, minimum_miscibility_pressure, transition_width)` | Transition factor grid | dimensionless |
 | `compute_effective_todd_longstaff_omega(pressure, base_omega, minimum_miscibility_pressure, transition_width)` | Effective omega grid | dimensionless |
 | `compute_todd_longstaff_effective_viscosity(oil_viscosity, solvent_viscosity, solvent_concentration, omega)` | Effective viscosity grid | cP |
-| `compute_todd_longstaff_effective_density(oil_density, solvent_density, oil_viscosity, solvent_viscosity, solvent_concentration, omega)` | Effective density grid | lbm/ft3 |
+| `compute_todd_longstaff_effective_density(oil_density, solvent_density, oil_viscosity, solvent_viscosity, solvent_concentration, omega)` | Effective density grid | lbm/ft³ |
 
 ---
 

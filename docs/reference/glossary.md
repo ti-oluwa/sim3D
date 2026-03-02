@@ -45,7 +45,7 @@
 : The permeability of a rock to a specific fluid phase when multiple phases are present. It is the product of absolute permeability and relative permeability: $k_{\text{eff}} = k \cdot k_r$.
 
 **Formation volume factor (FVF)**
-: The ratio of the volume of a fluid at reservoir conditions (pressure, temperature) to its volume at standard (surface) conditions. Oil FVF ($B_o$) is measured in bbl/STB. Gas FVF ($B_g$) is measured in ft3/SCF. Water FVF ($B_w$) is measured in bbl/STB.
+: The ratio of the volume of a fluid at reservoir conditions (pressure, temperature) to its volume at standard (surface) conditions. Oil FVF ($B_o$) is measured in bbl/STB. Gas FVF ($B_g$) is measured in ft³/SCF. Water FVF ($B_w$) is measured in bbl/STB.
 
 **Gas-oil contact (GOC)**
 : The depth at which the gas cap meets the oil zone. Above the GOC, the pore space is primarily filled with gas. Below it, the pore space is primarily filled with oil (and connate water).

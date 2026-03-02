@@ -235,7 +235,7 @@ config = bores.Config(
     timer=timer,
     wells=wells,
     well_schedules=schedules,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     scheme="impes",
 )
 ```

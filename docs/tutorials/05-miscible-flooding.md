@@ -43,7 +43,7 @@ We use the same 15x15x3 grid for consistency, but now inject CO2 with miscible p
 - **CO2 injector**: Corner (0, 0)
 - **MMP**: 1,800 psi
 - **Todd-Longstaff omega**: 0.67
-- **CO2 density**: 35.0 lbm/ft3 (at reservoir conditions)
+- **CO2 density**: 35.0 lbm/ft³ (at reservoir conditions)
 - **CO2 viscosity**: 0.05 cP (at reservoir conditions)
 
 !!! info "Minimum Miscibility Pressure (MMP)"
@@ -118,11 +118,12 @@ model = bores.reservoir_model(
     residual_gas_saturation_grid=Sgr,
     irreducible_water_saturation_grid=Swir,
     connate_water_saturation_grid=Swc,
-    reservoir_gas="co2",
+    reservoir_gas="CO2",
+    datum_depth=5000,
 )
 ```
 
-The only difference in the model construction is `reservoir_gas="co2"`, which tells the PVT correlation engine that the gas phase properties should be computed for CO2 rather than methane. This affects gas viscosity, density, compressibility factor, and other derived properties.
+The only difference in the model construction is `reservoir_gas="CO2"`, which tells the PVT correlation engine that the gas phase properties should be computed for CO2 rather than methane. This affects gas viscosity, density, compressibility factor, and other derived properties.
 
 ---
 
@@ -133,7 +134,10 @@ co2_injector = bores.injection_well(
     well_name="CO2-INJ-1",
     perforating_intervals=[((0, 0, 0), (0, 0, 2))],
     radius=0.25,
-    control=bores.ConstantRateControl(target_rate=500.0),
+    control=bores.ConstantRateControl(
+        target_rate=5_000_000.0, 
+        bhp_limit=5000,
+    ),
     injected_fluid=bores.InjectedFluid(
         name="CO2",
         phase=bores.FluidPhase.GAS,
@@ -142,7 +146,7 @@ co2_injector = bores.injection_well(
         is_miscible=True,
         minimum_miscibility_pressure=1800.0,
         todd_longstaff_omega=0.67,
-        density=35.0,       # lbm/ft3 at reservoir conditions
+        density=35.0,       # lbm/ft³ at reservoir conditions
         viscosity=0.05,     # cP at reservoir conditions
     ),
 )
@@ -156,7 +160,7 @@ This is the most important part of the tutorial. The `InjectedFluid` has several
 
 **`todd_longstaff_omega=0.67`** is the mixing parameter. The value of 2/3 is the most commonly used default in the industry. We will explore the sensitivity to this parameter later in the tutorial.
 
-**`density=35.0` and `viscosity=0.05`** override the correlation-based property calculations. This is important for CO2 because standard gas correlations (designed for hydrocarbon gases) significantly underestimate CO2 density and may give inaccurate viscosity values. At reservoir conditions (3,000 psi, 180 F), supercritical CO2 has a density around 35 lbm/ft3 and a viscosity around 0.05 cP. These values should ideally come from laboratory measurements or an equation of state model.
+**`density=35.0` and `viscosity=0.05`** override the correlation-based property calculations. This is important for CO2 because standard gas correlations (designed for hydrocarbon gases) significantly underestimate CO2 density and may give inaccurate viscosity values. At reservoir conditions (3,000 psi, 180 F), supercritical CO2 has a density around 35 lbm/ft³ and a viscosity around 0.05 cP. These values should ideally come from laboratory measurements or an equation of state model.
 
 !!! danger "CO2 Properties Require Overrides"
 
@@ -198,7 +202,7 @@ producer = bores.production_well(
 
 wells = bores.wells_(injectors=[co2_injector], producers=[producer])
 
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.5,
         oil_exponent=2.0,
@@ -214,7 +218,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=0.5),
         simulation_time=bores.Time(days=1095),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
     miscibility_model="todd_longstaff",
@@ -339,16 +343,16 @@ for omega in omega_values:
     )
 
     # Update wells and config
-    wells_omega = bores.wells_(injectors=[inj], producers=[producer])
-    config_omega = config.with_updates(wells=wells_omega)
+    wells = bores.wells_(injectors=[inj], producers=[producer])
+    config = config.with_updates(wells=wells)
 
     # Run simulation
-    states_omega = list(bores.run(model, config_omega))
+    states = list(bores.run(model, config))
 
     # Store recovery factor
-    time_d = np.array([s.time_in_days for s in states_omega])
+    time_d = np.array([s.time_in_days for s in states])
     avg_so = np.array([
-        s.model.fluid_properties.oil_saturation_grid.mean() for s in states_omega
+        s.model.fluid_properties.oil_saturation_grid.mean() for s in states
     ])
     rf = (initial_So - avg_so) / initial_So
     results[f"omega = {omega:.2f}"] = np.column_stack([time_d, rf])

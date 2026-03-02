@@ -107,7 +107,7 @@ co2_fluid = bores.InjectedFluid(
     phase=bores.FluidPhase.GAS,
     specific_gravity=1.52,      # CO2 gravity relative to air
     molecular_weight=44.01,     # CO2 molecular weight
-    density=35.0,               # lbm/ft3 - from EOS or lab data
+    density=35.0,               # lbm/ft³ - from EOS or lab data
     viscosity=0.05,             # cP - from EOS or lab data
 )
 ```
@@ -116,7 +116,7 @@ When `density` or `viscosity` is set, BORES uses those values directly instead o
 
 The density and viscosity values should come from equation-of-state calculations (using a tool like CoolProp, NIST REFPROP, or commercial PVT software) or from laboratory measurements at your specific reservoir temperature and pressure. As a rough guide for CO2 at typical reservoir conditions:
 
-| Condition | Density (lbm/ft3) | Viscosity (cP) |
+| Condition | Density (lbm/ft³) | Viscosity (cP) |
 | --- | --- | --- |
 | 2000 psi, 150 degrees F | ~30 | ~0.04 |
 | 3000 psi, 150 degrees F | ~38 | ~0.05 |

@@ -17,7 +17,7 @@ At minimum, a `Config` requires a `Timer` and a `RockFluidTables`:
 ```python
 import bores
 
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.5,
         oil_exponent=2.0,
@@ -33,7 +33,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=1),
         simulation_time=bores.Time(years=3),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
 )
 ```
 
@@ -53,7 +53,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=1),
         simulation_time=bores.Time(years=3),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
 )
 ```
@@ -65,7 +65,7 @@ For simulations with time-varying well controls, use `well_schedules`:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     well_schedules=schedules,
 )
 ```
@@ -79,7 +79,7 @@ Boundary conditions (aquifer support, constant pressure boundaries, etc.) are sp
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     boundary_conditions=boundary_conditions,
 )
@@ -194,7 +194,7 @@ These ranges prevent division by zero and numerical overflow in mobility calcula
 
 Since `Config` is immutable, you cannot modify fields directly. Use `copy()` or `with_updates()` to create modified versions:
 
-### copy()
+### `copy()`
 
 ```python
 # Create a new config with a different scheme
@@ -209,7 +209,7 @@ tuned_config = config.copy(
 )
 ```
 
-### with_updates()
+### `with_updates()`
 
 `with_updates()` works the same way as `copy()` but validates that all provided keys are valid `Config` attributes:
 
@@ -233,7 +233,7 @@ The `freeze_saturation_pressure` flag controls whether the oil bubble point pres
 # Keep Pb constant (standard black-oil assumption)
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     freeze_saturation_pressure=True,
 )
@@ -260,7 +260,7 @@ The `capillary_strength_factor` scales capillary pressure effects without changi
 # Reduce capillary effects by 50% for numerical stability
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     capillary_strength_factor=0.5,
 )
@@ -284,7 +284,7 @@ config = bores.Config(
         min_step_size=bores.Time(days=1),
         simulation_time=bores.Time(years=10),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     freeze_saturation_pressure=True,
 )
@@ -300,7 +300,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=1),
         simulation_time=bores.Time(years=5),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="gmres",
     pressure_preconditioner="amg",
@@ -319,7 +319,7 @@ config = bores.Config(
         min_step_size=bores.Time(minutes=30),
         simulation_time=bores.Time(years=3),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     miscibility_model="todd_longstaff",
     freeze_saturation_pressure=False,

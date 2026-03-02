@@ -171,6 +171,8 @@ The `cells` parameter accepts:
 | --- | --- | --- |
 | `None` | `cells=None` | Entire reservoir (default) |
 | `str` | `cells="PROD-1"` | Well name |
+| `Well/Wells` | `cells=production_well` | `Well` or `Wells` object |
+| `Sequence[Well]` | `cells=[production_well, injection_well]` | Sequence of `Well` objects |
 | `tuple(int,int,int)` | `cells=(5,5,0)` | Single cell index |
 | `list[tuple]` | `cells=[(5,5,0),(6,5,0)]` | Multiple cell indices |
 | `tuple(slice,...)` | `cells=(slice(0,10),...)` | Grid region |
@@ -282,8 +284,8 @@ vol = analyst.reservoir_volumetrics_analysis(step=-1)
 print(f"Oil in place: {vol.oil_in_place:,.0f} STB")
 print(f"Gas in place: {vol.gas_in_place:,.0f} SCF")
 print(f"Water in place: {vol.water_in_place:,.0f} STB")
-print(f"Pore volume: {vol.pore_volume:,.0f} ft3")
-print(f"HCPV: {vol.hydrocarbon_pore_volume:,.0f} ft3")
+print(f"Pore volume: {vol.pore_volume:,.0f} ft³")
+print(f"HCPV: {vol.hydrocarbon_pore_volume:,.0f} ft³")
 ```
 
 The `ReservoirVolumetrics` result class contains:
@@ -293,8 +295,8 @@ The `ReservoirVolumetrics` result class contains:
 | `oil_in_place` | STB | Total oil in place |
 | `gas_in_place` | SCF | Total gas in place |
 | `water_in_place` | STB | Total water in place |
-| `pore_volume` | ft3 | Total pore volume |
-| `hydrocarbon_pore_volume` | ft3 | Hydrocarbon-bearing pore volume |
+| `pore_volume` | ft³ | Total pore volume |
+| `hydrocarbon_pore_volume` | ft³ | Hydrocarbon-bearing pore volume |
 
 ### Volumetrics History
 
@@ -487,7 +489,7 @@ print(f"Avg pressure: {prod.average_reservoir_pressure:.0f} psi")
 print(f"Skin factor: {prod.skin_factor:.2f}")
 print(f"Flow efficiency: {prod.flow_efficiency:.2%}")
 print(f"Well index: {prod.well_index:.4f} rb/day/psi")
-print(f"Avg mobility: {prod.average_mobility:.4f} 1/cP")
+print(f"Avg mobility: {prod.average_mobility:.4f} cP⁻¹")
 ```
 
 ### Parameters
@@ -509,7 +511,7 @@ The `ProductivityAnalysis` result class contains:
 | `skin_factor` | dimensionless | Average skin factor across active wells |
 | `flow_efficiency` | fraction | Flow efficiency accounting for skin |
 | `well_index` | rb/day/psi | Average geometric well index |
-| `average_mobility` | 1/cP | Average phase mobility at perforations |
+| `average_mobility` | cP⁻¹ | Average phase mobility at perforations |
 
 ### Productivity History
 

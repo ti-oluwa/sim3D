@@ -169,6 +169,7 @@ model = bores.reservoir_model(
     connate_water_saturation_grid=Swc,
     dip_angle=3.0,        # 3 degrees from horizontal
     dip_azimuth=90.0,     # dipping toward East
+    datum_depth=5000,
 )
 ```
 

@@ -15,7 +15,7 @@ import bores
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="ilu",
     saturation_preconditioner="ilu",
@@ -42,7 +42,7 @@ ILU (Incomplete LU Factorization) is the default preconditioner and the most com
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="ilu",
     saturation_preconditioner="ilu",
@@ -58,7 +58,7 @@ AMG (Algebraic Multigrid) is a more powerful preconditioner that uses a hierarch
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="amg",
 )
@@ -75,7 +75,7 @@ CPR (Constrained Pressure Residual) is a two-stage preconditioner designed speci
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="implicit",
     pressure_preconditioner="cpr",
@@ -91,7 +91,7 @@ Block Jacobi is a simple preconditioner that inverts diagonal blocks of the matr
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="block_jacobi",
 )
@@ -127,7 +127,7 @@ cached_ilu.register(override=True)
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="cached_ilu",
 )
@@ -161,7 +161,7 @@ def my_preconditioner(A_csr):
 # Use in Config
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner="my_precond",
 )
@@ -189,7 +189,7 @@ You can disable preconditioning entirely by setting the preconditioner to `None`
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_preconditioner=None,    # No preconditioning
     saturation_preconditioner=None,

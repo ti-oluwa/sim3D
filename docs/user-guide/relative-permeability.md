@@ -229,7 +229,7 @@ While the Brooks-Corey model is convenient because it generates smooth curves fr
 
 Tabular relative permeability is the industry-standard approach when you have Special Core Analysis (SCAL) data from laboratory steady-state or unsteady-state experiments. In these experiments, two fluids are injected simultaneously through a core plug at different fractional flow rates, and the pressure drop and produced fluid volumes are used to back-calculate relative permeability at each saturation. The result is a table of saturation values paired with the corresponding relative permeability for each phase. Using these measured data directly avoids the approximation inherent in fitting an analytical model.
 
-### TwoPhaseRelPermTable
+### `TwoPhaseRelPermTable`
 
 A `TwoPhaseRelPermTable` stores one set of saturation values and the corresponding relative permeabilities for both phases. You specify which fluid is the wetting phase and which is the non-wetting phase, along with the saturation and permeability arrays.
 
@@ -262,7 +262,7 @@ krw_grid = ow_table.get_wetting_phase_relative_permeability(Sw_grid)
 kro_grid = ow_table.get_non_wetting_phase_relative_permeability(Sw_grid)
 ```
 
-### ThreePhaseRelPermTable
+### `ThreePhaseRelPermTable`
 
 For three-phase simulation, you combine two `TwoPhaseRelPermTable` objects (one for oil-water and one for gas-oil) into a `ThreePhaseRelPermTable`. This table uses the same mixing rules as the Brooks-Corey model to compute three-phase oil relative permeability from the two two-phase curves.
 
@@ -358,7 +358,7 @@ krg_grid = result["gas"]    # Shape: (20, 20, 5)
 
 The returned dictionary uses string keys `"water"`, `"oil"`, and `"gas"`. Each value is either a float (for scalar inputs) or a NumPy array matching the shape of the input saturations (for array inputs). This makes it easy to sweep over saturations for plotting or to evaluate the model on a full simulation grid.
 
-### Calling the ThreePhaseRelPermTable Directly
+### Calling the `ThreePhaseRelPermTable` Directly
 
 The tabular model works the same way. Use `get_relative_permeabilities()` or `__call__` with the three saturation values:
 
@@ -381,7 +381,7 @@ result = three_phase(
 )
 ```
 
-### Calling a TwoPhaseRelPermTable Directly
+### Calling a `TwoPhaseRelPermTable` Directly
 
 For the two-phase table, you query by wetting phase saturation using the dedicated methods:
 
@@ -401,7 +401,7 @@ This direct evaluation capability is valuable for generating relative permeabili
 
 ---
 
-## Integrating with RockFluidTables
+## Integrating with `RockFluidTables`
 
 Relative permeability is passed to the simulation through the `RockFluidTables` object, which also holds the capillary pressure model. You then pass `RockFluidTables` to the `Config`. This works the same way whether you use the Brooks-Corey analytical model or a tabular approach:
 
@@ -419,14 +419,14 @@ relperm = bores.BrooksCoreyThreePhaseRelPermModel(
     mixing_rule="eclipse_rule",
 )
 
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=relperm,
     capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(),
 )
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )
@@ -435,7 +435,7 @@ config = bores.Config(
 You can also pass a `ThreePhaseRelPermTable` instead of the Brooks-Corey model:
 
 ```python
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=three_phase,  # ThreePhaseRelPermTable from lab data
     capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(),
 )

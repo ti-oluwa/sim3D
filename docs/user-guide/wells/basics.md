@@ -113,7 +113,7 @@ An `InjectedFluid` describes the properties of the fluid being injected. It exte
 | `is_miscible` | `False` | Whether this fluid is miscible with oil |
 | `todd_longstaff_omega` | `0.67` | Todd-Longstaff mixing parameter (0 to 1) |
 | `minimum_miscibility_pressure` | `None` | MMP in psi (required if miscible) |
-| `density` | `None` | Override density in lbm/ft3 (bypasses correlations) |
+| `density` | `None` | Override density in lbm/ft³ (bypasses correlations) |
 | `viscosity` | `None` | Override viscosity in cP (bypasses correlations) |
 
 See [Well Fluids](fluids.md) for detailed guidance on configuring injected fluids, especially for CO2 and miscible gas injection.
@@ -231,7 +231,7 @@ The `Wells` object is then passed to the `Config` for simulation:
 config = bores.Config(
     timer=timer,
     wells=wells,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     scheme="impes",
 )
 ```

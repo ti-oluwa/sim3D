@@ -27,7 +27,7 @@ These are the main entry points for building reservoir models and wells. The fac
 import bores
 
 model = bores.reservoir_model(
-    grid_dimensions=(10, 10, 3),
+    grid_shape=(10, 10, 3),
     grid_sizes=(100.0, 100.0, 20.0),
     porosity=0.20,
     permeability_x=100.0,
@@ -64,19 +64,19 @@ These classes and functions control how simulations are configured and executed.
 | Name | Type | Description |
 | --- | --- | --- |
 | `Config` | class | Frozen configuration holding timer, wells, boundary conditions, solvers, convergence parameters, evolution scheme, and rock-fluid tables. |
-| `Run` | class | Orchestrates the simulation loop. Yields `StepResult` objects per timestep. |
-| `run()` | function | Convenience function to create and start a `Run`. Returns a generator of step results. |
+| `Run` | class | Orchestrates the simulation loop. Yields `ModelState` objects per timestep. |
+| `run()` | function | Main function to create and start a simulation run. Used by `Run` internally. Returns a generator of model states (`ModelState`). |
 
 ```python
 config = bores.Config(
     timer=bores.Timer(end=365.0, initial_time_step=1.0),
     wells=wells,
-    evolution_scheme=bores.EvolutionScheme.IMPES,
+    scheme="impes",
 )
 
 simulation = bores.run(model=model, config=config)
 for step in simulation:
-    print(f"Day {step.time:.1f}, Pressure: {step.pressure.mean():.1f} psi")
+    print(f"Day {step.time:.1f}, Pressure: {step.model.pressure_grid.mean():.1f} psi")
 ```
 
 ### Time Management
@@ -85,7 +85,7 @@ for step in simulation:
 | --- | --- | --- |
 | `Timer` | class | Simulation timer with start, end, and adaptive timestep control. |
 | `Time()` | function | Create a `Timer` instance (convenience constructor). |
-| `TimerState` | class | Current state of the timer during simulation (current time, step count, dt). |
+| `TimerState` | TypedDict | Current state of the timer during simulation (current time, step count, dt). |
 
 ### Model State
 
@@ -105,10 +105,10 @@ Well types, fluid definitions, controls, and scheduling are all available at the
 | Name | Type | Description |
 | --- | --- | --- |
 | `Well` | class | Base well class. Generic over coordinates and fluid type. |
-| `InjectionWell` | type alias | `Well` specialized for injection with `InjectedFluid`. |
-| `ProductionWell` | type alias | `Well` specialized for production with `ProducedFluid`. |
-| `Wells` | type alias | Collection type for multiple wells (used in `Config`). |
-| `well_type()` | function | Return the type of a well ("injection" or "production"). |
+| `InjectionWell` | class | `Well` specialized for injection with `InjectedFluid`. |
+| `ProductionWell` | class | `Well` specialized for production with `ProducedFluid`. |
+| `Wells` | class | Collection type for multiple wells (used in `Config`). |
+| `well_type()` | function | Decorator to registers a (custom) type of a well ("injection" or "production") for easy serialization/deserialization. |
 
 ### Well Fluids
 
@@ -140,7 +140,7 @@ Well types, fluid definitions, controls, and scheduling are all available at the
 | `PrimaryPhaseRateControl` | class | Rate control on the primary phase with BHP fallback. |
 | `MultiPhaseRateControl` | class | Control targeting total liquid or total fluid rate. |
 | `AdaptiveBHPRateControl` | class | Starts with rate control, switches to BHP when the rate target cannot be met. |
-| `well_control()` | function | Factory to create a well control from a string name and parameters. |
+| `well_control()` | function | Decorator to register a (custom) well control for easy serialization/deserialization. |
 
 ### Rate Clamping
 
@@ -149,7 +149,7 @@ Well types, fluid definitions, controls, and scheduling are all available at the
 | `RateClamp` | protocol | Base protocol for rate clamping strategies. |
 | `ProductionClamp` | class | Clamp that limits production rate to a maximum. |
 | `InjectionClamp` | class | Clamp that limits injection rate to a maximum. |
-| `rate_clamp()` | function | Factory to create a rate clamp from parameters. |
+| `rate_clamp()` | function | Decorator to register a (custom) rate clamp for easy serialization/deserialization. |
 
 ### Well Scheduling
 
@@ -297,7 +297,7 @@ Types for specifying reservoir boundary behavior.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `Boundary` | protocol | Base protocol for all boundary types. |
+| `Boundary` | enum | All available boundary directions. |
 | `BoundaryCondition` | class | A boundary condition applied to a specific face or region. |
 | `BoundaryConditions` | class | Collection of boundary conditions for all faces of the grid. |
 | `GridBoundaryCondition` | class | Boundary condition applied to the grid with face and type specification. Validates periodic boundary pairing. |
@@ -486,7 +486,7 @@ Import from `bores.visualization.plotly3d`:
 | `plotly3d.CellBlockRenderer` | class | Individual cell block rendering. |
 | `plotly3d.Scatter3DRenderer` | class | 3D scatter plot renderer. |
 | `plotly3d.Labels` | class | Manages text labels and annotations in 3D scenes. |
-| `plotly3d.Label` | class | A single text label with position and formatting. |
+| `plotly3d.Label` | class | A single text label with position and formatting info. |
 
 ---
 
@@ -510,7 +510,7 @@ import bores
 bores.use_64bit_precision()
 
 # Or temporarily
-with bores.with_precision(64):
+with bores.with_precision("float64"):
     model = bores.reservoir_model(...)
 ```
 
@@ -525,12 +525,12 @@ Type aliases and enumerations used throughout the API.
 | Name | Type | Description |
 | --- | --- | --- |
 | `FluidPhase` | enum | Fluid phase: `OIL`, `WATER`, `GAS`. |
-| `EvolutionScheme` | enum | Simulation scheme: `IMPES`, `EXPLICIT`, `IMPLICIT`. |
+| `EvolutionScheme` | literal | Simulation scheme: `"impes"`, `"explicit"`, `"implicit"`. |
 | `Orientation` | enum | Spatial orientation for fractures and boundaries. |
 | `Wettability` | enum | Rock wettability: `WATER_WET`, `OIL_WET`, `MIXED_WET`. |
-| `MiscibilityModel` | enum | Miscibility model type. |
-| `MixingRule` | enum | Three-phase mixing rule identifier. |
-| `WellFluidType` | enum | Well fluid classification. |
+| `MiscibilityModel` | literal | Miscibility model type: `"immiscible"` or `"todd_longstaff"` |
+| `MixingRule` | protocol | Three-phase mixing rule contract/protocol. |
+| `WellFluidType` | literal | Well fluid type. `"oil"`, `"gas"` or `"water"`. |
 
 ### Dimension Types
 
@@ -548,7 +548,7 @@ Type aliases and enumerations used throughout the API.
 | `ThreeDimensionalGrid` | type alias | NumPy array of shape `(nx, ny, nz)`. |
 | `TwoDimensionalGrid` | type alias | NumPy array of shape `(nx, ny)`. |
 | `OneDimensionalGrid` | type alias | NumPy array of shape `(nx,)`. |
-| `ArrayLike` | type alias | Anything that can be converted to a NumPy array. |
+| `ArrayLike` | protocol | Protocol for anything that can be converted to a NumPy array. |
 
 ### Function Types
 
@@ -563,10 +563,10 @@ Type aliases and enumerations used throughout the API.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `CapillaryPressures` | type alias | Tuple of capillary pressure arrays (Pcow, Pcgo). |
-| `RelativePermeabilities` | type alias | Tuple of relative permeability arrays (kro, krw, krg). |
-| `RelativeMobilityRange` | type alias | Range of relative mobility values. |
-| `Range` | type alias | A `(min, max)` tuple. |
+| `CapillaryPressures` | TypedDict | Dictionary of capillary pressure arrays (Pcow, Pcgo). |
+| `RelativePermeabilities` | TypedDict | Dictionary of relative permeability arrays (kro, krw, krg). |
+| `RelativeMobilityRange` | TypedDict | Dictionary defining range of relative mobility values for each fluid phase. |
+| `Range` | class | A `(min, max)` range for quantities. |
 
 ---
 
@@ -587,7 +587,7 @@ import bores
 
 print(bores.c.STANDARD_PRESSURE)      # 14.696 psi
 print(bores.c.STANDARD_TEMPERATURE)   # 60.0 F
-print(bores.c.GAS_CONSTANT)           # 10.7316 psi*ft3/(lbmol*R)
+print(bores.c.GAS_CONSTANT)           # 10.7316 psi*ft³/(lbmol*R)
 ```
 
 ---
@@ -617,16 +617,16 @@ import bores
 
 try:
     model = bores.reservoir_model(porosity=-0.1, ...)
-except bores.ValidationError as e:
-    print(f"Invalid model: {e}")
+except bores.ValidationError as exc:
+    print(f"Invalid model: {exc}")
 
 try:
     for step in bores.run(model=model, config=config):
         pass
-except bores.SolverError as e:
-    print(f"Solver failed: {e}")
-except bores.SimulationError as e:
-    print(f"Simulation error: {e}")
+except bores.SolverError as exc:
+    print(f"Solver failed: {exc}")
+except bores.SimulationError as exc:
+    print(f"Simulation error: {exc}")
 ```
 
 ---
@@ -638,12 +638,12 @@ Low-level array utility functions. These are primarily used internally but are a
 | Name | Type | Description |
 | --- | --- | --- |
 | `apply_mask()` | function | Apply a boolean mask to an array, setting masked cells to a fill value. |
-| `clip()` | function | Clip array values to a range (like `np.clip` but dtype-aware). |
+| `clip()` | function | Clip array values to a range (like `np.clip` but numba friendly). |
 | `clip_scalar()` | function | Clip a scalar value to a range. |
 | `get_mask()` | function | Get a boolean mask from a condition applied to an array. |
 | `is_array()` | function | Check if a value is a NumPy array. |
-| `max_()` | function | Maximum of an array (raises if any value exceeds a threshold). |
-| `min_()` | function | Minimum of an array (raises if any value is below a threshold). |
+| `max_()` | function | Returns maximum of a scalar/array (like `np.max` but numba friendly). |
+| `min_()` | function | Returns mininmum of a scalar/array (like `np.min` but numba friendly). |
 
 ---
 

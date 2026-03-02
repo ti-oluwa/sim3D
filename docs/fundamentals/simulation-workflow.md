@@ -65,7 +65,7 @@ config = bores.Config(
         min_step_size=bores.Time(seconds=10),
         simulation_time=bores.Time(days=365),
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="explicit",  # Use explicit scheme instead of IMPES
 )
@@ -207,8 +207,8 @@ Each yielded `ModelState` contains a complete snapshot of the simulation at that
 | `state.model.fluid_properties.oil_saturation_grid` | `ndarray` | Oil saturation at each cell |
 | `state.model.fluid_properties.water_saturation_grid` | `ndarray` | Water saturation at each cell |
 | `state.model.fluid_properties.gas_saturation_grid` | `ndarray` | Gas saturation at each cell |
-| `state.injection` | `RateGrids` | Injection rates (oil, water, gas) in ft3/day |
-| `state.production` | `RateGrids` | Production rates (oil, water, gas) in ft3/day |
+| `state.injection` | `RateGrids` | Injection rates (oil, water, gas) in ft³/day |
+| `state.production` | `RateGrids` | Production rates (oil, water, gas) in ft³/day |
 | `state.wells` | `Wells` | Well configuration at this state |
 
 Because every property is a NumPy array, you can perform any NumPy operation on the results - compute field averages, extract well-block values, calculate material balance, or feed the data into your own analysis pipeline.
@@ -222,7 +222,7 @@ The pressure equation at each IMPES timestep requires solving a sparse linear sy
     ```python
     config = bores.Config(
         timer=timer,
-        rock_fluid_tables=rock_fluid,
+        rock_fluid_tables=rock_fluid_tables,
         pressure_solver="bicgstab",
         pressure_preconditioner="ilu",
         # ... other parameters
@@ -236,7 +236,7 @@ The pressure equation at each IMPES timestep requires solving a sparse linear sy
     ```python
     config = bores.Config(
         timer=timer,
-        rock_fluid_tables=rock_fluid,
+        rock_fluid_tables=rock_fluid_tables,
         pressure_solver="gmres",
         pressure_preconditioner="cpr",
         # ... other parameters
@@ -250,7 +250,7 @@ The pressure equation at each IMPES timestep requires solving a sparse linear sy
     ```python
     config = bores.Config(
         timer=timer,
-        rock_fluid_tables=rock_fluid,
+        rock_fluid_tables=rock_fluid_tables,
         pressure_solver="cg",
         pressure_preconditioner="diagonal",
         # ... other parameters

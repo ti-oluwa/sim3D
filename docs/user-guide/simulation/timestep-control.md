@@ -140,7 +140,7 @@ The `Config` class provides per-phase saturation change limits and a pressure ch
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     max_oil_saturation_change=0.5,      # Default
     max_water_saturation_change=0.4,    # Default
@@ -181,7 +181,7 @@ The `Config` provides separate CFL thresholds for pressure and saturation:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     saturation_cfl_threshold=0.6,   # Default
     pressure_cfl_threshold=0.9,     # Default

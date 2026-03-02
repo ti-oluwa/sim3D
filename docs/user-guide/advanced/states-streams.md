@@ -57,7 +57,7 @@ perm_z = state.model.rock_properties.absolute_permeability.z
 Injection and production rates, relative permeabilities, and mobilities are stored directly on the state rather than nested inside the model. Rates are in reservoir cubic feet per day at the cell level.
 
 ```python
-# Injection and production rates (ft3/day per cell)
+# Injection and production rates (ft³/day per cell)
 oil_injection = state.injection.oil
 water_injection = state.injection.water
 gas_injection = state.injection.gas
@@ -71,7 +71,7 @@ kro = state.relative_permeabilities.oil
 krw = state.relative_permeabilities.water
 krg = state.relative_permeabilities.gas
 
-# Relative mobilities (1/cP, kr/mu)
+# Relative mobilities (cP⁻¹, kr/mu)
 lambda_o = state.relative_mobilities.oil
 lambda_w = state.relative_mobilities.water
 lambda_g = state.relative_mobilities.gas
@@ -133,7 +133,7 @@ The `output_frequency` parameter in `Config` controls how often states are yield
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     output_frequency=10,  # Yield every 10th step
 )
@@ -202,7 +202,7 @@ with StateStream(states=bores.run(model, config), store=store) as stream:
 
 If `auto_replay` is `False`, iterating a second time raises a `StreamError`. In that case, you must call `replay()` explicitly.
 
-### consume()
+### `consume()`
 
 The `consume()` method exhausts the entire stream without yielding any states to your code. All configured side effects (persistence, checkpointing, validation) still occur normally. This is useful when you want to run a simulation purely for the purpose of saving its output to disk.
 
@@ -218,7 +218,7 @@ stream.consume()  # States saved and checkpointed, nothing returned
 
 After calling `consume()`, the stream is marked as consumed. Calling `consume()` again has no effect. You can still call `replay()` to load the saved states.
 
-### last()
+### `last()`
 
 The `last()` method returns the final state from the stream. If the stream has not been consumed yet, it iterates through the entire simulation (triggering all side effects) and returns the last state yielded. If the stream has already been consumed and a store is available, it loads only the last entry from the store without replaying everything.
 
@@ -230,7 +230,7 @@ with StateStream(states=bores.run(model, config), store=store) as stream:
 
 This is particularly useful when you only need the end result of a simulation but still want all intermediate states saved to disk.
 
-### until(condition)
+### `until(condition)`
 
 The `until()` method iterates through the stream, yielding states one at a time, until the `condition` function returns `True`. The state that satisfies the condition is yielded as well, then iteration stops. All configured side effects (persistence, checkpointing) apply to every state that passes through, including those before the stop condition is met.
 
@@ -245,7 +245,7 @@ with StateStream(states=bores.run(model, config), store=store) as stream:
 
 The condition receives a `ModelState` and returns a boolean. Use `until()` when you have a physical stopping criterion ("stop when water cut exceeds 95%") rather than a fixed number of steps. Note that the remaining states in the underlying generator are not consumed, so the simulation stops early. If the condition never becomes `True`, the entire stream is consumed.
 
-### while_(condition)
+### `while_(condition)`
 
 The `while_()` method is the complement of `until()`. It iterates as long as the `condition` returns `True`, and stops when the condition becomes `False`. The final state (where the condition failed) is also yielded.
 
@@ -260,7 +260,7 @@ with StateStream(states=bores.run(model, config), store=store) as stream:
 
 Like `until()`, all side effects apply to every state that passes through. The key difference is the semantics: `until()` runs until something happens, `while_()` runs while something holds. Choose whichever reads more naturally for your use case.
 
-### replay(indices, predicate, steps, validator)
+### `replay(indices, predicate, steps, validator)`
 
 The `replay()` method loads previously saved states from the store. It returns an iterator, so you can process states one at a time without loading everything into memory. Filtering happens before deserialization, so skipped entries have no I/O cost.
 
@@ -295,7 +295,7 @@ The parameters can be combined. `indices` takes priority and bypasses `steps` an
 | `predicate` | `Callable[[EntryMeta], bool]` | Filter on stored entry metadata |
 | `validator` | `Callable[[ModelState], ModelState]` | Post-load validation/transformation |
 
-### flush(block)
+### `flush(block)`
 
 The `flush()` method manually writes the current batch buffer to the store. In normal operation, flushing happens automatically when the batch reaches `batch_size` or when the stream exits its context manager. Call `flush()` explicitly when you need to guarantee that data has been written at a specific point.
 
@@ -309,7 +309,7 @@ with StateStream(states=bores.run(model, config), store=store, batch_size=50) as
 
 The `block` parameter controls behavior when `background_io=True`. With `block=False` (the default), the batch is enqueued and the method returns immediately. With `block=True`, the method waits until all pending writes have completed.
 
-### progress()
+### `progress()`
 
 The `progress()` method returns a `StreamProgress` dictionary with real-time statistics about the stream's state. Use this for monitoring long-running simulations or building progress bars.
 

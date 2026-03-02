@@ -134,7 +134,7 @@ The model is expressed as:
 
 $$P_c = \frac{1}{\alpha} \left[ S_e^{-1/m} - 1 \right]^{1/n}$$
 
-where $\alpha$ is an inverse pressure parameter (in 1/psi), $n$ is a shape parameter that must be greater than 1, and $m = 1 - 1/n$ is derived from $n$. The parameter $\alpha$ is roughly the inverse of the entry pressure: larger $\alpha$ values produce lower capillary pressures. The parameter $n$ controls the curve shape and has a similar role to the pore size distribution index in Brooks-Corey: higher values produce narrower transition zones.
+where $\alpha$ is an inverse pressure parameter (in psi⁻¹), $n$ is a shape parameter that must be greater than 1, and $m = 1 - 1/n$ is derived from $n$. The parameter $\alpha$ is roughly the inverse of the entry pressure: larger $\alpha$ values produce lower capillary pressures. The parameter $n$ controls the curve shape and has a similar role to the pore size distribution index in Brooks-Corey: higher values produce narrower transition zones.
 
 The key advantage of Van Genuchten over Brooks-Corey is its behavior at the endpoints. Brooks-Corey capillary pressure goes to infinity as saturation approaches the residual value ($S_e \to 0$), which can cause numerical difficulties. Van Genuchten also approaches infinity but does so more gradually, which makes the transition smoother and reduces the risk of solver convergence issues.
 
@@ -144,9 +144,9 @@ The key advantage of Van Genuchten over Brooks-Corey is its behavior at the endp
 import bores
 
 capillary = bores.VanGenuchtenCapillaryPressureModel(
-    oil_water_alpha_water_wet=0.01,    # 1/psi (roughly: entry pressure ~ 1/alpha)
+    oil_water_alpha_water_wet=0.01,    # psi⁻¹ (roughly: entry pressure ~ 1/alpha)
     oil_water_n_water_wet=2.0,          # Shape parameter (must be > 1)
-    gas_oil_alpha=0.02,                 # 1/psi
+    gas_oil_alpha=0.02,                 # psi⁻¹
     gas_oil_n=2.0,                      # Shape parameter
 )
 ```
@@ -161,11 +161,11 @@ The Van Genuchten model supports the same wettability options as Brooks-Corey, w
 | `residual_oil_saturation_water` | `None` | Residual oil to waterflood $S_{or,w}$. |
 | `residual_oil_saturation_gas` | `None` | Residual oil to gas flood $S_{or,g}$. |
 | `residual_gas_saturation` | `None` | Trapped gas saturation $S_{gr}$. |
-| `oil_water_alpha_water_wet` | `0.01` | Van Genuchten $\alpha$ for oil-water, water-wet (1/psi) |
-| `oil_water_alpha_oil_wet` | `0.01` | Van Genuchten $\alpha$ for oil-water, oil-wet (1/psi) |
+| `oil_water_alpha_water_wet` | `0.01` | Van Genuchten $\alpha$ for oil-water, water-wet (psi⁻¹) |
+| `oil_water_alpha_oil_wet` | `0.01` | Van Genuchten $\alpha$ for oil-water, oil-wet (psi⁻¹) |
 | `oil_water_n_water_wet` | `2.0` | Van Genuchten $n$ for oil-water, water-wet |
 | `oil_water_n_oil_wet` | `2.0` | Van Genuchten $n$ for oil-water, oil-wet |
-| `gas_oil_alpha` | `0.01` | Van Genuchten $\alpha$ for gas-oil (1/psi) |
+| `gas_oil_alpha` | `0.01` | Van Genuchten $\alpha$ for gas-oil (psi⁻¹) |
 | `gas_oil_n` | `2.0` | Van Genuchten $n$ for gas-oil |
 | `wettability` | `WATER_WET` | Rock wettability |
 | `mixed_wet_water_fraction` | `0.5` | Water-wet pore fraction (for `MIXED_WET`) |
@@ -238,7 +238,7 @@ When you have laboratory-measured capillary pressure data from mercury injection
 
 Tabular capillary pressure is the preferred approach when you have high-quality SCAL data that does not fit well to a Brooks-Corey or Van Genuchten curve. Laboratory data often shows features that analytical models cannot capture: multiple inflection points from bimodal pore size distributions, sudden changes in slope at specific saturations, or asymmetric behavior at the drainage and imbibition endpoints. Using the raw data as a table preserves all of these features.
 
-### TwoPhaseCapillaryPressureTable
+### `TwoPhaseCapillaryPressureTable`
 
 A `TwoPhaseCapillaryPressureTable` stores wetting phase saturation values and the corresponding capillary pressure at each saturation. You specify which fluid is the wetting phase and which is the non-wetting phase.
 
@@ -268,7 +268,7 @@ Sw_grid = np.random.uniform(0.2, 0.8, size=(20, 20, 5))
 pc_grid = ow_pc_table.get_capillary_pressure(Sw_grid)
 ```
 
-### ThreePhaseCapillaryPressureTable
+### `ThreePhaseCapillaryPressureTable`
 
 For three-phase simulation, combine two `TwoPhaseCapillaryPressureTable` objects into a `ThreePhaseCapillaryPressureTable`. This is the capillary pressure equivalent of the `ThreePhaseRelPermTable` and follows the same pattern.
 
@@ -428,7 +428,7 @@ This direct evaluation capability is essential for building capillary pressure c
 
 ---
 
-## Integrating with RockFluidTables
+## Integrating with `RockFluidTables`
 
 Capillary pressure is passed to the simulation through the `RockFluidTables` object alongside the relative permeability model. You can mix analytical and tabular approaches freely: for example, you could use Brooks-Corey relative permeability with tabular capillary pressure, or tabular relative permeability with a Van Genuchten capillary pressure model.
 
@@ -436,7 +436,7 @@ Capillary pressure is passed to the simulation through the `RockFluidTables` obj
 import bores
 
 # Analytical relative permeability + analytical capillary pressure
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.5,
         oil_exponent=2.0,
@@ -455,7 +455,7 @@ You can also combine tabular relative permeability with an analytical capillary 
 
 ```python
 # Tabular capillary pressure with analytical relative permeability
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.0,
         oil_exponent=2.0,
@@ -470,7 +470,7 @@ Pass the `RockFluidTables` to the `Config` to use it in simulation:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )

@@ -11,7 +11,7 @@ import bores
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
     pressure_solver="bicgstab",      # Solver for pressure
@@ -40,7 +40,7 @@ BiCGSTAB (Biconjugate Gradient Stabilized) is the default solver for both pressu
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="bicgstab",
     saturation_solver="bicgstab",
@@ -56,7 +56,7 @@ GMRES (Generalized Minimal Residual) is an alternative that sometimes converges 
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="gmres",
 )
@@ -74,7 +74,7 @@ CG (Conjugate Gradient) is the fastest solver for symmetric positive definite (S
 # CG for pressure (works well for SPD pressure matrices)
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="cg",
     saturation_solver="bicgstab",  # Saturation matrix is not SPD
@@ -93,7 +93,7 @@ The direct solver uses sparse LU factorization (via `spsolve`) to compute the ex
 # Direct solver for small models (< 5000 cells)
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="direct",
     saturation_solver="direct",
@@ -111,7 +111,7 @@ You can specify a list of solvers to try in sequence. If the first solver fails 
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver=["bicgstab", "gmres", "direct"],
     saturation_solver=["bicgstab", "tfqmr"],
@@ -140,7 +140,7 @@ def my_solver(A, b, x0=None, *, rtol=1e-6, atol=0.0, maxiter=None, M=None, callb
 # Then use it in Config
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="my_custom_solver",
 )
@@ -163,7 +163,7 @@ The key parameters that affect solver performance are:
 ```python
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     pressure_solver="bicgstab",
     pressure_convergence_tolerance=1e-6,

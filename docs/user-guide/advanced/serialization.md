@@ -21,7 +21,7 @@ BORES supports four storage backends, each with different trade-offs:
 
 ### ZarrStore
 
-Zarr is the recommended backend for simulation state data. It stores arrays in a chunked, compressed format that is fast to write and read, supports appending without rewriting existing data, and handles large datasets efficiently.
+Zarr is the recommended backend for simulation state data. It stores arrays in a chunked, compressed format that is fast to write and read, supports appending without rewriting existing data, and handles large datasets efficiently. Apart from saving in local directories, `ZarrStore` should support any `BaseStore` type support by zarr.
 
 ```python
 from bores.stores import ZarrStore
@@ -190,7 +190,7 @@ You can register custom storage backends using the `@storage_backend` decorator:
 ```python
 from bores.stores import storage_backend, DataStore
 
-@storage_backend(name="parquet")
+@storage_backend("parquet")
 class ParquetStore(DataStore):
     def dump(self, data, **kwargs):
         ...
@@ -421,7 +421,7 @@ When you only need the end result from a previously saved simulation:
 
 ```python
 store = ZarrStore("simulation.zarr")
-entries = store.entries()
-final_state = next(store.load(ModelState, indices=[entries[-1].idx]))
+max_idx = store.max_index()
+final_state = next(store.load(ModelState, indices=[max_idx]))
 print(f"Final pressure: {final_state.model.fluid_properties.pressure_grid.mean():.1f} psi")
 ```

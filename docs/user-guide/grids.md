@@ -88,6 +88,10 @@ depth = bores.build_depth_grid(thickness)
 If you need absolute depths (referenced to a datum like sea level), add the top depth:
 
 ```python
+# Use a top depth datum of 5000ft
+depth = bores.build_depth_grid(thickness, datum=5000)
+
+# Or;
 top_depth = 5000.0  # ft subsea
 absolute_depth = depth + top_depth
 ```
@@ -140,7 +144,7 @@ import bores
 
 grid_shape = (20, 20, 5)
 thickness = bores.build_uniform_grid(grid_shape, value=15.0)
-depth = bores.build_depth_grid(thickness) + 5000.0  # Absolute depth from datum
+depth = bores.build_depth_grid(thickness, datum=5000.0) # Absolute depth from datum
 
 # Residual saturation grids
 Swc  = bores.build_uniform_grid(grid_shape, value=0.25)

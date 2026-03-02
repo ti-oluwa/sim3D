@@ -4,7 +4,7 @@
 
 The `bores.correlations.core` module contains scalar PVT correlation functions. Each function accepts single float values as input and returns a single float result. These are the building blocks that the simulator calls internally when computing fluid properties cell by cell, and you can also call them directly in your own scripts for point calculations, unit conversions, validation against laboratory data, or building custom PVT tables.
 
-All functions in this module use oilfield units: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft3, viscosity in centipoise, and volume factors in bbl/STB or ft3/SCF. The module also provides generic CoolProp-based functions that accept any fluid name supported by the CoolProp thermodynamic library, which are useful for computing properties of non-standard fluids like CO2, nitrogen, or other injection gases.
+All functions in this module use oilfield units: pressure in psi, temperature in degrees Fahrenheit, density in lbm/ft³, viscosity in centipoise, and volume factors in bbl/STB or ft³/SCF. The module also provides generic CoolProp-based functions that accept any fluid name supported by the CoolProp thermodynamic library, which are useful for computing properties of non-standard fluids like CO2, nitrogen, or other injection gases.
 
 The functions are organized by property category below. Within each category, you will find correlation-specific variants (e.g., Standing, Vazquez-Beggs) as well as unified dispatch functions that select the best correlation automatically based on conditions. Import them from `bores.correlations.core` or from `bores.correlations` directly.
 
@@ -65,7 +65,7 @@ These functions compute fluid properties for any CoolProp-supported fluid using 
 compute_fluid_density(pressure: float, temperature: float, fluid: str) -> float
 ```
 
-Computes fluid density from the equation of state using CoolProp. Returns density in lbm/ft3.
+Computes fluid density from the equation of state using CoolProp. Returns density in lbm/ft³.
 
 | Parameter | Type | Unit | Description |
 | --- | --- | --- | --- |
@@ -77,7 +77,7 @@ Computes fluid density from the equation of state using CoolProp. Returns densit
 from bores.correlations.core import compute_fluid_density
 
 co2_density = compute_fluid_density(3000.0, 200.0, "CO2")
-print(f"CO2 density: {co2_density:.2f} lbm/ft3")
+print(f"CO2 density: {co2_density:.2f} lbm/ft³")
 ```
 
 ### `compute_fluid_viscosity`
@@ -141,7 +141,7 @@ Computes gas gravity from a measured density at specific conditions, by comparin
 | --- | --- | --- | --- |
 | `pressure` | `float` | psi | Pressure at which density was measured |
 | `temperature` | `float` | F | Temperature at which density was measured |
-| `density` | `float` | lbm/ft3 | Measured gas density |
+| `density` | `float` | lbm/ft³ | Measured gas density |
 
 ---
 
@@ -310,7 +310,7 @@ compute_gas_formation_volume_factor(
 ) -> float
 ```
 
-Computes $B_g$ in ft3/SCF using the real gas law.
+Computes $B_g$ in ft³/SCF using the real gas law.
 
 $$B_g = \frac{Z \cdot T \cdot P_{std}}{P \cdot T_{std}}$$
 
@@ -551,7 +551,7 @@ compute_gas_density(
 ) -> float
 ```
 
-Real gas equation of state density in lbm/ft3.
+Real gas equation of state density in lbm/ft³.
 
 ### `compute_gas_viscosity`
 
@@ -599,7 +599,7 @@ compute_water_density_mccain(
 ) -> float
 ```
 
-McCain correlation for brine density in lbm/ft3.
+McCain correlation for brine density in lbm/ft³.
 
 ### `compute_water_density_batzle`
 
@@ -710,7 +710,7 @@ compute_live_oil_density(
 ) -> float
 ```
 
-Mass balance approach for live oil density in lbm/ft3. Accounts for stock tank oil mass, dissolved gas mass, and volume expansion via FVF.
+Mass balance approach for live oil density in lbm/ft³. Accounts for stock tank oil mass, dissolved gas mass, and volume expansion via FVF.
 
 ---
 

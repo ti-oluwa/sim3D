@@ -19,7 +19,7 @@ _bores_dtype: ContextVar[np.typing.DTypeLike] = ContextVar(
 
 def get_dtype() -> np.typing.DTypeLike:
     """
-    Get the current data type for used for computations in `bores`.
+    Get the current data precision type for used for computations in `bores`.
 
     This defines the precision used in calculations.
 
@@ -28,15 +28,21 @@ def get_dtype() -> np.typing.DTypeLike:
     return _bores_dtype.get()
 
 
+get_precision = get_dtype
+
+
 def set_dtype(dtype: np.typing.DTypeLike) -> None:
     """
-    Set the default data type for `bores` computations.
+    Set the default data precision type for `bores` computations.
 
     Useful for setting precision for current context.
 
     :param dtype: The data type to set as default.
     """
     _bores_dtype.set(dtype)
+
+
+set_precision = set_dtype
 
 
 @contextmanager
@@ -55,21 +61,21 @@ def with_precision(dtype: np.typing.DTypeLike):
 
 def use_128bit_precision() -> None:
     """
-    Set the default data type to float128 for `bores` computations.
+    Set the default data precision type to float128 for `bores` computations.
     """
     set_dtype(np.float128)
 
 
 def use_64bit_precision() -> None:
     """
-    Set the default data type to float64 for `bores` computations.
+    Set the default data precision type to float64 for `bores` computations.
     """
     set_dtype(np.float64)
 
 
 def use_32bit_precision() -> None:
     """
-    Set the default data type to float32 for `bores` computations.
+    Set the default data precision type to float32 for `bores` computations.
 
     Default precision for `bores`.
     """

@@ -96,6 +96,7 @@ model = bores.reservoir_model(
     residual_gas_saturation_grid=Sgr,
     irreducible_water_saturation_grid=Swir,
     connate_water_saturation_grid=Swc,
+    datum_depth=5000,
 )
 ```
 
@@ -110,7 +111,10 @@ gas_injector = bores.injection_well(
     well_name="GAS-INJ-1",
     perforating_intervals=[((0, 0, 0), (0, 0, 2))],
     radius=0.25,
-    control=bores.ConstantRateControl(target_rate=500.0),
+    control=bores.ConstantRateControl(
+        target_rate=5_000_000.0, 
+        bhp_limit=5000,
+    ),
     injected_fluid=bores.InjectedFluid(
         name="Methane",
         phase=bores.FluidPhase.GAS,
@@ -122,7 +126,7 @@ gas_injector = bores.injection_well(
 
 The key difference from the waterflood is the `InjectedFluid` configuration. Here we inject gas (`phase=FluidPhase.GAS`) with a specific gravity of 0.65, which is typical for methane-rich natural gas. The molecular weight of 16.04 g/mol corresponds to pure methane.
 
-The `target_rate=500.0` is in reservoir volume units (RB/day for gas at reservoir conditions). BORES uses the gas formation volume factor to convert between surface and reservoir volumes internally.
+The `target_rate=5_000_000.0` is in surface volume units (SCF/day for gas at standard conditions). BORES uses the gas formation volume factor to convert between surface and reservoir volumes internally.
 
 Notice that we do not set `is_miscible=True`. By default, `InjectedFluid` creates an immiscible gas - the gas and oil remain as separate phases with a clear interface between them. Miscible injection, where the gas dissolves into and mixes with the oil, is covered in the [next tutorial](05-miscible-flooding.md).
 
@@ -173,7 +177,7 @@ producer = bores.production_well(
 
 wells = bores.wells_(injectors=[gas_injector], producers=[producer])
 
-rock_fluid = bores.RockFluidTables(
+rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
         water_exponent=2.5,
         oil_exponent=2.0,
@@ -189,7 +193,7 @@ config = bores.Config(
         min_step_size=bores.Time(hours=0.5),
         simulation_time=bores.Time(days=1095),  # 3 years
     ),
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     scheme="impes",
 )

@@ -64,10 +64,10 @@ if const is not None:
 
 | Constant | Value | Unit | Description |
 |---|---|---|---|
-| `STANDARD_WATER_DENSITY` | 998.2 | kg/m3 | Water density at standard conditions (SI) |
-| `STANDARD_WATER_DENSITY_IMPERIAL` | 62.37 | lb/ft3 | Water density at standard conditions (Imperial) |
-| `STANDARD_AIR_DENSITY` | 1.225 | kg/m3 | Air density at standard conditions (SI) |
-| `STANDARD_AIR_DENSITY_IMPERIAL` | 0.0765 | lb/ft3 | Air density at standard conditions (Imperial) |
+| `STANDARD_WATER_DENSITY` | 998.2 | kg/m³ | Water density at standard conditions (SI) |
+| `STANDARD_WATER_DENSITY_IMPERIAL` | 62.37 | lb/ft³ | Water density at standard conditions (Imperial) |
+| `STANDARD_AIR_DENSITY` | 1.225 | kg/m³ | Air density at standard conditions (SI) |
+| `STANDARD_AIR_DENSITY_IMPERIAL` | 0.0765 | lb/ft³ | Air density at standard conditions (Imperial) |
 
 ### Molecular Weights
 
@@ -88,12 +88,12 @@ if const is not None:
 
 | Constant | Value | Unit | Description |
 |---|---|---|---|
-| `OIL_THERMAL_EXPANSION_COEFFICIENT` | 9.7e-4 | 1/K | Oil thermal expansion (SI) |
+| `OIL_THERMAL_EXPANSION_COEFFICIENT` | 9.7e-4 | K⁻¹ | Oil thermal expansion (SI) |
 | `OIL_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL` | 5.39e-4 | 1/F | Oil thermal expansion (Imperial) |
-| `WATER_THERMAL_EXPANSION_COEFFICIENT` | 3.0e-4 | 1/K | Water thermal expansion (SI) |
+| `WATER_THERMAL_EXPANSION_COEFFICIENT` | 3.0e-4 | K⁻¹ | Water thermal expansion (SI) |
 | `WATER_THERMAL_EXPANSION_COEFFICIENT_IMPERIAL` | 1.67e-4 | 1/F | Water thermal expansion (Imperial) |
-| `WATER_ISOTHERMAL_COMPRESSIBILITY` | 4.6e-10 | 1/Pa | Water compressibility (SI) |
-| `WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL` | 3.17e-6 | 1/psi | Water compressibility (Imperial) |
+| `WATER_ISOTHERMAL_COMPRESSIBILITY` | 4.6e-10 | Pa⁻¹ | Water compressibility (SI) |
+| `WATER_ISOTHERMAL_COMPRESSIBILITY_IMPERIAL` | 3.17e-6 | psi⁻¹ | Water compressibility (Imperial) |
 
 ### Gas Constant
 
@@ -101,7 +101,7 @@ if const is not None:
 |---|---|---|---|
 | `IDEAL_GAS_CONSTANT` | 8.314 | J/(mol K) | Universal gas constant |
 | `IDEAL_GAS_CONSTANT_SI` | 8.314e-3 | kJ/(mol K) | Gas constant (SI, kJ) |
-| `IDEAL_GAS_CONSTANT_IMPERIAL` | 10.732 | ft3 psi/(lb mol R) | Gas constant (Imperial) |
+| `IDEAL_GAS_CONSTANT_IMPERIAL` | 10.732 | ft³ psi/(lb mol R) | Gas constant (Imperial) |
 
 ### Pressure Conversions
 
@@ -129,23 +129,23 @@ if const is not None:
 
 | Constant | Value | Description |
 |---|---|---|
-| `MILLIDARCY_TO_SQUARE_METER` | 9.869e-16 | mD to m2 |
+| `MILLIDARCY_TO_SQUARE_METER` | 9.869e-16 | mD to m² |
 
 ### Volume Conversions
 
 | Constant | Value | Description |
 |---|---|---|
-| `BARRELS_TO_CUBIC_FEET` | 5.6146 | BBL to ft3 |
-| `CUBIC_FEET_TO_BARRELS` | 0.1781 | ft3 to BBL |
-| `STB_TO_CUBIC_FEET` | 5.6146 | STB to ft3 |
-| `STB_TO_CUBIC_METER` | 0.1590 | STB to m3 |
-| `CUBIC_METER_TO_STB` | 6.2898 | m3 to STB |
+| `BARRELS_TO_CUBIC_FEET` | 5.6146 | BBL to ft³ |
+| `CUBIC_FEET_TO_BARRELS` | 0.1781 | ft³ to BBL |
+| `STB_TO_CUBIC_FEET` | 5.6146 | STB to ft³ |
+| `STB_TO_CUBIC_METER` | 0.1590 | STB to m³ |
+| `CUBIC_METER_TO_STB` | 6.2898 | m³ to STB |
 | `SCF_TO_BARRELS` | 0.1781 | SCF to BBL |
-| `CUBIC_METER_TO_SCF` | 35.315 | m3 to SCF |
-| `SCF_TO_SCM` | 0.02832 | SCF to m3 |
-| `ACRE_FOOT_TO_CUBIC_FEET` | 43560 | acre-ft to ft3 |
+| `CUBIC_METER_TO_SCF` | 35.315 | m³ to SCF |
+| `SCF_TO_SCM` | 0.02832 | SCF to m³ |
+| `ACRE_FOOT_TO_CUBIC_FEET` | 43560 | acre-ft to ft³ |
 | `ACRE_FOOT_TO_BARRELS` | 7758 | acre-ft to BBL |
-| `ACRES_TO_SQUARE_FEET` | 43560 | acres to ft2 |
+| `ACRES_TO_SQUARE_FEET` | 43560 | acres to ft² |
 
 ### Length Conversions
 
@@ -168,8 +168,8 @@ if const is not None:
 
 | Constant | Value | Description |
 |---|---|---|
-| `CUBIC_METER_PER_SECOND_TO_STB_PER_DAY` | 543168.4 | m3/s to STB/day |
-| `STB_PER_DAY_TO_CUBIC_METER_PER_SECOND` | 1.841e-6 | STB/day to m3/s |
+| `CUBIC_METER_PER_SECOND_TO_STB_PER_DAY` | 543168.4 | m³/s to STB/day |
+| `STB_PER_DAY_TO_CUBIC_METER_PER_SECOND` | 1.841e-6 | STB/day to m³/s |
 
 ### Transmissibility Conversions
 
@@ -181,9 +181,9 @@ if const is not None:
 
 | Constant | Value | Unit | Description |
 |---|---|---|---|
-| `ACCELERATION_DUE_TO_GRAVITY_METER_PER_SECONDS_SQUARE` | 9.807 | m/s2 | Standard gravity (SI) |
-| `ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE` | 32.174 | ft/s2 | Standard gravity (Imperial) |
-| `GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2` | 32.174 | lbm ft/(lbf s2) | gc conversion factor |
+| `ACCELERATION_DUE_TO_GRAVITY_METER_PER_SECONDS_SQUARE` | 9.807 | m/s² | Standard gravity (SI) |
+| `ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE` | 32.174 | ft/s² | Standard gravity (Imperial) |
+| `GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2` | 32.174 | lbm ft/(lbf s²) | gc conversion factor |
 
 ### Numerical Thresholds
 
@@ -260,7 +260,7 @@ custom.DEFAULT_WATER_SALINITY_PPM = 100000  # Very saline formation water
 
 config = bores.Config(
     timer=timer,
-    rock_fluid_tables=rock_fluid,
+    rock_fluid_tables=rock_fluid_tables,
     wells=wells,
     constants=custom,
 )
