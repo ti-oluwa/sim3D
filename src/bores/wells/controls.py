@@ -46,7 +46,7 @@ def _disallow_flow(
     fluid: typing.Optional[WellFluid],
     phase_mobility: float,
     is_active: bool,
-    minimum_mobility: float = 1e-5,
+    minimum_mobility: float = 1e-18,
 ) -> bool:
     """
     Check if well should not allow flow and just return zero flow rate
@@ -56,14 +56,10 @@ def _disallow_flow(
     :param phase_mobility: Phase mobility (cP⁻¹).
     :param is_active: Whether well is active/open.
     :param minimum_mobility: Minimum mobility threshold below which phase is considered immobile (cP⁻¹).
-        Default 1e-5 cP⁻¹ corresponds to k_r ≈ 0.00001 (essentially zero).
+        Default 1e-12 cP⁻¹ corresponds to k_r ≈ 0.00001 (essentially zero).
     :return: True if no flow should happen, False otherwise.
     """
-    return (
-        fluid is None
-        or phase_mobility < minimum_mobility  # ← Enhanced check
-        or not is_active
-    )
+    return fluid is None or phase_mobility < minimum_mobility or not is_active
 
 
 def _setup_gas_pseudo_pressure(
@@ -427,17 +423,6 @@ class BHPControl(WellControl[WellFluidTcon]):
     """Target fluid phase for the control."""
     clamp: typing.Optional[RateClamp] = None
     """Condition for clamping flow rates to zero. None means no clamping."""
-    minimum_mobility_threshold: float = 1e-5
-    """
-    Minimum phase mobility threshold (cP⁻¹) below which the phase is considered immobile.
-    
-    When mobility falls below this threshold:
-    - `get_flow_rate(...)` returns 0.0 (cannot achieve target rate)
-    - `get_bottom_hole_pressure(...)` returns reservoir pressure (no driving force)
-    
-    Defaults to 1e-5 cP⁻¹ (corresponds to k_r ≈ 0.00001 at μ ≈ 1 cP).
-    This prevents numerical issues when trying to inject/produce immobile phases.
-    """
 
     def __attrs_post_init__(self) -> None:
         """Validate control parameters."""
@@ -484,7 +469,6 @@ class BHPControl(WellControl[WellFluidTcon]):
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             return 0.0
 
@@ -572,7 +556,6 @@ class BHPControl(WellControl[WellFluidTcon]):
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             # Return reservoir pressure (no driving force)
             return pressure
@@ -632,17 +615,6 @@ class ConstantRateControl(WellControl[WellFluidTcon]):
     """Target fluid phase for the control."""
     clamp: typing.Optional[RateClamp] = None
     """Condition for clamping flow rates to zero. None means no clamping."""
-    minimum_mobility_threshold: float = 1e-5
-    """
-    Minimum phase mobility threshold (cP⁻¹) below which the phase is considered immobile.
-    
-    When mobility falls below this threshold:
-    - `get_flow_rate(...)` returns 0.0 (cannot achieve target rate)
-    - `get_bottom_hole_pressure(...)` returns reservoir pressure (no driving force)
-    
-    Defaults to 1e-5 cP⁻¹ (corresponds to k_r ≈ 0.00001 at μ ≈ 1 cP).
-    This prevents numerical issues when trying to inject/produce immobile phases.
-    """
 
     def __attrs_post_init__(self) -> None:
         """Validate control parameters."""
@@ -662,7 +634,8 @@ class ConstantRateControl(WellControl[WellFluidTcon]):
             logger.warning(
                 f"Using {self.__class__.__name__!r} with injection (positive rate) but no `bhp_limit` specified.\n"
                 "This can lead to unrealistic injection pressures when injecting into low-mobility zones. "
-                "Consider setting `bhp_limit` to maximum safe injection pressure (e.g., fracture pressure)."
+                "Consider setting `bhp_limit` to maximum safe injection pressure (e.g., fracture pressure).",
+                UserWarning,
             )
 
     def get_flow_rate(
@@ -703,17 +676,8 @@ class ConstantRateControl(WellControl[WellFluidTcon]):
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             return 0.0
-
-        # Log warning if mobility is very low (i.e, above threshold but concerning)
-        if phase_mobility < 1e-3:
-            logger.debug(
-                f"Low mobility detected: {phase_mobility:.2e} cP⁻¹. "
-                f"Target rate {self.target_rate:.1f} may not be achievable. "
-                f"Phase may be near connate/residual saturation."
-            )
 
         # Apply allocation to target rate
         target_rate = (
@@ -804,7 +768,6 @@ class ConstantRateControl(WellControl[WellFluidTcon]):
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             return pressure
 
@@ -812,7 +775,6 @@ class ConstantRateControl(WellControl[WellFluidTcon]):
         target_rate_reservoir = (
             self.target_rate * allocation_fraction * formation_volume_factor
         )
-
         # Compute required BHP for target rate
         try:
             required_bhp = _compute_required_bhp(
@@ -928,17 +890,6 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
     """Target fluid phase for the control."""
     clamp: typing.Optional[RateClamp] = None
     """Condition for clamping flow rates to zero. None means no clamping."""
-    minimum_mobility_threshold: float = 1e-5
-    """
-    Minimum phase mobility threshold (cP⁻¹) below which the phase is considered immobile.
-    
-    When mobility falls below this threshold:
-    - `get_flow_rate(...)` returns 0.0 (cannot achieve target rate)
-    - `get_bottom_hole_pressure(...)` returns reservoir pressure (no driving force)
-    
-    Defaults to 1e-5 cP⁻¹ (corresponds to k_r ≈ 0.00001 at μ ≈ 1 cP).
-    This prevents numerical issues when trying to inject/produce immobile phases.
-    """
 
     def __attrs_post_init__(self) -> None:
         """Validate control parameters."""
@@ -986,17 +937,16 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
         :param pvt_tables: `PVTTables` object for fluid property lookups
         :return: Flow rate in (bbl/day or ft³/day).
         """
-        # Early return checks
         if _disallow_flow(
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             return 0.0
 
         # Apply allocation to target rate (for rate mode) and convert to reservoir rate
         target_rate = self.target_rate * allocation_fraction * formation_volume_factor
+        print(f"{str(fluid.phase).upper()} FVF: {formation_volume_factor}")
         is_production = target_rate < 0.0  # Negative rate indicates production
         bhp_limit = self.bhp_limit
         # Compute required BHP to achieve target rate
@@ -1133,7 +1083,6 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
             fluid=fluid,
             phase_mobility=phase_mobility,
             is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
         ) or (self.target_phase is not None and fluid.phase != self.target_phase):
             return pressure
 
@@ -1260,18 +1209,6 @@ class PrimaryPhaseRateControl(WellControl[WellFluidTcon]):
 
     secondary_clamp: typing.Optional[RateClamp] = None
     """Optional clamp on secondary (non-primary) phase rates."""
-
-    minimum_mobility_threshold: float = 1e-5
-    """
-    Minimum phase mobility threshold (cP⁻¹) below which the phase is considered immobile.
-    
-    When mobility falls below this threshold:
-    - `get_flow_rate(...)` returns 0.0 (cannot achieve target rate)
-    - `get_bottom_hole_pressure(...)` returns reservoir pressure (no driving force)
-    
-    Defaults to 1e-5 cP⁻¹ (corresponds to k_r ≈ 0.00001 at μ ≈ 1 cP).
-    This prevents numerical issues when trying to inject/produce immobile phases.
-    """
 
     def __attrs_post_init__(self) -> None:
         object.__setattr__(self, "primary_phase", FluidPhase(self.primary_phase))
@@ -1404,14 +1341,6 @@ class PrimaryPhaseRateControl(WellControl[WellFluidTcon]):
         :param primary_formation_volume_factor: FVF of primary phase (required for secondary phases).
         :param primary_fluid_compressibility: Compressibility of primary phase (required for secondary phases).
         """
-        if _disallow_flow(
-            fluid=fluid,
-            phase_mobility=phase_mobility,
-            is_active=is_active,
-            minimum_mobility=self.minimum_mobility_threshold,
-        ):
-            return 0.0
-
         if fluid.phase == self.primary_phase:
             return self.primary_control.get_flow_rate(
                 pressure=pressure,
@@ -1432,6 +1361,13 @@ class PrimaryPhaseRateControl(WellControl[WellFluidTcon]):
                 f"Cannot compute flow rate for secondary phase {fluid.phase} - "
                 f"primary phase properties not provided. Returning 0."
             )
+            return 0.0
+
+        if _disallow_flow(
+            fluid=fluid,
+            phase_mobility=phase_mobility,
+            is_active=is_active,
+        ):
             return 0.0
 
         bhp = self._compute_primary_bhp(

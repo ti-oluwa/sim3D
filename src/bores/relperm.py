@@ -935,9 +935,9 @@ class ThreePhaseRelPermTable(
     """Relative permeability table for oil-water system (water = wetting, oil = non-wetting)."""
     gas_oil_table: TwoPhaseRelPermTable
     """Relative permeability table for gas-oil system (oil = wetting, gas = non-wetting)."""
-    mixing_rule: typing.Optional[MixingRule] = None
+    mixing_rule: typing.Optional[typing.Union[MixingRule, str]] = None
     """
-    Mixing rule function to compute oil relative permeability in three-phase system.
+    Mixing rule function or name to compute oil relative permeability in three-phase system.
 
     The function should take the following parameters in order:
     - kro_w: Oil relative permeability from oil-water table
@@ -975,6 +975,10 @@ class ThreePhaseRelPermTable(
             raise ValidationError(
                 "`gas_oil_table` wetting phase must be oil in three-phase system."
             )
+
+        mixing_rule = self.mixing_rule
+        if isinstance(mixing_rule, str):
+            object.__setattr__(self, "mixing_rule", get_mixing_rule(mixing_rule))
 
     def get_relative_permeabilities(
         self,
@@ -1033,7 +1037,7 @@ class ThreePhaseRelPermTable(
 
         # Apply mixing rule for three-phase oil relative permeability
         if self.mixing_rule is not None:
-            kro = self.mixing_rule(
+            kro = self.mixing_rule(  # type: ignore
                 kro_w=kro_w,
                 kro_g=kro_g,
                 water_saturation=sw,
@@ -1264,9 +1268,9 @@ class BrooksCoreyThreePhaseRelPermModel(
     """
     wettability: Wettability = Wettability.WATER_WET
     """Wettability type (water-wet or oil-wet)."""
-    mixing_rule: MixingRule = eclipse_rule
+    mixing_rule: typing.Union[MixingRule, str] = eclipse_rule
     """
-    Mixing rule function to compute oil relative permeability in three-phase system.
+    Mixing rule function or name to compute oil relative permeability in three-phase system.
 
     The function should take the following parameters in order:
     - kro_w: Oil relative permeability from oil-water table
@@ -1278,6 +1282,11 @@ class BrooksCoreyThreePhaseRelPermModel(
     """
     supports_arrays: bool = attrs.field(init=False, repr=False, default=True)
     """Flag indicating support for array inputs."""
+
+    def __attrs_post_init__(self) -> None:
+        mixing_rule = self.mixing_rule
+        if isinstance(mixing_rule, str):
+            object.__setattr__(self, "mixing_rule", get_mixing_rule(mixing_rule))
 
     def get_relative_permeabilities(
         self,
@@ -1351,7 +1360,7 @@ class BrooksCoreyThreePhaseRelPermModel(
             oil_exponent=self.oil_exponent,
             gas_exponent=self.gas_exponent,
             wettability=self.wettability,
-            mixing_rule=self.mixing_rule,
+            mixing_rule=self.mixing_rule,  # type: ignore[arg-type]
         )
         return RelativePermeabilities(water=krw, oil=kro, gas=krg)  # type: ignore[typeddict-item]
 

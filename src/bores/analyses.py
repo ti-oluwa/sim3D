@@ -172,6 +172,119 @@ class DeclineCurveResult:
     """Predicted production rates from decline curve in STB/day or SCF/day depending on phase."""
 
 
+@attrs.frozen(slots=True)
+class InjectionFrontAnalysis:
+    """Spatial injection-front analysis results for a single time step."""
+
+    phase: typing.Literal["water", "gas"]
+    """Phase whose front is being tracked."""
+
+    front_cells: np.ndarray
+    """
+    Boolean mask (same shape as the reservoir grid) that is True at every cell
+    whose saturation has increased by at least `threshold` relative to the
+    initial state.  This is the *contacted* region (equivalent to the swept
+    zone boundary).
+    """
+
+    front_cell_count: int
+    """Number of cells on/inside the front (i.e. contacted cells)."""
+
+    front_volume_fraction: float
+    """Fraction of total grid cells that are contacted (0-1)."""
+
+    average_front_saturation: float
+    """
+    Mean saturation of the *displacing phase* in contacted cells only (fraction).
+    Indicates how thoroughly the swept zone is saturated.
+    """
+
+    max_front_saturation: float
+    """Peak displacing-phase saturation across all contacted cells (fraction)."""
+
+    saturation_delta_grid: np.ndarray
+    """
+    Full-field grid of (current_saturation - initial_saturation) for the
+    displacing phase.  Positive values indicate invaded cells; negative values
+    indicate cells where the phase has receded (e.g. gas dissolution behind a
+    waterflood front).
+
+    Units: fraction (dimensionless).
+    """
+
+    front_centroid: typing.Tuple[float, float, float]
+    """
+    Approximate centre-of-mass of the contacted region expressed as
+    (i_centroid, j_centroid, k_centroid) in cell-index units.
+    Useful for tracking plume migration direction over time.
+    """
+
+
+@attrs.frozen(slots=True)
+class MaterialBalanceError:
+    """
+    Per-phase material balance error for a simulation interval.
+
+    The error is computed as::
+
+        MBE = (ΔPV_phase - (V_injected - V_produced)) / PV_phase_initial
+
+    where all volumes are at *reservoir conditions* (ft³).
+
+    A positive MBE means the simulator has created fluid; negative means it has
+    lost fluid.  The absolute value is what matters for quality control.
+    """
+
+    oil_mbe: float
+    """
+    Oil phase material balance error as a fraction of initial oil pore volume.
+    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
+    """
+
+    water_mbe: float
+    """
+    Water phase material balance error as a fraction of initial water pore volume.
+    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
+    """
+
+    gas_mbe: float
+    """
+    Gas phase material balance error as a fraction of initial gas pore volume.
+    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
+    """
+
+    total_mbe: float
+    """
+    Aggregate (pore-volume-weighted) material balance error across all three
+    phases.  This is the single headline quality metric.
+    """
+
+    oil_pore_volume_initial: float
+    """Initial oil pore volume at reservoir conditions (ft³), used as denominator."""
+
+    water_pore_volume_initial: float
+    """Initial water pore volume at reservoir conditions (ft³)."""
+
+    gas_pore_volume_initial: float
+    """Initial gas pore volume at reservoir conditions (ft³)."""
+
+    quality: typing.Literal["excellent", "acceptable", "marginal", "unacceptable"]
+    """
+    Qualitative rating of `total_mbe` per standard reservoir-engineering thresholds:
+
+    - `"excellent"`     - |total_mbe| < 0.001  (< 0.1 %)
+    - `"acceptable"`    - |total_mbe| < 0.01   (< 1 %)
+    - `"marginal"`      - |total_mbe| < 0.05   (< 5 %)
+    - `"unacceptable"`  - |total_mbe| ≥ 0.05   (≥ 5 %)
+    """
+
+    from_step: int
+    """Starting time step of the interval checked."""
+
+    to_step: int
+    """Ending time step of the interval checked."""
+
+
 class ModelAnalyst(typing.Generic[NDimension]):
     """
     Analysis tools for evaluating reservoir model performance over a series of states
@@ -400,7 +513,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             Result: Dimensionless fraction (0.0 to 1.0, or 0% to 100%)
 
         Calculation Details:
-            STOIIP = Σ [Area x h x φ x (1-Swi) x NTG / Boi]
+            STOIIP = Σ [Area x h x φ x (1-Swi) x net_to_gross / Boi]
             Np = Σ [q_oil x Δt / Bo]
             RF = Np / STOIIP
 
@@ -409,7 +522,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             h = Net pay thickness (ft)
             φ = Porosity (fraction)
             Swi = Initial water saturation (fraction)
-            NTG = Net-to-gross ratio (fraction)
+            net_to_gross = Net-to-gross ratio (fraction)
             Boi = Initial oil formation volume factor (bbl/STB)
             q_oil = Oil production rate (STB/day)
             Δt = Time step (days)
@@ -1668,7 +1781,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             oil_saturation = model.fluid_properties.oil_saturation_grid
             oil_fvf = model.fluid_properties.oil_formation_volume_factor_grid
             porosity = model.rock_properties.porosity_grid
-            ntg = model.rock_properties.net_to_gross_ratio_grid
+            net_to_gross = model.rock_properties.net_to_gross_ratio_grid
             thickness = model.thickness_grid
             cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
             cell_area_grid = uniform_grid(
@@ -1680,7 +1793,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 porosity=porosity,
                 phase_saturation=oil_saturation,
                 formation_volume_factor=oil_fvf,
-                net_to_gross_ratio=ntg,
+                net_to_gross_ratio=net_to_gross,
                 hydrocarbon_type="oil",
                 acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
                 acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
@@ -1764,7 +1877,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_saturation = model.fluid_properties.gas_saturation_grid
             gas_fvf = model.fluid_properties.gas_formation_volume_factor_grid
             porosity = model.rock_properties.porosity_grid
-            ntg = model.rock_properties.net_to_gross_ratio_grid
+            net_to_gross = model.rock_properties.net_to_gross_ratio_grid
             thickness = model.thickness_grid
             cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
             cell_area_grid = uniform_grid(
@@ -1776,7 +1889,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 porosity=porosity,
                 phase_saturation=gas_saturation,
                 formation_volume_factor=gas_fvf,
-                net_to_gross_ratio=ntg,
+                net_to_gross_ratio=net_to_gross,
                 hydrocarbon_type="gas",
                 acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
                 acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
@@ -1856,7 +1969,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_saturation = model.fluid_properties.gas_saturation_grid
             gas_fvf = model.fluid_properties.gas_formation_volume_factor_grid
             porosity = model.rock_properties.porosity_grid
-            ntg = model.rock_properties.net_to_gross_ratio_grid
+            net_to_gross = model.rock_properties.net_to_gross_ratio_grid
             thickness = model.thickness_grid
             cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
             cell_area_grid = uniform_grid(
@@ -1868,7 +1981,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 porosity=porosity,
                 phase_saturation=gas_saturation,
                 formation_volume_factor=gas_fvf,
-                net_to_gross_ratio=ntg,
+                net_to_gross_ratio=net_to_gross,
                 hydrocarbon_type="gas",
                 acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
                 acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
@@ -1886,7 +1999,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 porosity=porosity,
                 phase_saturation=oil_saturation,
                 formation_volume_factor=oil_fvf,
-                net_to_gross_ratio=ntg,
+                net_to_gross_ratio=net_to_gross,
                 hydrocarbon_type="oil",
                 acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
                 acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
@@ -2425,7 +2538,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
 
         # Normalize drive contributions to get drive indices
-        # Single normalization pass – dividing by `total_drive` already ensures they sum to 1
+        # Single normalization pass - dividing by `total_drive` already ensures they sum to 1
         total_drive = (
             solution_gas_drive + gas_cap_drive + water_drive + compaction_drive
         )
@@ -2457,6 +2570,240 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
 
     mbal = material_balance_analysis
+
+    def material_balance_error(
+        self,
+        from_step: typing.Optional[int] = None,
+        to_step: int = -1,
+    ) -> MaterialBalanceError:
+        """
+        Compute the per-phase material balance error over a simulation interval.
+
+        The check is based on the fundamental conservation equation expressed at
+        *reservoir conditions*:
+
+        ```math
+        MBE_phase = (ΔPV_phase - (V_inj - V_prod)) / PV_phase_initial
+        ```
+
+        Where:
+            - `ΔPV_phase` is the change in pore volume occupied by the phase
+            (computed from saturation grids) between *from_step* and *to_step*,
+            converted to ft³ using the average formation volume factor.
+            - `V_inj` and `V_prod` are cumulative injected / produced volumes at
+            reservoir conditions (ft³) over the same interval.
+            - `PV_phase_initial` is the initial pore volume of the phase (ft³),
+            used only as a normaliser.
+
+        Because the MBE denominator is the *initial* pore volume of each phase,
+        phases with very small initial volumes (e.g. an initially dry gas cap) can
+        show large fractional errors even for small absolute discrepancies.  Watch
+        `total_mbe` (which uses the combined hydrocarbon pore volume) as the
+        headline metric.
+
+        **Thresholds** (per your documentation):
+
+        ==================  =================================================
+        |MBE|               Interpretation
+        ==================  =================================================
+        < 0.1 %             Excellent - results are reliable
+        0.1 % - 1 %         Acceptable - monitor for drift
+        1 % - 5 %           Marginal - refine grid or reduce timestep
+        > 5 %               Unacceptable - investigate before using results
+        ==================  =================================================
+
+        :param from_step: Starting time step of the interval (inclusive).
+            Defaults to `self._min_step` when *None*.
+        :param to_step: Ending time step of the interval (inclusive).
+            Use -1 for the latest available state.
+        :return: `MaterialBalanceError` with per-phase errors and a
+            quality rating.
+        """
+        if from_step is None:
+            from_step = self._min_step
+
+        to_step = self._resolve_step(to_step)
+        initial_state = self.get_state(from_step)
+        current_state = self.get_state(to_step)
+
+        if initial_state is None or current_state is None:
+            return MaterialBalanceError(
+                oil_mbe=0.0,
+                water_mbe=0.0,
+                gas_mbe=0.0,
+                total_mbe=0.0,
+                oil_pore_volume_initial=0.0,
+                water_pore_volume_initial=0.0,
+                gas_pore_volume_initial=0.0,
+                quality="unacceptable",
+                from_step=from_step,
+                to_step=to_step,
+            )
+
+        # Cell geometry
+        initial_model = initial_state.model
+        current_model = current_state.model
+
+        cell_dim = initial_model.cell_dimension  # (dx, dy) in ft
+        cell_area_ft2 = cell_dim[0] * cell_dim[1]  # ft²
+
+        thickness = initial_model.thickness_grid  # ft
+        porosity = initial_model.rock_properties.porosity_grid
+        net_to_gross = initial_model.rock_properties.net_to_gross_ratio_grid
+
+        # Bulk pore volume per cell (ft³) — constant through simulation
+        pore_volume_grid = cell_area_ft2 * thickness * porosity * net_to_gross  # ft³
+
+        def _phase_pore_volume(saturation_grid: np.ndarray) -> np.ndarray:
+            """ft³ of pore space occupied by the phase."""
+            return pore_volume_grid * saturation_grid
+
+        # Initial pore volumes (ft³)
+        oil_initial_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(initial_model.fluid_properties.oil_saturation_grid)
+            )
+        )
+        water_initial_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(initial_model.fluid_properties.water_saturation_grid)
+            )
+        )
+        gas_initial_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(initial_model.fluid_properties.gas_saturation_grid)
+            )
+        )
+
+        # Final pore volumes (ft³)
+        oil_current_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(current_model.fluid_properties.oil_saturation_grid)
+            )
+        )
+        water_current_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(current_model.fluid_properties.water_saturation_grid)
+            )
+        )
+        gas_current_pore_volume = float(
+            np.nansum(
+                _phase_pore_volume(current_model.fluid_properties.gas_saturation_grid)
+            )
+        )
+
+        # Change in reservoir-condition pore volume for each phase
+        # (positive = phase has grown in the reservoir)
+        oil_pore_volume_change = oil_current_pore_volume - oil_initial_pore_volume
+        water_pore_volume_change = water_current_pore_volume - water_initial_pore_volume
+        gas_pore_volume_change = gas_current_pore_volume - gas_initial_pore_volume
+
+        # The analyst methods already return stock-tank volumes, so we convert back
+        # to reservoir conditions using average FVFs.
+        avg_oil_fvf = float(
+            np.nanmean(current_model.fluid_properties.oil_formation_volume_factor_grid)
+        )
+        avg_water_fvf = float(
+            np.nanmean(
+                current_model.fluid_properties.water_formation_volume_factor_grid
+            )
+        )
+        avg_gas_fvf = float(
+            np.nanmean(current_model.fluid_properties.gas_formation_volume_factor_grid)
+        )
+
+        BARRELS_TO_CUBIC_FEET = c.BARRELS_TO_CUBIC_FEET
+
+        oil_produced_stb = self.oil_produced(from_step, to_step)
+        oil_injected_stb = self.oil_injected(from_step, to_step)
+        oil_produced_ft3 = oil_produced_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
+        oil_injected_ft3 = oil_injected_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
+
+        water_produced_stb = self.water_produced(from_step, to_step)
+        water_injected_stb = self.water_injected(from_step, to_step)
+        water_produced_ft3 = water_produced_stb * avg_water_fvf * BARRELS_TO_CUBIC_FEET
+        water_injected_ft3 = water_injected_stb * avg_water_fvf * BARRELS_TO_CUBIC_FEET
+
+        gas_produced_scf = self.free_gas_produced(from_step, to_step)
+        gas_injected_scf = self.gas_injected(from_step, to_step)
+        gas_produced_ft3 = gas_produced_scf * avg_gas_fvf
+        gas_injected_ft3 = gas_injected_scf * avg_gas_fvf
+
+        # MBE = (ΔPV - (V_inj - V_prod)) / PV_initial
+        # Net flux into the reservoir is (injection - production).
+        # If conservation holds: ΔPV == V_inj - V_prod & MBE == 0.
+        def _mbe(
+            pore_volume_change: float,
+            injected_volume: float,
+            produced_volume: float,
+            initial_pore_volume: float,
+        ) -> float:
+            """Computes phase material balance error"""
+            net_flux = injected_volume - produced_volume  # ft³ entering the reservoir
+            discrepancy = pore_volume_change - net_flux
+            if initial_pore_volume == 0.0:
+                return 0.0
+            return discrepancy / initial_pore_volume
+
+        oil_mbe = _mbe(
+            oil_pore_volume_change,
+            oil_injected_ft3,
+            oil_produced_ft3,
+            oil_initial_pore_volume,
+        )
+        water_mbe = _mbe(
+            water_pore_volume_change,
+            water_injected_ft3,
+            water_produced_ft3,
+            water_initial_pore_volume,
+        )
+        gas_mbe = _mbe(
+            gas_pore_volume_change,
+            gas_injected_ft3,
+            gas_produced_ft3,
+            gas_initial_pore_volume,
+        )
+
+        # Weighted aggregate: weight each phase by its initial pore volume
+        total_initial_pore_volume = (
+            oil_initial_pore_volume
+            + water_initial_pore_volume
+            + gas_initial_pore_volume
+        )
+        if total_initial_pore_volume > 0:
+            total_mbe = (
+                oil_mbe * oil_initial_pore_volume
+                + water_mbe * water_initial_pore_volume
+                + gas_mbe * gas_initial_pore_volume
+            ) / total_initial_pore_volume
+        else:
+            total_mbe = 0.0
+
+        # quality rating
+        abs_total = abs(total_mbe)
+        if abs_total < 0.001:
+            quality = "excellent"
+        elif abs_total < 0.01:
+            quality = "acceptable"
+        elif abs_total < 0.05:
+            quality = "marginal"
+        else:
+            quality = "unacceptable"
+
+        return MaterialBalanceError(
+            oil_mbe=float(oil_mbe),
+            water_mbe=float(water_mbe),
+            gas_mbe=float(gas_mbe),
+            total_mbe=float(total_mbe),
+            oil_pore_volume_initial=oil_initial_pore_volume,
+            water_pore_volume_initial=water_initial_pore_volume,
+            gas_pore_volume_initial=gas_initial_pore_volume,
+            quality=quality,
+            from_step=from_step,
+            to_step=to_step,
+        )
+
+    mbe = material_balance_error
 
     def sweep_efficiency_analysis(
         self,
@@ -2549,12 +2896,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
         porosity_grid = current_model.rock_properties.porosity_grid
         net_to_gross_grid = current_model.rock_properties.net_to_gross_ratio_grid
 
-        # initial Bo (bbl/STB) -> convert to ft^3/STB for volume calculations
+        # initial Bo (bbl/STB) -> convert to ft³/STB for volume calculations
         oil_formation_volume_factor_initial_grid = (
             initial_model.fluid_properties.oil_formation_volume_factor_grid
         )
 
-        # Convert Bo from bbl/STB to ft^3/STB
+        # Convert Bo from bbl/STB to ft³/STB
         initial_oil_formation_volume_factor_grid_ft3_per_stb = (
             oil_formation_volume_factor_initial_grid * c.BARRELS_TO_CUBIC_FEET
         )
@@ -2564,7 +2911,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             initial_oil_formation_volume_factor_grid_ft3_per_stb,
         )
 
-        # Compute initial oil pore volume per cell (ft^3) and convert to STB using initial Bo
+        # Compute initial oil pore volume per cell (ft³) and convert to STB using initial Bo
         initial_oil_pore_volume_ft3 = (
             cell_area_ft2
             * thickness_grid
@@ -2703,6 +3050,93 @@ class ModelAnalyst(typing.Generic[NDimension]):
             uncontacted_oil=uncontacted_oil_stb,
             areal_sweep_efficiency=float(areal_sweep_efficiency),
             vertical_sweep_efficiency=float(vertical_sweep_efficiency),
+        )
+
+    def injection_front_analysis(
+        self,
+        step: int = -1,
+        phase: typing.Literal["water", "gas"] = "water",
+        threshold: float = 0.02,
+    ) -> InjectionFrontAnalysis:
+        """
+        Track the spatial position and character of an injection-fluid front.
+
+        The front is defined as every cell whose displacing-phase saturation has
+        risen by at least *threshold* above its value in the earliest available
+        state.  This is consistent with the contact detection used in
+        :meth:`sweep_efficiency_analysis` but returns richer spatial information.
+
+        Unlike `sweep_efficiency_analysis`, which reports aggregate
+        efficiency scalars, this method returns the full saturation-delta grid and
+        a front centroid so you can track plume migration step-by-step.
+
+        :param step: Time step index to analyse; -1 gives the latest state.
+        :param phase: Displacing phase to track - `"water"` or `"gas"`.
+        :param threshold: Minimum saturation increase (fraction, e.g. 0.02) that
+            declares a cell as contacted.  Lower values are more sensitive to
+            numerical noise; higher values are more conservative.
+        :return: `InjectionFrontAnalysis` with spatial front information.
+        """
+        state = self.get_state(step)
+        initial_state = self.get_state(self._min_step)
+
+        if state is None or initial_state is None:
+            empty = np.zeros(1, dtype=bool)
+            return InjectionFrontAnalysis(
+                phase=phase,
+                front_cells=empty,
+                front_cell_count=0,
+                front_volume_fraction=0.0,
+                average_front_saturation=0.0,
+                max_front_saturation=0.0,
+                saturation_delta_grid=empty.astype(float),
+                front_centroid=(0.0, 0.0, 0.0),
+            )
+
+        if phase == "water":
+            current_sat = state.model.fluid_properties.water_saturation_grid
+            initial_sat = initial_state.model.fluid_properties.water_saturation_grid
+        else:
+            current_sat = state.model.fluid_properties.gas_saturation_grid
+            initial_sat = initial_state.model.fluid_properties.gas_saturation_grid
+
+        delta = current_sat - initial_sat
+        front_mask = delta > threshold  # contacted cells
+
+        total_cells = int(delta.size)
+        front_cell_count = int(np.count_nonzero(front_mask))
+        front_volume_fraction = (
+            front_cell_count / total_cells if total_cells > 0 else 0.0
+        )
+
+        avg_front_sat = (
+            float(np.nanmean(current_sat[front_mask])) if front_cell_count > 0 else 0.0
+        )
+        max_front_sat = (
+            float(np.nanmax(current_sat[front_mask])) if front_cell_count > 0 else 0.0
+        )
+
+        # Centre-of-mass of the contacted region (in cell-index units)
+        grid_shape = state.model.grid_shape
+        reshaped_mask = front_mask.reshape(grid_shape)
+        if front_cell_count > 0:
+            idx = np.argwhere(reshaped_mask)  # shape (N, ndim)
+            centroid = tuple(float(np.mean(idx[:, d])) for d in range(idx.shape[1]))
+            # Pad to 3-tuple if the grid is 2-D
+            while len(centroid) < 3:
+                centroid = centroid + (0.0,)
+        else:
+            centroid = (0.0, 0.0, 0.0)
+
+        return InjectionFrontAnalysis(
+            phase=phase,
+            front_cells=front_mask.reshape(grid_shape),
+            front_cell_count=front_cell_count,
+            front_volume_fraction=front_volume_fraction,
+            average_front_saturation=avg_front_sat,
+            max_front_saturation=max_front_sat,
+            saturation_delta_grid=delta.reshape(grid_shape),
+            front_centroid=centroid,  # type: ignore[arg-type]
         )
 
     def recommend_ipr_method(
@@ -4003,6 +4437,35 @@ class ModelAnalyst(typing.Generic[NDimension]):
         for t in range(from_step, to_step + 1, interval):
             yield (t, self.material_balance_analysis(t))
 
+    mbal_history = material_balance_history
+
+    def material_balance_error_history(
+        self,
+        from_step: typing.Optional[int] = None,
+        to_step: int = -1,
+        interval: int = 1,
+    ) -> typing.Generator[typing.Tuple[int, MaterialBalanceError], None, None]:
+        """
+        Generator for cumulative material balance error over time.
+
+        Each yielded value is the *cumulative* MBE from `from_step` up to step
+        *t*, so you can see whether errors are drifting monotonically (systematic
+        problem) or oscillating around zero (acceptable numerical noise).
+
+        :param from_step: Starting time step; defaults to `self._min_step`.
+        :param to_step: Ending time step; -1 for the last available.
+        :param interval: Sampling interval.
+        :return: Generator yielding `(step, MaterialBalanceError)` tuples.
+        """
+        if from_step is None:
+            from_step = self._min_step
+        to_step = self._resolve_step(to_step)
+
+        for t in range(from_step, to_step + 1, interval):
+            yield (t, self.material_balance_error(from_step=from_step, to_step=t))
+
+    mbe_history = material_balance_error_history
+
     def sweep_efficiency_history(
         self,
         from_step: int = 0,
@@ -4033,6 +4496,31 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     delta_gas_saturation_threshold=delta_gas_saturation_threshold,
                     solvent_concentration_threshold=solvent_concentration_threshold,
                 ),
+            )
+
+    def injection_front_history(
+        self,
+        from_step: int = 0,
+        to_step: int = -1,
+        interval: int = 1,
+        phase: typing.Literal["water", "gas"] = "water",
+        threshold: float = 0.02,
+    ) -> typing.Generator[typing.Tuple[int, InjectionFrontAnalysis], None, None]:
+        """
+        Generator for injection-front analysis over a range of time steps.
+
+        :param from_step: Starting time step (inclusive).
+        :param to_step: Ending time step (inclusive); -1 for the last available.
+        :param interval: Sampling interval.
+        :param phase: Displacing phase - `"water"` or `"gas"`.
+        :param threshold: Saturation-increase threshold for contact detection (fraction).
+        :return: Generator yielding `(step, InjectionFrontAnalysis)` tuples.
+        """
+        to_step = self._resolve_step(to_step)
+        for t in range(from_step, to_step + 1, interval):
+            yield (
+                t,
+                self.injection_front_analysis(step=t, phase=phase, threshold=threshold),
             )
 
     def productivity_history(

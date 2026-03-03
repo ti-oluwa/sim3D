@@ -21,7 +21,7 @@ This convention applies to all control types, all phase rates, and all flow rate
 
 ---
 
-## BHPControl
+## `BHPControl`
 
 The simplest control strategy: fix the bottom-hole pressure and let the flow rate be determined by Darcy's law. The rate depends on the pressure difference between the reservoir and the wellbore, the well index, and the phase mobility.
 
@@ -51,7 +51,7 @@ If $P_{res} > P_{wf}$, the rate is negative (production). If $P_{res} < P_{wf}$,
 
 ---
 
-## ConstantRateControl
+## `ConstantRateControl`
 
 Maintains a target flow rate regardless of reservoir conditions, as long as a minimum BHP constraint is satisfied.
 
@@ -82,7 +82,7 @@ The `bhp_limit` has different meanings depending on the flow direction: for prod
 
 ---
 
-## AdaptiveBHPRateControl
+## `AdaptiveBHPRateControl`
 
 The most commonly used control for production wells. It operates at a constant target rate as long as the BHP stays above the limit, then automatically switches to BHP control when the rate is no longer achievable. This mimics the real behavior of production wells as reservoir pressure declines.
 
@@ -113,7 +113,7 @@ This is the industry-standard approach for modeling depletion-drive reservoirs w
 
 ---
 
-## PrimaryPhaseRateControl
+## `PrimaryPhaseRateControl`
 
 The recommended control for production wells in three-phase simulation. It fixes the rate of one "primary" phase (typically oil) and computes the BHP required to deliver that rate. All other phases (water and gas) then produce at whatever their natural Darcy rates are at the resulting BHP.
 
@@ -157,7 +157,7 @@ This approach ensures physical consistency: all phases share the same wellbore p
 
 ---
 
-## MultiPhaseRateControl
+## `MultiPhaseRateControl`
 
 For cases where you need explicit, independent control over each phase. This provides separate control objects for oil, gas, and water, each with their own target rates and BHP limits.
 
@@ -200,7 +200,7 @@ Each phase operates under its own control independently. This is less physically
 
 Rate clamps are safety mechanisms that prevent unphysical flow. They check the computed flow rate or BHP and clamp it if a condition is met.
 
-### ProductionClamp
+### `ProductionClamp`
 
 Prevents injection through a production well. If the computed rate is positive (injection), it clamps the rate to zero. If the computed BHP exceeds reservoir pressure (which would drive injection), it clamps BHP to reservoir pressure.
 
@@ -213,7 +213,7 @@ clamp = bores.ProductionClamp()
 control = bores.BHPControl(bhp=1500.0, clamp=clamp)
 ```
 
-### InjectionClamp
+### `InjectionClamp`
 
 Prevents production through an injection well. If the computed rate is negative (production), it clamps the rate to zero.
 

@@ -2952,10 +2952,10 @@ def compute_water_density(
 
         rho_w = (Mass of standard water + Mass of dissolved gas) / Volume of live water
 
-        rho_w (lb/ft^3) = (rho_w_std (lb/ft^3) + Rsw (scf/STB) * gas_gravity * 0.01359) / Bw (res bbl/STB)
+        rho_w (lb/ft³) = (rho_w_std (lb/ft³) + Rsw (scf/STB) * gas_gravity * 0.01359) / Bw (res bbl/STB)
 
     where:
-    - rho_w_std is the standard water density at 60 F and 14.7 psia (62.37 lb/ft^3 for pure water).
+    - rho_w_std is the standard water density at 60 F and 14.7 psia (62.37 lb/ft³ for pure water).
     - Rsw is the gas solubility in water at current pressure and temperature (scf/STB).
     - gas_gravity is the specific gravity of the dissolved gas (relative to air).
     - Bw is the water formation volume factor at current pressure and temperature (res bbl/STB).
@@ -3007,13 +3007,13 @@ def compute_water_density(
         standard_mass_water_in_lb_per_stb + mass_of_dissolved_gas_in_lb_per_stb
     )
 
-    # Volume of live water at reservoir conditions (ft^3 per STB)
+    # Volume of live water at reservoir conditions (ft³ per STB)
     volume_of_live_water_in_ft3_per_stb = (
         gas_free_water_formation_volume_factor * c.BARRELS_TO_CUBIC_FEET
-    )  # res bbl/STB * ft^3/bbl = ft^3/STB
+    )  # res bbl/STB * ft³/bbl = ft³/STB
     live_water_density_in_lb_per_ft3 = (
         total_mass_in_lb_per_stb / volume_of_live_water_in_ft3_per_stb
-    )  # lb/ft^3
+    )  # lb/ft³
     # Ensure density is non-negative
     dtype = pressure.dtype
     return np.maximum(0.0, live_water_density_in_lb_per_ft3).astype(dtype)  # type: ignore[return-value]

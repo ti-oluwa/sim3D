@@ -115,10 +115,9 @@ def compute_well_index(
     :param skin_factor: Skin factor for the well (dimensionless, default is 0).
     :return: The well index in (mD*ft).
     """
-    well_index = (permeability * interval_thickness) / (
+    return (permeability * interval_thickness) / (
         np.log(effective_drainage_radius / wellbore_radius) + skin_factor
     )
-    return well_index
 
 
 @numba.njit(cache=True)
@@ -128,97 +127,120 @@ def compute_3D_effective_drainage_radius(
     well_orientation: Orientation,
 ) -> float:
     """
-    Compute the effective drainage radius for a well ina 3D reservoir model using
-    Peaceman's effective drainage radius formula.
+    Compute the effective drainage radius for a well in a 3D reservoir model
+    using Peaceman's (1983) anisotropic effective drainage radius formula.
 
-    The formula for this is given by:
+    Peaceman's formula for a well aligned along a given axis uses the two
+    grid dimensions and permeabilities *perpendicular* to the wellbore.
+    For a well in the Z-direction (standard vertical well)::
 
-    For x-direction:
+        r_o = 0.28 * sqrt[ (ky/kx)^0.5 * dx^2 + (kx/ky)^0.5 * dy^2 ]
+                           -----------------------------------------
+                                  (ky/kx)^0.25 + (kx/ky)^0.25
 
-        r_x = 0.28 * √[ (∆y² + ∆z²) / (√(k_y / k_z) + √(k_z / k_y)) ]
+    The same pattern applies by cyclic permutation for X- and Y-oriented
+    (horizontal) wells, substituting the two directions perpendicular to
+    the wellbore axis in each case.
 
-    For y-direction:
+    For the isotropic case (kx = ky = k) this reduces to::
 
-        r_y = 0.28 * √[ (∆x² + ∆z²) / (√(k_x / k_z) + √(k_z / k_x)) ]
+        r_o = 0.28 * sqrt(dx^2 + dy^2) / 2^0.5
+            = 0.198 * sqrt(dx^2 + dy^2)
 
-    For z-direction:
+    which matches the standard Peaceman result for uniform square grids
+    (r_o = 0.2 * dx when dx = dy).
 
-        r_z = 0.28 * √[ (∆x² + ∆y²) / (√(k_x / k_y) + √(k_y / k_x)) ]
+    If either perpendicular permeability is zero (e.g. a tight layer or shale
+    streak), the well has no drainage capacity in that plane and 0.0 is
+    returned.  The caller should treat a zero return value as an indicator
+    that no well index should be assigned to this interval.
 
-    Where:
-        - r_x, r_y, r_z are the effective drainage radii in the x, y, and z directions respectively.
-        - ∆x, ∆y, ∆z are the thicknesses of the reservoir interval in the x, y, and z directions respectively.
-        - k_x, k_y, k_z are the permeabilities of the reservoir rock in the x, y, and z directions respectively.
-
-    :param interval_thickness: A tuple representing the thickness of the reservoir interval in the x, y, and z directions (ft).
-    :param permeability: A tuple representing the permeability of the reservoir rock in the x, y, and z directions (mD).
-    :param well_orientation: The orientation of the well (Orientation.X, Orientation.Y, or Orientation.Z).
-    :return: The effective drainage radius in the direction of the well (ft).
+    :param interval_thickness: Tuple of cell dimensions (dx, dy, dz) in ft.
+    :param permeability: Tuple of permeabilities (kx, ky, kz) in mD.
+    :param well_orientation: Wellbore axis — Orientation.X for a horizontal
+        well along x, Orientation.Y for a horizontal well along y, or
+        Orientation.Z for a standard vertical well.
+    :return: Effective drainage (Peaceman) radius in ft, or 0.0 if either
+        perpendicular permeability is zero.
     """
+    dx, dy, dz = interval_thickness[0], interval_thickness[1], interval_thickness[2]
+    kx, ky, kz = permeability[0], permeability[1], permeability[2]
+
     if well_orientation == Orientation.X:
-        delta_y, delta_z = interval_thickness[1], interval_thickness[2]
-        k_y, k_z = permeability[1], permeability[2]
-        effective_drainage_radius = 0.28 * np.sqrt(
-            (delta_y**2 + delta_z**2) / (np.sqrt(k_y / k_z) + np.sqrt(k_z / k_y))
-        )
+        # Wellbore along x — perpendicular plane is y-z
+        if ky <= 0.0 or kz <= 0.0:
+            return 0.0
+        r1, r2 = ky / kz, kz / ky
+        numerator = np.sqrt(r1) * dy**2 + np.sqrt(r2) * dz**2
+        denominator = r1**0.25 + r2**0.25
     elif well_orientation == Orientation.Y:
-        delta_x, delta_z = interval_thickness[0], interval_thickness[2]
-        k_x, k_z = permeability[0], permeability[2]
-        effective_drainage_radius = 0.28 * np.sqrt(
-            (delta_x**2 + delta_z**2) / (np.sqrt(k_x / k_z) + np.sqrt(k_z / k_x))
-        )
+        # Wellbore along y — perpendicular plane is x-z
+        if kx <= 0.0 or kz <= 0.0:
+            return 0.0
+        r1, r2 = kx / kz, kz / kx
+        numerator = np.sqrt(r1) * dx**2 + np.sqrt(r2) * dz**2
+        denominator = r1**0.25 + r2**0.25
     elif well_orientation == Orientation.Z:
-        delta_x, delta_y = interval_thickness[0], interval_thickness[1]
-        k_x, k_y = permeability[0], permeability[1]
-        effective_drainage_radius = 0.28 * np.sqrt(
-            (delta_x**2 + delta_y**2) / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
-        )
+        # Wellbore along z — perpendicular plane is x-y (standard vertical well)
+        if kx <= 0.0 or ky <= 0.0:
+            return 0.0
+        r1, r2 = ky / kx, kx / ky
+        numerator = np.sqrt(r1) * dx**2 + np.sqrt(r2) * dy**2
+        denominator = r1**0.25 + r2**0.25
     else:
         raise ValidationError(f"Invalid well orientation {well_orientation}")
 
-    return effective_drainage_radius
+    return 0.28 * np.sqrt(numerator / denominator)
 
 
 @numba.njit(cache=True)
 def compute_2D_effective_drainage_radius(
     interval_thickness: TwoDimensions,
     permeability: TwoDimensions,
-    well_orientation: Orientation,
 ) -> float:
     """
-    Compute the effective drainage radius for a well in a 2D reservoir model.
+    Compute the effective drainage radius for a well in a 2D reservoir model
+    using Peaceman's (1983) anisotropic formula.
 
-    The formula for is given by:
+    In a 2D x-y model the wellbore is always perpendicular to the grid plane
+    (i.e. implicitly Z-oriented), so there is a single drainage radius
+    expression that uses both in-plane grid dimensions and permeabilities::
 
-        r = 0.28 * √[ ( (∆x² * √(k_y / k_x)) + (∆y² * √(k_x / k_y)) ) / ( √(k_y / k_x) + √(k_x / k_y) ) ]
+        r_o = 0.28 * sqrt[ (ky/kx)^0.5 * dx^2 + (kx/ky)^0.5 * dy^2 ]
+                           -----------------------------------------
+                                  (ky/kx)^0.25 + (kx/ky)^0.25
 
-    where:
-        - r_x, r_y are the effective drainage radii in the x and y directions respectively.
-        - ∆x, ∆y are the thicknesses of the reservoir interval in the x and y directions respectively.
-        - k_x, k_y are the permeabilities of the reservoir rock in the x and y directions respectively.
+    This is identical to the Z-orientation case of
+    :func:`compute_3D_effective_drainage_radius`.
 
-    :param interval_thickness: A tuple representing the thickness of the reservoir interval in the x and y directions (ft).
-    :param permeability: A tuple representing the permeability of the reservoir rock in the x and y directions (mD).
-    :param well_orientation: The orientation of the well (Orientation.X or Orientation.Y).
-    :return: The effective drainage radius in the direction of the well (ft).
+    For the isotropic case (kx = ky) this reduces to::
+
+        r_o = 0.28 * sqrt(dx^2 + dy^2) / sqrt(2)
+
+    which gives r_o = 0.2 * dx for a uniform square grid (dx = dy),
+    matching the classic Peaceman result.
+
+    If either permeability is zero or negative (e.g. a tight or shale cell),
+    the well has no drainage capacity and 0.0 is returned.  The caller should
+    treat a zero return value as an indicator that no well index should be
+    assigned to this interval.
+
+    :param interval_thickness: Tuple of cell dimensions (dx, dy) in ft.
+    :param permeability: Tuple of permeabilities (kx, ky) in mD.
+    :return: Effective drainage (Peaceman) radius in ft, or 0.0 if either
+        permeability is zero or negative.
     """
-    if well_orientation == Orientation.X:
-        delta_x, delta_y = interval_thickness[0], interval_thickness[1]
-        k_x, k_y = permeability[0], permeability[1]
-        effective_drainage_radius = 0.28 * np.sqrt(
-            (delta_x**2 * np.sqrt(k_y / k_x) + delta_y**2 * np.sqrt(k_x / k_y))
-            / (np.sqrt(k_y / k_x) + np.sqrt(k_x / k_y))
-        )
-    elif well_orientation == Orientation.Y:
-        delta_x, delta_y = interval_thickness[0], interval_thickness[1]
-        k_x, k_y = permeability[0], permeability[1]
-        effective_drainage_radius = 0.28 * np.sqrt(
-            (delta_x**2 * np.sqrt(k_x / k_y) + delta_y**2 * np.sqrt(k_y / k_x))
-            / (np.sqrt(k_x / k_y) + np.sqrt(k_y / k_x))
-        )
-    else:
-        raise ValidationError(f"Invalid well orientation {well_orientation}")
-    return effective_drainage_radius
+    kx, ky = permeability[0], permeability[1]
+
+    if kx <= 0.0 or ky <= 0.0:
+        return 0.0
+
+    dx, dy = interval_thickness[0], interval_thickness[1]
+
+    r1, r2 = ky / kx, kx / ky
+    numerator = np.sqrt(r1) * dx**2 + np.sqrt(r2) * dy**2
+    denominator = r1**0.25 + r2**0.25
+    return 0.28 * np.sqrt(numerator / denominator)
 
 
 @numba.njit(cache=True)
@@ -231,37 +253,55 @@ def compute_oil_well_rate(
     incompressibility_threshold: float = 1e-6,
 ) -> float:
     """
-    Compute the well rate using the well index and pressure drop.
+    Compute the well rate at reservoir conditions using the Darcy well equation.
 
-    This assumes radial flow to/from the wellbore.
-    May be steady-state or pseudo-steady-state flow depending on the well index calculation.
+    Returns the rate at **reservoir conditions** (rb/day).  The caller is
+    responsible for converting to stock-tank conditions by dividing by the
+    formation volume factor (Bo, Bw, or Bg), consistent with the rest of the
+    simulator.
 
-    The formula for the well rate is:
+    Because `phase_mobility = kr / mu` (no FVF term), and because Bo is
+    applied *downstream*, the linear Darcy formula is the correct formulation
+    for black-oil phases.  Bo already encodes fluid compressibility relative to
+    surface conditions via `co = -(1/Bo) * (dBo/dP)`, so applying an
+    additional exponential compressibility correction on top of a downstream Bo
+    division would double-count the same physical effect.
 
-        Q = 7.08e-3 * W * (P_bhp - P) * M
+    The slightly-compressible exponential correction is retained only for
+    phases where no FVF is applied downstream (e.g. a standalone single-phase
+    water or gas module that does not track Bw/Bg explicitly), and only when
+    `c * dP` is large enough to produce a materially different result from
+    the linear formula (> 1%) but still within the range where the exponential
+    density model is physically valid (c * dP <= 0.7).
 
-    or for slightly compressible fluids:
+    Sign convention:
+        - Negative rate indicates production (BHP < reservoir pressure).
+        - Positive rate  indicates injection  (BHP > reservoir pressure).
 
-        Q = 7.08e-3 * W * M * [exp(c_f * (P_bhp - P)) - 1] / c_f
+    Formula (linear / incompressible)::
 
-    where:
-        - Q is the well rate (bbl/day)
-        - W is the well index (mD*ft)
-        - P is the reservoir pressure (psi)
-        - P_bhp is the bottom-hole pressure (psi)
-        - M is the phase mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
+        Q = 7.08e-3 * W * M * (P_bhp - P)
 
-    Negative rate result indicates that the well is producing, while positive rates indicate injection.
+    Formula (slightly compressible, exponential)::
 
-    :param well_index: The well index (mD*ft).
-    :param pressure: The reservoir pressure (psi).
-    :param bottom_hole_pressure: The bottom-hole pressure (psi).
-    :param phase_mobility: The phase relative mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
-    :param fluid_compressibility: The fluid compressibility (1/psi). For slightly compressible fluids.
-    :param incompressibility_threshold: If fluid compressibility is less than this threshold
-        it is considered incompressible. This is to avoid numerical instability when fluid with very smail
-        compressibility is used with compressible fluid formula.
-    :return: The well rate in bbl/day.
+        Q = 7.08e-3 * W * M * [exp(c * dP) - 1] / c
+
+    where dP = P_bhp - P.
+
+    :param well_index: Well index (mD*ft).
+    :param pressure: Reservoir cell pressure at the perforation interval (psi).
+    :param bottom_hole_pressure: Well bottom-hole pressure (psi).
+    :param phase_mobility: Phase relative mobility kr/mu (md/cP).
+        Must not include the FVF term; Bo/Bw/Bg is applied by the caller.
+    :param fluid_compressibility: Fluid compressibility (psi^-1).  When
+        provided and above `incompressibility_threshold`, the exponential
+        correction is evaluated.  Pass None (default) to always use the
+        linear formula, which is correct for black-oil phases.
+    :param incompressibility_threshold: Minimum compressibility (psi^-1) below
+        which the fluid is treated as incompressible and the linear formula is
+        used regardless.  Default 1e-6 psi^-1.
+    :return: Well rate at reservoir conditions (bbl/day).  Negative for
+        production, positive for injection.
     """
     if well_index <= 0:
         raise ValidationError("Well index must be a positive value.")
@@ -270,35 +310,116 @@ def compute_oil_well_rate(
 
     pressure_difference = bottom_hole_pressure - pressure
     is_compressible = (
-        fluid_compressibility and fluid_compressibility >= incompressibility_threshold
+        fluid_compressibility is not None
+        and fluid_compressibility >= incompressibility_threshold
     )
     if is_compressible:
-        # Old: This can be inaccurate for large pressure differences,
-        # as it assume compressibility effect is small (c * ΔP << 1)
-        # which may not always be the case
-        # well_rate = (
-        #     7.08e-3
-        #     * well_index
-        #     * phase_mobility
-        #     * np.log(1 + (fluid_compressibility * pressure_difference))
-        #     / fluid_compressibility
-        # )
-
-        # So we use the exact solution to: dq/dP = k * λ * (1 + c * P)
-        # Integrated to give: q = (k * λ / c) * [exp(c * ΔP) - 1]
         argument = fluid_compressibility * pressure_difference  # type: ignore
-        if abs(argument) <= 50:
-            well_rate = (
+        # Apply exponential correction only when c*dP is large enough to
+        # produce a >1% deviation from the linear result, but small enough
+        # that the slightly-compressible exponential model remains valid.
+        # For black-oil oil/water with Bo tracked downstream this branch is
+        # essentially never entered (typical c*dP << 0.01); it is provided
+        # for single-phase modules that do not apply a downstream FVF.
+        #
+        # c*dP < 1e-4 : exp(x)-1 ~ x, numerically identical to linear.
+        # c*dP > 0.7  : model has broken down at this drawdown magnitude;
+        #               fall back to linear; Bo correction handles the rest.
+        if 1e-4 < abs(argument) <= 0.7:
+            return (
                 7.08e-3
                 * well_index
                 * phase_mobility
-                * (np.exp(argument) - 1)
+                * (np.exp(argument) - 1.0)
                 / fluid_compressibility
             )
-            return well_rate
 
-    well_rate = 7.08e-3 * well_index * phase_mobility * pressure_difference
-    return well_rate
+    return 7.08e-3 * well_index * phase_mobility * pressure_difference
+
+
+@numba.njit(cache=True)
+def compute_required_bhp_for_oil_rate(
+    target_rate: float,
+    well_index: float,
+    pressure: float,
+    phase_mobility: float,
+    fluid_compressibility: typing.Optional[float] = None,
+    incompressibility_threshold: float = 1e-6,
+) -> float:
+    """
+    Compute the bottom-hole pressure required to achieve a target well rate.
+
+    This is the exact algebraic inverse of `compute_oil_well_rate`.
+    The same FVF and compressibility convention applies: `target_rate` must
+    be at reservoir conditions (rb/day), and `phase_mobility = kr / mu`
+    with no FVF term.
+
+    Sign convention:
+        - Negative `target_rate` indicates production (returned BHP < reservoir pressure).
+        - Positive `target_rate`  indicates injection  (returned BHP > reservoir pressure).
+
+    Inverse formula (linear / incompressible)::
+
+        P_bhp = P + Q / (7.08e-3 * W * M)
+
+    Inverse formula (slightly compressible, exponential)::
+
+        P_bhp = P + ln(Q * c / (7.08e-3 * W * M) + 1) / c
+
+    The logarithmic inverse is the algebraically exact inverse of the
+    exponential forward formula, not an approximation.  The same c * dP
+    validity window used in `compute_oil_well_rate` is enforced here
+    by checking that the `ln` argument is positive and within a physically
+    meaningful range before applying it, guaranteeing that the two functions
+    are exact inverses of each other within the same operating regime.
+
+    :param target_rate: Target well rate at reservoir conditions (rb/day).
+        Negative for production, positive for injection.
+    :param well_index: Well index (mD*ft).
+    :param pressure: Reservoir cell pressure at the perforation interval (psi).
+    :param phase_mobility: Phase relative mobility kr/mu (md/cP).
+        Must not include the FVF term.
+    :param fluid_compressibility: Fluid compressibility (psi^-1).  When
+        provided and above `incompressibility_threshold`, the logarithmic
+        inverse is evaluated.  Pass None to always use the linear inverse.
+    :param incompressibility_threshold: Minimum compressibility (psi^-1) below
+        which the fluid is treated as incompressible.  Default 1e-6 psi^-1.
+    :return: Required bottom-hole pressure (psi).
+    """
+    if well_index <= 0:
+        raise ValidationError("Well index must be a positive value.")
+    if phase_mobility <= 0:
+        raise ValidationError("Phase mobility must be a positive value.")
+
+    denominator = 7.08e-3 * well_index * phase_mobility
+
+    is_compressible = (
+        fluid_compressibility is not None
+        and fluid_compressibility >= incompressibility_threshold
+    )
+    if is_compressible:
+        # Exact inverse of Q = (7.08e-3 * W * M / c) * [exp(c * dP) - 1]:
+        #   c * dP = ln(Q * c / (7.08e-3 * W * M) + 1)
+        #   dP     = ln(argument) / c
+        argument = target_rate * fluid_compressibility / denominator + 1.0  # type: ignore
+
+        # argument must be > 0 for ln() to be defined.
+        # argument <= 0 means the target rate exceeds what the
+        # compressibility-driven supply can deliver at this pressure;
+        # fall through to the linear formula as a conservative limit.
+        #
+        # argument > 1e10 implies a c*dP outside the valid range of the
+        # slightly-compressible model; fall through to linear.
+        if 0.0 < argument <= 1e10:
+            delta_p = np.log(argument) / fluid_compressibility
+            # Enforce the same c*dP <= 0.7 validity window as the forward
+            # function so the two are guaranteed to be exact inverses within
+            # the same operating regime.
+            if abs(fluid_compressibility * delta_p) <= 0.7:
+                return float(pressure + delta_p)
+
+    # Linear / incompressible inverse: dP = Q / (7.08e-3 * W * M)
+    return float(pressure + target_rate / denominator)
 
 
 def compute_gas_well_rate(
@@ -314,50 +435,62 @@ def compute_gas_well_rate(
     gas_gravity: typing.Optional[float] = None,
 ) -> float:
     """
-    Compute the gas well rate using the well index and pressure drop.
+    Compute the gas well rate at reservoir conditions (ft³/day).
 
-    This assumes radial flow to/from the wellbore.
-    May be steady-state or pseudo-steady-state flow depending on the well index calculation.
+    The well equation is first evaluated at surface conditions (SCF/day) via
+    the (Tsc/Psc) prefactor, then multiplied by Bg (ft³/SCF) to convert to
+    reservoir conditions, consistent with the oil/water rate functions which
+    return reservoir bbl/day.  The caller divides by Bg downstream to obtain
+    surface SCF/day, following the same pattern used throughout the simulator.
 
-    The formula for the gas well rate is:
+    Two formulations are supported:
 
-    For pseudo-pressure formulation:
+    Pseudo-pressure (recommended, valid over the full pressure range):
 
-        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * (m(P_bhp) - m(P))
+    ```
+    Q_scf = 1.9875e-2 * (Tsc/Psc) * (W * M / T) * (m(Pbhp) - m(P))
+    Q_res = Q_scf * Bg
+    ```
 
-    For pressure squared formulation:
+    Pressure-squared (valid when mu*Z is approximately constant, i.e.
+    low-to-moderate pressures below ~2000 psi):
 
-        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * M * ((P_bhp² - P²) / Z)
+    ```
+    Q_scf = 1.9875e-2 * (Tsc/Psc) * (W * M / T) * (Pbhp^2 - P^2) / Z
+    Q_res = Q_scf * Bg
+    ```
 
-    where:
-        - Q is the gas well rate (SCF/day)
-        - W is the well index (mD*ft)
-        - P is the reservoir pressure (psi)
-        - P_bhp is the bottom-hole pressure (psi)
-        - m(P) is the pseudo-pressure at pressure P
-        - T is the reservoir temperature (°F)
-        - Tsc is the standard temperature (°R), typically 520 °R (60 °F)
-        - Psc is the standard pressure (psi), typically 14.7 psi
-        - M is the phase mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
-        - Z_avg is the average compressibility factor in the reservoir interval.
+    Since phase_mobility = kr/mu (no Bg term), Bg must be supplied via
+    `formation_volume_factor` or computed internally from `gas_gravity`.
 
-    Negative rate result indicates that the well is producing, while positive rates indicate injection.
+    Sign convention:
+        - Negative rate indicates production (BHP < reservoir pressure).
+        - Positive rate  indicates injection  (BHP > reservoir pressure).
 
-    :param well_index: The well index (mD*ft).
-    :param pressure: The reservoir pressure (psi).
-    :param temperature: The reservoir temperature (°F).
-    :param bottom_hole_pressure: The bottom-hole pressure (psi).
-    :param phase_mobility: The phase relative mobility (cP⁻¹, default is 1.0) (k_r / μ) or (k_r / (μ * B)).
-    :param average_compressibility_factor: The average gas compressibility factor Z (default is 1.0).
-    :param use_pseudo_pressure: Whether to use pseudo-pressure formulation (default is True).
-    :param pseudo_pressure_table: Pre-computed pseudo-pressure table for fast lookup (required if use_pseudo_pressure is True).
-    :param formation_volume_factor: Gas formation volume factor (ft³/SCF). If provided, it will be used directly instead of calculating from gas gravity, T, and P.
-    :param gas_gravity: Gas specific gravity required if `formation_volume_factor` is not provided.
-    :return: The gas well rate (ft³/day).
+    :param well_index: Well index (mD*ft).
+    :param pressure: Reservoir pressure at the perforation interval (psi).
+    :param temperature: Reservoir temperature (deg F).
+    :param bottom_hole_pressure: Well bottom-hole pressure (psi).
+    :param phase_mobility: Phase relative mobility kr/mu (md/cP).
+        Must not include the Bg term; surface-to-reservoir conversion is
+        handled here via `formation_volume_factor` or `gas_gravity`.
+    :param average_compressibility_factor: Average Z-factor over the pressure
+        interval.  Used only for the pressure-squared formulation.
+        Default 1.0.
+    :param use_pseudo_pressure: If True (default), use the pseudo-pressure
+        formulation.  If False, use the pressure-squared formulation.
+    :param pseudo_pressure_table: Pre-computed pseudo-pressure lookup table.
+        Required when `use_pseudo_pressure=True`.
+    :param formation_volume_factor: Gas formation volume factor Bg (ft³/SCF)
+        at reservoir conditions.  If None, Bg is computed internally from
+        `gas_gravity`, `pressure`, and `temperature`.
+    :param gas_gravity: Gas specific gravity (air = 1.0).  Required when
+        `formation_volume_factor` is None.
+    :return: Gas well rate at reservoir conditions (ft³/day).  Negative for
+        production, positive for injection.
     """
     if well_index <= 0:
         raise ValidationError("Well index must be a positive value.")
-
     if phase_mobility <= 0:
         raise ValidationError("Phase mobility must be a positive value.")
 
@@ -365,113 +498,44 @@ def compute_gas_well_rate(
     Psc = c.STANDARD_PRESSURE_IMPERIAL
     temperature_rankine = fahrenheit_to_rankine(temperature)
 
-    if use_pseudo_pressure:
-        if pseudo_pressure_table is None:
-            raise ValidationError(
-                "`pseudo_pressure_table` must be provided when use_pseudo_pressure is True."
-            )
-
-        bottom_hole_pseudo_pressure = pseudo_pressure_table(bottom_hole_pressure)
-        reservoir_pseudo_pressure = pseudo_pressure_table(pressure)
-        pseudo_pressure_difference = (
-            bottom_hole_pseudo_pressure - reservoir_pseudo_pressure
-        )
-        well_rate = (
-            1.9875e-2
-            * (Tsc / Psc)
-            * (well_index / temperature_rankine)
-            * pseudo_pressure_difference
-        )
-    else:
-        pressure_difference_squared = bottom_hole_pressure**2 - pressure**2
-        well_rate = (
-            1.9875e-2
-            * (Tsc / Psc)
-            * (well_index / temperature_rankine)
-            * phase_mobility
-            * (pressure_difference_squared / average_compressibility_factor)
-        )
-
-    if formation_volume_factor:
+    if formation_volume_factor is not None:
         gas_fvf = formation_volume_factor
     else:
-        # Compute gas formation volume factor (ft³/SCF)
-        # Bg = 0.02827 * (Z_res * T) / P_res
         if gas_gravity is None:
             raise ComputationError(
-                "`gas_gravity` is required if gas `formation_volume_factor` is not provided"
+                "`gas_gravity` is required if `formation_volume_factor` is not provided."
             )
         z_at_reservoir = compute_gas_compressibility_factor(
-            pressure=pressure,  # ← reservoir pressure, not average!
+            pressure=pressure,
             temperature=temperature,
             gas_gravity=gas_gravity,
             method="dak",
         )
-        gas_fvf = 0.02827 * z_at_reservoir * temperature_rankine / pressure  # ft³/SCF
-    return well_rate * gas_fvf  # ft³/day
+        # Bg = 0.02827 * Z * T / P  (ft³/SCF)
+        gas_fvf = 0.02827 * z_at_reservoir * temperature_rankine / pressure
 
-
-@numba.njit(cache=True)
-def compute_required_bhp_for_oil_rate(
-    target_rate: float,
-    well_index: float,
-    pressure: float,
-    phase_mobility: float,
-    fluid_compressibility: typing.Optional[float] = None,
-    incompressibility_threshold: float = 1e-6,
-) -> float:
-    """
-    Compute the required bottom-hole pressure to achieve a target oil/water rate.
-
-    This is the inverse of `compute_oil_well_rate(...)`.
-
-    For incompressible fluids:
-        Q = 7.08e-3 * W * M * (P_bhp - P)
-        => P_bhp = P + Q / (7.08e-3 * W * M)
-
-    For slightly compressible fluids:
-        Q = 7.08e-3 * W * M * [exp(c_f * (P_bhp - P)) - 1] / c_f
-        => P_bhp = P + ln(Q * c_f / (7.08e-3 * W * M) + 1) / c_f
-
-    :param target_rate: Target well rate (bbl/day). Positive for injection, negative for production.
-    :param well_index: The well index (mD*ft).
-    :param pressure: The reservoir pressure (psi).
-    :param phase_mobility: The phase relative mobility (cP⁻¹) (k_r / μ) or (k_r / (μ * B)).
-    :param fluid_compressibility: The fluid compressibility (1/psi) for slightly compressible fluids.
-    :param incompressibility_threshold: If fluid compressibility is less than this threshold
-        it is considered incompressible. This is to avoid numerical instability when fluid with very smail
-        compressibility is used with compressible fluid formula.
-    :return: Required bottom-hole pressure (psi).
-    """
-    if well_index <= 0:
-        raise ValidationError("Well index must be a positive value.")
-    if phase_mobility <= 0:
-        raise ValidationError("Phase mobility must be a positive value.")
-
-    is_compressible = (
-        fluid_compressibility and fluid_compressibility >= incompressibility_threshold
+    # Common prefactor: 1.9875e-2 * (Tsc/Psc) * (W * M / T)
+    # Gives Q in SCF/day; multiply by Bg at the end for ft³/day.
+    prefactor = (
+        1.9875e-2 * (Tsc / Psc) * (well_index * phase_mobility / temperature_rankine)
     )
-    if is_compressible:
-        # Old Slightly compressible: P_bhp = P + (exp(Q * c_f / (conversion * W * M)) - 1) / c_f
-        # exponent = (
-        #     target_rate
-        #     * fluid_compressibility
-        #     / (conversion_factor * well_index * phase_mobility)
-        # )
-        # required_bhp = pressure + (np.exp(exponent) - 1.0) / fluid_compressibility
+    if use_pseudo_pressure:
+        if pseudo_pressure_table is None:
+            raise ValidationError(
+                "`pseudo_pressure_table` must be provided when `use_pseudo_pressure` is True."
+            )
+        pseudo_pressure_difference = pseudo_pressure_table(
+            bottom_hole_pressure
+        ) - pseudo_pressure_table(pressure)
+        well_rate_scf = prefactor * pseudo_pressure_difference
+    else:
+        pressure_squared_difference = bottom_hole_pressure**2 - pressure**2
+        well_rate_scf = (
+            prefactor * pressure_squared_difference / average_compressibility_factor
+        )
 
-        # Slightly compressible: P_bhp = P + ln(Q * c_f / (7.08e-3 * W * M) + 1) / c_f
-        denominator = 7.08e-3 * well_index * phase_mobility
-        argument = target_rate * fluid_compressibility / denominator + 1.0  # type: ignore
-        # Check if ln() argument is reasonable (not too large), must be positive for ln()
-        # ln(x) for x > 1e15 can cause numerical issues
-        if 0 < argument < 1e10:
-            required_bhp = pressure + np.log(argument) / fluid_compressibility
-            return float(required_bhp)
-
-    # Incompressible: P_bhp = P + Q / (conversion * W * M)
-    required_bhp = pressure + target_rate / (7.08e-3 * well_index * phase_mobility)
-    return float(required_bhp)
+    # Convert SCF/day to reservoir ft³/day
+    return well_rate_scf * gas_fvf
 
 
 def compute_required_bhp_for_gas_rate(
@@ -486,93 +550,109 @@ def compute_required_bhp_for_gas_rate(
     formation_volume_factor: typing.Optional[float] = None,
 ) -> float:
     """
-    Compute the required bottom-hole pressure to achieve a target gas rate.
+    Compute the bottom-hole pressure required to achieve a target gas rate.
 
-    This is the inverse of `compute_gas_well_rate()`.
+    This is the exact algebraic inverse of `compute_gas_well_rate`.
+    `target_rate` must be at reservoir conditions (ft³/day), consistent
+    with the return value of :func:`compute_gas_well_rate`.
 
-    For pseudo-pressure formulation:
-        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * (m(P_bhp) - m(P))
-        => m(P_bhp) = m(P) + Q * T * Psc / (1.9875e-2 * Tsc * W)
-        => P_bhp = m^(-1)(m(P_bhp))  [inverse interpolation]
+    Sign convention:
+        - Negative `target_rate` indicates production (returned BHP < reservoir pressure).
+        - Positive `target_rate`  indicates injection  (returned BHP > reservoir pressure).
 
-    For pressure squared formulation:
-        Q = 1.9875e-2 * (Tsc / Psc) * (W / T) * M * (P_bhp² - P²) / Z
-        => P_bhp = sqrt(P² + Q * T * Psc * Z / (1.9875e-2 * Tsc * W * M))
+    Inverse formula (pseudo-pressure):
 
-    :param target_rate: Target gas rate (ft³/day). Positive for injection, negative for production.
-    :param well_index: The well index (mD*ft).
-    :param pressure: The reservoir pressure (psi).
-    :param temperature: The reservoir temperature (°F).
-    :param phase_mobility: The phase relative mobility (cP⁻¹) (k_r / μ) or (k_r / (μ * B)).
-    :param average_compressibility_factor: Average gas compressibility factor Z (default is 1.0).
-    :param use_pseudo_pressure: Whether to use pseudo-pressure formulation (default is True).
-    :param pseudo_pressure_table: Pre-computed pseudo-pressure table for inverse lookup.
-    :param formation_volume_factor: Gas formation volume factor (ft³/SCF).
+    ```
+    Q_scf   = target_rate / Bg
+    m(Pbhp) = m(P) + Q_scf * T * Psc / (1.9875e-2 * Tsc * W * M)
+    Pbhp    = m^-1( m(Pbhp) )  [inverse table interpolation]
+    ```
+
+    Inverse formula (pressure-squared):
+
+    ```
+    Q_scf  = target_rate / Bg
+    Pbhp   = sqrt( P^2 + Q_scf * T * Psc * Z / (1.9875e-2 * Tsc * W * M) )
+    ```
+
+    :param target_rate: Target gas rate at reservoir conditions (ft³/day).
+        Negative for production, positive for injection.
+    :param well_index: Well index (mD*ft).
+    :param pressure: Reservoir pressure at the perforation interval (psi).
+    :param temperature: Reservoir temperature (deg F).
+    :param phase_mobility: Phase relative mobility kr/mu (md/cP).
+        Must not include the Bg term.
+    :param average_compressibility_factor: Average Z-factor over the pressure
+        interval.  Used only for the pressure-squared formulation.
+        Default 1.0.
+    :param use_pseudo_pressure: If True (default), use the pseudo-pressure
+        inverse.  If False, use the pressure-squared inverse.
+    :param pseudo_pressure_table: Pre-computed pseudo-pressure lookup table
+        supporting inverse interpolation.  Required when
+        `use_pseudo_pressure=True`.
+    :param formation_volume_factor: Gas Bg (ft³/SCF) at reservoir conditions.
+        Required to convert the reservoir-condition target rate back to
+        surface SCF/day before inverting the well equation.
     :return: Required bottom-hole pressure (psi).
     """
     if well_index <= 0:
         raise ValidationError("Well index must be a positive value.")
     if phase_mobility <= 0:
         raise ValidationError("Phase mobility must be a positive value.")
+    if formation_volume_factor is None:
+        raise ValidationError(
+            "`formation_volume_factor` (Bg) must be provided to convert the "
+            "reservoir-condition target rate to surface conditions."
+        )
 
     Tsc = c.STANDARD_TEMPERATURE_RANKINE
     Psc = c.STANDARD_PRESSURE_IMPERIAL
     temperature_rankine = fahrenheit_to_rankine(temperature)
 
-    # Account for formation volume factor if provided
-    if formation_volume_factor:
-        # Convert target rate back to surface conditions
-        target_rate_surface = target_rate / formation_volume_factor
-    else:
-        target_rate_surface = target_rate
+    # Convert reservoir ft³/day back to SCF/day for inversion
+    target_rate_scf = target_rate / formation_volume_factor
+
+    # Common denominator: 1.9875e-2 * Tsc * W * M / T
+    denominator = 1.9875e-2 * Tsc * well_index * phase_mobility / temperature_rankine
 
     if use_pseudo_pressure:
         if pseudo_pressure_table is None:
             raise ValidationError(
-                "Pseudo-pressure table is required for pseudo-pressure formulation."
+                "`pseudo_pressure_table` must be provided when `use_pseudo_pressure` is True."
             )
-
-        # m(P_bhp) = m(P) + Q * T * Psc / (1.9875e-2 * Tsc * W)
+        # m(Pbhp) = m(P) + Q_scf * Psc / denominator
         reservoir_pseudo_pressure = pseudo_pressure_table(pressure)
-        pseudo_pressure_change = (
-            target_rate_surface
-            * temperature_rankine
-            * Psc
-            / (1.9875e-2 * Tsc * well_index)
+        required_pseudo_pressure = (
+            reservoir_pseudo_pressure + target_rate_scf * Psc / denominator
         )
-        required_pseudo_pressure = reservoir_pseudo_pressure + pseudo_pressure_change
-
-        # Find the pressure corresponding to required_pseudo_pressure
         try:
-            required_bhp = pseudo_pressure_table.inverse_interpolate(
-                pseudo_pressure=required_pseudo_pressure
+            return float(
+                pseudo_pressure_table.inverse_interpolate(
+                    pseudo_pressure=required_pseudo_pressure
+                )
             )
         except ValidationError as exc:
-            min_pseudo_p = pseudo_pressure_table.pseudo_pressures[0]
-            max_pseudo_p = pseudo_pressure_table.pseudo_pressures[-1]
+            min_mp = pseudo_pressure_table.pseudo_pressures[0]
+            max_mp = pseudo_pressure_table.pseudo_pressures[-1]
             raise ComputationError(
-                f"Cannot achieve target rate {target_rate:.2f} - "
-                f"required pseudo-pressure {required_pseudo_pressure:.2f} outside valid range. "
-                f"Valid range: [{min_pseudo_p:.2f}, {max_pseudo_p:.2f}]"
+                f"Cannot achieve target rate {target_rate:.2f} ft³/day — "
+                f"required pseudo-pressure {required_pseudo_pressure:.2f} is outside "
+                f"the valid table range [{min_mp:.2f}, {max_mp:.2f}]."
             ) from exc
-    else:
-        # P_bhp² = P² + Q * T * Psc * Z / (1.9875e-2 * Tsc * W * M)
-        pressure_squared_change = (
-            target_rate_surface
-            * temperature_rankine
-            * Psc
-            * average_compressibility_factor
-            / (1.9875e-2 * Tsc * well_index * phase_mobility)
+
+    # Pressure-squared inverse.
+    # Pbhp^2 = P^2 + Q_scf * Psc * Z / denominator
+    required_bhp_squared = (
+        pressure**2
+        + target_rate_scf * Psc * average_compressibility_factor / denominator
+    )
+    if required_bhp_squared < 0:
+        raise ComputationError(
+            f"Cannot achieve target rate {target_rate:.2f} ft³/day — "
+            "results in negative pressure squared.  "
+            "The requested rate exceeds reservoir deliverability."
         )
-        required_bhp_squared = pressure**2 + pressure_squared_change
-
-        if required_bhp_squared < 0:
-            raise ComputationError(
-                f"Cannot achieve target rate {target_rate:.2f} - results in negative pressure squared."
-            )
-        required_bhp = np.sqrt(required_bhp_squared)
-
-    return float(required_bhp)
+    return float(np.sqrt(required_bhp_squared))
 
 
 def _build_table_interpolator(

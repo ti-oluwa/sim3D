@@ -10,7 +10,7 @@ This event-driven approach is more flexible than a simple time-step table becaus
 
 ---
 
-## WellEvent: Predicate + Action
+## `WellEvent`: Predicate + Action
 
 A `WellEvent` combines a predicate (when to trigger) with an action (what to do). At each timestep, the simulator calls the predicate with the well and the current model state. If the predicate returns `True`, the action is executed.
 
@@ -39,7 +39,7 @@ This event triggers at timestep 50 and reduces the oil production target from wh
 
 ## Built-in Predicates
 
-### time_predicate
+### `time_predicate`
 
 The most common predicate triggers at a specific timestep or simulation time:
 
@@ -83,7 +83,7 @@ Registered predicates are serializable, meaning they can be saved and loaded as 
 
 ## Built-in Actions
 
-### update_well
+### `update_well`
 
 The `update_well` function creates an action that modifies well properties. You can change the control, skin factor, active status, or fluid properties:
 

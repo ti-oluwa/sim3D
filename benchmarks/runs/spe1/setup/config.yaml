@@ -116,7 +116,7 @@
               - 0.0
               - 0.0
               - 0.0
-          mixing_rule: stone_I_rule
+          mixing_rule: eclipse_rule
       capillary_pressure_table:
         brooks_corey_capillary_pressure_model:
           irreducible_water_saturation: 0.12
@@ -147,7 +147,7 @@
             control:
               constant_rate_control:
                 target_rate: 100000000.0
-                bhp_limit: null
+                bhp_limit: 40000
                 target_phase: null
                 clamp:
                   injection_clamp:
@@ -184,9 +184,9 @@
               primary_phase_rate_control:
                 primary_phase: oil
                 primary_control:
-                  constant_rate_control:
+                  adaptive_bhp_rate_control:
                     target_rate: -20000.0
-                    bhp_limit: 100.0
+                    bhp_limit: 1000.0
                     target_phase: null
                     clamp:
                       production_clamp:
@@ -651,17 +651,28 @@
         value: 35000
         description: Default water salinity in parts per million (ppm)
         unit: ppm
+      MIN_OIL_ZONE_THICKNESS:
+        value: 5
+        description: Minimum oil zone thickness below which a warning is raised to
+          notify that the oil zone is too thin
+        unit: ft
+      FLUID_INCOMPRESSIBILITY_THRESHOLD:
+        value: 1.0e-06
+        description: Minimum fluid compressibility below which the fluid should be
+          considered incompressible
+        unit: 1/psi
     warn_well_anomalies: true
     log_interval: 10
-    pressure_solver: bicgstab
+    pressure_solver: direct
     saturation_solver: bicgstab
-    pressure_preconditioner: cached_ilu
+    pressure_preconditioner: ilu
     saturation_preconditioner: ilu
     phase_appearance_tolerance: 1.0e-06
     residual_oil_drainage_ratio_water_flood: 0.6
     residual_oil_drainage_ratio_gas_flood: 0.6
     residual_gas_drainage_ratio: 0.5
     max_oil_saturation_change: 0.05
-    max_water_saturation_change: 0.4
+    max_water_saturation_change: 0.05
     max_gas_saturation_change: 0.05
     max_pressure_change: 200.0
+    freeze_saturation_pressure: true

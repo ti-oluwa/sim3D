@@ -1,5 +1,6 @@
 import logging
 import typing
+import warnings
 
 import attrs
 import numpy as np
@@ -163,11 +164,12 @@ class PVTTableData(StoreSerializable):
         for field in attrs.fields(type(self)):
             value = getattr(self, field.name)
 
-            if value is not None and isinstance(value, np.ndarray):
-                if value.dtype != dtype:
-                    object.__setattr__(
-                        self, field.name, value.astype(dtype, copy=False)
-                    )
+            if (
+                value is not None
+                and isinstance(value, np.ndarray)
+                and value.dtype != dtype
+            ):
+                object.__setattr__(self, field.name, value.astype(dtype, copy=False))
 
 
 DEFAULT_PROPERTY_CLAMPS: typing.Dict[str, typing.Tuple[float, float]] = {
@@ -425,42 +427,45 @@ class PVTTables:
             "gas_density_table": data.gas_density_table,
         }
         for name, table in tables_2d.items():
-            if table is not None:
-                if table.shape != (n_p, n_t):
-                    raise ValidationError(
-                        f"{name} shape {table.shape} must match (n_pressures={n_p}, n_temperatures={n_t})"
-                    )
+            if table is not None and table.shape != (n_p, n_t):
+                raise ValidationError(
+                    f"{name} shape {table.shape} must match (n_pressures={n_p}, n_temperatures={n_t})"
+                )
 
         # Physical bounds checks
-        if data.oil_viscosity_table is not None:
-            if np.any(data.oil_viscosity_table <= 0):
-                raise ValidationError("Oil viscosity must be positive")
+        if data.oil_viscosity_table is not None and np.any(
+            data.oil_viscosity_table <= 0
+        ):
+            raise ValidationError("Oil viscosity must be positive")
 
-        if data.gas_viscosity_table is not None:
-            if np.any(data.gas_viscosity_table <= 0):
-                raise ValidationError("Gas viscosity must be positive")
+        if data.gas_viscosity_table is not None and np.any(
+            data.gas_viscosity_table <= 0
+        ):
+            raise ValidationError("Gas viscosity must be positive")
 
-        if data.water_viscosity_table is not None:
-            if np.any(data.water_viscosity_table <= 0):
-                raise ValidationError("Water viscosity must be positive")
+        if data.water_viscosity_table is not None and np.any(
+            data.water_viscosity_table <= 0
+        ):
+            raise ValidationError("Water viscosity must be positive")
 
         # Density checks
-        if data.oil_density_table is not None:
-            if np.any(data.oil_density_table <= 0):
-                raise ValidationError("Oil density must be positive")
+        if data.oil_density_table is not None and np.any(data.oil_density_table <= 0):
+            raise ValidationError("Oil density must be positive")
 
         if data.gas_density_table is not None:
             if np.any(data.gas_density_table <= 0):
                 raise ValidationError("Gas density must be positive")
             # # Gas should be less dense than oil
-            if data.oil_density_table is not None:
-                if np.any(data.gas_density_table >= data.oil_density_table):
-                    raise ValidationError("Gas density should be less than oil density")
+            if data.oil_density_table is not None and np.any(
+                data.gas_density_table >= data.oil_density_table
+            ):
+                raise ValidationError("Gas density should be less than oil density")
 
         # Formation volume factor checks
-        if data.oil_formation_volume_factor_table is not None:
-            if np.any(data.oil_formation_volume_factor_table <= 0):
-                raise ValidationError("Oil formation volume factor must be positive")
+        if data.oil_formation_volume_factor_table is not None and np.any(
+            data.oil_formation_volume_factor_table <= 0
+        ):
+            raise ValidationError("Oil formation volume factor must be positive")
 
         logger.debug("Physical consistency checks passed")
 
@@ -1605,7 +1610,7 @@ def build_pvt_table_data(
 
     # BUILD GAS PROPERTIES (2D TABLES)
     if build_gas_properties:
-        logger.debug("Building gas properties...")
+        logger.debug("Building gas PVT properties...")
         # Gas gravity (usually constant)
         if gas_gravity_table is None:
             gas_gravity_table = np.full((n_p, n_t), gas_gravity, dtype=dtype)
@@ -1657,11 +1662,11 @@ def build_pvt_table_data(
                 gas_density_grid=gas_density_table,  # type: ignore[arg-type]
                 gas_molecular_weight_grid=gas_molecular_weight_table,
             )
-        logger.debug("Gas properties built")
+        logger.debug("Gas PVT properties built")
 
     # BUILD WATER PROPERTIES (3D TABLES)
     if build_water_properties:
-        logger.debug("Building water properties...")
+        logger.debug("Building water PVT properties...")
         # Water viscosity: μw(P, T, S)
         if water_viscosity_table is None:
             water_viscosity_table = build_water_viscosity_grid(  # type: ignore[arg-type]
@@ -1746,11 +1751,11 @@ def build_pvt_table_data(
                     salinity_grid=salinity_grid_3d,
                 )
             )
-        logger.debug("Water properties built")
+        logger.debug("Water PVT properties built")
 
     # BUILD OIL PROPERTIES (2D TABLES)
     if build_oil_properties:
-        logger.debug("Building oil properties...")
+        logger.debug("Building oil PVT properties...")
         # Oil specific gravity (usually constant)
         if oil_specific_gravity_table is None:
             oil_specific_gravity_table = np.full(
@@ -1798,10 +1803,11 @@ def build_pvt_table_data(
                     estimated_rs = float(
                         np.clip(10 ** (0.0125 * oil_api) * 50.0, 50.0, 2000.0)
                     )
-                    logger.warning(
+                    warnings.warn(
                         f"No `estimated_solution_gor` provided. Estimating Rs = {estimated_rs:.1f} SCF/STB "
                         f"from API = {oil_api:.1f}°. This affects bubble point pressure accuracy. "
-                        f"Pass `estimated_solution_gor` explicitly for best results."
+                        f"Pass `estimated_solution_gor` explicitly for best results.",
+                        UserWarning,
                     )
 
                 estimated_rs_grid = np.full(n_t, estimated_rs, dtype=dtype)
@@ -1874,9 +1880,9 @@ def build_pvt_table_data(
 
         # OIL FORMATION VOLUME FACTOR & COMPRESSIBILITY
         # These have a circular dependency in the saturated (below Pb) region:
-        #   - Oil FVF (Bo) below Pb uses oil compressibility (Co) for the liberation correction term
-        #   - Oil compressibility (Co) below Pb uses Bo and gas FVF (Bg) for the same correction term
-        # Resolution: iterate to convergence, typically 2-3 passes would suffice.
+        #  - Oil FVF (Bo) below Pb uses oil compressibility (Co) for the liberation correction term
+        #  - Oil compressibility (Co) below Pb uses Bo and gas FVF (Bg) for the same correction term
+        # So we solve for them iteratively til convergence. Typically 2-3 passes would suffice.
         need_bo = oil_formation_volume_factor_table is None
         need_co = oil_compressibility_table is None
 
@@ -1897,17 +1903,19 @@ def build_pvt_table_data(
             # Use the provided gas FVF table if available; otherwise fall back to ideal gas (Bg = 1).
             # Bg = 1 is a poor approximation at high pressure but avoids a hard dependency
             # on gas properties when the user has not requested gas table construction.
-            if build_gas_properties and gas_formation_volume_factor_table is not None:
+            if gas_formation_volume_factor_table is not None:
                 gas_fvf_for_compressibility = gas_formation_volume_factor_table
             else:
                 if not build_gas_properties:
-                    logger.warning(
+                    warnings.warn(
                         "Gas FVF table unavailable for oil compressibility liberation correction term. "
                         "Using ideal gas approximation (Bg = 1.0 bbl/scf). "
-                        "Enable gas property table construction (`build_gas_properties=True`) for accurate saturated Co."
+                        "Enable gas property table construction (`build_gas_properties=True`) for accurate saturated Co.",
+                        UserWarning,
                     )
                 gas_fvf_for_compressibility = np.ones((n_p, n_t), dtype=dtype)
 
+        gas_gravity_grid_2d = np.full((n_p, n_t), gas_gravity, dtype=dtype)
         if need_bo and need_co:
             assert rs_at_bubble_point_grid is not None
             assert gas_fvf_for_compressibility is not None
@@ -1923,13 +1931,10 @@ def build_pvt_table_data(
             oil_compressibility_estimate = np.full((n_p, n_t), 1e-5, dtype=dtype)
 
             logger.debug(
-                "Beginning iterative Bo/Co bootstrap (max_iterations=%d, tolerance=%.2e).",
-                max_iterations,
-                convergence_tolerance,
+                f"Beginning iterative Bo/Co bootstrap (max_iterations={max_iterations}, tolerance={convergence_tolerance:.2e}).",
             )
 
             max_compressibility_change = 0.0
-            gas_gravity_grid_2d = np.full((n_p, n_t), gas_gravity, dtype=dtype)
             for iteration in range(max_iterations):
                 # Step 1: Build Bo using current Co estimate.
                 # Above Pb: Bo depends on Co via exp(-Co * (P - Pb)).
@@ -1971,30 +1976,23 @@ def build_pvt_table_data(
                     )
                 )
                 logger.debug(
-                    "Bo/Co iteration %d/%d: max ΔCo = %.3e psi⁻¹.",
-                    iteration + 1,
-                    max_iterations,
-                    max_compressibility_change,
+                    f"Bo/Co iteration {iteration + 1}/{max_iterations}: max ΔCo = {max_compressibility_change:.3e} psi⁻¹.",
                 )
 
                 oil_compressibility_estimate = oil_compressibility_updated
                 if max_compressibility_change < convergence_tolerance:
                     logger.debug(
-                        "Bo/Co bootstrap converged in %d iteration(s) "
-                        "(max ΔCo = %.3e psi⁻¹ < tolerance %.3e psi⁻¹).",
-                        iteration + 1,
-                        max_compressibility_change,
-                        convergence_tolerance,
+                        f"Bo/Co bootstrap converged in {iteration + 1} iteration(s) "
+                        f"(max ΔCo = {max_compressibility_change:.3e} psi⁻¹ < tolerance {convergence_tolerance:.3e} psi⁻¹).",
                     )
                     break
             else:
-                logger.warning(
-                    "Bo/Co bootstrap did not converge within %d iterations "
-                    "(final max ΔCo = %.3e psi⁻¹). "
+                warnings.warn(
+                    f"Bo/Co bootstrap did not converge within {max_iterations} iterations "
+                    f"(final max ΔCo = {max_compressibility_change:.3e} psi⁻¹). "
                     "Results may be inaccurate for volatile or heavy oil. "
                     "Consider widening the pressure range or providing pre-computed tables.",
-                    max_iterations,
-                    max_compressibility_change,
+                    UserWarning,
                 )
 
             oil_compressibility_table = oil_compressibility_estimate  # type: ignore
@@ -2008,7 +2006,7 @@ def build_pvt_table_data(
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
                 oil_specific_gravity_grid=oil_specific_gravity_table,
-                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                gas_gravity_grid=gas_gravity_grid_2d,
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,  # type: ignore[arg-type]
                 oil_compressibility_grid=oil_compressibility_table,
             )
@@ -2023,7 +2021,7 @@ def build_pvt_table_data(
                 temperature_grid=temperature_grid_2d,
                 bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
                 oil_api_gravity_grid=oil_api_gravity_table,
-                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                gas_gravity_grid=gas_gravity_grid_2d,
                 gor_at_bubble_point_pressure_grid=rs_at_bubble_point_grid,
                 gas_formation_volume_factor_grid=gas_fvf_for_compressibility,
                 oil_formation_volume_factor_grid=oil_formation_volume_factor_table,
@@ -2033,7 +2031,7 @@ def build_pvt_table_data(
         if oil_density_table is None:
             oil_density_table = build_live_oil_density_grid(
                 oil_api_gravity_grid=oil_api_gravity_table,
-                gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                gas_gravity_grid=gas_gravity_grid_2d,
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,  # type: ignore[arg-type]
                 formation_volume_factor_grid=oil_formation_volume_factor_table,  # type: ignore[arg-type]
             )
@@ -2047,7 +2045,7 @@ def build_pvt_table_data(
                     pressure_grid=bubble_point_pressure_grid_2d,
                     temperature_grid=temperature_grid_2d,
                     bubble_point_pressure_grid=bubble_point_pressure_grid_2d,
-                    gas_gravity_grid=np.full((n_p, n_t), gas_gravity, dtype=dtype),
+                    gas_gravity_grid=gas_gravity_grid_2d,
                     oil_api_gravity_grid=oil_api_gravity_table,
                 )
 
@@ -2059,7 +2057,7 @@ def build_pvt_table_data(
                 solution_gas_to_oil_ratio_grid=solution_gas_to_oil_ratio_table,  # type: ignore[arg-type]
                 gor_at_bubble_point_pressure_grid=rs_at_bubble_point_grid,  # type: ignore[arg-type]
             )
-        logger.debug("Oil properties built")
+        logger.debug("Oil PVT properties built")
 
     table_data = PVTTableData(
         pressures=pressures,

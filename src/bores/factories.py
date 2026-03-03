@@ -466,11 +466,11 @@ def reservoir_model(
     oil_api_gravity_grid = build_oil_api_gravity_grid(oil_specific_gravity_grid)
 
     # Computing Solution GOR and bubble point pressure, we have four cases:
-    #   (a) Both provided            → use as-is
-    #   (b) Pb provided, Rs missing  → derive Rs from Pb using correlations
-    #   (c) Rs provided, Pb missing  → derive Pb from Rs (pvt_tables first)
-    #   (d) Neither provided         → estimate using iterative coupled solver
-    #       (estimate_solution_gor handles T variation; Standing alone does not)
+    #  (a) Both provided            → use as-is
+    #  (b) Pb provided, Rs missing  → derive Rs from Pb using correlations
+    #  (c) Rs provided, Pb missing  → derive Pb from Rs (pvt_tables first)
+    #  (d) Neither provided         → estimate using iterative coupled solver
+    #      (estimate_solution_gor handles T variation; Standing alone does not)
     if (
         solution_gas_to_oil_ratio_grid is None
         and oil_bubble_point_pressure_grid is not None
@@ -601,7 +601,7 @@ def reservoir_model(
                 gas_compressibility_factor_grid=gas_compressibility_factor_grid,  # type: ignore
             )
 
-    # Oil FVF and oil compressibility — resolve circular dependency.
+    # Oil FVF and oil compressibility have a circular dependency on each other.
     # Bo above Pb uses Co: Bo = Bob * exp(-Co * (P - Pb))
     # Co below Pb uses Bo: Co includes (Bg/Bo) * (dRs/dP) / 5.615 liberation term
     # When both are missing, iterate to convergence (typically 2-3 passes).
@@ -615,6 +615,8 @@ def reservoir_model(
             ),
         )
 
+    print("Avg. Oil FVF: ", np.nanmean(oil_formation_volume_factor_grid))
+
     if oil_compressibility_grid is None and pvt_tables is not None:
         oil_compressibility_grid = typing.cast(
             typing.Optional[NDimensionalGrid[NDimension]],
@@ -624,11 +626,16 @@ def reservoir_model(
             ),
         )
 
+    print(
+        "Avg. Oil Compressibility from PVT Tables: ",
+        np.nanmean(oil_compressibility_grid),
+    )
+
     need_bo = oil_formation_volume_factor_grid is None
     need_co = oil_compressibility_grid is None
 
     if need_bo and need_co:
-        # Both missing — iterative bootstrap.
+        # Both are missing. We use iterative bootstrap.
         # Rs at bubble point is needed for Co below Pb.
         rs_at_bubble_point_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=oil_bubble_point_pressure_grid,
@@ -679,20 +686,14 @@ def reservoir_model(
                 )
             )
             logger.debug(
-                "Bo/Co iteration %d/%d: max ΔCo = %.3e psi⁻¹.",
-                iteration + 1,
-                max_iterations,
-                max_change,
+                f"Bo/Co iteration {iteration + 1}/{max_iterations}: max ΔCo = {max_change:.3e} psi⁻¹.",
             )
 
             oil_compressibility_estimate = oil_compressibility_updated
             if max_change < convergence_tolerance:
                 logger.debug(
-                    "Bo/Co bootstrap converged in %d iteration(s) "
-                    "(max ΔCo = %.3e psi⁻¹ < tolerance %.3e psi⁻¹).",
-                    iteration + 1,
-                    max_change,
-                    convergence_tolerance,
+                    f"Bo/Co bootstrap converged in {iteration + 1} iteration(s) "
+                    f"(max ΔCo = {max_change:.3e} psi⁻¹ < tolerance {convergence_tolerance:.3e} psi⁻¹).",
                 )
                 break
         else:
@@ -700,7 +701,7 @@ def reservoir_model(
                 f"Bo/Co bootstrap did not converge within {max_iterations} iterations "
                 f"(final max ΔCo = {max_change:.3e} psi⁻¹). "
                 "Results may be less accurate for volatile or heavy oils. "
-                "Consider providing pre-computed oil_compressibility_grid.",
+                "Consider providing pre-computed `oil_compressibility_table`.",
                 UserWarning,
             )
 
