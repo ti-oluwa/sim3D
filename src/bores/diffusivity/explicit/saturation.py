@@ -982,6 +982,14 @@ def compute_well_rate_grids(
                     "gas_solubility_in_water": gas_solubility_in_water_grid[i, j, k],
                 }
 
+            # Total mobility for pressure equation coupling
+            total_mobility = (
+                oil_relative_mobility_grid[i, j, k]
+                + water_relative_mobility_grid[i, j, k]
+                + gas_relative_mobility_grid[i, j, k]
+            )
+            total_mobility = typing.cast(float, total_mobility)
+
             phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
@@ -1001,7 +1009,7 @@ def compute_well_rate_grids(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 well_index=well_index,
-                phase_mobility=phase_mobility,
+                phase_mobility=total_mobility,
                 fluid=injected_fluid,
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
@@ -1010,6 +1018,7 @@ def compute_well_rate_grids(
                 # Do not pass reservoir fluid PVT tables for injected fluid
                 pvt_tables=None,
             )
+            print(f"Injected {injected_fluid.phase} @ {cell_injection_rate}; FVF {phase_fvf}")
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
@@ -1182,6 +1191,7 @@ def compute_well_rate_grids(
                     pvt_tables=config.pvt_tables,
                     **primary_phase_kwargs,
                 )
+                print(f"Produced {produced_phase} @ {production_rate}; FVF {phase_fvf}")
                 if production_rate > 0.0 and config.warn_well_anomalies:
                     _warn_production_rate_is_positive(
                         production_rate=production_rate,

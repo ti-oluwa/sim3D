@@ -1039,8 +1039,7 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
                 fluid_compressibility=fluid_compressibility,
                 incompressibility_threshold=incompressibility_threshold,
             )
-
-        print(f"{str(fluid.phase).upper()} Phase: ", rate)
+        
         clamped = _apply_clamp(
             rate=rate,
             clamp=self.clamp,
@@ -1421,7 +1420,6 @@ class PrimaryPhaseRateControl(WellControl[WellFluidTcon]):
                 incompressibility_threshold=c.FLUID_INCOMPRESSIBILITY_THRESHOLD,
             )
 
-        print(f"{str(fluid.phase).upper()} Phase: ", rate)
         clamped = _apply_clamp(
             rate=rate,
             clamp=self.secondary_clamp,

@@ -930,7 +930,7 @@ def add_well_contributions(
             )
 
             # Will mostlikely never happen since phase mobilities are clamped to non-zero minimum values
-            if phase_mobility <= 0.0 and total_mobility <= 0.0:
+            if phase_mobility <= 0.0 or total_mobility <= 0.0:
                 continue
 
             # Get fluid properties
@@ -1118,15 +1118,8 @@ def add_well_contributions(
                         float, oil_formation_volume_factor_grid[i, j, k]
                     )
 
-                # Total mobility for pressure equation coupling
-                total_mobility = (
-                    oil_relative_mobility_grid[i, j, k]
-                    + water_relative_mobility_grid[i, j, k]
-                    + gas_relative_mobility_grid[i, j, k]
-                )
-
                 # Will mostlikely never happen since phase mobilities are clamped to non-zero minimum values
-                if phase_mobility <= 0.0 and total_mobility <= 0.0:
+                if phase_mobility <= 0.0:
                     continue
 
                 use_pseudo_pressure = (
@@ -1174,7 +1167,7 @@ def add_well_contributions(
 
                 # Compute productivity index
                 phase_productivity_index = (
-                    well_index * total_mobility * md_per_cp_to_ft2_per_psi_per_day
+                    well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
                 )
                 # Semi-implicit coupling (same form for production)
                 A[cell_1D_index, cell_1D_index] += phase_productivity_index
