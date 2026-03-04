@@ -318,6 +318,118 @@ def compute_mobility_grids(
     return (x_mobilities, y_mobilities, z_mobilities)  # type: ignore[return-value]
 
 
+@numba.njit(cache=True)
+def compute_pressure_mobility_grids(
+    absolute_permeability_x: ThreeDimensionalGrid,
+    absolute_permeability_y: ThreeDimensionalGrid,
+    absolute_permeability_z: ThreeDimensionalGrid,
+    water_relative_mobility_grid: ThreeDimensionalGrid,
+    oil_relative_mobility_grid: ThreeDimensionalGrid,
+    gas_relative_mobility_grid: ThreeDimensionalGrid,
+    water_fvf_grid: ThreeDimensionalGrid,
+    oil_fvf_grid: ThreeDimensionalGrid,
+    gas_fvf_grid: ThreeDimensionalGrid,
+    md_per_cp_to_ft2_per_psi_per_day: float,
+) -> typing.Tuple[
+    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
+    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
+    typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid],
+]:
+    """
+    Compute FVF-weighted mobility grids for the pressure equation.
+
+    For the canonical black-oil IMPES pressure equation, transmissibility requires
+    phase mobilities of the form:
+
+        λ_α = k_abs * (kr_α / (μ_α · B_α)) * unit_conversion
+
+    This is distinct from the saturation-equation mobility (kr/μ, no B), which is
+    handled by `compute_mobility_grids`.
+
+    At typical reservoir conditions the gas FVF B_g ≈ 0.004 ft³/SCF, so omitting
+    the 1/B_g factor inflates gas mobility by ~250×, dominating total transmissibility
+    even at low gas saturation and producing a physically incorrect pressure field.
+
+    :param absolute_permeability_x: Absolute permeability in x-direction (mD)
+    :param absolute_permeability_y: Absolute permeability in y-direction (mD)
+    :param absolute_permeability_z: Absolute permeability in z-direction (mD)
+    :param water_relative_mobility_grid: Water relative mobility kr_w/μ_w (1/cP)
+    :param oil_relative_mobility_grid: Oil relative mobility kr_o/μ_o (1/cP)
+    :param gas_relative_mobility_grid: Gas relative mobility kr_g/μ_g (1/cP)
+    :param water_fvf_grid: Water formation volume factor B_w (bbl/STB)
+    :param oil_fvf_grid: Oil formation volume factor B_o (bbl/STB)
+    :param gas_fvf_grid: Gas formation volume factor B_g (ft³/SCF)
+    :param md_per_cp_to_ft2_per_psi_per_day: Unit conversion constant
+    :return: Tuple of 3 direction tuples, each containing (water, oil, gas) FVF-weighted
+        mobility grids: (x_mobilities, y_mobilities, z_mobilities).
+        Units: ft²/(psi·day), consistent with pressure equation transmissibility.
+    """
+    # X-direction: λ_α = k_abs * (kr_α / μ_α) / B_α * unit_conversion
+    water_mobility_grid_x = (
+        absolute_permeability_x
+        * water_relative_mobility_grid
+        / water_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    oil_mobility_grid_x = (
+        absolute_permeability_x
+        * oil_relative_mobility_grid
+        / oil_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    gas_mobility_grid_x = (
+        absolute_permeability_x
+        * gas_relative_mobility_grid
+        / gas_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+
+    # Y-direction
+    water_mobility_grid_y = (
+        absolute_permeability_y
+        * water_relative_mobility_grid
+        / water_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    oil_mobility_grid_y = (
+        absolute_permeability_y
+        * oil_relative_mobility_grid
+        / oil_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    gas_mobility_grid_y = (
+        absolute_permeability_y
+        * gas_relative_mobility_grid
+        / gas_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+
+    # Z-direction
+    water_mobility_grid_z = (
+        absolute_permeability_z
+        * water_relative_mobility_grid
+        / water_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    oil_mobility_grid_z = (
+        absolute_permeability_z
+        * oil_relative_mobility_grid
+        / oil_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+    gas_mobility_grid_z = (
+        absolute_permeability_z
+        * gas_relative_mobility_grid
+        / gas_fvf_grid
+        * md_per_cp_to_ft2_per_psi_per_day
+    )
+
+    x_mobilities = (water_mobility_grid_x, oil_mobility_grid_x, gas_mobility_grid_x)
+    y_mobilities = (water_mobility_grid_y, oil_mobility_grid_y, gas_mobility_grid_y)
+    z_mobilities = (water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z)
+    return (x_mobilities, y_mobilities, z_mobilities)  # type: ignore[return-value]
+
+
 def build_amg_preconditioner(
     A_csr: typing.Union[csr_array, csr_matrix], cycle: str = "V", **kwargs: typing.Any
 ) -> LinearOperator:

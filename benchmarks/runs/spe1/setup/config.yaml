@@ -147,7 +147,7 @@
             control:
               constant_rate_control:
                 target_rate: 100000000.0
-                bhp_limit: 40000
+                bhp_limit: 15000
                 target_phase: null
                 clamp:
                   injection_clamp:
@@ -663,9 +663,9 @@
         unit: 1/psi
     warn_well_anomalies: true
     log_interval: 10
-    pressure_solver: direct
+    pressure_solver: bicgstab
     saturation_solver: bicgstab
-    pressure_preconditioner: ilu
+    pressure_preconditioner: cached_ilu
     saturation_preconditioner: ilu
     phase_appearance_tolerance: 1.0e-06
     residual_oil_drainage_ratio_water_flood: 0.6

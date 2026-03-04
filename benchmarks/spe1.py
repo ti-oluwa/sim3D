@@ -234,9 +234,9 @@ def setup_grid():
             1.4350,  # 2014.7
             1.5000,  # 2514.7
             1.5650,  # 3014.7
-            1.6950,  # 4014.7 (bubble point)
-            1.8270,  # 5014.7 (saturated value, will be adjusted for undersaturated)
-            2.3570,  # 9014.7 (saturated value, will be adjusted for undersaturated)
+            1.6950,  # 4014.7 (bubble point) ← same in both tables
+            1.6718,  # 5014.7 (undersaturated, interpolated)
+            1.5790,  # 9014.7 (undersaturated, from Table 2)
         ]
     )
 
@@ -466,10 +466,11 @@ def setup_grid():
     # -------------------------------------------------------------------------
     # Build PVT Table Data
     # -------------------------------------------------------------------------
-    pvt_table_data = bores.build_pvt_table_data(
+    pvt_data = bores.build_pvt_table_data(
         pressures=pvt_pressures_saturated,
         temperatures=pvt_temperatures,
         salinities=bores.array([0.0]),  # Fresh water
+        bubble_point_pressures=bores.array([4014.7, 4014.7]),
         oil_specific_gravity=oil_specific_gravity,
         gas_gravity=gas_gravity,
         water_salinity=0.0,
@@ -486,9 +487,7 @@ def setup_grid():
         water_density_table=water_density_table,
         gas_solubility_in_water_table=gas_solubility_water_table,
     )
-    pvt_tables = bores.PVTTables(
-        data=pvt_table_data, interpolation_method="linear"
-    )
+    pvt_tables = bores.PVTTables(data=pvt_data, interpolation_method="linear")
 
     # -------------------------------------------------------------------------
     # Build Reservoir Model
@@ -516,14 +515,15 @@ def setup_grid():
         connate_water_saturation_grid=connate_water_saturation_grid,
         residual_gas_saturation_grid=residual_gas_saturation_grid,
         net_to_gross_ratio_grid=net_to_gross_grid,
+        water_salinity_grid=bores.array(np.zeros(grid_shape)),
         dip_angle=0.0,
         dip_azimuth=0.0,
         pvt_tables=pvt_tables,
         datum_depth=8325.0,
     )
 
-    model.to_file(Path("./benchmarks/runs/spe1/setup/model.h5"))
-    pvt_table_data.to_file(Path("./benchmarks/runs/spe1/setup/pvt.h5"))
+    model.save(Path("./benchmarks/runs/spe1/setup/model.h5"))
+    pvt_data.save(Path("./benchmarks/runs/spe1/setup/pvt.h5"))
     return Path, bores, np, oil_specific_gravity, pvt_tables
 
 
@@ -653,7 +653,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         control=bores.ConstantRateControl(
             target_rate=100.0e6,  # 100 MMscf/D
             clamp=bores.InjectionClamp(),
-            bhp_limit=40_000,
+            bhp_limit=15_000,
         ),
         injected_fluid=bores.InjectedFluid(
             name="Gas",
@@ -722,12 +722,21 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     # -------------------------------------------------------------------------
     # Config
     # -------------------------------------------------------------------------
+    preconditioner_factory = bores.CachedPreconditionerFactory(
+        factory="ilu",
+        name="cached_ilu",
+        update_frequency=10,
+        recompute_threshold=0.3,
+    )
+    preconditioner_factory.register(override=True)
+
     config = bores.Config(
         timer=timer,
         rock_fluid_tables=rock_fluid_tables,
         scheme="impes",
         output_frequency=1,
-        pressure_solver="direct",
+        pressure_solver="bicgstab",
+        pressure_preconditioner="cached_ilu",
         log_interval=10,
         pvt_tables=pvt_tables,
         wells=wells,
@@ -741,7 +750,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         max_pressure_change=200.0,
     )
 
-    config.to_file(Path("./benchmarks/runs/spe1/setup/config.yaml"))
+    config.save(Path("./benchmarks/runs/spe1/setup/config.yaml"))
     return (wells,)
 
 
@@ -756,7 +765,7 @@ def run_simulation(Path, bores, store):
     run = bores.Run.from_files(
         model_path=Path("./benchmarks/runs/spe1/setup/model.h5"),
         config_path=Path("./benchmarks/runs/spe1/setup/config.yaml"),
-        pvt_table_path=Path("./benchmarks/runs/spe1/setup/pvt.h5"),
+        pvt_data_path=Path("./benchmarks/runs/spe1/setup/pvt.h5"),
     )
 
 
@@ -772,7 +781,7 @@ def run_simulation(Path, bores, store):
             last_state = state
 
     if last_state is not None:
-        last_state.model.to_file(Path("./benchmarks/runs/spe1/results/model.h5"))
+        last_state.model.save(Path("./benchmarks/runs/spe1/results/model.h5"))
     return (stream,)
 
 
@@ -1181,6 +1190,13 @@ def recovery_plots(analyst, bores, np, recovery_efficiency_history):
 
 
 @app.cell
+def _(analyst):
+    mbe = analyst.material_balance_error()
+    print(mbe.total_mbe)
+    return
+
+
+@app.cell
 def _(bores, states, wells):
     injector_locations, producer_locations = wells.locations
     injector_names, producer_names = wells.names
@@ -1206,9 +1222,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.plotly3d.DataVisualizer()
-    property = "water-fvf"
+    property = "oil-fvf"
     figures = []
-    timesteps = [19]
+    timesteps = [30]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

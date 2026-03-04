@@ -615,8 +615,6 @@ def reservoir_model(
             ),
         )
 
-    print("Avg. Oil FVF: ", np.nanmean(oil_formation_volume_factor_grid))
-
     if oil_compressibility_grid is None and pvt_tables is not None:
         oil_compressibility_grid = typing.cast(
             typing.Optional[NDimensionalGrid[NDimension]],
@@ -626,14 +624,8 @@ def reservoir_model(
             ),
         )
 
-    print(
-        "Avg. Oil Compressibility from PVT Tables: ",
-        np.nanmean(oil_compressibility_grid),
-    )
-
     need_bo = oil_formation_volume_factor_grid is None
     need_co = oil_compressibility_grid is None
-
     if need_bo and need_co:
         # Both are missing. We use iterative bootstrap.
         # Rs at bubble point is needed for Co below Pb.

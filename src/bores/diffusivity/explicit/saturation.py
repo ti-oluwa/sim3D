@@ -123,7 +123,6 @@ def evolve_saturation(
         for water, oil, and gas, respectively.
         (updated_water_saturation_grid, updated_oil_saturation_grid, updated_gas_saturation_grid)
     """
-    # Extract properties from provided objects for clarity and convenience
     time_step_in_days = time_step_size * c.DAYS_PER_SECOND
     absolute_permeability = rock_properties.absolute_permeability
     porosity_grid = rock_properties.porosity_grid
@@ -917,9 +916,7 @@ def compute_well_rate_grids(
 
     # Process all injection wells (compute total WI + rates in single pass)
     for injection_well in wells.injection_wells:
-        if not injection_well.is_open:
-            continue
-        if injection_well.injected_fluid is None:
+        if not injection_well.is_open or injection_well.injected_fluid is None:
             continue
 
         injected_fluid = injection_well.injected_fluid
@@ -2321,9 +2318,7 @@ def compute_miscible_well_rate_grids(
 
     # Process all injection wells (compute total WI + rates in single pass)
     for injection_well in wells.injection_wells:
-        if not injection_well.is_open:
-            continue
-        if injection_well.injected_fluid is None:
+        if not injection_well.is_open or injection_well.injected_fluid is None:
             continue
 
         injected_fluid = injection_well.injected_fluid

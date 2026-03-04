@@ -173,7 +173,7 @@ import bores
 sim_run = bores.Run.from_files(
     model_path="model.h5",
     config_path="config.yaml",
-    pvt_table_path="pvt.h5",  # Optional
+    pvt_data_path="pvt.h5",  # Optional
 )
 
 # Iterate directly over the Run object

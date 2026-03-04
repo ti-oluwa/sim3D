@@ -13,10 +13,9 @@ from bores.correlations.arrays import compute_hydrocarbon_in_place
 from bores.errors import ValidationError
 from bores.grids.base import uniform_grid
 from bores.states import ModelState
-from bores.types import NDimension
+from bores.types import FluidPhase, NDimension, NDimensionalGrid
 from bores.utils import clip
-from bores.wells.base import _expand_intervals
-
+from bores.wells.base import Wells, _expand_intervals
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +282,73 @@ class MaterialBalanceError:
 
     to_step: int
     """Ending time step of the interval checked."""
+
+
+def _build_injected_fvf_grids(
+    wells: Wells,
+    pressure_grid: NDimensionalGrid[NDimension],
+    temperature_grid: NDimensionalGrid[NDimension],
+    grid_shape: NDimension,
+) -> typing.Tuple[NDimensionalGrid[NDimension], NDimensionalGrid[NDimension]]:
+    """
+    Build per-cell grids of injected gas and water FVF using each
+    injector's actual InjectedFluid properties and vectorized PVT correlations.
+
+    Cells with no injection activity are NaN. Handles WAG and multi-fluid
+    scenarios correctly — each injector's fluid is used only for the cells
+    it perforates, using that fluid's specific gravity / salinity for FVF.
+
+    :param wells: Wells object containing injection wells.
+    :param pressure_grid: 3D pressure grid (psi).
+    :param temperature_grid: 3D temperature grid (°F).
+    :param grid_shape: Shape of the reservoir grid (nx, ny, nz).
+    :return: (injected_gas_fvf_grid, injected_water_fvf_grid)
+        all shaped `grid_shape`, NaN where no injection occurs.
+    """
+    injected_gas_fvf_grid = np.full(grid_shape, np.nan)
+    injected_water_fvf_grid = np.full(grid_shape, np.nan)
+
+    for well in wells.injection_wells:
+        if not well.is_open or well.injected_fluid is None:
+            continue
+
+        fluid = well.injected_fluid
+
+        # Collect all perforated cell indices for this well in one pass
+        i_coords, j_coords, k_coords = [], [], []
+        for start, end in well.perforating_intervals:
+            for i in range(start[0], end[0] + 1):
+                for j in range(start[1], end[1] + 1):
+                    for k in range(start[2], end[2] + 1):
+                        i_coords.append(i)
+                        j_coords.append(j)
+                        k_coords.append(k)
+
+        if not i_coords:
+            continue
+
+        idx = (
+            np.array(i_coords, dtype=np.intp),
+            np.array(j_coords, dtype=np.intp),
+            np.array(k_coords, dtype=np.intp),
+        )
+
+        # Extract pressure and temperature arrays for all perforated cells at once
+        cell_pressures = pressure_grid[idx].astype(np.float64)
+        cell_temperatures = temperature_grid[idx].astype(np.float64)
+
+        # Single vectorized FVF call for all perforated cells of this injector
+        fvf_values = fluid.get_formation_volume_factor(
+            pressure=cell_pressures,
+            temperature=cell_temperatures,
+        )
+
+        if fluid.phase == FluidPhase.GAS:
+            injected_gas_fvf_grid[idx] = fvf_values
+        elif fluid.phase == FluidPhase.WATER:
+            injected_water_fvf_grid[idx] = fvf_values
+
+    return injected_gas_fvf_grid, injected_water_fvf_grid  # type: ignore[return-value]
 
 
 class ModelAnalyst(typing.Generic[NDimension]):
@@ -1284,15 +1350,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 continue
 
             step_in_days = state.step_size * c.DAYS_PER_SECOND
-            gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-
-            gas_injection_SCF_day = gas_injection / gas_fvf_grid
+            injected_gas_fvf_grid, _ = _build_injected_fvf_grids(
+                wells=state.wells,
+                pressure_grid=state.model.fluid_properties.pressure_grid,
+                temperature_grid=state.model.fluid_properties.temperature_grid,
+                grid_shape=state.model.grid_shape,
+            )
+            # NaN where no injector: gas_injection is also 0 there, nansum skips correctly
+            gas_injection_scf_day = gas_injection / injected_gas_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                gas_injection_SCF_day = gas_injection_SCF_day * mask
+                gas_injection_scf_day = gas_injection_scf_day * mask
 
-            total_injection += np.nansum(gas_injection_SCF_day * step_in_days)
+            total_injection += np.nansum(gas_injection_scf_day * step_in_days)
 
         result = float(total_injection)
         self._gas_injected_cache[key] = result
@@ -1364,12 +1435,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 continue
 
             step_in_days = state.step_size * c.DAYS_PER_SECOND
-            water_fvf_grid = (
-                state.model.fluid_properties.water_formation_volume_factor_grid
+            _, injected_water_fvf_grid = _build_injected_fvf_grids(
+                wells=state.wells,
+                pressure_grid=state.model.fluid_properties.pressure_grid,
+                temperature_grid=state.model.fluid_properties.temperature_grid,
+                grid_shape=state.model.grid_shape,
             )
-
             water_injection_stb_day = (
-                water_injection * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+                water_injection * c.CUBIC_FEET_TO_BARRELS / injected_water_fvf_grid
             )
 
             # Apply mask if filtering
@@ -2296,21 +2369,21 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
             oil_rate = np.nansum(oil_injection_stb_day)
 
+        injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
+            wells=state.wells,
+            pressure_grid=state.model.fluid_properties.pressure_grid,
+            temperature_grid=state.model.fluid_properties.temperature_grid,
+            grid_shape=state.model.grid_shape,
+        )
         if (gas_injection := state.injection.gas) is not None:
-            # Convert from ft³/day to SCF/day using gas FVF
-            gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            gas_injection_scf_day = gas_injection / gas_fvf_grid
+            gas_injection_scf_day = gas_injection / injected_gas_fvf_grid
             if mask is not None:
                 gas_injection_scf_day = np.where(mask, gas_injection_scf_day, 0.0)
             gas_rate = np.nansum(gas_injection_scf_day)
 
         if (water_injection := state.injection.water) is not None:
-            # Convert from ft³/day to STB/day using water FVF
-            water_fvf_grid = (
-                state.model.fluid_properties.water_formation_volume_factor_grid
-            )
             water_injection_stb_day = (
-                water_injection * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
+                water_injection * c.CUBIC_FEET_TO_BARRELS / injected_water_fvf_grid
             )
             if mask is not None:
                 water_injection_stb_day = np.where(mask, water_injection_stb_day, 0.0)
@@ -2719,15 +2792,34 @@ class ModelAnalyst(typing.Generic[NDimension]):
         oil_produced_ft3 = oil_produced_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
         oil_injected_ft3 = oil_injected_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
 
+        injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
+            wells=current_state.wells,
+            pressure_grid=current_model.fluid_properties.pressure_grid,
+            temperature_grid=current_model.fluid_properties.temperature_grid,
+            grid_shape=current_model.grid_shape,
+        )
+        avg_gas_fvf_injected = (
+            float(np.nanmean(injected_gas_fvf_grid))
+            if not np.all(np.isnan(injected_gas_fvf_grid))
+            else avg_gas_fvf
+        )
+        avg_water_fvf_injected = (
+            float(np.nanmean(injected_water_fvf_grid))
+            if not np.all(np.isnan(injected_water_fvf_grid))
+            else avg_water_fvf
+        )
+
         water_produced_stb = self.water_produced(from_step, to_step)
         water_injected_stb = self.water_injected(from_step, to_step)
         water_produced_ft3 = water_produced_stb * avg_water_fvf * BARRELS_TO_CUBIC_FEET
-        water_injected_ft3 = water_injected_stb * avg_water_fvf * BARRELS_TO_CUBIC_FEET
+        water_injected_ft3 = (
+            water_injected_stb * avg_water_fvf_injected * BARRELS_TO_CUBIC_FEET
+        )
 
         gas_produced_scf = self.free_gas_produced(from_step, to_step)
         gas_injected_scf = self.gas_injected(from_step, to_step)
         gas_produced_ft3 = gas_produced_scf * avg_gas_fvf
-        gas_injected_ft3 = gas_injected_scf * avg_gas_fvf
+        gas_injected_ft3 = gas_injected_scf * avg_gas_fvf_injected
 
         # MBE = (ΔPV - (V_inj - V_prod)) / PV_initial
         # Net flux into the reservoir is (injection - production).
@@ -3483,7 +3575,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
             self._min_step, step, cells=cells_obj
         )  # SCF (free gas only)
 
-        # Get average formation volume factors at current reservoir conditions
+        injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
+            wells=state.wells,
+            pressure_grid=state.model.fluid_properties.pressure_grid,
+            temperature_grid=state.model.fluid_properties.temperature_grid,
+            grid_shape=state.model.grid_shape,
+        )
+
+        # Get average formation volume factors
         avg_oil_fvf = np.nanmean(
             state.model.fluid_properties.oil_formation_volume_factor_grid
         )  # bbl/STB
@@ -3493,10 +3592,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
         avg_water_fvf_produced = np.nanmean(
             state.model.fluid_properties.water_formation_volume_factor_grid
         )  # bbl/STB
-        avg_water_fvf_injected = avg_water_fvf_produced  # Typically same as produced
+        # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
+        avg_water_fvf_injected = (
+            float(np.nanmean(injected_water_fvf_grid))
+            if not np.all(np.isnan(injected_water_fvf_grid))
+            else avg_water_fvf_produced
+        )
 
-        # Get gas formation volume factor for injected gas at reservoir pressure
-        avg_gas_fvf_injected = avg_gas_fvf  # Injected gas FVF at reservoir conditions
+        # Get gas formation volume factor for injected gas
+        # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
+        avg_gas_fvf_injected = (
+            float(np.nanmean(injected_gas_fvf_grid))
+            if not np.all(np.isnan(injected_gas_fvf_grid))
+            else avg_gas_fvf
+        )
 
         # Calculate injected reservoir volumes (numerator)
         injected_water_reservoir_volume = (

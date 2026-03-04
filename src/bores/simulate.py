@@ -397,21 +397,21 @@ def _run_impes_step(
         freeze_saturation_pressure=config.freeze_saturation_pressure,
     )
 
-    # Recompute relative mobility grids with updated fluid properties
-    # Since relative mobility depends on fluid viscosities which change with pressure
-    logger.debug("Rebuilding relative mobility grids for saturation evolution...")
-    (
-        padded_water_relative_mobility_grid,
-        padded_oil_relative_mobility_grid,
-        padded_gas_relative_mobility_grid,
-    ) = build_three_phase_relative_mobilities_grids(
-        oil_relative_permeability_grid=padded_relperm_grids.kro,
-        water_relative_permeability_grid=padded_relperm_grids.krw,
-        gas_relative_permeability_grid=padded_relperm_grids.krg,
-        water_viscosity_grid=padded_fluid_properties.water_viscosity_grid,
-        oil_viscosity_grid=padded_fluid_properties.oil_effective_viscosity_grid,
-        gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
-    )
+    # # Recompute relative mobility grids with updated fluid properties
+    # # Since relative mobility depends on fluid viscosities which change with pressure
+    # logger.debug("Rebuilding relative mobility grids for saturation evolution...")
+    # (
+    #     padded_water_relative_mobility_grid,
+    #     padded_oil_relative_mobility_grid,
+    #     padded_gas_relative_mobility_grid,
+    # ) = build_three_phase_relative_mobilities_grids(
+    #     oil_relative_permeability_grid=padded_relperm_grids.kro,
+    #     water_relative_permeability_grid=padded_relperm_grids.krw,
+    #     gas_relative_permeability_grid=padded_relperm_grids.krg,
+    #     water_viscosity_grid=padded_fluid_properties.water_viscosity_grid,
+    #     oil_viscosity_grid=padded_fluid_properties.oil_effective_viscosity_grid,
+    #     gas_viscosity_grid=padded_fluid_properties.gas_viscosity_grid,
+    # )
 
     # Clamp relative mobility grids to avoid numerical issues
     # NOTE: Important design decision! We would normally apply these clamps to active
@@ -419,21 +419,21 @@ def _run_impes_step(
     # instability as phase mobility can become zero and hence transmissibilities, and hence diagonals in the
     # the sparse matrix can be zeroed out making the matrix singular. Therefore, we clamp all to a very small
     # non-zero value to ensure numerical stability.
-    padded_water_relative_mobility_grid = config.relative_mobility_range["water"].clip(
-        padded_water_relative_mobility_grid
-    )
-    padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].clip(
-        padded_oil_relative_mobility_grid
-    )
-    padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].clip(
-        padded_gas_relative_mobility_grid
-    )
-    padded_relative_mobility_grids = RelativeMobilityGrids(
-        water_relative_mobility=padded_water_relative_mobility_grid,
-        oil_relative_mobility=padded_oil_relative_mobility_grid,
-        gas_relative_mobility=padded_gas_relative_mobility_grid,
-    )
-    logger.debug("Relative mobility grids rebuilt for saturation evolution.")
+    # padded_water_relative_mobility_grid = config.relative_mobility_range["water"].clip(
+    #     padded_water_relative_mobility_grid
+    # )
+    # padded_oil_relative_mobility_grid = config.relative_mobility_range["oil"].clip(
+    #     padded_oil_relative_mobility_grid
+    # )
+    # padded_gas_relative_mobility_grid = config.relative_mobility_range["gas"].clip(
+    #     padded_gas_relative_mobility_grid
+    # )
+    # padded_relative_mobility_grids = RelativeMobilityGrids(
+    #     water_relative_mobility=padded_water_relative_mobility_grid,
+    #     oil_relative_mobility=padded_oil_relative_mobility_grid,
+    #     gas_relative_mobility=padded_gas_relative_mobility_grid,
+    # )
+    # logger.debug("Relative mobility grids rebuilt for saturation evolution.")
 
     # Saturation evolution (explicit)
     logger.debug("Evolving saturation (explicit)...")
@@ -998,14 +998,14 @@ class Run(StoreSerializable):
         cls,
         model_path: typing.Union[str, PathLike],
         config_path: typing.Union[str, PathLike],
-        pvt_table_path: typing.Optional[typing.Union[str, PathLike]] = None,
+        pvt_data_path: typing.Optional[typing.Union[str, PathLike]] = None,
     ) -> Self:
         """
         Load run from separate model and config files.
 
         :param model_path: Path to the reservoir model file.
         :param config_path: Path to the simulation configuration file.
-        :param pvt_table_path: Optional path to PVT table data file.
+        :param pvt_data_path: Optional path to PVT table data file.
         :return: `Run` instance with loaded model and config.
         """
         model = ReservoirModel.from_file(model_path)
@@ -1018,12 +1018,12 @@ class Run(StoreSerializable):
         if config is None:
             raise ValidationError("Failed to load simulation config from file.")
 
-        if pvt_table_path is not None:
-            pvt_table_data = PVTTableData.from_file(pvt_table_path)
-            if pvt_table_data is None:
+        if pvt_data_path is not None:
+            pvt_data = PVTTableData.from_file(pvt_data_path)
+            if pvt_data is None:
                 raise ValidationError("Failed to load PVT table data from file.")
 
-            pvt_tables = PVTTables(pvt_table_data)
+            pvt_tables = PVTTables(data=pvt_data)
             config = config.with_updates(pvt_tables=pvt_tables)
         return cls(model=model, config=config)
 

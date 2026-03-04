@@ -36,7 +36,7 @@ def build_run_from_setup():
 
 @app.cell
 def save_run(Path, run):
-    run.to_file(Path("./scenarios/runs/stabilization/run.h5"))
+    run.save(Path("./scenarios/runs/stabilization/run.h5"))
     return
 
 
@@ -61,7 +61,7 @@ def run_simulation(bores, run, store):
 
 @app.cell
 def capture_last_state(Path, last_state):
-    last_state.model.to_file(Path("./scenarios/runs/stabilization/results/model.h5"))
+    last_state.model.save(Path("./scenarios/runs/stabilization/results/model.h5"))
     return
 
 

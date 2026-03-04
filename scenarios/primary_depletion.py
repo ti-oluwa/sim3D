@@ -21,8 +21,8 @@ def setup_run():
     preconditioner_factory = bores.CachedPreconditionerFactory(
         factory="ilu",
         name="cached_ilu",
-        update_frequency=10,
-        recompute_threshold=0.3,
+        update_frequency=5,
+        recompute_threshold=0.2,
     )
     preconditioner_factory.register(override=True)
 
@@ -34,31 +34,18 @@ def setup_run():
     )
 
     # Production well
-    clamp = bores.ProductionClamp()
-    control = bores.MultiPhaseRateControl(
-        oil_control=bores.AdaptiveBHPRateControl(
-            target_rate=-5000,
-            target_phase="oil",
-            bhp_limit=500,
-            clamp=clamp,
+    control = bores.PrimaryPhaseRateControl(
+        primary_phase="oil",
+        primary_control=bores.AdaptiveBHPRateControl(
+            target_rate=-2000,
+            bhp_limit=1000,
+            clamp=bores.ProductionClamp(),
         ),
-        gas_control=bores.AdaptiveBHPRateControl(
-            target_rate=-500,
-            target_phase="gas",
-            bhp_limit=800,
-            clamp=clamp,
-        ),
-        water_control=bores.AdaptiveBHPRateControl(
-            target_rate=-10,
-            target_phase="water",
-            bhp_limit=800,
-            clamp=clamp,
-        ),
+        secondary_clamp=bores.ProductionClamp(),
     )
     producer = bores.production_well(
         well_name="P-1",
         perforating_intervals=[
-            ((14, 10, 3), (14, 10, 4)),
             ((14, 10, 6), (14, 10, 7)),
         ],
         radius=0.3542,
@@ -89,8 +76,8 @@ def setup_run():
 
     wells = bores.wells_(injectors=None, producers=[producer])
     timer = bores.Timer(
-        initial_step_size=bores.Time(hours=20),
-        max_step_size=bores.Time(days=7),
+        initial_step_size=bores.Time(days=1),
+        max_step_size=bores.Time(days=15),
         min_step_size=bores.Time(minutes=10.0),
         simulation_time=bores.Time(years=15),
         max_cfl_number=0.9,
@@ -98,15 +85,21 @@ def setup_run():
         backoff_factor=0.5,
         aggressive_backoff_factor=0.25,
         max_rejects=20,
-        growth_cooldown_steps=10,
     )
-    run.config = run.config.with_updates(wells=wells, timer=timer)
+    run.config = run.config.with_updates(
+        wells=wells,
+        timer=timer,
+        max_gas_saturation_change=0.05,
+        max_oil_saturation_change=0.05,
+        max_water_saturation_change=0.05,
+        max_pressure_change=200.0,
+    )
     return Path, bores, run
 
 
 @app.cell
 def save_run(Path, run):
-    run.to_file(Path("./scenarios/runs/primary_depletion/run.h5"))
+    run.save(Path("./scenarios/runs/primary_depletion/run.h5"))
     return
 
 
@@ -132,7 +125,7 @@ def run_simulation(bores, run, store):
 
 @app.cell
 def capture_last_state(Path, last_state):
-    last_state.model.to_file(
+    last_state.model.save(
         Path("./scenarios/runs/primary_depletion/results/model.h5")
     )
     return

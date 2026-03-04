@@ -143,7 +143,6 @@ class Well(StoreSerializable, typing.Generic[Coordinates, WellFluidT]):
             return compute_2D_effective_drainage_radius(
                 interval_thickness=interval_thickness,
                 permeability=permeability,
-                well_orientation=self.orientation,
             )
 
         if len(permeability) != 3:

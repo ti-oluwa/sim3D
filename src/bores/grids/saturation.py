@@ -6,9 +6,11 @@ import numpy as np
 from bores._precision import get_dtype
 from bores.constants import c
 from bores.errors import ValidationError
-from bores.types import NDimension, NDimensionalGrid
+from bores.relperm import RelativePermeabilityTable
+from bores.types import FluidPhase, NDimension, NDimensionalGrid
 
-__all__ = ["build_saturation_grids"]
+
+__all__ = ["build_saturation_grids", "seed_phase_saturation"]
 
 
 def build_saturation_grids(
@@ -772,3 +774,188 @@ def _normalize_saturations(
     oil_saturation[~active] = 0.0
     gas_saturation[~active] = 0.0
     return water_saturation, oil_saturation, gas_saturation
+
+
+def seed_phase_saturation(
+    oil_saturation_grid: NDimensionalGrid[NDimension],
+    cells: typing.Sequence[typing.Tuple[int, int, int]],
+    phase: typing.Union[FluidPhase, typing.Literal["gas", "water"]],
+    gas_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    water_saturation_grid: typing.Optional[NDimensionalGrid[NDimension]] = None,
+    seed_saturation: typing.Optional[float] = None,
+    relperm_table: typing.Optional[RelativePermeabilityTable] = None,
+    inplace: bool = False,
+) -> typing.Tuple[
+    typing.Optional[NDimensionalGrid[NDimension]],
+    NDimensionalGrid[NDimension],
+    typing.Optional[NDimensionalGrid[NDimension]],
+]:
+    """
+    Seed the (injected) phase saturation at injector cells to break the cold-start
+    deadlock that occurs when the (injected) phase has zero relative permeability
+    at initial conditions.
+
+    In black-oil simulation the well productivity index is proportional to
+    the (injected) phase mobility. When the (injected) phase saturation is zero at
+    t=0, kr=0 exactly, PI=0, and the injector contributes nothing to the pressure
+    equation regardless of BHP. No flux enters the cell, saturation stays zero,
+    and the deadlock persists indefinitely. Setting a small nonzero saturation
+    just above the kr=0 plateau at the injector perforations breaks this cycle
+    on the first timestep.
+
+    Oil saturation is reduced by the seed delta at every affected cell to preserve
+    the saturation constraint Sw + So + Sg = 1. Oil is always chosen as the
+    displaced phase because gas injection displaces oil (not connate water) and
+    water injection displaces oil (not residual gas).
+
+    When `relperm_table` is provided the seed is auto-detected by evaluating
+    kr at a representative initial saturation state and scanning for the minimum
+    (injected) phase saturation that yields kr > 0, stepped one table entry further
+    into the nonzero region for numerical margin. When `seed_saturation` is
+    provided it is used directly and `relperm_table` is ignored. At least one
+    of the two must be supplied.
+
+    :param oil_saturation_grid: Oil saturation grid (fraction, 0-1). Reduced by
+        the seed delta at each injector cell to preserve the saturation constraint.
+        Shape: (nx, ny, nz).
+    :param cells: List of (i, j, k) grid indices identifying all
+        perforated cells of the injection well.
+    :param phase: Phase being targeted/injected. Must be `FluidPhase.GAS` or
+        `FluidPhase.WATER`. Determines which saturation grid is seeded and
+        which relative permeability curve is scanned for auto-detection.
+    :param gas_saturation_grid: Gas saturation grid (fraction, 0-1). Required
+        when `phase == FluidPhase.GAS`. Shape: (nx, ny, nz).
+    :param water_saturation_grid: Water saturation grid (fraction, 0-1). Required
+        when `phase == FluidPhase.WATER`. Shape: (nx, ny, nz).
+    :param seed_saturation: Explicit seed value (fraction). When provided,
+        `relperm_table` is ignored and this value is applied directly. The
+        caller is responsible for ensuring kr_phase(seed) > 0.
+    :param relperm_table: Optional relative permeability table used to auto-detect
+        the minimum targeted/injected phase saturation that yields kr > 0. The table is
+        evaluated at a representative initial state (Sw=min(water_saturation_grid),
+        So=1-Sw, Sg=0 for gas; Sw scanning from 0 upward for water) and the
+        first saturation entry with kr > 0 is selected, stepped one entry further
+        for margin. Ignored if `seed_saturation` is provided. If neither
+        `seed_saturation` nor `relperm_table` is provided a ValidationError
+        is raised.
+    :param inplace: If True, modifies the input grids in place and returns them.
+        If False (default), operates on copies and leaves originals unchanged.
+
+    :returns: Tuple of (water_saturation_grid, oil_saturation_grid,
+        gas_saturation_grid). Grids not relevant to the targeted/injected phase are
+        returned unchanged (and may be None if not provided). If `inplace=True`
+        the returned objects are the same as the inputs.
+
+    :raises ValidationError: If `phase` is not GAS or WATER.
+    :raises ValidationError: If the saturation grid for the targeted/injected phase is
+        not provided.
+    :raises ValidationError: If neither `seed_saturation` nor `relperm_table`
+        is provided.
+    :raises ValidationError: If `relperm_table` is provided but all kr values
+        for the targeted/injected phase are zero.
+    :raises ValidationError: If applying the seed delta would reduce oil
+        saturation below zero at any injector cell.
+    """
+    if isinstance(phase, str):
+        phase = FluidPhase(phase)
+
+    if phase not in (FluidPhase.GAS, FluidPhase.WATER):
+        raise ValidationError(f"`phase` must be 'gas' or 'water', got {phase!r}.")
+    if phase == FluidPhase.GAS and gas_saturation_grid is None:
+        raise ValidationError("`gas_saturation_grid` is required when `phase` is gas.")
+    if phase == FluidPhase.WATER and water_saturation_grid is None:
+        raise ValidationError(
+            "`water_saturation_grid` is required when `phase` is water."
+        )
+    if seed_saturation is None and relperm_table is None:
+        raise ValidationError(
+            "Either `seed_saturation` or `relperm_table` must be provided."
+        )
+
+    if not inplace:
+        oil_saturation_grid = oil_saturation_grid.copy()
+        if gas_saturation_grid is not None:
+            gas_saturation_grid = gas_saturation_grid.copy()
+        if water_saturation_grid is not None:
+            water_saturation_grid = water_saturation_grid.copy()
+
+    # Determine seed value
+    seed: float
+    if seed_saturation is not None:
+        seed = float(seed_saturation)
+    else:
+        assert relperm_table is not None  # guarded above
+        # Build a representative initial saturation state to scan kr values.
+        # Use minimum water saturation (connate) as the base Sw.
+        base_water_sat = (
+            float(np.min(water_saturation_grid))
+            if water_saturation_grid is not None
+            else 0.0
+        )
+
+        if phase == FluidPhase.GAS:
+            # Scan increasing Sg from 0 upward at connate Sw.
+            # Step through candidate Sg values from the table by decrementing So.
+            # Use 100 evenly spaced Sg candidates from 0 to (1 - base_water_sat).
+            gas_sat_candidates = np.linspace(0.0, 1.0 - base_water_sat, 200)
+            oil_sat_candidates = 1.0 - base_water_sat - gas_sat_candidates
+            kr_values = relperm_table(
+                water_saturation=np.full_like(gas_sat_candidates, base_water_sat),
+                oil_saturation=oil_sat_candidates,
+                gas_saturation=gas_sat_candidates,
+            )
+            krg_values = np.asarray(kr_values["gas"])
+            nonzero_mask = krg_values > 0.0
+            if not np.any(nonzero_mask):
+                raise ValidationError(
+                    "All kr_g values evaluated by `relperm_table` are zero across "
+                    "the full gas saturation range. Cannot auto-detect seed saturation."
+                )
+            first_nonzero_idx = int(np.argmax(nonzero_mask))
+            # Step one candidate further into nonzero region for margin
+            target_idx = min(first_nonzero_idx + 1, len(gas_sat_candidates) - 1)
+            seed = float(gas_sat_candidates[target_idx])
+
+        else:  # FluidPhase.WATER
+            # Scan increasing Sw from base_water_sat upward.
+            water_sat_candidates = np.linspace(base_water_sat, 1.0, 200)
+            oil_sat_candidates = 1.0 - water_sat_candidates
+            kr_values = relperm_table(
+                water_saturation=water_sat_candidates,
+                oil_saturation=oil_sat_candidates,
+                gas_saturation=np.zeros_like(water_sat_candidates),
+            )
+            krw_values = np.asarray(kr_values["water"])
+            nonzero_mask = krw_values > 0.0
+            if not np.any(nonzero_mask):
+                raise ValidationError(
+                    "All kr_w values evaluated by `relperm_table` are zero across "
+                    "the full water saturation range. Cannot auto-detect seed saturation."
+                )
+            first_nonzero_idx = int(np.argmax(nonzero_mask))
+            target_idx = min(first_nonzero_idx + 1, len(water_sat_candidates) - 1)
+            seed = float(water_sat_candidates[target_idx])
+
+    # Apply seed at each cell
+    target_phase_grid: NDimensionalGrid[NDimension] = (
+        gas_saturation_grid if phase == FluidPhase.GAS else water_saturation_grid  # type: ignore[assignment]
+    )
+
+    for cell in cells:
+        i, j, k = cell
+        current = float(target_phase_grid[i, j, k])
+        if current >= seed:
+            continue
+
+        delta = seed - current
+        current_oil_sat = float(oil_saturation_grid[i, j, k])
+        if current_oil_sat - delta < 0.0:
+            raise ValidationError(
+                f"Cannot seed cell ({i}, {j}, {k}): oil saturation So={current_oil_sat:.6f} "
+                f"is insufficient to absorb seed delta={delta:.6f}. "
+                "Reduce `seed_saturation` or check initial conditions."
+            )
+        target_phase_grid[i, j, k] = seed
+        oil_saturation_grid[i, j, k] = current_oil_sat - delta
+
+    return water_saturation_grid, oil_saturation_grid, gas_saturation_grid

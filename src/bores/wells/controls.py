@@ -946,9 +946,9 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
 
         # Apply allocation to target rate (for rate mode) and convert to reservoir rate
         target_rate = self.target_rate * allocation_fraction * formation_volume_factor
-        print(f"{str(fluid.phase).upper()} FVF: {formation_volume_factor}")
         is_production = target_rate < 0.0  # Negative rate indicates production
         bhp_limit = self.bhp_limit
+        
         # Compute required BHP to achieve target rate
         incompressibility_threshold = c.FLUID_INCOMPRESSIBILITY_THRESHOLD
         try:
@@ -1040,6 +1040,7 @@ class AdaptiveBHPRateControl(WellControl[WellFluidTcon]):
                 incompressibility_threshold=incompressibility_threshold,
             )
 
+        print(f"{str(fluid.phase).upper()} Phase: ", rate)
         clamped = _apply_clamp(
             rate=rate,
             clamp=self.clamp,
@@ -1420,6 +1421,7 @@ class PrimaryPhaseRateControl(WellControl[WellFluidTcon]):
                 incompressibility_threshold=c.FLUID_INCOMPRESSIBILITY_THRESHOLD,
             )
 
+        print(f"{str(fluid.phase).upper()} Phase: ", rate)
         clamped = _apply_clamp(
             rate=rate,
             clamp=self.secondary_clamp,

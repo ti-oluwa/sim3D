@@ -197,15 +197,17 @@ def setup_3d_model():
         value=0.65,  # Typical for associated gas
     )
 
-    pvt_table_data = bores.build_pvt_table_data(
+    oil_bubble_point_pressure = oil_bubble_point_pressure_grid.mean()
+    pvt_data = bores.build_pvt_table_data(
         pressures=bores.array([500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500]),
         temperatures=bores.array([120, 140, 160, 180, 200, 220]),
         salinities=bores.array([30000, 32000, 36000, 40000]),  # ppm
+        bubble_point_pressures=bores.array([oil_bubble_point_pressure] * 6),
         oil_specific_gravity=0.845,
         gas_gravity=0.65,
         reservoir_gas="methane",
     )
-    pvt_tables = bores.PVTTables(data=pvt_table_data, interpolation_method="linear")
+    pvt_tables = bores.PVTTables(data=pvt_data, interpolation_method="linear")
 
     model = bores.reservoir_model(
         grid_shape=grid_shape,
@@ -249,9 +251,9 @@ def setup_3d_model():
     model = bores.apply_fracture(model, fault)
 
     # Save model data
-    model.to_file(Path("./scenarios/runs/setup/model.h5"))
+    model.save(Path("./scenarios/runs/setup/model.h5"))
     # Save PVT data
-    pvt_table_data.to_file(Path("./scenarios/runs/setup/pvt.h5"))
+    pvt_data.save(Path("./scenarios/runs/setup/pvt.h5"))
     return Path, bores, pvt_tables
 
 
@@ -335,7 +337,7 @@ def setup_config(Path, bores, pvt_tables):
     )
 
     # Save base config
-    config.to_file(Path("./scenarios/runs/setup/config.yaml"))
+    config.save(Path("./scenarios/runs/setup/config.yaml"))
     return
 
 

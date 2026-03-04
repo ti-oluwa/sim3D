@@ -358,11 +358,11 @@ When your model and config are stored in separate files, use the `from_files()` 
 run = bores.Run.from_files(
     model_path="reservoir_model.h5",
     config_path="simulation_config.yaml",
-    pvt_table_path="pvt_tables.h5",  # Optional
+    pvt_data_path="pvt_tables.h5",  # Optional
 )
 ```
 
-The `pvt_table_path` parameter is optional. When provided, the PVT tables are loaded and attached to the config automatically. This is useful when PVT data comes from a separate laboratory analysis file.
+The `pvt_data_path` parameter is optional. When provided, the PVT tables are loaded and attached to the config automatically. This is useful when PVT data comes from a separate laboratory analysis file.
 
 ---
 

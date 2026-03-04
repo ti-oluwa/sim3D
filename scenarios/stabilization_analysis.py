@@ -17,7 +17,7 @@ def _():
     store = bores.ZarrStore(
         store=Path.cwd() / "scenarios/runs/stabilization/results/stabilization.zarr"
     )
-    stream = bores.StateStream(store=store, auto_replay=True)
+    stream = bores.StateStream(store=store)
 
     states = list(stream.replay())
     return bores, itertools, np, states
@@ -368,7 +368,7 @@ def _(bores, states, viz):
         # isomin=0.05
     )
 
-    property = "oil-density"
+    property = "z"
     figures = []
     timesteps = [10]
     for timestep in timesteps:
