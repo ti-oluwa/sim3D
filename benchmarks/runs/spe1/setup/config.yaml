@@ -6,7 +6,7 @@
       initial_step_size: 432000.0
       max_step_size: 2592000.0
       min_step_size: 3600.0
-      simulation_time: 315576000.0
+      simulation_time: 157788000.0
       max_cfl_number: 0.9
       cfl_safety_margin: 0.85
       ramp_up_factor: 1.2
@@ -117,20 +117,7 @@
               - 0.0
               - 0.0
           mixing_rule: eclipse_rule
-      capillary_pressure_table:
-        brooks_corey_capillary_pressure_model:
-          irreducible_water_saturation: 0.12
-          residual_oil_saturation_water: 0.0
-          residual_oil_saturation_gas: 0.0
-          residual_gas_saturation: 0.0
-          oil_water_entry_pressure_water_wet: 1.0
-          oil_water_entry_pressure_oil_wet: 5.0
-          oil_water_pore_size_distribution_index_water_wet: 2.0
-          oil_water_pore_size_distribution_index_oil_wet: 2.0
-          gas_oil_entry_pressure: 1.0
-          gas_oil_pore_size_distribution_index: 2.0
-          wettability: water_wet
-          mixed_wet_water_fraction: 0.5
+      capillary_pressure_table: null
     wells:
       injection_wells:
         GAS-INJ:
@@ -147,7 +134,7 @@
             control:
               constant_rate_control:
                 target_rate: 100000000.0
-                bhp_limit: 15000
+                bhp_limit: 5200
                 target_phase: null
                 clamp:
                   injection_clamp:
@@ -217,13 +204,13 @@
     max_iterations: 250
     output_frequency: 1
     scheme: impes
-    use_pseudo_pressure: true
+    use_pseudo_pressure: false
     relative_mobility_range:
       oil:
-        min: 1.0e-09
+        min: 1.0e-12
         max: 1000000.0
       water:
-        min: 1.0e-09
+        min: 1.0e-12
         max: 1000000.0
       gas:
         min: 1.0e-12
@@ -634,7 +621,7 @@
           table internally
         unit: points
       SATURATION_EPSILON:
-        value: 1.0e-06
+        value: 1.0e-12
         description: Small epsilon value to prevent numerical issues with saturations
           at 0 or 1
         unit: fraction

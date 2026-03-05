@@ -4,8 +4,9 @@ import typing
 import attrs
 import numpy as np
 
-from bores._precision import get_dtype
 from bores.boundary_conditions import BoundaryConditions, BoundaryMetadata, default_bc
+from bores.constants import c
+from bores.diffusivity.base import normalize_saturations
 from bores.models import FluidProperties, RockProperties
 from bores.types import NDimension, NDimensionalGrid, ThreeDimensions
 
@@ -90,41 +91,25 @@ def apply_boundary_conditions(
             property_name="temperature",
         ),
     )
-    # Clamp saturations to [0, 1] after applying BCs
-    dtype = get_dtype()
-    fluid_properties.oil_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.oil_saturation_grid, dtype=dtype
-    )
-    fluid_properties.water_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.water_saturation_grid, dtype=dtype
-    )
-    fluid_properties.gas_saturation_grid.clip(
-        min=0.0, max=1.0, out=fluid_properties.gas_saturation_grid, dtype=dtype
-    )
 
-    # Normalize saturations to ensure So + Sw + Sg = 1.0
-    # This is critical for mass balance after boundary conditions are applied
-    total_saturation = (
-        fluid_properties.oil_saturation_grid
-        + fluid_properties.water_saturation_grid
-        + fluid_properties.gas_saturation_grid
+    # # Normalize saturations to ensure So + Sw + Sg = 1.0
+    (
+        normalized_water_saturation,
+        normalized_oil_saturation,
+        normalized_gas_saturation,
+    ) = normalize_saturations(
+        oil_saturation_grid=fluid_properties.oil_saturation_grid,
+        water_saturation_grid=fluid_properties.water_saturation_grid,
+        gas_saturation_grid=fluid_properties.gas_saturation_grid,
+        saturation_epsilon=c.SATURATION_EPSILON,
     )
-    # Avoid division by zero. If total is near zero, distribute equally
-    safe_total = np.where(total_saturation > 1e-12, total_saturation, 1.0)
-
-    normalized_oil = fluid_properties.oil_saturation_grid.copy()
-    normalized_water = fluid_properties.water_saturation_grid.copy()
-    normalized_gas = fluid_properties.gas_saturation_grid.copy()
-    np.divide(normalized_oil, safe_total, out=normalized_oil)
-    np.divide(normalized_water, safe_total, out=normalized_water)
-    np.divide(normalized_gas, safe_total, out=normalized_gas)
-
     fluid_properties = attrs.evolve(
         fluid_properties,
-        oil_saturation_grid=normalized_oil,
-        water_saturation_grid=normalized_water,
-        gas_saturation_grid=normalized_gas,
+        oil_saturation_grid=normalized_oil_saturation,
+        water_saturation_grid=normalized_water_saturation,
+        gas_saturation_grid=normalized_gas_saturation,
     )
+    
     excluded_fluid_properties = (
         "pressure_grid",
         "oil_saturation_grid",

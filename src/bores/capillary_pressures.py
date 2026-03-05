@@ -356,7 +356,7 @@ def compute_brooks_corey_capillary_pressures(
 
     # Validate saturations
     if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
-        raise ValueError("Saturations must be between 0 and 1.")
+        raise ValidationError("Saturations must be between 0 and 1.")
 
     # Normalize saturations if they do not sum to 1
     total_saturation = sw + so + sg
@@ -647,13 +647,13 @@ def compute_van_genuchten_capillary_pressures(
     """
     # Parameter validation
     if oil_water_alpha_water_wet <= 0.0 or oil_water_alpha_oil_wet <= 0.0:
-        raise ValueError("Oil-water alpha parameters must be positive.")
+        raise ValidationError("Oil-water alpha parameters must be positive.")
     if gas_oil_alpha <= 0.0:
-        raise ValueError("Gas-oil alpha parameter must be positive.")
+        raise ValidationError("Gas-oil alpha parameter must be positive.")
     if oil_water_n_water_wet <= 1.0 or oil_water_n_oil_wet <= 1.0:
-        raise ValueError("Oil-water n parameters must be greater than 1.")
+        raise ValidationError("Oil-water n parameters must be greater than 1.")
     if gas_oil_n <= 1.0:
-        raise ValueError("Gas-oil n parameter must be greater than 1.")
+        raise ValidationError("Gas-oil n parameter must be greater than 1.")
 
     # Convert to arrays for vectorized operations
     sw = np.atleast_1d(water_saturation)
@@ -671,7 +671,7 @@ def compute_van_genuchten_capillary_pressures(
 
     # Validate saturations
     if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
-        raise ValueError("Saturations must be between 0 and 1.")
+        raise ValidationError("Saturations must be between 0 and 1.")
 
     # Normalize saturations if they do not sum to 1
     total_saturation = sw + so + sg
@@ -987,11 +987,11 @@ def compute_leverett_j_capillary_pressures(
 
     # Validate saturations
     if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
-        raise ValueError("Saturations must be between 0 and 1.")
+        raise ValidationError("Saturations must be between 0 and 1.")
     if np.any(perm < 0.0):
-        raise ValueError("Permeability must be positive.")
+        raise ValidationError("Permeability must be positive.")
     if np.any((phi < 0.0) | (phi > 1.0)):
-        raise ValueError("Porosity must be between 0 and 1.")
+        raise ValidationError("Porosity must be between 0 and 1.")
 
     # Normalize saturations if they do not sum to 1
     total_saturation = sw + so + sg

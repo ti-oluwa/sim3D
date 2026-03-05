@@ -318,6 +318,50 @@ def compute_mobility_grids(
     return (x_mobilities, y_mobilities, z_mobilities)  # type: ignore[return-value]
 
 
+@numba.njit(parallel=True, cache=True)
+def normalize_saturations(
+    water_saturation_grid: ThreeDimensionalGrid,
+    oil_saturation_grid: ThreeDimensionalGrid,
+    gas_saturation_grid: ThreeDimensionalGrid,
+    saturation_epsilon: float,
+) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
+    """
+    Clamp saturations values to zero and normalize saturations to sum = 1.
+
+    :param water_saturation_grid: 3D grid of water saturations.
+    :param oil_saturation_grid: 3D grid of oil saturations.
+    :param gas_saturation_grid: 3D grid of gas saturations.
+    :param saturation_epsilon: Small threshold to avoid division by zero.
+    :return: (water_sat, oil_sat, gas_sat)
+    """
+    # Get grid shape
+    nx, ny, nz = water_saturation_grid.shape
+
+    # Iterate through all cells (parallelized on outermost loop)
+    for i in numba.prange(nx):  # type: ignore
+        for j in range(ny):
+            for k in range(nz):
+                # Clamp negatives to zero
+                sw = max(0.0, water_saturation_grid[i, j, k])
+                so = max(0.0, oil_saturation_grid[i, j, k])
+                sg = max(0.0, gas_saturation_grid[i, j, k])
+
+                total = sw + so + sg
+
+                # Normalize if total > epsilon
+                if total > saturation_epsilon:
+                    water_saturation_grid[i, j, k] = sw / total
+                    oil_saturation_grid[i, j, k] = so / total
+                    gas_saturation_grid[i, j, k] = sg / total
+                else:
+                    # Set to zero if total is too small
+                    water_saturation_grid[i, j, k] = 0.0
+                    oil_saturation_grid[i, j, k] = 0.0
+                    gas_saturation_grid[i, j, k] = 0.0
+
+    return water_saturation_grid, oil_saturation_grid, gas_saturation_grid
+
+
 @numba.njit(cache=True)
 def compute_pressure_mobility_grids(
     absolute_permeability_x: ThreeDimensionalGrid,

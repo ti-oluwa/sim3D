@@ -922,17 +922,6 @@ def add_well_contributions(
                     "gas_solubility_in_water": gas_solubility_in_water_grid[i, j, k],
                 }
 
-            # Total mobility for pressure equation coupling
-            total_mobility = (
-                oil_relative_mobility_grid[i, j, k]
-                + water_relative_mobility_grid[i, j, k]
-                + gas_relative_mobility_grid[i, j, k]
-            )
-
-            # Will mostlikely never happen since phase mobilities are clamped to non-zero minimum values
-            if phase_mobility <= 0.0 or total_mobility <= 0.0:
-                continue
-
             # Get fluid properties
             phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
@@ -960,6 +949,10 @@ def add_well_contributions(
                 fluid_compressibility=phase_compressibility,
                 # Do not pass reservoir fluid PVT tables for injected fluid
                 pvt_tables=None,
+            )
+            print()
+            print(
+                f"Injected Phase Mobility {phase_mobility}; Effective BHP: {effective_bhp}"
             )
             # Check for non-finite BHP before using it
             if not np.isfinite(effective_bhp):
@@ -990,7 +983,7 @@ def add_well_contributions(
             # PI uses total mobility to avoid cold start or phase saturtion dealock issues
             # PI = mD·ft/cP * conversion = ft³/psi·day
             phase_productivity_index = (
-                well_index * total_mobility * md_per_cp_to_ft2_per_psi_per_day
+                well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
             )
             # Semi-implicit coupling: q = PI * (p_wf - p_cell)
             # Rearranging: PI * p_cell = PI * p_wf - q
@@ -1117,10 +1110,6 @@ def add_well_contributions(
                     phase_fvf = typing.cast(
                         float, oil_formation_volume_factor_grid[i, j, k]
                     )
-
-                # Will mostlikely never happen since phase mobilities are clamped to non-zero minimum values
-                if phase_mobility <= 0.0:
-                    continue
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS

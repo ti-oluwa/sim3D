@@ -189,7 +189,7 @@ if const is not None:
 
 | Constant | Value | Description |
 |---|---|---|
-| `SATURATION_EPSILON` | 1e-6 | Prevents numerical issues at S=0 or S=1 |
+| `SATURATION_EPSILON` | 1e-12 | Prevents numerical issues at S=0 or S=1 |
 | `MINIMUM_TRANSMISSIBILITY_FACTOR` | 1e-12 | Floor for transmissibility values |
 | `GAS_SOLUBILITY_TOLERANCE` | 1e-6 | Tolerance for gas solubility calculations |
 | `GAS_PSEUDO_PRESSURE_THRESHOLD` | 0.0 | Pressure above which pseudo-pressure is used |

@@ -53,10 +53,11 @@ class Config(
         default=1e-4, validator=attrs.validators.le(1e-2)
     )
     """Relative convergence tolerance for saturation solvers (default is 1e-4). Transport matrix tend to be more well conditioned."""
-    max_iterations: int = attrs.field(
+    max_iterations: int = attrs.field(  # type: ignore
         default=250,
         validator=attrs.validators.and_(
-            attrs.validators.ge(1), attrs.validators.le(500)
+            attrs.validators.ge(1),  # type: ignore[arg-type]
+            attrs.validators.le(500),  # type: ignore[arg-type]
         ),
     )
     """
@@ -75,8 +76,8 @@ class Config(
     """Whether to use pseudo-pressure for gas (when applicable)."""
     relative_mobility_range: RelativeMobilityRange = attrs.field(
         default=RelativeMobilityRange(
-            oil=Range(min=1e-9, max=1e6),
-            water=Range(min=1e-9, max=1e6),
+            oil=Range(min=1e-12, max=1e6),
+            water=Range(min=1e-12, max=1e6),
             gas=Range(min=1e-12, max=1e6),
         )
     )
@@ -90,9 +91,9 @@ class Config(
     """
     total_compressibility_range: Range = attrs.field(default=Range(min=1e-24, max=1e-2))
     """Range to constrain total compressibility for the simulation. This is usually necessary for numerical stability."""
-    capillary_strength_factor: float = attrs.field(
+    capillary_strength_factor: float = attrs.field(  # type: ignore
         default=1.0,
-        validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),
+        validator=attrs.validators.and_(attrs.validators.ge(0), attrs.validators.le(1)),  # type: ignore[arg-type]
     )
     """
     Factor to scale capillary flow for numerical stability. Reduce to dampen capillary effects.

@@ -404,18 +404,6 @@ def evolve_saturation(
             ),
         )
 
-    # Normalize saturations
-    (
-        updated_water_saturation_grid,
-        updated_oil_saturation_grid,
-        updated_gas_saturation_grid,
-    ) = normalize_saturations(
-        water_saturation_grid=updated_water_saturation_grid,
-        oil_saturation_grid=updated_oil_saturation_grid,
-        gas_saturation_grid=updated_gas_saturation_grid,
-        saturation_epsilon=c.SATURATION_EPSILON,
-    )
-
     cfl_threshold = cfl_violation_info[5]
     max_cfl_encountered = cfl_violation_info[4]
     cfl_i, cfl_j, cfl_k = (
@@ -982,14 +970,6 @@ def compute_well_rate_grids(
                     "gas_solubility_in_water": gas_solubility_in_water_grid[i, j, k],
                 }
 
-            # Total mobility for pressure equation coupling
-            total_mobility = (
-                oil_relative_mobility_grid[i, j, k]
-                + water_relative_mobility_grid[i, j, k]
-                + gas_relative_mobility_grid[i, j, k]
-            )
-            total_mobility = typing.cast(float, total_mobility)
-
             phase_compressibility = injected_fluid.get_compressibility(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
@@ -1009,7 +989,7 @@ def compute_well_rate_grids(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
                 well_index=well_index,
-                phase_mobility=total_mobility,
+                phase_mobility=phase_mobility,
                 fluid=injected_fluid,
                 fluid_compressibility=phase_compressibility,
                 use_pseudo_pressure=use_pseudo_pressure,
@@ -1018,7 +998,6 @@ def compute_well_rate_grids(
                 # Do not pass reservoir fluid PVT tables for injected fluid
                 pvt_tables=None,
             )
-            print(f"Injected {injected_fluid.phase} @ {cell_injection_rate}; FVF {phase_fvf}")
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
@@ -1191,7 +1170,11 @@ def compute_well_rate_grids(
                     pvt_tables=config.pvt_tables,
                     **primary_phase_kwargs,
                 )
-                print(f"Produced {produced_phase} @ {production_rate}; FVF {phase_fvf}")
+                print()
+                print(
+                    f"Produced {str(produced_phase).upper()} rate: {production_rate}; FVF {phase_fvf}"
+                )
+                print(f"{str(produced_phase).upper()} Mobility: ", phase_mobility)
                 if production_rate > 0.0 and config.warn_well_anomalies:
                     _warn_production_rate_is_positive(
                         production_rate=production_rate,
@@ -1336,26 +1319,43 @@ def apply_saturation_updates(
                     max_cfl_encountered = cfl_number
 
                 # Calculate saturation changes
-                water_saturation_change = (
-                    (net_water_flux + net_water_well_rate)
-                    * time_step_in_days
-                    / cell_pore_volume
-                )
                 oil_saturation_change = (
                     (net_oil_flux + net_oil_well_rate)
                     * time_step_in_days
                     / cell_pore_volume
                 )
-                gas_saturation_change = (
-                    (net_gas_flux + net_gas_well_rate)
+                water_saturation_change = (
+                    (net_water_flux + net_water_well_rate)
                     * time_step_in_days
                     / cell_pore_volume
                 )
+                # gas_saturation_change = (
+                #     (net_gas_flux + net_gas_well_rate)
+                #     * time_step_in_days
+                #     / cell_pore_volume
+                # )
 
-                # Update saturations
-                updated_water_saturation_grid[i, j, k] += water_saturation_change
-                updated_oil_saturation_grid[i, j, k] += oil_saturation_change
-                updated_gas_saturation_grid[i, j, k] += gas_saturation_change
+                # Update water and oil saturations only, gas saturation reacts
+                new_water_saturation = (
+                    updated_water_saturation_grid[i, j, k] + water_saturation_change
+                )
+                new_oil_saturation = (
+                    updated_oil_saturation_grid[i, j, k] + oil_saturation_change
+                )
+
+                if new_water_saturation < 0.0:
+                    new_water_saturation = 0.0
+                if new_oil_saturation < 0.0:
+                    new_oil_saturation = 0.0
+
+                updated_water_saturation_grid[i, j, k] = new_water_saturation
+                updated_oil_saturation_grid[i, j, k] = new_oil_saturation
+
+                new_gas_saturation = 1.0 - new_water_saturation - new_oil_saturation
+                if new_gas_saturation < 0.0:
+                    new_gas_saturation = 0.0
+
+                updated_gas_saturation_grid[i, j, k] = new_gas_saturation
 
     return (
         updated_water_saturation_grid,
@@ -1363,50 +1363,6 @@ def apply_saturation_updates(
         updated_gas_saturation_grid,
         cfl_violation_info,
     )
-
-
-@numba.njit(parallel=True, cache=True)
-def normalize_saturations(
-    water_saturation_grid: ThreeDimensionalGrid,
-    oil_saturation_grid: ThreeDimensionalGrid,
-    gas_saturation_grid: ThreeDimensionalGrid,
-    saturation_epsilon: float,
-) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
-    """
-    Clamp saturations values to zero and normalize saturations to sum = 1.
-
-    :param water_saturation_grid: 3D grid of water saturations.
-    :param oil_saturation_grid: 3D grid of oil saturations.
-    :param gas_saturation_grid: 3D grid of gas saturations.
-    :param saturation_epsilon: Small threshold to avoid division by zero.
-    :return: (water_sat, oil_sat, gas_sat)
-    """
-    # Get grid shape
-    nx, ny, nz = water_saturation_grid.shape
-
-    # Iterate through all cells (parallelized on outermost loop)
-    for i in numba.prange(nx):  # type: ignore
-        for j in range(ny):
-            for k in range(nz):
-                # Clamp negatives to zero
-                sw = max(0.0, water_saturation_grid[i, j, k])
-                so = max(0.0, oil_saturation_grid[i, j, k])
-                sg = max(0.0, gas_saturation_grid[i, j, k])
-
-                total = sw + so + sg
-
-                # Normalize if total > epsilon
-                if total > saturation_epsilon:
-                    water_saturation_grid[i, j, k] = sw / total
-                    oil_saturation_grid[i, j, k] = so / total
-                    gas_saturation_grid[i, j, k] = sg / total
-                else:
-                    # Set to zero if total is too small
-                    water_saturation_grid[i, j, k] = 0.0
-                    oil_saturation_grid[i, j, k] = 0.0
-                    gas_saturation_grid[i, j, k] = 0.0
-
-    return water_saturation_grid, oil_saturation_grid, gas_saturation_grid
 
 
 def evolve_miscible_saturation(
@@ -1741,18 +1697,6 @@ def evolve_miscible_saturation(
                 ),
             ),
         )
-
-    # Normalize saturations
-    (
-        updated_water_saturation_grid,
-        updated_oil_saturation_grid,
-        updated_gas_saturation_grid,
-    ) = normalize_saturations(
-        water_saturation_grid=updated_water_saturation_grid,
-        oil_saturation_grid=updated_oil_saturation_grid,
-        gas_saturation_grid=updated_gas_saturation_grid,
-        saturation_epsilon=c.SATURATION_EPSILON,
-    )
 
     cfl_threshold = cfl_violation_info[5]
     cfl_i, cfl_j, cfl_k = (
@@ -2772,27 +2716,40 @@ def apply_saturation_and_solvent_updates(
 
                 # Total flow rates (advection + wells) in lbm/day
                 total_water_flow = net_water_flux + net_water_well_rate
-                total_oil_flow = net_oil_flux + net_oil_well_rate
                 total_gas_flow = net_gas_flux + net_gas_well_rate
 
                 # Update saturations: convert mass to volume by dividing by density
                 water_saturation_change = (total_water_flow * time_step_in_days) / (
                     cell_pore_volume
                 )
-                oil_saturation_change = (total_oil_flow * time_step_in_days) / (
-                    cell_pore_volume
-                )
                 gas_saturation_change = (total_gas_flow * time_step_in_days) / (
                     cell_pore_volume
                 )
 
-                updated_water_saturation_grid[i, j, k] += water_saturation_change
-                updated_oil_saturation_grid[i, j, k] += oil_saturation_change
-                updated_gas_saturation_grid[i, j, k] += gas_saturation_change
+                # Update water and gas saturations only, oil saturation reacts
+                new_water_saturation = (
+                    updated_water_saturation_grid[i, j, k] + water_saturation_change
+                )
+                new_gas_saturation = (
+                    updated_gas_saturation_grid[i, j, k] + gas_saturation_change
+                )
+
+                if new_water_saturation < 0.0:
+                    new_water_saturation = 0.0
+                if new_gas_saturation < 0.0:
+                    new_gas_saturation = 0.0
+
+                updated_water_saturation_grid[i, j, k] = new_water_saturation
+                updated_gas_saturation_grid[i, j, k] = new_gas_saturation
+
+                new_oil_saturation = 1.0 - new_water_saturation - new_gas_saturation
+                if new_oil_saturation < 0.0:
+                    new_oil_saturation = 0.0
+
+                updated_oil_saturation_grid[i, j, k] = new_oil_saturation
 
                 # Update solvent concentration in oil phase
                 # Mass balance: (C_old * V_oil_old) + (C_in * V_in) = (C_new * V_oil_new)
-                new_oil_saturation = updated_oil_saturation_grid[i, j, k]
                 if new_oil_saturation > 1e-9:  # Avoid division by zero
                     # New oil volume (after saturation updates)
                     new_oil_volume = new_oil_saturation * cell_pore_volume

@@ -605,7 +605,6 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         wetting_phase_relative_permeability=kro_ascending,
         non_wetting_phase_relative_permeability=krg_ascending,
     )
-
     # Oil-water table: krw = 0 everywhere (since we dealing with only oil and gas case for this benchmark)
     oil_water_table = bores.TwoPhaseRelPermTable(
         wetting_phase=bores.FluidPhase.WATER,
@@ -621,24 +620,8 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         mixing_rule=bores.eclipse_rule,
     )
 
-    # -------------------------------------------------------------------------
-    # Capillary pressure — zero throughout (Table 1: Pc = 0)
-    # -------------------------------------------------------------------------
-    capillary_pressure_table = bores.BrooksCoreyCapillaryPressureModel(
-        irreducible_water_saturation=0.12,
-        residual_oil_saturation_water=0.0,
-        residual_oil_saturation_gas=0.0,
-        residual_gas_saturation=0.0,
-        oil_water_entry_pressure_water_wet=1.0,
-        oil_water_pore_size_distribution_index_water_wet=2.0,
-        gas_oil_entry_pressure=1.0,
-        gas_oil_pore_size_distribution_index=2.0,
-        wettability=bores.Wettability.WATER_WET,
-    )
-
     rock_fluid_tables = bores.RockFluidTables(
-        relative_permeability_table=relative_permeability_table,
-        capillary_pressure_table=capillary_pressure_table,
+        relative_permeability_table=relative_permeability_table
     )
 
     # -------------------------------------------------------------------------
@@ -653,7 +636,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         control=bores.ConstantRateControl(
             target_rate=100.0e6,  # 100 MMscf/D
             clamp=bores.InjectionClamp(),
-            bhp_limit=15_000,
+            bhp_limit=5200,
         ),
         injected_fluid=bores.InjectedFluid(
             name="Gas",
@@ -711,7 +694,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         initial_step_size=bores.Time(days=5.0),
         max_step_size=bores.Time(days=30.0),
         min_step_size=bores.Time(hours=1.0),
-        simulation_time=bores.Time(years=10.0),
+        simulation_time=bores.Time(years=5.0),
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
         backoff_factor=0.5,
@@ -748,6 +731,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         max_oil_saturation_change=0.05,
         max_water_saturation_change=0.05,
         max_pressure_change=200.0,
+        use_pseudo_pressure=False,
     )
 
     config.save(Path("./benchmarks/runs/spe1/setup/config.yaml"))
@@ -777,7 +761,7 @@ def run_simulation(Path, bores, store):
 
     last_state = None
     with bores.StateStream(run, store=store, background_io=True) as stream:
-        for state in stream:
+        for state in stream.until(GOR_gte_20_000):
             last_state = state
 
     if last_state is not None:
@@ -1192,7 +1176,7 @@ def recovery_plots(analyst, bores, np, recovery_efficiency_history):
 @app.cell
 def _(analyst):
     mbe = analyst.material_balance_error()
-    print(mbe.total_mbe)
+    print(mbe.water_mbe)
     return
 
 
@@ -1222,9 +1206,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.plotly3d.DataVisualizer()
-    property = "oil-fvf"
+    property = "water-sat"
     figures = []
-    timesteps = [30]
+    timesteps = [2]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

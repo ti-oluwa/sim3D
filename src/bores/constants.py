@@ -503,7 +503,7 @@ DEFAULT_CONSTANTS: typing.Dict[str, typing.Union[typing.Any, Constant]] = {
         unit="points",
     ),
     "SATURATION_EPSILON": Constant(
-        value=1e-6,
+        value=1e-12,
         description="Small epsilon value to prevent numerical issues with saturations at 0 or 1",
         unit="fraction",
     ),

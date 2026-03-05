@@ -18,5 +18,5 @@ class RockFluidTables(Serializable):
 
     relative_permeability_table: RelativePermeabilityTable
     """Callable that evaluates the relative permeability curves based on fluid saturations."""
-    capillary_pressure_table: CapillaryPressureTable
+    capillary_pressure_table: typing.Optional[CapillaryPressureTable] = None
     """Callable that evaluates the capillary pressure curves based on fluid saturations."""

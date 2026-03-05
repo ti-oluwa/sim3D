@@ -1121,7 +1121,7 @@ def compute_corey_three_phase_relative_permeabilities(
 
     # Validate saturations
     if np.any((sw < 0) | (sw > 1) | (so < 0) | (so > 1) | (sg < 0) | (sg > 1)):
-        raise ValueError("Saturations must be between 0 and 1.")
+        raise ValidationError("Saturations must be between 0 and 1.")
 
     # Normalize saturations if they do not sum to 1
     total_saturation = sw + so + sg
@@ -1211,7 +1211,7 @@ def compute_corey_three_phase_relative_permeabilities(
         )
 
     else:
-        raise ValueError(f"Wettability {wettability!r} not implemented.")
+        raise ValidationError(f"Wettability {wettability!r} not implemented.")
 
     # Clip all results to [0, 1]
     krw = np.clip(krw, 0.0, 1.0)
