@@ -25,9 +25,9 @@ produced_fluids = [
 ]
 
 # Production control
-prod_control = bores.PrimaryPhaseRateControl(
+prod_control = bores.CoupledRateControl(
     primary_phase=bores.FluidPhase.OIL,
-    primary_control=bores.AdaptiveBHPRateControl(
+    primary_control=bores.AdaptiveRateControl(
         target_rate=-300.0,
         target_phase="oil",
         bhp_limit=1000.0,
@@ -58,7 +58,7 @@ injector = bores.injection_well(
         specific_gravity=1.0,
         molecular_weight=18.015,
     ),
-    control=bores.ConstantRateControl(
+    control=bores.RateControl(
         target_rate=1200.0,
         bhp_limit=5000.0,
     ),
@@ -104,7 +104,7 @@ for j in range(2, 18, 4):
             specific_gravity=1.0,
             molecular_weight=18.015,
         ),
-        control=bores.ConstantRateControl(target_rate=600.0, bhp_limit=5000.0),
+        control=bores.RateControl(target_rate=600.0, bhp_limit=5000.0),
     ))
 
 wells = bores.wells_(producers=producers, injectors=injectors)
@@ -136,7 +136,7 @@ for i, (x, y) in enumerate(edge_positions):
             name="Water", phase=bores.FluidPhase.WATER,
             specific_gravity=1.0, molecular_weight=18.015,
         ),
-        control=bores.ConstantRateControl(target_rate=400.0, bhp_limit=5000.0),
+        control=bores.RateControl(target_rate=400.0, bhp_limit=5000.0),
     ))
 
 # Interior producers

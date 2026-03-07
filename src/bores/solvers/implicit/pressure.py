@@ -12,7 +12,7 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
-from bores.diffusivity.base import (
+from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_pressure_is_low,
     _warn_production_pressure_is_high,
@@ -31,7 +31,7 @@ from bores.types import (
     ThreeDimensions,
 )
 from bores.wells import Wells
-from bores.wells.controls import PrimaryPhaseRateControl
+from bores.wells.controls import CoupledRateControl
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ def evolve_pressure(
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     config: Config,
+    pad_width: int = 1,
 ) -> EvolutionResult[ImplicitPressureSolution, None]:
     """
     Solves the fully implicit finite-difference pressure equation for a slightly compressible,
@@ -70,6 +71,7 @@ def evolve_pressure(
     :param capillary_pressure_grids: Tuple of capillary pressure grids for (oil-water, gas-oil)
     :param wells: `Wells` object containing well definitions and properties
     :param config: `Config` object containing simulation config
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: `EvolutionResult` containing the new pressure grid and scheme used
     """
     absolute_permeability = rock_properties.absolute_permeability
@@ -219,6 +221,7 @@ def evolve_pressure(
         time_step_size=time_step_size,
         config=config,
         md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
+        pad_width=pad_width,
     )
 
     # Solve the linear system A·pⁿ⁺¹ = b
@@ -319,7 +322,7 @@ def compute_accumulation_arrays(
     cell_size_y: float,
     time_step_size_in_days: float,
     dtype: np.typing.DTypeLike,
-) -> typing.Tuple[np.ndarray, np.ndarray]:
+) -> typing.Tuple[np.typing.NDArray, np.typing.NDArray]:
     """
     Compute accumulation terms for all interior cells and return as dense arrays.
 
@@ -375,7 +378,7 @@ def compute_accumulation_arrays(
 
 def add_accumulation_terms(
     A: lil_matrix,
-    b: np.ndarray,
+    b: np.typing.NDArray,
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -387,7 +390,7 @@ def add_accumulation_terms(
     cell_size_y: float,
     time_step_size_in_days: float,
     dtype: np.typing.DTypeLike,
-) -> typing.Tuple[lil_matrix, np.ndarray]:
+) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
     """
     Initialize accumulation terms then populate sparse matrix.
 
@@ -452,7 +455,13 @@ def compute_face_transmissibility_arrays(
     elevation_grid: ThreeDimensionalGrid,
     gravitational_constant: float,
     dtype: np.typing.DTypeLike,
-) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> typing.Tuple[
+    np.typing.NDArray,
+    np.typing.NDArray,
+    np.typing.NDArray,
+    np.typing.NDArray,
+    np.typing.NDArray,
+]:
     """
     Compute face transmissibility arrays for all interior cell faces.
 
@@ -693,7 +702,7 @@ def compute_face_transmissibility_arrays(
 
 def add_face_transmissibilities_and_fluxes(
     A: lil_matrix,
-    b: np.ndarray,
+    b: np.typing.NDArray,
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -717,7 +726,7 @@ def add_face_transmissibilities_and_fluxes(
     elevation_grid: ThreeDimensionalGrid,
     gravitational_constant: float,
     dtype: np.typing.DTypeLike,
-) -> typing.Tuple[lil_matrix, np.ndarray]:
+) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
     """
     Add face transmissibilities then populate sparse matrix.
 
@@ -793,7 +802,7 @@ def add_face_transmissibilities_and_fluxes(
 
 def add_well_contributions(
     A: lil_matrix,
-    b: np.ndarray,
+    b: np.typing.NDArray,
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -815,11 +824,12 @@ def add_well_contributions(
     time_step_size: float,
     config: Config,
     md_per_cp_to_ft2_per_psi_per_day: float,
-) -> typing.Tuple[lil_matrix, np.ndarray]:
+    pad_width: int = 1,
+) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
     """
     Compute well flow rates and add contributions to the RHS vector b.
 
-    Well treatment is semi-implicit in time.
+    Production well treatment is semi-implicit in time.
 
     :param A: Sparse coefficient matrix (lil_matrix format) - not modified, returned for consistency
     :param b: RHS vector to modify in place
@@ -844,6 +854,7 @@ def add_well_contributions(
     :param time_step_size: Time step size (seconds)
     :param config: Simulation config
     :param md_per_cp_to_ft2_per_psi_per_day: Conversion factor from mD·ft/cP to ft²/psi·day
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: Tuple of (A, b) with well contributions added to b (A unchanged, returned for consistency)
     """
     _to_1D_index = functools.partial(
@@ -863,11 +874,12 @@ def add_well_contributions(
         total_well_index = 0.0
 
         # For the first pass over perforated cells, we compute total WI and cache well indices
+        # Offset well coordinates by pad_width to account for ghost cells
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -937,60 +949,73 @@ def add_well_contributions(
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
 
-            effective_bhp = well.get_bottom_hole_pressure(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                phase_mobility=phase_mobility,
-                well_index=well_index,
-                fluid=injected_fluid,
-                formation_volume_factor=phase_fvf,
-                allocation_fraction=allocation_fraction,
-                use_pseudo_pressure=use_pseudo_pressure,
-                fluid_compressibility=phase_compressibility,
-                # Do not pass reservoir fluid PVT tables for injected fluid
-                pvt_tables=None,
-            )
-            print()
-            print(
-                f"Injected Phase Mobility {phase_mobility}; Effective BHP: {effective_bhp}"
-            )
-            # Check for non-finite BHP before using it
-            if not np.isfinite(effective_bhp):
-                logger.error(
-                    f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
-                    f"Skipping this perforation. Check for low mobility or numerical issues."
+            if well.control.is_bhp_control():
+                # BHP-controlled injection: Robin BC with phase mobility
+                effective_bhp = well.get_bottom_hole_pressure(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    phase_mobility=phase_mobility,
+                    well_index=well_index,
+                    fluid=injected_fluid,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    fluid_compressibility=phase_compressibility,
+                    pvt_tables=None,
                 )
-                continue  # Skip this perforation
+                if not np.isfinite(effective_bhp):
+                    logger.error(
+                        f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
+                        f"Skipping this perforation. Check for low mobility or numerical issues."
+                    )
+                    continue
 
-            # Check for unrealistic BHP (orders of magnitude off)
-            if abs(effective_bhp - cell_oil_pressure) > 1e6:
-                logger.warning(
-                    f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
-                    f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
-                    f"This may indicate numerical instability or inappropriate well control."
+                if abs(effective_bhp - cell_oil_pressure) > 1e6:
+                    logger.warning(
+                        f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                        f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
+                        f"This may indicate numerical instability or inappropriate well control."
+                    )
+
+                if cell_oil_pressure > effective_bhp and config.warn_well_anomalies:
+                    _warn_injection_pressure_is_low(
+                        bhp=effective_bhp,
+                        cell_pressure=cell_oil_pressure,
+                        well_name=well.name,
+                        time=time_step * time_step_size,
+                        cell=(i, j, k),
+                    )
+
+                phase_productivity_index = (
+                    well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
                 )
-
-            # Check for backflow (cell pressure > BHP)
-            if cell_oil_pressure > effective_bhp and config.warn_well_anomalies:
-                _warn_injection_pressure_is_low(
-                    bhp=effective_bhp,
-                    cell_pressure=cell_oil_pressure,
-                    well_name=well.name,
-                    time=time_step * time_step_size,
-                    cell=(i, j, k),
+                A[cell_1D_index, cell_1D_index] += phase_productivity_index
+                b[cell_1D_index] += phase_productivity_index * effective_bhp
+            else:
+                # Rate-controlled injection.
+                total_mobility = (
+                    typing.cast(float, water_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
                 )
-
-            # PI uses total mobility to avoid cold start or phase saturtion dealock issues
-            # PI = mD·ft/cP * conversion = ft³/psi·day
-            phase_productivity_index = (
-                well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
-            )
-            # Semi-implicit coupling: q = PI * (p_wf - p_cell)
-            # Rearranging: PI * p_cell = PI * p_wf - q
-            # In pressure equation: ... = ... + q
-            # So: A[i,i] += PI, b[i] += PI * p_wf
-            A[cell_1D_index, cell_1D_index] += phase_productivity_index
-            b[cell_1D_index] += phase_productivity_index * effective_bhp
+                effective_bhp = well.get_bottom_hole_pressure(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    phase_mobility=total_mobility,
+                    well_index=well_index,
+                    fluid=injected_fluid,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    fluid_compressibility=phase_compressibility,
+                    pvt_tables=None,
+                )
+                total_productivity_index = (
+                    well_index * total_mobility * md_per_cp_to_ft2_per_psi_per_day
+                )
+                # Semi-implicit Robin BC: q = PI_total * (P_wf - P_cell)
+                A[cell_1D_index, cell_1D_index] += total_productivity_index
+                b[cell_1D_index] += total_productivity_index * effective_bhp
 
     # Process production wells
     for well in wells.production_wells:
@@ -1002,11 +1027,12 @@ def add_well_contributions(
         total_well_index = 0.0
 
         # First pass over perforated cells, compute total WI and cache well indices
+        # Offset well coordinates by pad_width to account for ghost cells
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -1042,9 +1068,9 @@ def add_well_contributions(
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
 
-            # Build primary phase context if using PrimaryPhaseRateControl
+            # Build primary phase context if using CoupledRateControl
             primary_phase_kwargs: dict = {}
-            if isinstance(well.control, PrimaryPhaseRateControl):
+            if isinstance(well.control, CoupledRateControl):
                 primary_phase_kwargs = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
                     oil_mobility=typing.cast(

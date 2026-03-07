@@ -1,7 +1,10 @@
+import logging
 import typing
 
 import attrs
+import numpy as np
 
+from bores.constants import c
 from bores.grids.pvt import (
     build_gas_compressibility_factor_grid,
     build_gas_compressibility_grid,
@@ -27,8 +30,15 @@ from bores.grids.pvt import (
 from bores.grids.rock_fluid import build_effective_residual_saturation_grids
 from bores.models import FluidProperties, RockProperties, SaturationHistory
 from bores.tables.pvt import PVTTables
-from bores.types import MiscibilityModel, NDimensionalGrid, ThreeDimensions
+from bores.types import (
+    MiscibilityModel,
+    NDimensionalGrid,
+    ThreeDimensionalGrid,
+    ThreeDimensions,
+)
 from bores.wells import Wells
+
+logger = logging.getLogger(__name__)
 
 
 def update_pvt_grids(
@@ -450,6 +460,142 @@ def update_pvt_grids(
         gas_density_grid=new_gas_density_grid,
     )
     return updated_fluid_properties
+
+
+def apply_solution_gas_liberation(
+    fluid_properties: FluidProperties[ThreeDimensions],
+    old_solution_gas_to_oil_ratio_grid: ThreeDimensionalGrid,
+    old_oil_formation_volume_factor_grid: ThreeDimensionalGrid,
+) -> FluidProperties[ThreeDimensions]:
+    """
+    Applies solution gas liberation (or re-dissolution) to saturations based on
+    changes in the solution gas-to-oil ratio (Rs) from the PVT update.
+
+    When pressure drops below the bubble point, Rs decreases and dissolved gas
+    comes out of solution as free gas. When pressure rises and free gas is
+    present, gas can re-dissolve into oil.
+
+    Physics:
+        - Oil shrinks when Rs decreases: So_new = So_old * Bo_new / Bo_old
+        - Gas appears: dSg = (Rs_old - Rs_new) * So_old * Bg_new / (Bo_old * bbl_to_ft3)
+        - Re-dissolution is capped at available free gas
+        - Rs is corrected if the PVT update assumed more gas could dissolve than exists
+
+    :param fluid_properties: Fluid properties with updated PVT (new Rs, Bo, Bg)
+        but old saturations.
+    :param old_solution_gas_to_oil_ratio_grid: Rs grid before PVT update (SCF/STB).
+    :param old_oil_formation_volume_factor_grid: Bo grid before PVT update (RB/STB).
+    :return: Updated fluid properties with post-flash saturations and corrected Rs.
+    """
+    new_solution_gas_to_oil_ratio_grid = fluid_properties.solution_gas_to_oil_ratio_grid
+    new_oil_formation_volume_factor_grid = (
+        fluid_properties.oil_formation_volume_factor_grid
+    )
+    new_gas_formation_volume_factor_grid = (
+        fluid_properties.gas_formation_volume_factor_grid
+    )
+
+    oil_saturation_grid = fluid_properties.oil_saturation_grid.copy()
+    gas_saturation_grid = fluid_properties.gas_saturation_grid.copy()
+    corrected_solution_gas_to_oil_ratio_grid = new_solution_gas_to_oil_ratio_grid.copy()
+
+    bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
+
+    # delta > 0 means gas liberation, < 0 means potential re-dissolution
+    delta_solution_gas_to_oil_ratio = (
+        old_solution_gas_to_oil_ratio_grid - new_solution_gas_to_oil_ratio_grid
+    )
+
+    # Mask for cells where liberation occurs (Rs decreased)
+    liberation_mask = delta_solution_gas_to_oil_ratio > 0.0
+    # Mask for cells where re-dissolution could occur (Rs increased and free gas exists)
+    redissolution_mask = (delta_solution_gas_to_oil_ratio < 0.0) & (
+        gas_saturation_grid > 0.0
+    )
+    # Mask for cells where Rs increased but no free gas to dissolve
+    no_gas_mask = (delta_solution_gas_to_oil_ratio < 0.0) & (gas_saturation_grid <= 0.0)
+
+    # For Gas Liberation
+    if np.any(liberation_mask):
+        # Volume of gas liberated per unit pore volume
+        # N_o (STB per ft³ pore) = So / (Bo_old * bbl_to_ft3)
+        # Liberated gas (SCF per ft³ pore) = delta_rs * N_o
+        # Liberated gas at reservoir conditions (ft³ per ft³ pore) = SCF * Bg
+        liberated_gas_saturation = (
+            delta_solution_gas_to_oil_ratio[liberation_mask]
+            * oil_saturation_grid[liberation_mask]
+            * new_gas_formation_volume_factor_grid[liberation_mask]
+            / (old_oil_formation_volume_factor_grid[liberation_mask] * bbl_to_ft3)
+        )
+        # Oil shrinks because Bo changed (less dissolved gas = lower FVF)
+        oil_saturation_grid[liberation_mask] = (
+            oil_saturation_grid[liberation_mask]
+            * new_oil_formation_volume_factor_grid[liberation_mask]
+            / old_oil_formation_volume_factor_grid[liberation_mask]
+        )
+        gas_saturation_grid[liberation_mask] = (
+            gas_saturation_grid[liberation_mask] + liberated_gas_saturation
+        )
+
+    # For Gas Re-dissolution
+    if np.any(redissolution_mask):
+        # Maximum Rs increase limited by available free gas
+        # Available gas in SCF per unit pore volume = Sg / Bg
+        # Available gas per STB oil = (Sg / Bg) / (So / (Bo_old * bbl_to_ft3))
+        #                           = Sg * Bo_old * bbl_to_ft3 / (So * Bg)
+        safe_oil_saturation = np.maximum(oil_saturation_grid[redissolution_mask], 1e-30)
+        safe_gas_formation_volume_factor = np.maximum(
+            new_gas_formation_volume_factor_grid[redissolution_mask], 1e-30
+        )
+        max_dissolvable_gas_to_oil_ratio = (
+            gas_saturation_grid[redissolution_mask]
+            * old_oil_formation_volume_factor_grid[redissolution_mask]
+            * bbl_to_ft3
+            / (safe_oil_saturation * safe_gas_formation_volume_factor)
+        )
+        # delta is negative here; cap magnitude at max dissolvable
+        actual_delta_solution_gas_to_oil_ratio = np.maximum(
+            delta_solution_gas_to_oil_ratio[redissolution_mask],
+            -max_dissolvable_gas_to_oil_ratio,
+        )
+        # Gas consumed (positive value subtracted from Sg)
+        dissolved_gas_saturation = (
+            -actual_delta_solution_gas_to_oil_ratio
+            * oil_saturation_grid[redissolution_mask]
+            * new_gas_formation_volume_factor_grid[redissolution_mask]
+            / (old_oil_formation_volume_factor_grid[redissolution_mask] * bbl_to_ft3)
+        )
+        gas_saturation_grid[redissolution_mask] = (
+            gas_saturation_grid[redissolution_mask] - dissolved_gas_saturation
+        )
+        # Oil swells (Bo increases when more gas dissolves)
+        oil_saturation_grid[redissolution_mask] = (
+            oil_saturation_grid[redissolution_mask]
+            * new_oil_formation_volume_factor_grid[redissolution_mask]
+            / old_oil_formation_volume_factor_grid[redissolution_mask]
+        )
+        # Correct Rs if PVT update over-estimated dissolution
+        corrected_solution_gas_to_oil_ratio_grid[redissolution_mask] = (
+            old_solution_gas_to_oil_ratio_grid[redissolution_mask]
+            - actual_delta_solution_gas_to_oil_ratio
+        )
+
+    # No free gas to dissolve
+    if np.any(no_gas_mask):
+        # Revert Rs to old value — can't dissolve gas that doesn't exist
+        corrected_solution_gas_to_oil_ratio_grid[no_gas_mask] = (
+            old_solution_gas_to_oil_ratio_grid[no_gas_mask]
+        )
+
+    # Clamp saturations (normalization should be done by the caller)
+    oil_saturation_grid = np.maximum(oil_saturation_grid, 0.0)
+    gas_saturation_grid = np.maximum(gas_saturation_grid, 0.0)
+    return attrs.evolve(
+        fluid_properties,
+        oil_saturation_grid=oil_saturation_grid,
+        gas_saturation_grid=gas_saturation_grid,
+        solution_gas_to_oil_ratio_grid=corrected_solution_gas_to_oil_ratio_grid,
+    )
 
 
 def update_residual_saturation_grids(

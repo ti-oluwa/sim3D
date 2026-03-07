@@ -5,12 +5,16 @@
     timer:
       initial_step_size: 432000.0
       max_step_size: 2592000.0
-      min_step_size: 3600.0
+      min_step_size: 1200.0
       simulation_time: 157788000.0
       max_cfl_number: 0.9
       cfl_safety_margin: 0.85
       ramp_up_factor: 1.2
+      backoff_factor: 0.5
+      aggressive_backoff_factor: 0.25
+      max_steps: null
       max_growth_per_step: 1.3
+      max_rejects: 20
       step_size_smoothing: 0.2
       growth_cooldown_steps: 5
       failure_memory_window: 5
@@ -132,9 +136,9 @@
                 - 0
             radius: 0.25
             control:
-              constant_rate_control:
+              adaptive_bhp_rate_control:
                 target_rate: 100000000.0
-                bhp_limit: 5200
+                bhp_limit: 12000.0
                 target_phase: null
                 clamp:
                   injection_clamp:

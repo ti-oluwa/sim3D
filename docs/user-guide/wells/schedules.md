@@ -20,9 +20,9 @@ import bores
 event = bores.WellEvent(
     predicate=bores.time_predicate(time_step=50),
     action=bores.update_well(
-        control=bores.PrimaryPhaseRateControl(
+        control=bores.CoupledRateControl(
             primary_phase=bores.FluidPhase.OIL,
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=-200.0,
                 target_phase="oil",
                 bhp_limit=800.0,
@@ -92,9 +92,9 @@ import bores
 
 # Change control strategy
 change_rate = bores.update_well(
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-100.0,
             target_phase="oil",
             bhp_limit=500.0,
@@ -140,9 +140,9 @@ def reduce_rate_by_half(well, state):
     current_control = well.control
     if hasattr(current_control, 'primary_control'):
         current_rate = current_control.primary_control.target_rate
-        new_control = bores.PrimaryPhaseRateControl(
+        new_control = bores.CoupledRateControl(
             primary_phase=current_control.primary_phase,
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=current_rate * 0.5,
                 target_phase=current_control.primary_control.target_phase,
                 bhp_limit=current_control.primary_control.bhp_limit,
@@ -169,9 +169,9 @@ schedule = bores.WellSchedule()
 schedule.add("rate_reduction", bores.WellEvent(
     predicate=bores.time_predicate(time_step=50),
     action=bores.update_well(
-        control=bores.PrimaryPhaseRateControl(
+        control=bores.CoupledRateControl(
             primary_phase=bores.FluidPhase.OIL,
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=-200.0,
                 target_phase="oil",
                 bhp_limit=800.0,
@@ -201,9 +201,9 @@ prod_schedule = bores.WellSchedule()
 prod_schedule.add("reduce_rate", bores.WellEvent(
     predicate=bores.time_predicate(time_step=100),
     action=bores.update_well(
-        control=bores.PrimaryPhaseRateControl(
+        control=bores.CoupledRateControl(
             primary_phase=bores.FluidPhase.OIL,
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=-200.0,
                 target_phase="oil",
                 bhp_limit=800.0,
@@ -219,7 +219,7 @@ inj_schedule = bores.WellSchedule()
 inj_schedule.add("increase_rate", bores.WellEvent(
     predicate=bores.time_predicate(time_step=100),
     action=bores.update_well(
-        control=bores.ConstantRateControl(
+        control=bores.RateControl(
             target_rate=1200.0,
             bhp_limit=5000.0,
         ),
@@ -282,9 +282,9 @@ import bores
 combined_action = bores.EventAction.sequence(
     bores.update_well(skin_factor=-2.0),       # Workover
     bores.update_well(
-        control=bores.PrimaryPhaseRateControl(
+        control=bores.CoupledRateControl(
             primary_phase=bores.FluidPhase.OIL,
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=-800.0,
                 target_phase="oil",
                 bhp_limit=1200.0,

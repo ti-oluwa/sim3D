@@ -134,7 +134,7 @@ co2_injector = bores.injection_well(
     well_name="CO2-INJ-1",
     perforating_intervals=[((0, 0, 0), (0, 0, 2))],
     radius=0.25,
-    control=bores.ConstantRateControl(
+    control=bores.RateControl(
         target_rate=5_000_000.0, 
         bhp_limit=5000,
     ),
@@ -175,9 +175,9 @@ producer = bores.production_well(
     well_name="PROD-1",
     perforating_intervals=[((14, 14, 0), (14, 14, 2))],
     radius=0.25,
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-400.0,
             target_phase="oil",
             bhp_limit=800.0,
@@ -328,7 +328,7 @@ for omega in omega_values:
         well_name="CO2-INJ-1",
         perforating_intervals=[((0, 0, 0), (0, 0, 2))],
         radius=0.25,
-        control=bores.ConstantRateControl(target_rate=500.0),
+        control=bores.RateControl(target_rate=500.0),
         injected_fluid=bores.InjectedFluid(
             name="CO2",
             phase=bores.FluidPhase.GAS,

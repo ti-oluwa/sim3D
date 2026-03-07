@@ -77,6 +77,10 @@ class TimerState(typing.TypedDict):
     max_cfl_number: float
     cfl_safety_margin: float
     ramp_up_factor: typing.Optional[float]
+    backoff_factor: float
+    aggressive_backoff_factor: float
+    max_steps: typing.Optional[int]
+    max_rejects: int
     max_growth_per_step: float
     step_size_smoothing: float
     growth_cooldown_steps: int
@@ -881,7 +885,11 @@ class Timer(StoreSerializable):
             "max_cfl_number": self.max_cfl_number,
             "cfl_safety_margin": self.cfl_safety_margin,
             "ramp_up_factor": self.ramp_up_factor,
+            "backoff_factor": self.backoff_factor,
+            "aggressive_backoff_factor": self.aggressive_backoff_factor,
+            "max_steps": self.max_steps,
             "max_growth_per_step": self.max_growth_per_step,
+            "max_rejects": self.max_rejects,
             "step_size_smoothing": self.step_size_smoothing,
             "growth_cooldown_steps": self.growth_cooldown_steps,
             "failure_memory_window": self.failure_memory_window,
@@ -946,6 +954,10 @@ class Timer(StoreSerializable):
             "max_cfl_number": state.get("max_cfl_number", 1.0),
             "cfl_safety_margin": state.get("cfl_safety_margin", 0.9),
             "ramp_up_factor": state.get("ramp_up_factor"),
+            "backoff_factor": state.get("backoff_factor", 0.5),
+            "aggressive_backoff_factor": state.get("aggressive_backoff_factor", 0.25),
+            "max_steps": state.get("max_steps"),
+            "max_rejects": state.get("max_rejects", 10),
             "max_growth_per_step": state.get("max_growth_per_step", 1.5),
             "step_size_smoothing": state.get("step_size_smoothing", 0.7),
             "growth_cooldown_steps": state.get("growth_cooldown_steps", 5),

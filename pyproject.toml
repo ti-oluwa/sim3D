@@ -70,6 +70,7 @@ dependencies = [
     "types-pyyaml>=6.0.12.20250915",
     "types-cachetools>=6.2.0.20251022",
     "scipy-stubs>=1.15.3.0",
+    "marimo>=0.20.4",
 ]
 
 

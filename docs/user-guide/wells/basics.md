@@ -41,9 +41,9 @@ producer = bores.production_well(
             molecular_weight=16.04,
         ),
     ],
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-500.0,
             target_phase="oil",
             bhp_limit=1000.0,
@@ -90,7 +90,7 @@ injector = bores.injection_well(
         specific_gravity=1.0,
         molecular_weight=18.015,
     ),
-    control=bores.ConstantRateControl(
+    control=bores.RateControl(
         target_rate=800.0,  # Positive = injection
         bhp_limit=5000.0,   # Max injection pressure
     ),

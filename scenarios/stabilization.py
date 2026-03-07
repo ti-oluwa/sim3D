@@ -29,7 +29,7 @@ def build_run_from_setup():
     run = bores.Run.from_files(
         model_path=Path("./scenarios/runs/setup/model.h5"),
         config_path=Path("./scenarios/runs/setup/config.yaml"),
-        pvt_table_path=Path("./scenarios/runs/setup/pvt.h5"),
+        pvt_data_path=Path("./scenarios/runs/setup/pvt.h5"),
     )
     return Path, bores, run
 

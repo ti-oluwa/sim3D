@@ -10,7 +10,6 @@ from .boundary_conditions import *
 from .capillary_pressures import *
 from .config import *
 from .constants import *
-from .diffusivity import *
 from .errors import *
 from .factories import *
 from .fractures import *
@@ -19,6 +18,7 @@ from .models import *
 from .relperm import *
 from .serialization import *
 from .simulate import *
+from .solvers import *
 from .states import *
 from .stores import *
 from .streams import *

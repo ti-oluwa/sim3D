@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.20.4"
 app = marimo.App(width="full", app_title="bores")
 
 
@@ -21,8 +21,8 @@ def setup_run():
     preconditioner_factory = bores.CachedPreconditionerFactory(
         factory="ilu",
         name="cached_ilu",
-        update_frequency=5,
-        recompute_threshold=0.2,
+        update_frequency=10,
+        recompute_threshold=0.3,
     )
     preconditioner_factory.register(override=True)
 
@@ -30,13 +30,13 @@ def setup_run():
     run = bores.Run.from_files(
         model_path=Path("./scenarios/runs/stabilization/results/model.h5"),
         config_path=Path("./scenarios/runs/setup/config.yaml"),
-        pvt_table_path=Path("./scenarios/runs/setup/pvt.h5"),
+        pvt_data_path=Path("./scenarios/runs/setup/pvt.h5"),
     )
 
     # Production well
-    control = bores.PrimaryPhaseRateControl(
+    control = bores.CoupledRateControl(
         primary_phase="oil",
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-2000,
             bhp_limit=1000,
             clamp=bores.ProductionClamp(),

@@ -169,9 +169,9 @@ producer = bores.production_well(
     well_name="PROD-1",
     perforating_intervals=[((5, 5, 0), (5, 5, 2))],
     radius=0.25,  # ft
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-200.0,    # produce 200 STB/day of oil
             target_phase="oil",
             bhp_limit=500.0,       # minimum BHP constraint
@@ -200,9 +200,9 @@ wells = bores.wells_(producers=[producer])
 
 The well is placed at grid location (5, 5) and perforated from layer 0 to layer 2, connecting it to all three reservoir layers. The perforating interval is specified as a pair of (x, y, z) coordinates: the start and end of the perforation.
 
-We use `PrimaryPhaseRateControl` because it is the standard approach in reservoir simulation for production wells. You fix the oil rate (the primary phase), and the simulator computes the BHP required to deliver that rate. Water and gas then flow at whatever their natural Darcy rates are at the resulting BHP. This is far more realistic than applying the same rate to all phases.
+We use `CoupledRateControl` because it is the standard approach in reservoir simulation for production wells. You fix the oil rate (the primary phase), and the simulator computes the BHP required to deliver that rate. Water and gas then flow at whatever their natural Darcy rates are at the resulting BHP. This is far more realistic than applying the same rate to all phases.
 
-Inside the primary control, `AdaptiveBHPRateControl` handles the oil rate target of -200 STB/day (negative = production). When reservoir pressure is high, the well achieves this rate. As pressure declines, eventually the drawdown needed to maintain -200 STB/day would push BHP below 500 psi. At that point, the control automatically switches to constant-BHP mode and lets the oil rate decline naturally. The `ProductionClamp` on the secondary phases prevents backflow of water or gas into the reservoir.
+Inside the primary control, `AdaptiveRateControl` handles the oil rate target of -200 STB/day (negative = production). When reservoir pressure is high, the well achieves this rate. As pressure declines, eventually the drawdown needed to maintain -200 STB/day would push BHP below 500 psi. At that point, the control automatically switches to constant-BHP mode and lets the oil rate decline naturally. The `ProductionClamp` on the secondary phases prevents backflow of water or gas into the reservoir.
 
 The `produced_fluids` list tells the simulator which phases can flow into this well. Even though we start with no free gas, we include a gas `ProducedFluid` because gas will appear once pressure drops below the bubble point.
 
@@ -353,7 +353,7 @@ The 3D visualization shows the pressure distribution at the final time step. You
 
 2. **The bubble point** is a critical threshold. Above it, the system behaves as single-phase (undersaturated) oil. Below it, gas liberates from solution, creating a two-phase system with very different flow characteristics.
 
-3. **`PrimaryPhaseRateControl`** is the standard way to control production wells. You fix the oil (or gas) rate and let the other phases flow at whatever BHP results from the primary phase. `AdaptiveBHPRateControl` within it handles the automatic switch from rate to BHP mode as reservoir pressure declines.
+3. **`CoupledRateControl`** is the standard way to control production wells. You fix the oil (or gas) rate and let the other phases flow at whatever BHP results from the primary phase. `AdaptiveRateControl` within it handles the automatic switch from rate to BHP mode as reservoir pressure declines.
 
 4. **The `reservoir_model()` factory** computes most PVT properties automatically from correlations. You only need to provide the properties you know; the factory estimates the rest.
 

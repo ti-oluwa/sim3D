@@ -9,7 +9,7 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
-from bores.diffusivity.base import (
+from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_rate_is_negative,
     _warn_production_rate_is_positive,
@@ -20,7 +20,7 @@ from bores.grids.pvt import build_total_fluid_compressibility_grid
 from bores.models import FluidProperties, RockProperties
 from bores.types import FluidPhase, ThreeDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
-from bores.wells.controls import PrimaryPhaseRateControl
+from bores.wells.controls import CoupledRateControl
 
 __all__ = ["evolve_pressure"]
 
@@ -45,6 +45,7 @@ def evolve_pressure(
     capillary_pressure_grids: CapillaryPressureGrids[ThreeDimensions],
     wells: Wells[ThreeDimensions],
     config: Config,
+    pad_width: int = 1,
 ) -> EvolutionResult[ExplicitPressureSolution, None]:
     """
     Computes the pressure evolution (specifically, oil phase pressure P_oil) in the reservoir grid
@@ -61,6 +62,8 @@ def evolve_pressure(
         pressure, temperature, saturations, viscosities, and compressibilities for
         water, oil, and gas.
     :param wells: `Wells` object containing well parameters for injection and production wells
+    :param config: Simulation config.
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: A N-Dimensional numpy array representing the updated oil phase pressure field (psi).
     """
     time_step_size_in_days = time_step_size * c.DAYS_PER_SECOND
@@ -221,6 +224,7 @@ def evolve_pressure(
         time_step_size=time_step_size,
         config=config,
         dtype=dtype,
+        pad_width=pad_width,
     )
 
     # Apply pressure updates
@@ -657,6 +661,7 @@ def compute_well_rate_grid(
     time_step_size: float,
     config: Config,
     dtype: np.typing.DTypeLike,
+    pad_width: int = 1,
 ) -> ThreeDimensionalGrid:
     """
     Compute well rates for all cells (injection + production).
@@ -687,6 +692,7 @@ def compute_well_rate_grid(
     :param time_step_size: Time step size (seconds)
     :param config: Simulation config
     :param dtype: NumPy dtype for array allocation (np.float32 or np.float64)
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: 3D grid of net well flow rates (ft³/day), positive = injection, negative = production
     """
     well_rate_grid = np.zeros((cell_count_x, cell_count_y, cell_count_z), dtype=dtype)
@@ -701,11 +707,13 @@ def compute_well_rate_grid(
         total_well_index = 0.0
 
         # First pass over perforated cells: compute total WI and cache well indices
+        # Offset well coordinates by pad_width to account for ghost cells
+        pw = pad_width
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pw, end[0] + pw + 1),
+                range(start[1] + pw, end[1] + pw + 1),
+                range(start[2] + pw, end[2] + pw + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -773,20 +781,42 @@ def compute_well_rate_grid(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            # Compute injection rate (bbls/day for liquids, ft³/day for gas)
-            cell_injection_rate = well.get_flow_rate(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                well_index=well_index,
-                phase_mobility=phase_mobility,
-                fluid=injected_fluid,
-                fluid_compressibility=phase_compressibility,
-                use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=phase_fvf,
-                allocation_fraction=allocation_fraction,
-                # Do not pass reservoir fluid PVT tables for injected fluid
-                pvt_tables=None,
-            )
+            if well.control.is_bhp_control():
+                # BHP-controlled injection: use phase mobility
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=phase_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+            else:
+                # Rate-controlled injection
+                total_mobility = (
+                    typing.cast(float, water_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                )
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=total_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+
+            if injected_phase != FluidPhase.GAS:
+                cell_injection_rate *= c.BARRELS_TO_CUBIC_FEET
 
             # Check for backflow (negative injection)
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
@@ -800,10 +830,6 @@ def compute_well_rate_grid(
                     else "bbls/day",
                 )
 
-            # Convert to ft³/day if not already
-            if injected_phase != FluidPhase.GAS:
-                cell_injection_rate *= c.BARRELS_TO_CUBIC_FEET
-
             well_rate_grid[i, j, k] += cell_injection_rate
 
     # Process production wells
@@ -816,11 +842,13 @@ def compute_well_rate_grid(
         total_well_index = 0.0
 
         # First pass over perforated cells: compute total WI and cache well indices
+        # Offset well coordinates by pad_width to account for ghost cells
+        pw = pad_width
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pw, end[0] + pw + 1),
+                range(start[1] + pw, end[1] + pw + 1),
+                range(start[2] + pw, end[2] + pw + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -856,20 +884,38 @@ def compute_well_rate_grid(
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
 
-            # Build primary phase context if using PrimaryPhaseRateControl
+            # Build primary phase context if using CoupledRateControl
             primary_phase_kwargs: dict = {}
-            if isinstance(well.control, PrimaryPhaseRateControl):
+            if isinstance(well.control, CoupledRateControl):
                 primary_phase_kwargs = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
-                    oil_mobility=typing.cast(float, oil_relative_mobility_grid[i, j, k]),
-                    water_mobility=typing.cast(float, water_relative_mobility_grid[i, j, k]),
-                    gas_mobility=typing.cast(float, gas_relative_mobility_grid[i, j, k]),
-                    oil_fvf=typing.cast(float, oil_formation_volume_factor_grid[i, j, k]),
-                    water_fvf=typing.cast(float, water_formation_volume_factor_grid[i, j, k]),
-                    gas_fvf=typing.cast(float, gas_formation_volume_factor_grid[i, j, k]),
-                    oil_compressibility=typing.cast(float, oil_compressibility_grid[i, j, k]),
-                    water_compressibility=typing.cast(float, water_compressibility_grid[i, j, k]),
-                    gas_compressibility=typing.cast(float, gas_compressibility_grid[i, j, k]),
+                    oil_mobility=typing.cast(
+                        float, oil_relative_mobility_grid[i, j, k]
+                    ),
+                    water_mobility=typing.cast(
+                        float, water_relative_mobility_grid[i, j, k]
+                    ),
+                    gas_mobility=typing.cast(
+                        float, gas_relative_mobility_grid[i, j, k]
+                    ),
+                    oil_fvf=typing.cast(
+                        float, oil_formation_volume_factor_grid[i, j, k]
+                    ),
+                    water_fvf=typing.cast(
+                        float, water_formation_volume_factor_grid[i, j, k]
+                    ),
+                    gas_fvf=typing.cast(
+                        float, gas_formation_volume_factor_grid[i, j, k]
+                    ),
+                    oil_compressibility=typing.cast(
+                        float, oil_compressibility_grid[i, j, k]
+                    ),
+                    water_compressibility=typing.cast(
+                        float, water_compressibility_grid[i, j, k]
+                    ),
+                    gas_compressibility=typing.cast(
+                        float, gas_compressibility_grid[i, j, k]
+                    ),
                 )
 
             for produced_fluid in well.produced_fluids:

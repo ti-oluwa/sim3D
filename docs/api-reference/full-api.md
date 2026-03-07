@@ -4,7 +4,7 @@
 
 This page lists every class, function, constant, and type exported from the `bores` package. Everything listed here is importable directly from `bores` (for example, `from bores import Config` or `import bores; bores.Config`). The API is organized by functional area to help you find what you need quickly.
 
-The `bores` package uses wildcard re-exports from its internal modules. This means you never need to import from internal paths like `bores.wells.controls` or `bores.diffusivity.base`. Everything public is available at the top level. The only exception is the array PVT correlations, which must be imported from `bores.correlations.arrays` explicitly, and the visualization submodules (`bores.visualization.plotly1d`, `bores.visualization.plotly2d`, `bores.visualization.plotly3d`) which you can import by name for direct renderer access.
+The `bores` package uses wildcard re-exports from its internal modules. This means you never need to import from internal paths like `bores.wells.controls` or `bores.solvers.base`. Everything public is available at the top level. The only exception is the array PVT correlations, which must be imported from `bores.correlations.arrays` explicitly, and the visualization submodules (`bores.visualization.plotly1d`, `bores.visualization.plotly2d`, `bores.visualization.plotly3d`) which you can import by name for direct renderer access.
 
 For detailed documentation of individual items, see the relevant sections in the [User Guide](../user-guide/index.md) and [Tutorials](../tutorials/index.md). For PVT correlation functions specifically, see the [Scalar Correlations](correlations-scalar.md) and [Array Correlations](correlations-array.md) pages.
 
@@ -136,10 +136,10 @@ Well types, fluid definitions, controls, and scheduling are all available at the
 | --- | --- | --- |
 | `WellControl` | protocol | Base protocol for all well control strategies. |
 | `BHPControl` | class | Constant bottom-hole pressure control. |
-| `ConstantRateControl` | class | Constant surface rate control with optional BHP limit. |
-| `PrimaryPhaseRateControl` | class | Rate control on the primary phase with BHP fallback. |
+| `RateControl` | class | Constant surface rate control with optional BHP limit. |
+| `CoupledRateControl` | class | Rate control on the primary phase with BHP fallback. |
 | `MultiPhaseRateControl` | class | Control targeting total liquid or total fluid rate. |
-| `AdaptiveBHPRateControl` | class | Starts with rate control, switches to BHP when the rate target cannot be met. |
+| `AdaptiveRateControl` | class | Starts with rate control, switches to BHP when the rate target cannot be met. |
 | `well_control()` | function | Decorator to register a (custom) well control for easy serialization/deserialization. |
 
 ### Rate Clamping

@@ -38,7 +38,7 @@ def setup_run():
         well_name="GI-1",
         perforating_intervals=[((16, 3, 1), (16, 3, 3))],
         radius=0.3542,  # 8.5 inch wellbore
-        control=bores.AdaptiveBHPRateControl(
+        control=bores.AdaptiveRateControl(
             target_rate=1_000_000,
             target_phase="gas",
             bhp_limit=3500,
@@ -69,19 +69,19 @@ def setup_run():
     # Producer well
     production_clamp = bores.ProductionClamp()
     control = bores.MultiPhaseRateControl(
-        oil_control=bores.AdaptiveBHPRateControl(
+        oil_control=bores.AdaptiveRateControl(
             target_rate=-5000,
             target_phase="oil",
             bhp_limit=300,
             clamp=production_clamp,
         ),
-        gas_control=bores.AdaptiveBHPRateControl(
+        gas_control=bores.AdaptiveRateControl(
             target_rate=-500,
             target_phase="gas",
             bhp_limit=800,
             clamp=production_clamp,
         ),
-        water_control=bores.AdaptiveBHPRateControl(
+        water_control=bores.AdaptiveRateControl(
             target_rate=-20,
             target_phase="water",
             bhp_limit=800,

@@ -565,7 +565,11 @@ class Constants(
         :param defaults: Optional dictionary of default constants to initialize with.
             If None, uses the predefined `DEFAULT_CONSTANTS`.
         """
-        defaults = defaults if defaults is not None else DEFAULT_CONSTANTS
+        defaults = (
+            {**DEFAULT_CONSTANTS, **defaults}
+            if defaults is not None
+            else DEFAULT_CONSTANTS
+        )
         for name, value in defaults.items():
             if isinstance(value, Constant):
                 self._store[name] = value

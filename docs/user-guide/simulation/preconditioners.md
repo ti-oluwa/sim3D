@@ -112,7 +112,7 @@ The polynomial preconditioner approximates $A^{-1}$ using a truncated Neumann se
 Building a preconditioner (especially ILU or AMG) is expensive, but in reservoir simulation the matrix structure stays constant and the coefficients change slowly between time steps. BORES provides `CachedPreconditionerFactory` to reuse a preconditioner across multiple time steps, rebuilding it only when needed.
 
 ```python
-from bores.diffusivity.base import CachedPreconditionerFactory
+from bores.solvers.base import CachedPreconditionerFactory
 
 # Cache ILU, rebuild every 10 steps or when matrix changes by > 30%
 cached_ilu = CachedPreconditionerFactory(
@@ -150,7 +150,7 @@ Caching can save 20 to 40% of total simulation time for problems where the matri
 You can register custom preconditioner factories using the `@preconditioner_factory` decorator:
 
 ```python
-from bores.diffusivity.base import preconditioner_factory
+from bores.solvers.base import preconditioner_factory
 
 @preconditioner_factory(name="my_precond")
 def my_preconditioner(A_csr):
@@ -167,7 +167,7 @@ config = bores.Config(
 )
 ```
 
-The factory function receives the sparse coefficient matrix and must return a `scipy.sparse.linalg.LinearOperator` that can be applied to a vector (the preconditioner solve step). You can list all registered preconditioner factories with `bores.diffusivity.base.list_preconditioner_factories()`.
+The factory function receives the sparse coefficient matrix and must return a `scipy.sparse.linalg.LinearOperator` that can be applied to a vector (the preconditioner solve step). You can list all registered preconditioner factories with `bores.solvers.base.list_preconditioner_factories()`.
 
 ---
 

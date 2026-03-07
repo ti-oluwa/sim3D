@@ -57,9 +57,7 @@ def setup_grid():
     reference_depth = 8400.0  # ft
 
     # Interpolate undersaturated density at initial pressure
-    rho_at_pb = (
-        37.046  # lbm/ft³ at 4014.7 psia (bubble point, undersaturated table)
-    )
+    rho_at_pb = 37.046  # lbm/ft³ at 4014.7 psia (bubble point, undersaturated table)
     rho_at_9015 = 39.768  # lbm/ft³ at 9014.7 psia (undersaturated table)
     p_interp_frac = (reference_pressure - 4014.7) / (9014.7 - 4014.7)
     rho_oil_initial = rho_at_pb + (rho_at_9015 - rho_at_pb) * p_interp_frac
@@ -143,9 +141,7 @@ def setup_grid():
     residual_oil_saturation_gas_grid = bores.uniform_grid(
         grid_shape=grid_shape, value=0.0
     )
-    residual_gas_saturation_grid = bores.uniform_grid(
-        grid_shape=grid_shape, value=0.0
-    )
+    residual_gas_saturation_grid = bores.uniform_grid(grid_shape=grid_shape, value=0.0)
 
     oil_saturation_grid = bores.uniform_grid(grid_shape=grid_shape, value=0.88)
     water_saturation_grid = bores.uniform_grid(grid_shape=grid_shape, value=0.12)
@@ -163,9 +159,7 @@ def setup_grid():
     # Gas viscosity initial
     gas_viscosity_grid = bores.uniform_grid(grid_shape=grid_shape, value=0.027)
 
-    oil_viscosity_grid = bores.uniform_grid(
-        grid_shape=grid_shape, value=0.51
-    )  # cP
+    oil_viscosity_grid = bores.uniform_grid(grid_shape=grid_shape, value=0.51)  # cP
 
     # Oil specific gravity from Table 2 dead oil density at 14.7 psia: 46.244 lb/ft³ (assuming oil is incompressible at STP)
     # oil_specific_gravity = compute_oil_specific_gravity(
@@ -390,75 +384,57 @@ def setup_grid():
     # OIL TABLES
     solution_gor_table = np.column_stack(
         [solution_gor_saturated, solution_gor_saturated]
-    ).astype(np.float32)
-
-    oil_fvf_table = np.column_stack([oil_fvf_values, oil_fvf_values]).astype(
-        np.float32
     )
+
+    oil_fvf_table = np.column_stack([oil_fvf_values, oil_fvf_values])
 
     oil_viscosity_table = np.column_stack(
         [oil_viscosity_saturated, oil_viscosity_saturated]
-    ).astype(np.float32)
+    )
 
-    oil_density_table = np.column_stack(
-        [oil_density_saturated, oil_density_saturated]
-    ).astype(np.float32)
+    oil_density_table = np.column_stack([oil_density_saturated, oil_density_saturated])
 
     # GAS TABLES
-    gas_fvf_table = np.column_stack([gas_fvf_values, gas_fvf_values]).astype(
-        np.float32
-    )
+    gas_fvf_table = np.column_stack([gas_fvf_values, gas_fvf_values])
 
     gas_viscosity_table = np.column_stack(
         [gas_viscosity_saturated, gas_viscosity_saturated]
-    ).astype(np.float32)
+    )
 
-    gas_density_table = np.column_stack(
-        [gas_density_values, gas_density_values]
-    ).astype(np.float32)
+    gas_density_table = np.column_stack([gas_density_values, gas_density_values])
 
     # WATER TABLES (need 3D: n_pressures × n_temperatures × n_salinities)
     # For SPE1, salinity = 0 (fresh water), so n_salinities = 1
     water_fvf_table = np.stack(
         [np.column_stack([water_fvf_values, water_fvf_values])], axis=2
-    ).astype(np.float32)  # Shape: (10, 2, 1)
+    )  # Shape: (10, 2, 1)
 
     water_viscosity_table = np.stack(
         [np.column_stack([water_viscosity_values, water_viscosity_values])], axis=2
-    ).astype(np.float32)
+    )
 
     water_density_table = np.stack(
         [np.column_stack([water_density_values, water_density_values])], axis=2
-    ).astype(np.float32)
+    )
 
     gas_solubility_water_table = np.stack(
-        [
-            np.column_stack(
-                [gas_solubility_water_values, gas_solubility_water_values]
-            )
-        ],
+        [np.column_stack([gas_solubility_water_values, gas_solubility_water_values])],
         axis=2,
-    ).astype(np.float32)
+    )
 
     # Cast to typed arrays for bores
     solution_gor_table = typing.cast(bores.TwoDimensionalGrid, solution_gor_table)
     oil_fvf_table = typing.cast(bores.TwoDimensionalGrid, oil_fvf_table)
-    oil_viscosity_table = typing.cast(
-        bores.TwoDimensionalGrid, oil_viscosity_table
-    )
+    oil_viscosity_table = typing.cast(bores.TwoDimensionalGrid, oil_viscosity_table)
     oil_density_table = typing.cast(bores.TwoDimensionalGrid, oil_density_table)
     gas_fvf_table = typing.cast(bores.TwoDimensionalGrid, gas_fvf_table)
-    gas_viscosity_table = typing.cast(
-        bores.TwoDimensionalGrid, gas_viscosity_table
-    )
+    gas_viscosity_table = typing.cast(bores.TwoDimensionalGrid, gas_viscosity_table)
     gas_density_table = typing.cast(bores.TwoDimensionalGrid, gas_density_table)
     water_fvf_table = typing.cast(bores.ThreeDimensionalGrid, water_fvf_table)
     water_viscosity_table = typing.cast(
         bores.ThreeDimensionalGrid, water_viscosity_table
     )
-    water_density_table = typing.cast(
-        bores.ThreeDimensionalGrid, water_density_table
-    )
+    water_density_table = typing.cast(bores.ThreeDimensionalGrid, water_density_table)
     gas_solubility_water_table = typing.cast(
         bores.ThreeDimensionalGrid, gas_solubility_water_table
     )
@@ -633,10 +609,10 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         well_name="GAS-INJ",
         perforating_intervals=[((0, 0, 0), (0, 0, 0))],
         radius=0.25,
-        control=bores.ConstantRateControl(
+        control=bores.AdaptiveRateControl(
             target_rate=100.0e6,  # 100 MMscf/D
+            bhp_limit=12_000.0,  # Max injection BHP (psia)
             clamp=bores.InjectionClamp(),
-            bhp_limit=5200,
         ),
         injected_fluid=bores.InjectedFluid(
             name="Gas",
@@ -653,9 +629,9 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         well_name="OIL-PROD",
         perforating_intervals=[((9, 9, 2), (9, 9, 2))],
         radius=0.25,
-        control=bores.PrimaryPhaseRateControl(
+        control=bores.CoupledRateControl(
             primary_phase="oil",
-            primary_control=bores.AdaptiveBHPRateControl(
+            primary_control=bores.AdaptiveRateControl(
                 target_rate=-20e3,  # 20 MSTB/D production
                 bhp_limit=1000.0,  # min BHP 1000 psia
                 clamp=bores.ProductionClamp(),
@@ -693,7 +669,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     timer = bores.Timer(
         initial_step_size=bores.Time(days=5.0),
         max_step_size=bores.Time(days=30.0),
-        min_step_size=bores.Time(hours=1.0),
+        min_step_size=bores.Time(minutes=20.0),
         simulation_time=bores.Time(years=5.0),
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
@@ -752,12 +728,10 @@ def run_simulation(Path, bores, store):
         pvt_data_path=Path("./benchmarks/runs/spe1/setup/pvt.h5"),
     )
 
-
     def GOR_gte_20_000(state: bores.ModelState[bores.ThreeDimensions]) -> bool:
         analyst = bores.ModelAnalyst([state])
         rates = analyst.instantaneous_production_rates(cells=[(9, 9, 2)])
         return rates.gas_oil_ratio >= 20_000
-
 
     last_state = None
     with bores.StateStream(run, store=store, background_io=True) as stream:
@@ -771,7 +745,7 @@ def run_simulation(Path, bores, store):
 
 @app.cell
 def load_states(stream):
-    states = list(stream.replay(steps=None))
+    states = list(stream.replay(steps=lambda s: s % 20 == 0))
     return (states,)
 
 
@@ -997,7 +971,7 @@ def fluid_cut_plots(bores, gor_history, np, water_cut_history):
 def oil_production_plot(analyst, bores, np):
     # Production & Injection
     oil_production_history = analyst.oil_production_history(
-        interval=1, cumulative=False, from_step=1
+        interval=1, cumulative=True, from_step=1
     )
     oil_production_fig = bores.make_series_plot(
         data={
@@ -1176,7 +1150,7 @@ def recovery_plots(analyst, bores, np, recovery_efficiency_history):
 @app.cell
 def _(analyst):
     mbe = analyst.material_balance_error()
-    print(mbe.water_mbe)
+    print(mbe.total_mbe)
     return
 
 
@@ -1206,9 +1180,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.plotly3d.DataVisualizer()
-    property = "water-sat"
+    property = "oil-sat"
     figures = []
-    timesteps = [2]
+    timesteps = [50]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

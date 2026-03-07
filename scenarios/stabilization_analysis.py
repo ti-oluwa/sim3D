@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.20.4"
 app = marimo.App(width="full")
 
 
@@ -95,6 +95,13 @@ def _(bores, itertools, np, states):
         oil_water_capillary_pressure_history,
         water_saturation_history,
     )
+
+
+@app.cell
+def _(analyst):
+    mbe = analyst.material_balance_error()
+    print(mbe.total_mbe)
+    return
 
 
 @app.cell

@@ -124,7 +124,7 @@ injector = bores.injection_well(
     well_name="INJ-1",
     perforating_intervals=[((0, 0, 0), (0, 0, 2))],
     radius=0.25,  # ft
-    control=bores.ConstantRateControl(
+    control=bores.RateControl(
         target_rate=8000.0, # 8000 STB/day
         bhp_limit=5000,
         clamp=bores.InjectionClamp(),
@@ -138,14 +138,14 @@ injector = bores.injection_well(
 )
 
 # Production well in opposite corner (9,9) perforated across all 3 layers.
-# PrimaryPhaseRateControl fixes the oil rate; water and gas flow naturally.
+# CoupledRateControl fixes the oil rate; water and gas flow naturally.
 producer = bores.production_well(
     well_name="PROD-1",
     perforating_intervals=[((9, 9, 0), (9, 9, 2))],
     radius=0.25,  # ft
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
-        primary_control=bores.AdaptiveBHPRateControl(
+        primary_control=bores.AdaptiveRateControl(
             target_rate=-10_000.0,    # produce 10,000 STB/day of oil
             target_phase="oil",
             bhp_limit=1000.0,      # never drop below 1000 psi
@@ -265,7 +265,7 @@ Each well needs a name, one or more perforating intervals (defined as pairs of g
 
     BORES uses a consistent sign convention throughout the entire framework: **positive values mean injection** (fluid flowing into the reservoir) and **negative values mean production** (fluid flowing out). This applies to well rates, flux boundaries, and all internal flow calculations. When you specify `target_rate=-500.0` for a producer, the negative sign tells BORES this is a production rate.
 
-The `PrimaryPhaseRateControl` on the producer is the standard approach in reservoir simulation. You fix the oil rate (the primary phase) at -500 STB/day, and the simulator computes the BHP needed to deliver that rate. Water and gas then produce at their natural rates at the resulting BHP. The inner `AdaptiveBHPRateControl` handles the automatic switch from rate to BHP mode when the well can no longer sustain the target rate without dropping below 1000 psi.
+The `CoupledRateControl` on the producer is the standard approach in reservoir simulation. You fix the oil rate (the primary phase) at -500 STB/day, and the simulator computes the BHP needed to deliver that rate. Water and gas then produce at their natural rates at the resulting BHP. The inner `AdaptiveRateControl` handles the automatic switch from rate to BHP mode when the well can no longer sustain the target rate without dropping below 1000 psi.
 
 ### Rock-Fluid Properties
 

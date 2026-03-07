@@ -326,13 +326,13 @@ def normalize_saturations(
     saturation_epsilon: float,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
-    Clamp saturations values to zero and normalize saturations to sum = 1.
+    Clamp saturations values (in-place) to zero and normalize saturations to sum = 1.
 
     :param water_saturation_grid: 3D grid of water saturations.
     :param oil_saturation_grid: 3D grid of oil saturations.
     :param gas_saturation_grid: 3D grid of gas saturations.
     :param saturation_epsilon: Small threshold to avoid division by zero.
-    :return: (water_sat, oil_sat, gas_sat)
+    :return: Tuple of normalized saturation grids (water_sat, oil_sat, gas_sat)
     """
     # Get grid shape
     nx, ny, nz = water_saturation_grid.shape

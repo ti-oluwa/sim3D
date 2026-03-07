@@ -10,7 +10,7 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
-from bores.diffusivity.base import (
+from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_rate_is_negative,
     _warn_production_rate_is_positive,
@@ -27,7 +27,7 @@ from bores.types import (
 )
 from bores.utils import clip
 from bores.wells import Wells
-from bores.wells.controls import PrimaryPhaseRateControl
+from bores.wells.controls import CoupledRateControl
 
 __all__ = ["evolve_miscible_saturation", "evolve_saturation"]
 
@@ -101,6 +101,8 @@ def evolve_saturation(
     production_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
+    pressure_change_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    pad_width: int = 1,
 ) -> EvolutionResult[ExplicitSaturationSolution, SaturationEvolutionMeta]:
     """
     Computes the new/updated saturation distribution for water, oil, and gas
@@ -119,6 +121,7 @@ def evolve_saturation(
     :param config: Simulation config and parameters.
     :param injection_grid: Object supporting setitem to set cell injection rates for each phase in ft³/day.
     :param production_grid: Object supporting setitem to set cell production rates for each phase in ft³/day.
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: A tuple of 3-Dimensional numpy arrays representing the updated saturation distributions
         for water, oil, and gas, respectively.
         (updated_water_saturation_grid, updated_oil_saturation_grid, updated_gas_saturation_grid)
@@ -231,13 +234,14 @@ def evolve_saturation(
             time_step=time_step,
             time_step_size=time_step_size,
             config=config,
+            pad_width=pad_width,
             injection_grid=injection_grid,
             production_grid=production_grid,
             dtype=dtype,
         )
     )
 
-    # Apply saturation updates
+    # Apply saturation updates with PVT volume correction
     (
         updated_water_saturation_grid,
         updated_oil_saturation_grid,
@@ -263,6 +267,11 @@ def evolve_saturation(
         time_step_in_days=time_step_in_days,
         cfl_threshold=config.saturation_cfl_threshold,
         dtype=dtype,
+        pressure_change_grid=pressure_change_grid,
+        oil_compressibility_grid=oil_compressibility_grid,
+        water_compressibility_grid=water_compressibility_grid,
+        gas_compressibility_grid=gas_compressibility_grid,
+        rock_compressibility=rock_properties.compressibility,
     )
     max_oil_saturation_change = np.max(
         np.abs(updated_oil_saturation_grid - current_oil_saturation_grid)
@@ -862,6 +871,7 @@ def compute_well_rate_grids(
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ],
     dtype: np.typing.DTypeLike,
+    pad_width: int = 1,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
     Compute well rates for all cells (injection + production).
@@ -889,6 +899,7 @@ def compute_well_rate_grids(
     :param injection_grid: Optional 3D grid to record injection rates (water, oil, gas).
     :param production_grid: Optional 3D grid to record production rates (water, oil, gas).
     :param dtype: Numpy data type for computations.
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: (net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid) (ft³/day)
     """
     # Initialize well rate grids
@@ -903,11 +914,11 @@ def compute_well_rate_grids(
     )
 
     # Process all injection wells (compute total WI + rates in single pass)
-    for injection_well in wells.injection_wells:
-        if not injection_well.is_open or injection_well.injected_fluid is None:
+    for well in wells.injection_wells:
+        if not well.is_open or well.injected_fluid is None:
             continue
 
-        injected_fluid = injection_well.injected_fluid
+        injected_fluid = well.injected_fluid
         injected_phase = injected_fluid.phase
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
@@ -922,11 +933,12 @@ def compute_well_rate_grids(
         total_well_index = 0.0
 
         # Iterate over perforated cells to compute total WI and cache well indices
-        for start, end in injection_well.perforating_intervals:
+        # Offset well coordinates by pad_width to account for ghost cells
+        for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -935,10 +947,10 @@ def compute_well_rate_grids(
                     absolute_permeability.y[i, j, k],
                     absolute_permeability.z[i, j, k],
                 )
-                well_index = injection_well.get_well_index(
+                well_index = well.get_well_index(
                     interval_thickness=interval_thickness,
                     permeability=permeability,
-                    skin_factor=injection_well.skin_factor,
+                    skin_factor=well.skin_factor,
                 )
                 well_index_cache.append(((i, j, k), well_index))
                 total_well_index += well_index
@@ -983,25 +995,43 @@ def compute_well_rate_grids(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
-            # Since phase relative mobility does not include formation volume factor
-            cell_injection_rate = injection_well.get_flow_rate(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                well_index=well_index,
-                phase_mobility=phase_mobility,
-                fluid=injected_fluid,
-                fluid_compressibility=phase_compressibility,
-                use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=phase_fvf,
-                allocation_fraction=allocation_fraction,
-                # Do not pass reservoir fluid PVT tables for injected fluid
-                pvt_tables=None,
-            )
+            if well.control.is_bhp_control():
+                # BHP-controlled injection: use phase mobility
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=phase_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+            else:
+                total_mobility = (
+                    typing.cast(float, water_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                )
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=total_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
-                    well_name=injection_well.name,
+                    well_name=well.name,
                     cell=(i, j, k),
                     time=time_step * time_step_size,
                     rate_unit="ft³/day"
@@ -1031,8 +1061,8 @@ def compute_well_rate_grids(
             net_gas_well_rate_grid[i, j, k] += cell_gas_injection_rate
 
     # Process all production wells (compute total WI + rates in single pass)
-    for production_well in wells.production_wells:
-        if not production_well.is_open:
+    for well in wells.production_wells:
+        if not well.is_open:
             continue
 
         # Cache to store (cell_location, well_index) pairs
@@ -1040,11 +1070,12 @@ def compute_well_rate_grids(
         total_well_index = 0.0
 
         # Iterate over perforated cells to compute total WI and cache well indices
-        for start, end in production_well.perforating_intervals:
+        # Offset well coordinates by pad_width to account for ghost cells
+        for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -1053,10 +1084,10 @@ def compute_well_rate_grids(
                     absolute_permeability.y[i, j, k],
                     absolute_permeability.z[i, j, k],
                 )
-                well_index = production_well.get_well_index(
+                well_index = well.get_well_index(
                     interval_thickness=interval_thickness,
                     permeability=permeability,
-                    skin_factor=production_well.skin_factor,
+                    skin_factor=well.skin_factor,
                 )
                 well_index_cache.append(((i, j, k), well_index))
                 total_well_index += well_index
@@ -1083,43 +1114,40 @@ def compute_well_rate_grids(
             cell_oil_production_rate = 0.0
             cell_gas_production_rate = 0.0
 
-            # Build primary phase context if using PrimaryPhaseRateControl
             primary_phase_kwargs: dict = {}
-            if isinstance(production_well.control, PrimaryPhaseRateControl):
-                primary_phase_kwargs = (
-                    production_well.control.build_primary_phase_context(
-                        produced_fluids=production_well.produced_fluids,
-                        oil_mobility=typing.cast(
-                            float, oil_relative_mobility_grid[i, j, k]
-                        ),
-                        water_mobility=typing.cast(
-                            float, water_relative_mobility_grid[i, j, k]
-                        ),
-                        gas_mobility=typing.cast(
-                            float, gas_relative_mobility_grid[i, j, k]
-                        ),
-                        oil_fvf=typing.cast(
-                            float, oil_formation_volume_factor_grid[i, j, k]
-                        ),
-                        water_fvf=typing.cast(
-                            float, water_formation_volume_factor_grid[i, j, k]
-                        ),
-                        gas_fvf=typing.cast(
-                            float, gas_formation_volume_factor_grid[i, j, k]
-                        ),
-                        oil_compressibility=typing.cast(
-                            float, oil_compressibility_grid[i, j, k]
-                        ),
-                        water_compressibility=typing.cast(
-                            float, water_compressibility_grid[i, j, k]
-                        ),
-                        gas_compressibility=typing.cast(
-                            float, gas_compressibility_grid[i, j, k]
-                        ),
-                    )
+            if isinstance(well.control, CoupledRateControl):
+                primary_phase_kwargs = well.control.build_primary_phase_context(
+                    produced_fluids=well.produced_fluids,
+                    oil_mobility=typing.cast(
+                        float, oil_relative_mobility_grid[i, j, k]
+                    ),
+                    water_mobility=typing.cast(
+                        float, water_relative_mobility_grid[i, j, k]
+                    ),
+                    gas_mobility=typing.cast(
+                        float, gas_relative_mobility_grid[i, j, k]
+                    ),
+                    oil_fvf=typing.cast(
+                        float, oil_formation_volume_factor_grid[i, j, k]
+                    ),
+                    water_fvf=typing.cast(
+                        float, water_formation_volume_factor_grid[i, j, k]
+                    ),
+                    gas_fvf=typing.cast(
+                        float, gas_formation_volume_factor_grid[i, j, k]
+                    ),
+                    oil_compressibility=typing.cast(
+                        float, oil_compressibility_grid[i, j, k]
+                    ),
+                    water_compressibility=typing.cast(
+                        float, water_compressibility_grid[i, j, k]
+                    ),
+                    gas_compressibility=typing.cast(
+                        float, gas_compressibility_grid[i, j, k]
+                    ),
                 )
 
-            for produced_fluid in production_well.produced_fluids:
+            for produced_fluid in well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = typing.cast(
@@ -1157,7 +1185,7 @@ def compute_well_rate_grids(
                 )
                 # The rate returned here is in bbls/day for oil and water, and ft³/day for gas
                 # Since phase relative mobility does not include formation volume factor
-                production_rate = production_well.get_flow_rate(
+                production_rate = well.get_flow_rate(
                     pressure=cell_oil_pressure,
                     temperature=cell_temperature,
                     well_index=well_index,
@@ -1170,15 +1198,11 @@ def compute_well_rate_grids(
                     pvt_tables=config.pvt_tables,
                     **primary_phase_kwargs,
                 )
-                print()
-                print(
-                    f"Produced {str(produced_phase).upper()} rate: {production_rate}; FVF {phase_fvf}"
-                )
-                print(f"{str(produced_phase).upper()} Mobility: ", phase_mobility)
+
                 if production_rate > 0.0 and config.warn_well_anomalies:
                     _warn_production_rate_is_positive(
                         production_rate=production_rate,
-                        well_name=production_well.name,
+                        well_name=well.name,
                         cell=(i, j, k),
                         time=time_step * time_step_size,
                         rate_unit="ft³/day"
@@ -1234,11 +1258,27 @@ def apply_saturation_updates(
     time_step_in_days: float,
     cfl_threshold: float,
     dtype: np.typing.DTypeLike,
+    pressure_change_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    oil_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    water_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    rock_compressibility: float = 0.0,
 ) -> typing.Tuple[
     ThreeDimensionalGrid, ThreeDimensionalGrid, ThreeDimensionalGrid, OneDimensionalGrid
 ]:
     """
-    Apply saturation updates with CFL criteria checking.
+    Apply saturation updates with CFL criteria checking and PVT volume correction.
+
+    In IMPES, the pressure equation includes compressibility so the saturation
+    transport must too. If not, we would creates a volume balance mismatch where So + Sw + Sg
+    drifts from 1.0 over time. The PVT correction accounts for fluid expansion /
+    contraction and pore volume change due to the pressure change:
+
+        ΔSα_pvt = Sα x (cα + cf) x (-ΔP)
+
+    This ensures each phase's saturation properly reflects both transport and
+    pressure-driven volume changes, maintaining So + Sw + Sg ≈ 1.0 without
+    artificial proportional normalization that would inflate immobile phases.
 
     :param water_saturation_grid: 3D grid of water saturations.
     :param oil_saturation_grid: 3D grid of oil saturations.
@@ -1259,9 +1299,21 @@ def apply_saturation_updates(
     :param time_step_in_days: Time step size in days.
     :param cfl_threshold: Maximum allowed CFL number.
     :param dtype: Numpy data type for computations.
+    :param pressure_change_grid: 3D grid of pressure changes (P_new - P_old) in psi.
+        When provided along with compressibility grids, PVT volume correction is applied.
+    :param oil_compressibility_grid: 3D grid of oil compressibilities (psi⁻¹).
+    :param water_compressibility_grid: 3D grid of water compressibilities (psi⁻¹).
+    :param gas_compressibility_grid: 3D grid of gas compressibilities (psi⁻¹).
+    :param rock_compressibility: Scalar rock (pore) compressibility (psi⁻¹).
     :return: Tuple of (updated_water_sat, updated_oil_sat, updated_gas_sat, cfl_violation_info)
     where `cfl_violation_info` is array [violated (bool), i, j, k, cfl_number, max_cfl]
     """
+    apply_pvt_correction = (
+        pressure_change_grid is not None
+        and oil_compressibility_grid is not None
+        and water_compressibility_grid is not None
+        and gas_compressibility_grid is not None
+    )
     # Initialize updated saturation grids
     updated_water_saturation_grid = water_saturation_grid.copy()
     updated_oil_saturation_grid = oil_saturation_grid.copy()
@@ -1329,32 +1381,73 @@ def apply_saturation_updates(
                     * time_step_in_days
                     / cell_pore_volume
                 )
-                # gas_saturation_change = (
-                #     (net_gas_flux + net_gas_well_rate)
-                #     * time_step_in_days
-                #     / cell_pore_volume
-                # )
-
-                # Update water and oil saturations only, gas saturation reacts
-                new_water_saturation = (
-                    updated_water_saturation_grid[i, j, k] + water_saturation_change
-                )
-                new_oil_saturation = (
-                    updated_oil_saturation_grid[i, j, k] + oil_saturation_change
+                gas_saturation_change = (
+                    (net_gas_flux + net_gas_well_rate)
+                    * time_step_in_days
+                    / cell_pore_volume
                 )
 
+                # Transport-based saturation update
+                old_water_saturation = water_saturation_grid[i, j, k]
+                old_oil_saturation = oil_saturation_grid[i, j, k]
+                old_gas_saturation = gas_saturation_grid[i, j, k]
+
+                new_water_saturation = old_water_saturation + water_saturation_change
+                new_oil_saturation = old_oil_saturation + oil_saturation_change
+                new_gas_saturation = old_gas_saturation + gas_saturation_change
+
+                # PVT volume correction: accounts for fluid expansion/contraction
+                # and pore volume change due to pressure change.
+                # ΔSα_pvt = Sα_old x (cα + cf) x (-ΔP)
+                # When pressure decreases: fluids expand, pore volume contracts so Sα increases.
+                # When pressure increases: fluids contract, pore volume expands so Sα decreases.
+                if apply_pvt_correction:
+                    delta_pressure = pressure_change_grid[i, j, k]  # type: ignore[index]
+                    negative_delta_pressure = -delta_pressure
+
+                    new_oil_saturation += (
+                        old_oil_saturation
+                        * (
+                            oil_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+                    new_water_saturation += (
+                        old_water_saturation
+                        * (
+                            water_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+                    new_gas_saturation += (
+                        old_gas_saturation
+                        * (
+                            gas_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+
+                # Clamp negative saturations
                 if new_water_saturation < 0.0:
                     new_water_saturation = 0.0
                 if new_oil_saturation < 0.0:
                     new_oil_saturation = 0.0
-
-                updated_water_saturation_grid[i, j, k] = new_water_saturation
-                updated_oil_saturation_grid[i, j, k] = new_oil_saturation
-
-                new_gas_saturation = 1.0 - new_water_saturation - new_oil_saturation
                 if new_gas_saturation < 0.0:
                     new_gas_saturation = 0.0
 
+                # Residual volume balance correction: apply any remaining tiny
+                # numerical gap to oil (the dominant phase) rather than
+                # proportional normalization which would inflate immobile phases.
+                total_saturation = (
+                    new_water_saturation + new_oil_saturation + new_gas_saturation
+                )
+                if abs(total_saturation - 1.0) > 1e-12:
+                    new_oil_saturation += 1.0 - total_saturation
+                    if new_oil_saturation < 0.0:
+                        new_oil_saturation = 0.0
+
+                updated_water_saturation_grid[i, j, k] = new_water_saturation
+                updated_oil_saturation_grid[i, j, k] = new_oil_saturation
                 updated_gas_saturation_grid[i, j, k] = new_gas_saturation
 
     return (
@@ -1383,13 +1476,15 @@ def evolve_miscible_saturation(
     production_grid: typing.Optional[
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ] = None,
+    pressure_change_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    pad_width: int = 1,
 ) -> EvolutionResult[ExplicitSaturationSolution, SaturationEvolutionMeta]:
     """
     Evolve saturations explicitly with Todd-Longstaff miscible displacement.
 
     Solvent (e.g., CO2) can exist as:
-    1. Free gas phase (tracked by gas_saturation)
-    2. Dissolved in oil (tracked by solvent_concentration in oil)
+    1. Free gas phase (tracked by `gas_saturation`)
+    2. Dissolved in oil (tracked by `solvent_concentration` in oil)
 
     :param cell_dimension: Tuple of (cell_size_x, cell_size_y) in feet.
     :param thickness_grid: 3D grid of cell thicknesses (ft).
@@ -1404,6 +1499,7 @@ def evolve_miscible_saturation(
     :param config: Simulation config.
     :param injection_grid: Optional 3D grid to record injection rates (water, oil, gas).
     :param production_grid: Optional 3D grid to record production rates (water, oil, gas).
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: `EvolutionResult` containing updated saturations and solvent concentration
     """
     absolute_permeability = rock_properties.absolute_permeability
@@ -1523,6 +1619,7 @@ def evolve_miscible_saturation(
         time_step=time_step,
         time_step_size=time_step_size,
         config=config,
+        pad_width=pad_width,
         injection_grid=injection_grid,
         production_grid=production_grid,
         dtype=dtype,
@@ -1557,6 +1654,11 @@ def evolve_miscible_saturation(
         cell_size_y=cell_size_y,
         time_step_in_days=time_step_in_days,
         cfl_threshold=cfl_threshold,
+        pressure_change_grid=pressure_change_grid,
+        oil_compressibility_grid=oil_compressibility_grid,
+        water_compressibility_grid=water_compressibility_grid,
+        gas_compressibility_grid=gas_compressibility_grid,
+        rock_compressibility=rock_properties.compressibility,
     )
     max_oil_saturation_change = np.max(
         np.abs(updated_oil_saturation_grid - current_oil_saturation_grid)
@@ -1778,10 +1880,10 @@ def compute_phase_and_solvent_fluxes_from_neighbour(
     :param elevation_grid: 3D grid of cell elevations (ft).
     :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :return: Tuple of (water_flux, oil_flux, gas_flux, solvent_flux_in_oil)
-        1. water_flux: Volumetric flux of water (ft³/day).
-        2. oil_flux: Volumetric flux of oil (ft³/day).
-        3. gas_flux: Volumetric flux of gas (ft³/day).
-        4. solvent_flux_in_oil: Volumetric flux of solvent in oil phase (ft³/day).
+        1. `water_flux`: Volumetric flux of water (ft³/day).
+        2. `oil_flux`: Volumetric flux of oil (ft³/day).
+        3. `gas_flux`: Volumetric flux of gas (ft³/day).
+        4. `solvent_flux_in_oil`: Volumetric flux of solvent in oil phase (ft³/day).
     """
     # Calculate pressure differences relative to current cell (Neighbour - Current)
     # These represent the gradients driving flow from Neighbour to currrent cell, or vice versa
@@ -1942,10 +2044,10 @@ def compute_net_phase_and_solvent_flux_contributions(
     :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm).
     :param dtype: Numpy data type for computations.
     :return: Tuple of net flux grids:
-        1. net_water_flux_grid: 3D grid of net water fluxes (ft³/day).
-        2. net_oil_flux_grid: 3D grid of net oil fluxes (ft³/day).
-        3. net_gas_flux_grid: 3D grid of net gas fluxes (ft³/day).
-        4. net_solvent_flux_grid: 3D grid of net solvent fluxes (ft³/day).
+        1. `net_water_flux_grid`: 3D grid of net water fluxes (ft³/day).
+        2. `net_oil_flux_grid`: 3D grid of net oil fluxes (ft³/day).
+        3. `net_gas_flux_grid`: 3D grid of net gas fluxes (ft³/day).
+        4. `net_solvent_flux_grid`: 3D grid of net solvent fluxes (ft³/day).
     """
     # Initialize flux grids
     net_water_flux_grid = np.zeros(
@@ -2213,6 +2315,7 @@ def compute_miscible_well_rate_grids(
         SupportsSetItem[ThreeDimensions, typing.Tuple[float, float, float]]
     ],
     dtype: np.typing.DTypeLike,
+    pad_width: int = 1,
 ) -> typing.Tuple[
     ThreeDimensionalGrid,
     ThreeDimensionalGrid,
@@ -2249,9 +2352,10 @@ def compute_miscible_well_rate_grids(
     :param injection_grid: Optional grid to store injection rates (ft³/day)
     :param production_grid: Optional grid to store production rates (ft³/day)
     :param dtype: Data type for output arrays
+    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
     :return: Tuple of (net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid,
         solvent_injection_concentration_grid, gas_injection_rate_grid)
-        where rates are in ft³/day (volumetric rates) and concentration is dimensionless (-)
+        where rates are in ft³/day (volumetric rates) and concentration is dimensionless.
     """
     # Initialize well rate grids
     net_water_well_rate_grid = np.zeros(
@@ -2271,11 +2375,11 @@ def compute_miscible_well_rate_grids(
     )
 
     # Process all injection wells (compute total WI + rates in single pass)
-    for injection_well in wells.injection_wells:
-        if not injection_well.is_open or injection_well.injected_fluid is None:
+    for well in wells.injection_wells:
+        if not well.is_open or well.injected_fluid is None:
             continue
 
-        injected_fluid = injection_well.injected_fluid
+        injected_fluid = well.injected_fluid
         injected_phase = injected_fluid.phase
 
         # Cache to store (cell_location, well_index) pairs
@@ -2290,11 +2394,12 @@ def compute_miscible_well_rate_grids(
         gas_solubility_in_water_grid = fluid_properties.gas_solubility_in_water_grid
 
         # Iterate over perforated cells to compute total WI and cache well indices
-        for start, end in injection_well.perforating_intervals:
+        # Offset well coordinates by pad_width to account for ghost cells
+        for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -2303,10 +2408,10 @@ def compute_miscible_well_rate_grids(
                     absolute_permeability.y[i, j, k],
                     absolute_permeability.z[i, j, k],
                 )
-                well_index = injection_well.get_well_index(
+                well_index = well.get_well_index(
                     interval_thickness=interval_thickness,
                     permeability=permeability,
-                    skin_factor=injection_well.skin_factor,
+                    skin_factor=well.skin_factor,
                 )
                 well_index_cache.append(((i, j, k), well_index))
                 total_well_index += well_index
@@ -2350,23 +2455,43 @@ def compute_miscible_well_rate_grids(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            cell_injection_rate = injection_well.get_flow_rate(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                well_index=well_index,
-                phase_mobility=phase_mobility,
-                fluid=injected_fluid,
-                fluid_compressibility=phase_compressibility,
-                use_pseudo_pressure=use_pseudo_pressure,
-                formation_volume_factor=phase_fvf,
-                allocation_fraction=allocation_fraction,
-                # Do not pass reservoir fluid PVT tables for injected fluid
-                pvt_tables=None,
-            )
+            if well.control.is_bhp_control():
+                # BHP-controlled injection: use phase mobility
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=phase_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+            else:
+                total_mobility = (
+                    typing.cast(float, water_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
+                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                )
+                cell_injection_rate = well.get_flow_rate(
+                    pressure=cell_oil_pressure,
+                    temperature=cell_temperature,
+                    well_index=well_index,
+                    phase_mobility=total_mobility,
+                    fluid=injected_fluid,
+                    fluid_compressibility=phase_compressibility,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    pvt_tables=None,
+                )
+
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
                     injection_rate=cell_injection_rate,
-                    well_name=injection_well.name,
+                    well_name=well.name,
                     cell=(i, j, k),
                     time=time_step * time_step_size,
                     rate_unit="ft³/day"
@@ -2411,8 +2536,8 @@ def compute_miscible_well_rate_grids(
             gas_injection_rate_grid[i, j, k] = cell_gas_injection_rate
 
     # Process all production wells (compute total WI + rates in single pass)
-    for production_well in wells.production_wells:
-        if not production_well.is_open:
+    for well in wells.production_wells:
+        if not well.is_open:
             continue
 
         # Cache to store (cell_location, well_index) pairs
@@ -2420,11 +2545,12 @@ def compute_miscible_well_rate_grids(
         total_well_index = 0.0
 
         # Iterate over perforated cells to compute total WI and cache well indices
-        for start, end in production_well.perforating_intervals:
+        # Offset well coordinates by pad_width to account for ghost cells
+        for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0], end[0] + 1),
-                range(start[1], end[1] + 1),
-                range(start[2], end[2] + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -2433,10 +2559,10 @@ def compute_miscible_well_rate_grids(
                     absolute_permeability.y[i, j, k],
                     absolute_permeability.z[i, j, k],
                 )
-                well_index = production_well.get_well_index(
+                well_index = well.get_well_index(
                     interval_thickness=interval_thickness,
                     permeability=permeability,
-                    skin_factor=production_well.skin_factor,
+                    skin_factor=well.skin_factor,
                 )
                 well_index_cache.append(((i, j, k), well_index))
                 total_well_index += well_index
@@ -2463,43 +2589,41 @@ def compute_miscible_well_rate_grids(
             cell_oil_production_rate = 0.0
             cell_gas_production_rate = 0.0
 
-            # Build primary phase context if using PrimaryPhaseRateControl
+            # Build primary phase context if using CoupledRateControl
             primary_phase_kwargs: dict = {}
-            if isinstance(production_well.control, PrimaryPhaseRateControl):
-                primary_phase_kwargs = (
-                    production_well.control.build_primary_phase_context(
-                        produced_fluids=production_well.produced_fluids,
-                        oil_mobility=typing.cast(
-                            float, oil_relative_mobility_grid[i, j, k]
-                        ),
-                        water_mobility=typing.cast(
-                            float, water_relative_mobility_grid[i, j, k]
-                        ),
-                        gas_mobility=typing.cast(
-                            float, gas_relative_mobility_grid[i, j, k]
-                        ),
-                        oil_fvf=typing.cast(
-                            float, oil_formation_volume_factor_grid[i, j, k]
-                        ),
-                        water_fvf=typing.cast(
-                            float, water_formation_volume_factor_grid[i, j, k]
-                        ),
-                        gas_fvf=typing.cast(
-                            float, gas_formation_volume_factor_grid[i, j, k]
-                        ),
-                        oil_compressibility=typing.cast(
-                            float, oil_compressibility_grid[i, j, k]
-                        ),
-                        water_compressibility=typing.cast(
-                            float, water_compressibility_grid[i, j, k]
-                        ),
-                        gas_compressibility=typing.cast(
-                            float, gas_compressibility_grid[i, j, k]
-                        ),
-                    )
+            if isinstance(well.control, CoupledRateControl):
+                primary_phase_kwargs = well.control.build_primary_phase_context(
+                    produced_fluids=well.produced_fluids,
+                    oil_mobility=typing.cast(
+                        float, oil_relative_mobility_grid[i, j, k]
+                    ),
+                    water_mobility=typing.cast(
+                        float, water_relative_mobility_grid[i, j, k]
+                    ),
+                    gas_mobility=typing.cast(
+                        float, gas_relative_mobility_grid[i, j, k]
+                    ),
+                    oil_fvf=typing.cast(
+                        float, oil_formation_volume_factor_grid[i, j, k]
+                    ),
+                    water_fvf=typing.cast(
+                        float, water_formation_volume_factor_grid[i, j, k]
+                    ),
+                    gas_fvf=typing.cast(
+                        float, gas_formation_volume_factor_grid[i, j, k]
+                    ),
+                    oil_compressibility=typing.cast(
+                        float, oil_compressibility_grid[i, j, k]
+                    ),
+                    water_compressibility=typing.cast(
+                        float, water_compressibility_grid[i, j, k]
+                    ),
+                    gas_compressibility=typing.cast(
+                        float, gas_compressibility_grid[i, j, k]
+                    ),
                 )
 
-            for produced_fluid in production_well.produced_fluids:
+            for produced_fluid in well.produced_fluids:
                 produced_phase = produced_fluid.phase
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = typing.cast(
@@ -2532,7 +2656,7 @@ def compute_miscible_well_rate_grids(
                         float, oil_formation_volume_factor_grid[i, j, k]
                     )
 
-                production_rate = production_well.get_flow_rate(
+                production_rate = well.get_flow_rate(
                     pressure=cell_oil_pressure,
                     temperature=cell_temperature,
                     well_index=well_index,
@@ -2550,7 +2674,7 @@ def compute_miscible_well_rate_grids(
                 if production_rate > 0.0 and config.warn_well_anomalies:
                     _warn_production_rate_is_positive(
                         production_rate=production_rate,
-                        well_name=production_well.name,
+                        well_name=well.name,
                         cell=(i, j, k),
                         time=time_step * time_step_size,
                         rate_unit="ft³/day"
@@ -2612,6 +2736,11 @@ def apply_saturation_and_solvent_updates(
     cell_size_y: float,
     time_step_in_days: float,
     cfl_threshold: float,
+    pressure_change_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    oil_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    water_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    gas_compressibility_grid: typing.Optional[ThreeDimensionalGrid] = None,
+    rock_compressibility: float = 0.0,
 ) -> typing.Tuple[
     ThreeDimensionalGrid,
     ThreeDimensionalGrid,
@@ -2620,7 +2749,7 @@ def apply_saturation_and_solvent_updates(
     OneDimensionalGrid,
 ]:
     """
-    Apply saturation and solvent concentration updates with CFL checking (JIT compiled).
+    Apply saturation and solvent concentration updates with CFL checking.
 
     :param water_saturation_grid: Current water saturation (-)
     :param oil_saturation_grid: Current oil saturation (-)
@@ -2647,6 +2776,12 @@ def apply_saturation_and_solvent_updates(
     :return: Tuple of (updated_water_sat, updated_oil_sat, updated_gas_sat, updated_solvent_conc, cfl_violation_info)
              where `cfl_violation_info` is [violated, i, j, k, cfl_number, max_cfl]
     """
+    apply_pvt_correction = (
+        pressure_change_grid is not None
+        and oil_compressibility_grid is not None
+        and water_compressibility_grid is not None
+        and gas_compressibility_grid is not None
+    )
     nx, ny, nz = water_saturation_grid.shape
 
     # Initialize updated grids
@@ -2714,38 +2849,77 @@ def apply_saturation_and_solvent_updates(
                     cfl_violation[5] = cfl_threshold
                     max_cfl_encountered = cfl_number
 
-                # Total flow rates (advection + wells) in lbm/day
+                # Total flow rates (advection + wells) in ft³/day
                 total_water_flow = net_water_flux + net_water_well_rate
+                total_oil_flow = net_oil_flux + net_oil_well_rate
                 total_gas_flow = net_gas_flux + net_gas_well_rate
 
-                # Update saturations: convert mass to volume by dividing by density
+                # Calculate saturation changes from transport
                 water_saturation_change = (total_water_flow * time_step_in_days) / (
+                    cell_pore_volume
+                )
+                oil_saturation_change = (total_oil_flow * time_step_in_days) / (
                     cell_pore_volume
                 )
                 gas_saturation_change = (total_gas_flow * time_step_in_days) / (
                     cell_pore_volume
                 )
 
-                # Update water and gas saturations only, oil saturation reacts
-                new_water_saturation = (
-                    updated_water_saturation_grid[i, j, k] + water_saturation_change
-                )
-                new_gas_saturation = (
-                    updated_gas_saturation_grid[i, j, k] + gas_saturation_change
-                )
+                # Transport-based saturation update
+                old_water_saturation = water_saturation_grid[i, j, k]
+                old_oil_saturation = oil_saturation
+                old_gas_saturation = gas_saturation_grid[i, j, k]
 
+                new_water_saturation = old_water_saturation + water_saturation_change
+                new_oil_saturation = old_oil_saturation + oil_saturation_change
+                new_gas_saturation = old_gas_saturation + gas_saturation_change
+
+                # PVT volume correction
+                if apply_pvt_correction:
+                    delta_pressure = pressure_change_grid[i, j, k]  # type: ignore[index]
+                    negative_delta_pressure = -delta_pressure
+
+                    new_oil_saturation += (
+                        old_oil_saturation
+                        * (
+                            oil_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+                    new_water_saturation += (
+                        old_water_saturation
+                        * (
+                            water_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+                    new_gas_saturation += (
+                        old_gas_saturation
+                        * (
+                            gas_compressibility_grid[i, j, k] + rock_compressibility  # type: ignore[index]
+                        )
+                        * negative_delta_pressure
+                    )
+
+                # Clamp negative saturations
                 if new_water_saturation < 0.0:
                     new_water_saturation = 0.0
+                if new_oil_saturation < 0.0:
+                    new_oil_saturation = 0.0
                 if new_gas_saturation < 0.0:
                     new_gas_saturation = 0.0
 
+                # Residual volume balance correction
+                total_saturation = (
+                    new_water_saturation + new_oil_saturation + new_gas_saturation
+                )
+                if abs(total_saturation - 1.0) > 1e-12:
+                    new_oil_saturation += 1.0 - total_saturation
+                    if new_oil_saturation < 0.0:
+                        new_oil_saturation = 0.0
+
                 updated_water_saturation_grid[i, j, k] = new_water_saturation
                 updated_gas_saturation_grid[i, j, k] = new_gas_saturation
-
-                new_oil_saturation = 1.0 - new_water_saturation - new_gas_saturation
-                if new_oil_saturation < 0.0:
-                    new_oil_saturation = 0.0
-
                 updated_oil_saturation_grid[i, j, k] = new_oil_saturation
 
                 # Update solvent concentration in oil phase

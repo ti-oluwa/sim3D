@@ -129,7 +129,7 @@ Solver chains add robustness at the cost of potentially longer solve times on di
 You can register custom solver functions using the `@solver_func` decorator. A custom solver must follow the SciPy solver interface:
 
 ```python
-from bores.diffusivity.base import solver_func
+from bores.solvers.base import solver_func
 
 @solver_func(name="my_custom_solver")
 def my_solver(A, b, x0=None, *, rtol=1e-6, atol=0.0, maxiter=None, M=None, callback=None):
@@ -146,7 +146,7 @@ config = bores.Config(
 )
 ```
 
-The `@solver_func` decorator registers your function in the global solver registry, making it available by name in the `Config`. You can list all registered solvers with `bores.diffusivity.base.list_solver_funcs()`.
+The `@solver_func` decorator registers your function in the global solver registry, making it available by name in the `Config`. You can list all registered solvers with `bores.solvers.base.list_solver_funcs()`.
 
 ---
 

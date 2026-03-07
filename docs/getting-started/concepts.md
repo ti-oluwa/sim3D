@@ -194,15 +194,15 @@ When defining a production well, specify a negative target rate. When defining a
 import bores
 
 # Injection well: positive rate means fluid flows INTO the reservoir
-injector_control = bores.ConstantRateControl(
+injector_control = bores.RateControl(
     target_rate=500.0,  # +500 STB/day
     clamp=bores.InjectionClamp(),
 )
 
 # Production well: fix the oil rate, let other phases flow naturally
-producer_control = bores.PrimaryPhaseRateControl(
+producer_control = bores.CoupledRateControl(
     primary_phase=bores.FluidPhase.OIL,
-    primary_control=bores.AdaptiveBHPRateControl(
+    primary_control=bores.AdaptiveRateControl(
         target_rate=-500.0,       # -500 STB/day of oil (production)
         target_phase="oil",
         bhp_limit=1000.0,         # minimum BHP constraint

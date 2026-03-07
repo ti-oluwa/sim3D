@@ -1,12 +1,9 @@
 import logging
 import typing
 
-import attrs
-import numpy as np
-
 from bores.boundary_conditions import BoundaryConditions, BoundaryMetadata, default_bc
 from bores.constants import c
-from bores.diffusivity.base import normalize_saturations
+from bores.solvers.base import normalize_saturations
 from bores.models import FluidProperties, RockProperties
 from bores.types import NDimension, NDimensionalGrid, ThreeDimensions
 
@@ -92,24 +89,14 @@ def apply_boundary_conditions(
         ),
     )
 
-    # # Normalize saturations to ensure So + Sw + Sg = 1.0
-    (
-        normalized_water_saturation,
-        normalized_oil_saturation,
-        normalized_gas_saturation,
-    ) = normalize_saturations(
+    # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
+    normalize_saturations(
         oil_saturation_grid=fluid_properties.oil_saturation_grid,
         water_saturation_grid=fluid_properties.water_saturation_grid,
         gas_saturation_grid=fluid_properties.gas_saturation_grid,
         saturation_epsilon=c.SATURATION_EPSILON,
     )
-    fluid_properties = attrs.evolve(
-        fluid_properties,
-        oil_saturation_grid=normalized_oil_saturation,
-        water_saturation_grid=normalized_water_saturation,
-        gas_saturation_grid=normalized_gas_saturation,
-    )
-    
+
     excluded_fluid_properties = (
         "pressure_grid",
         "oil_saturation_grid",
