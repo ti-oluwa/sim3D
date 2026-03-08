@@ -3,3 +3,8 @@
 from .base import *  # noqa
 from . import config, plotly1d, plotly2d, plotly3d  # noqa
 from .plotly1d import make_series_plot  # noqa
+
+try:
+    from . import pyvista3d  # noqa
+except ImportError:
+    pass

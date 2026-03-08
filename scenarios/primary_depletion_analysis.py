@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.20.4"
 app = marimo.App(width="full")
 
 
@@ -17,9 +17,9 @@ def _():
     store = bores.ZarrStore(
         store=Path("./scenarios/runs/primary_depletion/results/primary_depletion.zarr")
     )
-    stream = bores.StateStream(store=store, auto_replay=True)
+    stream = bores.StateStream(store=store)
 
-    states = list(stream.replay(steps=None))
+    states = list(stream.replay(steps=lambda s: s % 30 == 0))
     return bores, itertools, np, states
 
 
@@ -342,27 +342,6 @@ def _(analyst, bores, np):
 
 @app.cell
 def _(analyst, bores, np):
-    gas_injection_history = analyst.gas_injection_history(
-        interval=1, cumulative=False, from_step=1
-    )
-    gas_injection_fig = bores.make_series_plot(
-        data={
-            # "Water Injection": np.array(list(water_injection_history)),
-            "Gas Injection": np.array(list(gas_injection_history)),
-        },
-        title="Gas Injection Analysis (CASE 2)",
-        x_label="Time Step",
-        y_label="Injection (SCF)",
-        marker_sizes=6,
-        width=720,
-        height=460,
-    )
-    gas_injection_fig.show()
-    return
-
-
-@app.cell
-def _(analyst, bores, np):
     # Cumulative production & injection
     cumulative_oil_production_history = analyst.oil_production_history(
         interval=1, cumulative=True, from_step=1
@@ -612,8 +591,15 @@ def _(analyst, bores, np):
 
 
 @app.cell
+def _(analyst):
+    mbe = analyst.material_balance_error()
+    print(mbe.total_mbe)
+    return
+
+
+@app.cell
 def _(bores):
-    viz = bores.plotly3d.DataVisualizer()
+    viz = bores.pyvista3d.DataVisualizer(bores.pyvista3d.PlotConfig(notebook=True, off_screen=True))
     return (viz,)
 
 
@@ -628,17 +614,19 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="isosurface",
+        plot_type="cell_blocks",
         width=960,
         height=600,
-        opacity=0.67,
-        # labels=labels,
-        aspect_mode="data",
-        z_scale=3.0,
-        marker_size=6,
+        opacity=1,
+        labels=labels,
+        aspect_mode="cube",
+        # z_scale=3.0,
+        marker_size=3,
         show_wells=True,
-        show_surface_marker=True,
+        # show_surface_marker=True,
         show_perforations=True,
+        show_cell_outlines=True,
+        show_edges=True,
         # x_slice=(10, 20),
         # z_slice=(0, 8),
         # isomin=0.6,
@@ -646,9 +634,9 @@ def _(bores, states, viz):
         # cmax=1,
     )
 
-    property = "z"
+    property = "oil-viscosity"
     figures = []
-    timesteps = [0, 974]
+    timesteps = [100]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],
@@ -665,6 +653,22 @@ def _(bores, states, viz):
         #     figure.show()
     else:
         figures[0].show()
+    return
+
+
+@app.cell
+def _(states, viz):
+    viz.animate(
+        states,
+        property="oil-saturation",
+        plot_type="cell_blocks",
+        output_gif="oil_saturation.gif",
+        frame_duration=250,
+        # step_size=5,  # Every 5th timestep
+        cmin=0.0,
+        cmax=1.0,  # Fixed range for consistent coloring
+        opacity=1.0,
+    )
     return
 
 

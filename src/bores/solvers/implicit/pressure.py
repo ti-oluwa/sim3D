@@ -6,7 +6,7 @@ import typing
 import attrs
 import numba
 import numpy as np
-from scipy.sparse import lil_matrix
+from scipy.sparse import coo_matrix, lil_matrix
 
 from bores._precision import get_dtype
 from bores.config import Config
@@ -121,7 +121,7 @@ def evolve_pressure(
         capillary_pressure_grids
     )
 
-    # Compute mobility grids for x, y, z directions using njitted function
+    # Compute mobility grids for x, y, z directions
     x_mobilities, y_mobilities, z_mobilities = compute_mobility_grids(
         absolute_permeability_x=absolute_permeability.x,
         absolute_permeability_y=absolute_permeability.y,
@@ -131,36 +131,28 @@ def evolve_pressure(
         gas_relative_mobility_grid=gas_relative_mobility_grid,
         md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
     )
-
-    # Unpack mobility grids by direction
     water_mobility_grid_x, oil_mobility_grid_x, gas_mobility_grid_x = x_mobilities
     water_mobility_grid_y, oil_mobility_grid_y, gas_mobility_grid_y = y_mobilities
     water_mobility_grid_z, oil_mobility_grid_z, gas_mobility_grid_z = z_mobilities
 
     time_step_size_in_days = time_step_size * c.DAYS_PER_SECOND
-
-    # Initialize sparse coefficient matrix and RHS vector
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
-    A = lil_matrix((interior_cell_count, interior_cell_count), dtype=dtype)  # type: ignore
-    b = np.zeros(interior_cell_count, dtype=dtype, order="C")
 
-    # Initialize accumulation terms for all cells
-    add_accumulation_terms(
-        A=A,
-        b=b,
+    # Compute accumulation terms (diagonal and RHS contributions)
+    diagonal_values, rhs_values = compute_accumulation_arrays(
+        cell_count_x=cell_count_x,
+        cell_count_y=cell_count_y,
+        cell_count_z=cell_count_z,
+        thickness_grid=thickness_grid,
         porosity_grid=porosity_grid,
         total_compressibility_grid=total_compressibility_grid,  # type: ignore
-        thickness_grid=thickness_grid,
         current_oil_pressure_grid=current_oil_pressure_grid,
         cell_size_x=cell_size_x,
         cell_size_y=cell_size_y,
         time_step_size_in_days=time_step_size_in_days,
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
         dtype=dtype,
     )
-    # Add face transmissibilities and fluxes
+    # Compute face transmissibilities (off-diagonal entries and additional diagonal/RHS contributions)
     # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
     # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
     # and say the acceleration due to gravity was changed to 12.0 ft/s² for some reason (say g on Mars)
@@ -169,35 +161,57 @@ def evolve_pressure(
         c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
-    add_face_transmissibilities_and_fluxes(
-        A=A,
-        b=b,
-        thickness_grid=thickness_grid,
-        water_mobility_grid_x=water_mobility_grid_x,
-        oil_mobility_grid_x=oil_mobility_grid_x,
-        gas_mobility_grid_x=gas_mobility_grid_x,
-        water_mobility_grid_y=water_mobility_grid_y,
-        oil_mobility_grid_y=oil_mobility_grid_y,
-        gas_mobility_grid_y=gas_mobility_grid_y,
-        water_mobility_grid_z=water_mobility_grid_z,
-        oil_mobility_grid_z=oil_mobility_grid_z,
-        gas_mobility_grid_z=gas_mobility_grid_z,
-        oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-        gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-        oil_density_grid=oil_density_grid,
-        water_density_grid=water_density_grid,
-        gas_density_grid=gas_density_grid,
-        elevation_grid=elevation_grid,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        gravitational_constant=gravitational_constant,
-        dtype=dtype,
+    rows, cols, off_diag_values, diagonal_additions, rhs_additions = (
+        compute_face_transmissibility_arrays(
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            water_mobility_grid_x=water_mobility_grid_x,
+            oil_mobility_grid_x=oil_mobility_grid_x,
+            gas_mobility_grid_x=gas_mobility_grid_x,
+            water_mobility_grid_y=water_mobility_grid_y,
+            oil_mobility_grid_y=oil_mobility_grid_y,
+            gas_mobility_grid_y=gas_mobility_grid_y,
+            water_mobility_grid_z=water_mobility_grid_z,
+            oil_mobility_grid_z=oil_mobility_grid_z,
+            gas_mobility_grid_z=gas_mobility_grid_z,
+            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+            oil_density_grid=oil_density_grid,
+            water_density_grid=water_density_grid,
+            gas_density_grid=gas_density_grid,
+            elevation_grid=elevation_grid,
+            gravitational_constant=gravitational_constant,
+            dtype=dtype,
+        )
     )
-    # Compute well flow rates and add to RHS using extracted function
-    add_well_contributions(
+
+    # Combine diagonal and RHS contributions from accumulation and face terms
+    final_diagonal = diagonal_values + diagonal_additions
+    b = rhs_values + rhs_additions
+
+    # Build sparse matrix using COO format
+    # Diagonal entries
+    diag_rows = np.arange(interior_cell_count, dtype=np.int32)
+    diag_cols = np.arange(interior_cell_count, dtype=np.int32)
+
+    # Combine diagonal and off-diagonal entries into single arrays
+    all_rows = np.concatenate([diag_rows, rows])
+    all_cols = np.concatenate([diag_cols, cols])
+    all_values = np.concatenate([final_diagonal, off_diag_values])
+
+    # Create COO matrix and convert to `lil_matrix` for well modifications
+    A = coo_matrix(
+        (all_values, (all_rows, all_cols)),
+        shape=(interior_cell_count, interior_cell_count),
+        dtype=dtype,  # type: ignore[arg-type]
+    ).tolil()
+
+    # Add well contributions (modifies diagonal entries of A for well productivity indices)
+    A, b = add_well_contributions(
         A=A,
         b=b,
         cell_count_x=cell_count_x,
@@ -376,6 +390,7 @@ def compute_accumulation_arrays(
     return diagonal_values, rhs_values
 
 
+@numba.njit(cache=True)
 def add_accumulation_terms(
     A: lil_matrix,
     b: np.typing.NDArray,
@@ -700,6 +715,7 @@ def compute_face_transmissibility_arrays(
     return rows, cols, off_diag_values, diagonal_additions, rhs_additions
 
 
+@numba.njit(cache=True)
 def add_face_transmissibilities_and_fluxes(
     A: lil_matrix,
     b: np.typing.NDArray,
@@ -869,7 +885,6 @@ def add_well_contributions(
         if not well.is_open or well.injected_fluid is None:
             continue
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 
@@ -1022,7 +1037,6 @@ def add_well_contributions(
         if not well.is_open:
             continue
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 

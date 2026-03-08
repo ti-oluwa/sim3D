@@ -9,15 +9,15 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
+from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
+from bores.grids.pvt import build_total_fluid_compressibility_grid
+from bores.models import FluidProperties, RockProperties
 from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_rate_is_negative,
     _warn_production_rate_is_positive,
     compute_mobility_grids,
 )
-from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
-from bores.grids.pvt import build_total_fluid_compressibility_grid
-from bores.models import FluidProperties, RockProperties
 from bores.types import FluidPhase, ThreeDimensionalGrid, ThreeDimensions
 from bores.wells import Wells
 from bores.wells.controls import CoupledRateControl
@@ -74,7 +74,6 @@ def evolve_pressure(
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
-    # This is P_oil or Pⁿ_{i,j}
     current_oil_pressure_grid = fluid_properties.pressure_grid
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
@@ -702,18 +701,16 @@ def compute_well_rate_grid(
         if not well.is_open or well.injected_fluid is None:
             continue
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 
         # First pass over perforated cells: compute total WI and cache well indices
         # Offset well coordinates by pad_width to account for ghost cells
-        pw = pad_width
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0] + pw, end[0] + pw + 1),
-                range(start[1] + pw, end[1] + pw + 1),
-                range(start[2] + pw, end[2] + pw + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
@@ -837,18 +834,16 @@ def compute_well_rate_grid(
         if not well.is_open:
             continue
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 
         # First pass over perforated cells: compute total WI and cache well indices
         # Offset well coordinates by pad_width to account for ghost cells
-        pw = pad_width
         for start, end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0] + pw, end[0] + pw + 1),
-                range(start[1] + pw, end[1] + pw + 1),
-                range(start[2] + pw, end[2] + pw + 1),
+                range(start[0] + pad_width, end[0] + pad_width + 1),
+                range(start[1] + pad_width, end[1] + pad_width + 1),
+                range(start[2] + pad_width, end[2] + pad_width + 1),
             ):
                 cell_thickness = thickness_grid[i, j, k]
                 interval_thickness = (cell_size_x, cell_size_y, cell_thickness)

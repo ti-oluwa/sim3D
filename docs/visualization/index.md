@@ -126,6 +126,6 @@ export BORES_RECOMMENDED_VOLUME_CELLS=512000  # Target cells after auto-coarseni
 To see the current configuration:
 
 ```python
-from bores.visualization.config import get_config_summary
-print(get_config_summary())
+from bores.visualization.config import config_summary
+print(config_summary())
 ```

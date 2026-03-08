@@ -928,7 +928,6 @@ def compute_well_rate_grids(
         )
         gas_solubility_in_water_grid = fluid_properties.gas_solubility_in_water_grid
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 
@@ -1065,7 +1064,6 @@ def compute_well_rate_grids(
         if not well.is_open:
             continue
 
-        # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
 

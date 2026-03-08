@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.20.4"
 app = marimo.App(width="full")
 
 
@@ -684,7 +684,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     preconditioner_factory = bores.CachedPreconditionerFactory(
         factory="ilu",
         name="cached_ilu",
-        update_frequency=10,
+        update_frequency=15,
         recompute_threshold=0.3,
     )
     preconditioner_factory.register(override=True)
@@ -1180,9 +1180,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.plotly3d.DataVisualizer()
-    property = "oil-sat"
+    property = "pressure"
     figures = []
-    timesteps = [50]
+    timesteps = [100]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

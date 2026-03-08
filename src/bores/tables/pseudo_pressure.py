@@ -105,7 +105,7 @@ def compute_gas_pseudo_pressure(
 
         for i in range(len(split_points) - 1):
             try:
-                segment_result, segment_error = quad(
+                segment_result, _ = quad(
                     func=integrand,
                     a=split_points[i],
                     b=split_points[i + 1],
@@ -127,7 +127,7 @@ def compute_gas_pseudo_pressure(
     else:
         # Single integration for small range
         try:
-            result, error = quad(
+            result, _ = quad(
                 func=integrand,
                 a=p_min,
                 b=p_max,

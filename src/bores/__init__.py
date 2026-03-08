@@ -4,6 +4,16 @@
 3D 3-Phase Black-Oil Reservoir Modelling and Simulation Framework.
 """
 
+import os
+
+import numba
+
+# Configure Numba threading before any imports (must be done before numba JIT compilation)
+# Set numba thread count to match available cores (or from environment variable)
+cpu_count = os.cpu_count() or 1
+numba_threads = int(os.environ.get("NUMBA_NUM_THREADS", cpu_count))
+numba.set_num_threads(numba_threads)
+
 from ._precision import *
 from .analyses import *
 from .boundary_conditions import *
@@ -29,7 +39,7 @@ from .utils import *
 from .visualization import *
 from .wells import *
 
-use_32bit_precision()  
+use_32bit_precision()
 
 
 __version__ = "0.1.0"

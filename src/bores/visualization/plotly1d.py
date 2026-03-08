@@ -3,7 +3,9 @@ Plotly-based 1D Visualization Suite for 1 Dimensional Series and Time-Series Dat
 """
 
 import collections.abc
+import logging
 import typing
+import weakref
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -14,6 +16,54 @@ from plotly.subplots import make_subplots  # type: ignore[import-untyped]
 
 from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
+
+logger = logging.getLogger(__name__)
+
+
+_active_figures: typing.List[weakref.ref] = []
+
+
+def _register_figure(fig: go.Figure) -> None:
+    """Track active figures for memory cleanup."""
+    _active_figures.append(weakref.ref(fig, _on_figure_deleted))
+
+
+def _on_figure_deleted(ref: typing.Any) -> None:
+    """Remove dead weakref from registry."""
+    try:
+        _active_figures.remove(ref)
+    except ValueError:
+        pass
+
+
+def cleanup_figures() -> None:
+    """
+    Release memory from all tracked figures.
+
+    Clears figure data to free memory. Useful after creating large
+    time-series animations or multiple figures. Call when figures are no longer needed.
+
+    Example:
+        ```python
+        from bores.visualization.plotly1d import cleanup_figures
+
+        # Create many figures
+        for i in range(100):
+            plotter.make_plot(...)
+
+        # Free memory when done
+        cleanup_figures()
+        ```
+    """
+    for ref in _active_figures[:]:
+        fig = ref()
+        if fig is not None:
+            try:
+                fig.data = []
+            except (AttributeError, RuntimeError) as exc:
+                logger.debug(f"Failed to cleanup figure: {exc}")
+    _active_figures.clear()
+
 
 SeriesData = typing.Union[
     TwoDimensionalGrid,  # Single series as (n, 2) array with (x, y) pairs
@@ -198,9 +248,9 @@ class BaseRenderer(ABC):
         if isinstance(data, collections.abc.Mapping):
             # Mapping input: {name: data_array}
             for name, series_data in data.items():
-                self.validate_series(series_data=series_data, name=name)
-                series_list.append(series_data)
-                names_list.append(name)
+                self.validate_series(series_data=series_data, name=name)  # type: ignore
+                series_list.append(series_data)  # type: ignore
+                names_list.append(name)  # type: ignore
         elif isinstance(data, collections.abc.Sequence) and not isinstance(
             data, np.ndarray
         ):
@@ -863,7 +913,7 @@ class TornadoRenderer(BaseRenderer):
         # Parse data
         if isinstance(data, collections.abc.Mapping):
             var_names = list(data.keys())
-            values_array = np.array([data[name] for name in var_names])
+            values_array = np.array([data[name] for name in var_names])  # type: ignore
         else:
             if not isinstance(data, np.ndarray):
                 raise ValidationError("Data must be numpy array or mapping")
@@ -880,9 +930,9 @@ class TornadoRenderer(BaseRenderer):
                 var_names = [f"Variable {i + 1}" for i in range(len(values_array))]
 
         # Extract low, base, high values
-        low_values = values_array[:, 0]
-        base_values = values_array[:, 1]
-        high_values = values_array[:, 2]
+        low_values = values_array[:, 0]  # type: ignore
+        base_values = values_array[:, 1]  # type: ignore
+        high_values = values_array[:, 2]  # type: ignore
 
         # Compute base value if not provided
         if base_value is None:
@@ -1382,6 +1432,7 @@ class DataVisualizer:
             height=self.config.height * rows,  # Scale height by number of rows
             showlegend=self.config.show_legend,
         )
+        _register_figure(fig)
         return fig
 
     def help(self, plot_type: typing.Optional[PlotType] = None) -> str:

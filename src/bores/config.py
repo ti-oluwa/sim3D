@@ -111,7 +111,7 @@ class Config(
     miscibility_model: MiscibilityModel = "immiscible"
     """Miscibility model: 'immiscible', 'todd_longstaff'"""
 
-    saturation_cfl_threshold: float = 0.6
+    saturation_cfl_threshold: float = 0.7
     """
     Maximum allowable saturation CFL number for the 'explicit' evolution scheme to ensure numerical stability.
 

@@ -1448,7 +1448,6 @@ def build_pvt_table_data(
     )
     dtype = get_dtype()
 
-    # Handle salinity array
     if salinities is None:
         # Use single salinity value
         salinities = np.array([water_salinity_value], dtype=dtype)  # type: ignore[assignment]
@@ -1920,11 +1919,8 @@ def build_pvt_table_data(
             assert rs_at_bubble_point_grid is not None
             assert gas_fvf_for_compressibility is not None
 
-            # Iteration parameters
             max_iterations = 10
-            convergence_tolerance = (
-                1e-7  # psi⁻¹ — max absolute change in Co between iterations
-            )
+            convergence_tolerance = 1e-7  # psi⁻¹
 
             # Seed the iteration with a representative mid-range oil compressibility.
             # This is only used for the first Bo estimate; it is replaced after the first pass.

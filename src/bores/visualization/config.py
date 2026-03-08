@@ -20,7 +20,7 @@ __all__ = [
     "MAX_ISOSURFACE_CELLS_3D",
     "MAX_VOLUME_CELLS_3D",
     "RECOMMENDED_VOLUME_CELLS_3D",
-    "get_config_summary",
+    "config_summary",
 ]
 
 
@@ -40,7 +40,6 @@ def _get_float_env(key: str, default: float) -> float:
         return default
 
 
-# Performance Limits for 3D Visualization
 MAX_VOLUME_CELLS_3D = _get_int_env("BORES_MAX_VOLUME_CELLS", 1_000_000)
 """Maximum cells for volume rendering before auto-coarsening (default: 1M)"""
 
@@ -82,7 +81,7 @@ DEFAULT_MARKER_LINE_COLOR = os.environ.get("BORES_MARKER_LINE_COLOR", "white")
 """Default color for marker outlines"""
 
 
-def get_config_summary() -> str:
+def config_summary() -> str:
     """
     Get a summary of current visualization configuration.
 
@@ -91,8 +90,8 @@ def get_config_summary() -> str:
 
     Example:
     ```python
-    from bores.visualization.config import get_config_summary
-    print(get_config_summary())
+    from bores.visualization.config import config_summary
+    print(config_summary())
     ```
     """
     lines = [

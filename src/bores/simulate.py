@@ -1146,19 +1146,19 @@ def run(
     ```python
     import bores
 
-    # Using ReservoirModel and Config directly
+    # Using `ReservoirModel` and `Config` directly
     model = bores.ReservoirModel.from_file("path/to/3d_model.h5")
     config = bores.Config.from_file("path/to/simulation_config.yaml")
     for state in bores.run(model, config):
         # Process the model state at each output interval
         process(state)
 
-    # Using Run instance
+    # Using `Run` instance
     run = bores.Run(model=model, config=config)
     for state in bores.run(run):
         process(state)
 
-    # Using Run instance with overridden config
+    # Using `Run` instance with overridden config
     new_config = bores.Config.from_file("path/to/new_simulation_config.yaml")
     for state in bores.run(run, config=new_config):
         process(state)
@@ -1247,6 +1247,7 @@ def run(
             grid_shape=grid_shape,
             thickness_grid=thickness_grid,
             time=0.0,
+            pad_width=1,
         )
 
         # Initialize fluid properties before starting the simulation
@@ -1378,6 +1379,7 @@ def run(
                             grid_shape=grid_shape,
                             thickness_grid=thickness_grid,
                             time=timer.elapsed_time + step_size,
+                            pad_width=1,
                         )
                     )
                     logger.debug("Boundary conditions applied.")

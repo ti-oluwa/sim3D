@@ -31,8 +31,6 @@ from bores.visualization.config import (
 
 __all__ = [
     "ColorScheme",
-    "ColorbarConfig",
-    "ColorbarPresets",
     "PropertyMeta",
     "PropertyRegistry",
     "image_config",
@@ -111,200 +109,6 @@ class ColorScheme(str, Enum):
 
 
 @dataclass(frozen=True)
-class ColorbarConfig:
-    """Configuration for a colorbar preset."""
-
-    colorscale: str
-    """Plotly colorscale name"""
-
-    reversescale: bool = False
-    """Whether to reverse the colorscale direction"""
-
-    cmin: typing.Optional[float] = None
-    """Minimum value for color mapping (None = auto from data)"""
-
-    cmax: typing.Optional[float] = None
-    """Maximum value for color mapping (None = auto from data)"""
-
-    title: typing.Optional[str] = None
-    """Title text for the colorbar"""
-
-    tickformat: typing.Optional[str] = None
-    """Format string for colorbar tick labels (e.g., '.2f', '.2e')"""
-
-    def to_plotly_dict(self) -> typing.Dict[str, typing.Any]:
-        """
-        Convert to Plotly colorbar dictionary format.
-
-        :return: Dictionary suitable for plotly colorbar parameter
-        """
-        result: typing.Dict[str, typing.Any] = {
-            "colorscale": self.colorscale,
-        }
-        if self.reversescale:
-            result["reversescale"] = True
-        if self.cmin is not None:
-            result["cmin"] = self.cmin
-        if self.cmax is not None:
-            result["cmax"] = self.cmax
-        if self.title:
-            result["title"] = self.title
-        if self.tickformat:
-            result["tickformat"] = self.tickformat
-        return result
-
-
-class ColorbarPresets:
-    """
-    Predefined colorbar configurations for common reservoir properties.
-
-    Each preset is optimized for the typical value ranges and physical
-    meaning of different reservoir properties.
-    """
-
-    # Saturation properties (0-1 range)
-    SATURATION = ColorbarConfig(
-        colorscale="RdYlBu_r",
-        cmin=0.0,
-        cmax=1.0,
-        tickformat=".2f",
-    )
-    """Oil/water/gas saturation - blue (low) to red (high)"""
-
-    OIL_SATURATION = ColorbarConfig(
-        colorscale="Cividis",
-        cmin=0.0,
-        cmax=1.0,
-        tickformat=".2f",
-    )
-    """Oil saturation - perceptually uniform, colorblind-friendly"""
-
-    WATER_SATURATION = ColorbarConfig(
-        colorscale="RdBu",
-        reversescale=True,
-        cmin=0.0,
-        cmax=1.0,
-        tickformat=".2f",
-    )
-    """Water saturation - blue (wet) to red (dry)"""
-
-    GAS_SATURATION = ColorbarConfig(
-        colorscale="Magma",
-        cmin=0.0,
-        cmax=1.0,
-        tickformat=".2f",
-    )
-    """Gas saturation - dark (low) to bright (high)"""
-
-    # Pressure (typically 1000-5000 psi for reservoirs)
-    PRESSURE = ColorbarConfig(
-        colorscale="Viridis",
-        tickformat=".0f",
-    )
-    """Reservoir pressure - sequential colorscale"""
-
-    PRESSURE_DEPLETION = ColorbarConfig(
-        colorscale="RdYlGn",
-        reversescale=True,
-        tickformat=".0f",
-    )
-    """Pressure depletion - green (high) to red (depleted)"""
-
-    # Temperature (typically 100-300°F)
-    TEMPERATURE = ColorbarConfig(
-        colorscale="Inferno",
-        tickformat=".1f",
-    )
-    """Temperature - heat-like colorscale (dark to bright yellow/white)"""
-
-    # Viscosity (log scale, 0.1 to 10,000+ cP)
-    VISCOSITY = ColorbarConfig(
-        colorscale="Inferno",
-        tickformat=".2e",
-    )
-    """Viscosity - use with log-scale data"""
-
-    # Density
-    DENSITY = ColorbarConfig(
-        colorscale="Plasma",
-        tickformat=".1f",
-    )
-    """Density - sequential colorscale"""
-
-    # Permeability (log scale, 0.001 to 10,000+ mD)
-    PERMEABILITY = ColorbarConfig(
-        colorscale="Viridis",
-        tickformat=".2e",
-    )
-    """Permeability - use with log-scale data"""
-
-    # Porosity (0-0.4 typical)
-    POROSITY = ColorbarConfig(
-        colorscale="Cividis",
-        cmin=0.0,
-        cmax=0.4,
-        tickformat=".3f",
-    )
-    """Porosity - perceptually uniform"""
-
-    # Generic diverging (for anomalies, differences)
-    DIVERGING = ColorbarConfig(
-        colorscale="RdBu",
-        tickformat=".2f",
-    )
-    """Diverging colorscale - red (negative) to blue (positive)"""
-
-    DIVERGING_BALANCED = ColorbarConfig(
-        colorscale="Balance",
-        tickformat=".2f",
-    )
-    """Balanced diverging - symmetric around zero"""
-
-    # Earth/geological
-    DEPTH = ColorbarConfig(
-        colorscale="Earth",
-        reversescale=True,
-        tickformat=".0f",
-    )
-    """Depth - earth tones, reversed (shallow=light, deep=dark)"""
-
-    @classmethod
-    def get_for_property(cls, property_name: str) -> typing.Optional[ColorbarConfig]:
-        """
-        Get the recommended colorbar preset for a property name.
-
-        :param property_name: Name of the property (e.g., 'pressure', 'oil_saturation')
-        :return: ColorbarConfig if found, None otherwise
-
-        Example:
-        ```python
-        preset = ColorbarPresets.get_for_property("oil_saturation")
-        colorbar_dict = preset.to_plotly_dict()
-        ```
-        """
-        property_map = {
-            "oil_saturation": cls.OIL_SATURATION,
-            "water_saturation": cls.WATER_SATURATION,
-            "gas_saturation": cls.GAS_SATURATION,
-            "pressure": cls.PRESSURE,
-            "oil_pressure": cls.PRESSURE,
-            "temperature": cls.TEMPERATURE,
-            "oil_viscosity": cls.VISCOSITY,
-            "water_viscosity": cls.VISCOSITY,
-            "gas_viscosity": cls.VISCOSITY,
-            "oil_density": cls.DENSITY,
-            "water_density": cls.DENSITY,
-            "gas_density": cls.DENSITY,
-            "permeability_x": cls.PERMEABILITY,
-            "permeability_y": cls.PERMEABILITY,
-            "permeability_z": cls.PERMEABILITY,
-            "porosity": cls.POROSITY,
-            "thickness": cls.DEPTH,
-        }
-        return property_map.get(property_name.lower())
-
-
-@dataclass(frozen=True)
 class PropertyMeta:
     """Metadata for model properties used in property registry."""
 
@@ -331,7 +135,7 @@ class PropertyMeta:
     log_scale: bool = False
     """Whether to apply logarithmic scaling (base 10) to the data before visualization.
     
-    Use log_scale=True for properties that vary over many orders of magnitude, such as:
+    Use `log_scale=True` for properties that vary over many orders of magnitude, such as:
     - Viscosity (0.1 to 10,000+ cP)
     - Compressibility (1e-6 to 1e-3 psi⁻¹)
     - Permeability (0.001 to 10,000+ mD)
@@ -339,7 +143,7 @@ class PropertyMeta:
     When True:
     - Data values are transformed using log₁₀(value) for plotting
     - Color mapping and isosurfaces use log-transformed values
-    - Hover text and colorbar show ORIGINAL physical values (not log values)
+    - Hover text and colorbar show original physical values (not log values)
     - Zero/negative values are handled by replacing with small positive values
     
     Example: 0.5 cP viscosity becomes log₁₀(0.5) = -0.301 for plotting,
@@ -371,7 +175,7 @@ class PropertyMeta:
 class PropertyRegistry:
     """Registry of all reservoir model and model state properties available for visualization."""
 
-    _defaults = dict(
+    _defaults = dict(  # noqa
         # Pressure and Temperature
         oil_pressure=PropertyMeta(
             name="model.fluid_properties.pressure_grid",

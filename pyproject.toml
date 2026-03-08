@@ -70,7 +70,6 @@ dependencies = [
     "types-pyyaml>=6.0.12.20250915",
     "types-cachetools>=6.2.0.20251022",
     "scipy-stubs>=1.15.3.0",
-    "marimo>=0.20.4",
 ]
 
 
@@ -97,6 +96,11 @@ numpy = [
 ]
 scipy = [
   { index = "numpy-mkl", marker = "sys_platform != 'darwin' and platform_machine == 'x86_64'" },
+]
+
+[project.optional-dependencies]
+pyvista = [
+    "pyvista[jupyter]>=0.44.0"
 ]
 
 [dependency-groups]

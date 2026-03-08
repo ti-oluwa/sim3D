@@ -790,9 +790,9 @@ class TwoPhaseRelPermTable(Serializable):
     - Gas-Oil system: gas is non-wetting, oil is wetting
     """
 
-    wetting_phase: FluidPhase
+    wetting_phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """The wetting fluid phase, e.g., 'water' (for oil-water (water-wet)) or 'oil' (for gas-oil (oil-wet))."""
-    non_wetting_phase: FluidPhase
+    non_wetting_phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """The non-wetting fluid phase, e.g., 'oil' (for oil-water (water-wet)) or 'gas' (for gas-oil (oil-wet))."""
     wetting_phase_saturation: npt.NDArray[np.floating] = attrs.field(
         converter=bores_array

@@ -1530,7 +1530,7 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
        - Must also provide dimensionless_radius_ratio
        - Simplified dimensionless time calculation (t_D ≈ t / characteristic_time)
 
-    **Example (Using Physical Properties - Recommended):**
+    **Example (Using Physical Properties):**
     ```python
     from bores.boundary_conditions import CarterTracyAquifer, GridBoundaryCondition
 
@@ -1561,7 +1561,7 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
     )
     ```
 
-    **Example (Using Calibrated Constant - Legacy):**
+    **Example (Using Calibrated Constant):**
     ```python
     # When physical properties are uncertain - use history-matched constant
     aquifer = CarterTracyAquifer(
@@ -1854,15 +1854,6 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
     """
 
     def __attrs_post_init__(self) -> None:
-        """
-        Validate parameters and compute derived quantities.
-
-        Checks that user has provided either:
-            - Option A: All physical properties (k, φ, c_t, μ, r_inner, r_outer, h)
-            - Option B: Calibrated aquifer_constant
-
-        Computes internal state variables based on the chosen mode.
-        """
         has_physical_properties = all(
             x is not None
             for x in [
@@ -2010,8 +2001,8 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
         # and the water influx capacity.
         #
         # Physical interpretation:
-        # - Strong aquifer: Large influx capacity → maintains pressure close to initial pressure
-        # - Weak aquifer: Limited influx → allows more pressure decline
+        # - Strong aquifer: Large influx capacity maintains pressure close to initial pressure
+        # - Weak aquifer: Limited influx allows more pressure decline
         #
         # We use a support factor based on the ratio of actual influx to
         # maximum possible influx given the pressure drop.
@@ -2024,8 +2015,8 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
             max_influx_capacity = self._computed_aquifer_constant * pressure_drop
 
             # Support factor: ratio of actual influx to maximum capacity
-            # = 0: No influx (no support) → boundary pressure = reservoir pressure
-            # = 1: Full capacity influx (strong support) → boundary pressure ≈ initial pressure
+            # if = 0: No influx (no support) because boundary pressure = reservoir pressure
+            # if = 1: Full capacity influx (strong support) because boundary pressure ≈ initial pressure
             if max_influx_capacity > 0:
                 support_factor = min(
                     1.0, water_influx_rate / (max_influx_capacity + 1e-10)
@@ -2083,14 +2074,14 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
 
         # Convolution Integral
         # Sum contributions from all past pressure changes using superposition
-        for time_i, pressure_drop_i in self._pressure_history:
-            if pressure_drop_i <= 0:
+        for time, pressure_drop in self._pressure_history:
+            if pressure_drop <= 0:
                 # No influx if no pressure drop (or pressure increase)
                 continue
 
             # Time elapsed since this pressure change
-            time_diff = current_time - time_i
-            if time_diff <= 0:
+            time_difference = current_time - time
+            if time_difference <= 0:
                 continue
 
             # Compute Dimensionless Time
@@ -2099,12 +2090,14 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
                 # t_D = (k / (φ * μ * c_t)) * (t / r_w²) = η * t / r_w²
                 assert self.inner_radius is not None
                 dimensionless_time = (
-                    self._hydraulic_diffusivity * time_diff / (self.inner_radius**2)
+                    self._hydraulic_diffusivity
+                    * time_difference
+                    / (self.inner_radius**2)
                 )
             else:
                 # Calibrated constant mode: Simplified (dimensionally inconsistent)
                 # User should ensure time units are consistent with aquifer_constant calibration
-                dimensionless_time = time_diff
+                dimensionless_time = time_difference
 
             # Van Everdingen-Hurst Function
             # Compute dimensionless water influx derivative at this time
@@ -2114,7 +2107,7 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
             )
 
             # Add contribution from this pressure change to total influx
-            influx_rate_sum += pressure_drop_i * W_D_prime
+            influx_rate_sum += pressure_drop * W_D_prime
 
         # Scale by Aquifer Constant
         # B is already scaled by angle in `__attrs_post_init__` for physical properties mode
@@ -2248,7 +2241,6 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
     @classmethod
     def __load__(cls, data: typing.Mapping[str, typing.Any]) -> Self:
         if "aquifer_permeability" in data:
-            # Physical properties mode
             instance = cls(
                 aquifer_permeability=data["aquifer_permeability"],
                 aquifer_porosity=data["aquifer_porosity"],
@@ -2261,7 +2253,6 @@ class CarterTracyAquifer(BoundaryCondition[NDimension]):
                 angle=data.get("angle", 360.0),
             )
         else:
-            # Calibrated constant mode
             instance = cls(
                 aquifer_constant=data["aquifer_constant"],
                 dimensionless_radius_ratio=data.get("dimensionless_radius_ratio", 10.0),
@@ -2381,6 +2372,7 @@ class GridBoundaryCondition(Serializable, typing.Generic[NDimension]):
         self,
         padded_grid: NDimensionalGrid[NDimension],
         metadata: typing.Optional[BoundaryMetadata] = None,
+        pad_width: int = 1,
     ) -> None:
         """
         Applies each defined boundary condition to the padded grid with ghost cells.
@@ -2388,77 +2380,79 @@ class GridBoundaryCondition(Serializable, typing.Generic[NDimension]):
         - For 2D grids (shape: [nx+2, ny+2]), x and y boundaries are applied.
         - For 3D grids (shape: [nx+2, ny+2, nz+2]), x, y, and z boundaries are applied.
 
+        :param pad_width: Number of ghost cells used for grid padding.
         :raises ValidationError: If grid dimensions are inconsistent with metadata.grid_shape
         """
         # Validate ghost cells if metadata provides grid_shape
         if metadata is not None and metadata.grid_shape is not None:
-            expected_shape = tuple(s + 2 for s in metadata.grid_shape)
+            ghost_cells_count = pad_width * 2
+            expected_shape = tuple((s + ghost_cells_count) for s in metadata.grid_shape)
             if padded_grid.shape != expected_shape:
                 raise ValidationError(
                     f"Grid shape {padded_grid.shape} does not match expected padded shape "
-                    f"{expected_shape} (grid_shape {metadata.grid_shape} + 2 ghost cells per dimension). "
+                    f"{expected_shape} (grid_shape {metadata.grid_shape} + {ghost_cells_count} ghost cells per dimension). "
                     "Ensure the grid has ghost cells before applying boundary conditions."
                 )
 
         if padded_grid.ndim == 2:
             self.left.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(0, 1), slice(None)),
+                boundary_indices=(slice(0, pad_width), slice(None)),
                 direction=Boundary.LEFT,
                 metadata=metadata,
             )
             self.right.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(-1, None), slice(None)),
+                boundary_indices=(slice(-pad_width, None), slice(None)),
                 direction=Boundary.RIGHT,
                 metadata=metadata,
             )
             self.front.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(0, 1)),
+                boundary_indices=(slice(None), slice(0, pad_width)),
                 direction=Boundary.FRONT,
                 metadata=metadata,
             )
             self.back.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(-1, None)),
+                boundary_indices=(slice(None), slice(-pad_width, None)),
                 direction=Boundary.BACK,
                 metadata=metadata,
             )
         elif padded_grid.ndim == 3:
             self.left.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(0, 1), slice(None), slice(None)),
+                boundary_indices=(slice(0, pad_width), slice(None), slice(None)),
                 direction=Boundary.LEFT,
                 metadata=metadata,
             )
             self.right.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(-1, None), slice(None), slice(None)),
+                boundary_indices=(slice(-pad_width, None), slice(None), slice(None)),
                 direction=Boundary.RIGHT,
                 metadata=metadata,
             )
             self.front.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(0, 1), slice(None)),
+                boundary_indices=(slice(None), slice(0, pad_width), slice(None)),
                 direction=Boundary.FRONT,
                 metadata=metadata,
             )
             self.back.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(-1, None), slice(None)),
+                boundary_indices=(slice(None), slice(-pad_width, None), slice(None)),
                 direction=Boundary.BACK,
                 metadata=metadata,
             )
             self.bottom.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(None), slice(0, 1)),
+                boundary_indices=(slice(None), slice(None), slice(0, pad_width)),
                 direction=Boundary.BOTTOM,
                 metadata=metadata,
             )
             self.top.apply(
                 grid=padded_grid,
-                boundary_indices=(slice(None), slice(None), slice(-1, None)),
+                boundary_indices=(slice(None), slice(None), slice(-pad_width, None)),
                 direction=Boundary.TOP,
                 metadata=metadata,
             )
@@ -2568,7 +2562,7 @@ class BoundaryConditions(
         Initializes the `BoundaryConditions`.
 
         :param factory: Optional callable to provide default boundary conditions.
-            If not provided, defaults to NoFlowBoundary for all sides/axes.
+            If not provided, defaults to `NoFlowBoundary` for all sides/axes.
 
         :param conditions: Optional mapping of property names to their respective boundary conditions.
         """
@@ -2604,7 +2598,6 @@ class BoundaryConditions(
         # Deep copy all the boundary conditions
         new_conditions = {k: copy.deepcopy(v, memo) for k, v in self.items()}
 
-        # Initialize the new instance
         result.__init__(conditions=new_conditions, factory=new_factory)
 
         # Deep copy any other instance attributes that might have been added

@@ -3,7 +3,9 @@ Plotly-based 2D Visualization Suite for 2 Dimensional Reservoir Simulation Data 
 """
 
 import collections.abc
+import logging
 import typing
+import weakref
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -15,6 +17,53 @@ from plotly.subplots import make_subplots  # type: ignore[import-untyped]
 from bores.errors import ValidationError
 from bores.types import TwoDimensionalGrid
 from bores.visualization.base import ColorScheme, PropertyMeta
+
+logger = logging.getLogger(__name__)
+
+
+_active_figures: typing.List[weakref.ref] = []
+
+
+def _register_figure(fig: go.Figure) -> None:
+    """Track active figures for memory cleanup."""
+    _active_figures.append(weakref.ref(fig, _on_figure_deleted))
+
+
+def _on_figure_deleted(ref: typing.Any) -> None:
+    """Remove dead weakref from registry."""
+    try:
+        _active_figures.remove(ref)
+    except ValueError:
+        pass
+
+
+def cleanup_figures() -> None:
+    """
+    Release memory from all tracked figures.
+
+    Clears figure data to free memory. Useful after creating large
+    visualizations or multiple figures. Call when figures are no longer needed.
+
+    Example:
+    ```python
+    from bores.visualization.plotly2d import cleanup_figures
+
+    # Create many figures
+    for i in range(100):
+        plotter.make_plot(...)
+
+    # Free memory when done
+    cleanup_figures()
+    ```
+    """
+    for ref in _active_figures[:]:
+        fig = ref()
+        if fig is not None:
+            try:
+                fig.data = []
+            except (AttributeError, RuntimeError) as exc:
+                logger.debug(f"Failed to cleanup figure: {exc}")
+    _active_figures.clear()
 
 
 @attrs.frozen
@@ -978,6 +1027,7 @@ class DataVisualizer:
 
         if layout_updates:
             fig.update_layout(**layout_updates)
+        _register_figure(fig)
         return fig
 
     def make_plots(
@@ -1111,6 +1161,7 @@ class DataVisualizer:
             height=self.config.height,
             title=self.config.title or "2D Visualization Subplots",
         )
+        _register_figure(fig)
         return fig
 
     def help(self, plot_type: typing.Optional[PlotType] = None) -> str:

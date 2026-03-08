@@ -1240,7 +1240,7 @@ class CoupledRateControl(WellControl[WellFluidTcon]):
 
     __type__ = "primary_phase_rate_control"
 
-    primary_phase: FluidPhase
+    primary_phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """Phase whose rate is fixed (determines BHP)."""
 
     primary_control: typing.Union[RateControl, AdaptiveRateControl]
@@ -1515,7 +1515,7 @@ class CoupledRateControl(WellControl[WellFluidTcon]):
             FluidPhase.GAS: (gas_mobility, gas_fvf, gas_compressibility),
             FluidPhase.WATER: (water_mobility, water_fvf, water_compressibility),
         }
-        mobility, fvf, compressibility = phase_props[self.primary_phase]
+        mobility, fvf, compressibility = phase_props[FluidPhase(self.primary_phase)]
         return {
             "primary_phase_mobility": mobility,
             "primary_fluid": primary_fluid,

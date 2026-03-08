@@ -2,8 +2,6 @@ import logging
 import typing
 
 from bores.boundary_conditions import BoundaryConditions, BoundaryMetadata, default_bc
-from bores.constants import c
-from bores.solvers.base import normalize_saturations
 from bores.models import FluidProperties, RockProperties
 from bores.types import NDimension, NDimensionalGrid, ThreeDimensions
 
@@ -26,6 +24,7 @@ def apply_boundary_conditions(
     grid_shape: typing.Tuple[int, int, int],
     thickness_grid: NDimensionalGrid[ThreeDimensions],
     time: float,
+    pad_width: int = 1,
 ) -> typing.Tuple[FluidProperties, RockProperties]:
     """
     Applies boundary conditions to the fluid property grids.
@@ -36,6 +35,7 @@ def apply_boundary_conditions(
     :param cell_dimension: The dimensions of each grid cell.
     :param grid_shape: The shape of the simulation grid.
     :param thickness_grid: The (unpadded) thickness grid of the reservoir.
+    :param pad_width: Number of ghost cells used for grid padding.
     :param time: The current simulation time.
     """
     boundary_conditions["pressure"].apply(
@@ -47,6 +47,7 @@ def apply_boundary_conditions(
             grid_shape=grid_shape,
             property_name="pressure",
         ),
+        pad_width=pad_width,
     )
     boundary_conditions["oil_saturation"].apply(
         fluid_properties.oil_saturation_grid,
@@ -57,6 +58,7 @@ def apply_boundary_conditions(
             grid_shape=grid_shape,
             property_name="oil_saturation",
         ),
+        pad_width=pad_width,
     )
     boundary_conditions["water_saturation"].apply(
         fluid_properties.water_saturation_grid,
@@ -67,6 +69,7 @@ def apply_boundary_conditions(
             grid_shape=grid_shape,
             property_name="water_saturation",
         ),
+        pad_width=pad_width,
     )
     boundary_conditions["gas_saturation"].apply(
         fluid_properties.gas_saturation_grid,
@@ -77,6 +80,7 @@ def apply_boundary_conditions(
             grid_shape=grid_shape,
             property_name="gas_saturation",
         ),
+        pad_width=pad_width,
     )
     boundary_conditions["temperature"].apply(
         fluid_properties.temperature_grid,
@@ -87,14 +91,7 @@ def apply_boundary_conditions(
             grid_shape=grid_shape,
             property_name="temperature",
         ),
-    )
-
-    # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
-    normalize_saturations(
-        oil_saturation_grid=fluid_properties.oil_saturation_grid,
-        water_saturation_grid=fluid_properties.water_saturation_grid,
-        gas_saturation_grid=fluid_properties.gas_saturation_grid,
-        saturation_epsilon=c.SATURATION_EPSILON,
+        pad_width=pad_width,
     )
 
     excluded_fluid_properties = (

@@ -689,7 +689,7 @@ class WellFluid(Serializable):
 
     name: str
     """Name of the fluid. Examples: Methane, CO2, Water, Oil."""
-    phase: FluidPhase
+    phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """Phase of the fluid. Examples: WATER, GAS, OIL."""
     specific_gravity: float = attrs.field(validator=attrs.validators.ge(0))
     """Specific gravity of the fluid in (lbm/ft³)."""
@@ -733,23 +733,18 @@ class WellFluid(Serializable):
         else:
             pvt_hash = None
 
-        # Build cache key
         cache_key = (
-            self.name,  # Fluid identifier (e.g., "CH4", "CO2")
-            self.phase.value,  # Phase enum value
-            round(
-                self.specific_gravity, 6
-            ),  # Gas gravity (rounded to avoid float precision issues)
-            round(self.molecular_weight, 6),  # Molecular weight (rounded)
-            round(temperature, 2),  # Temperature (rounded to 0.01 °F precision)
-            round(reference_pressure, 2)
-            if reference_pressure is not None
-            else None,  # Reference pressure
+            self.name,
+            self.phase.value,  # type: ignore
+            round(self.specific_gravity, 6),
+            round(self.molecular_weight, 6),
+            round(temperature, 2),
+            round(reference_pressure, 2) if reference_pressure is not None else None,
             tuple(round(p, 2) for p in pressure_range)
             if pressure_range is not None
-            else None,  # Pressure range
-            points,  # Number of points
-            pvt_hash,  # PVT table configuration (or None)
+            else None,
+            points,
+            pvt_hash,
         )
         return cache_key
 
@@ -1294,5 +1289,5 @@ def compute_effective_permeability_for_well(
         return np.sqrt(max(ky, 0.0) * max(kz, 0.0))
     elif orientation == Orientation.Y:  # well along y: transverse are x,z
         return np.sqrt(max(kx, 0.0) * max(kz, 0.0))
-    # For Oblique/unknown orientation, use conservative fallback, i.e geometric mean of all three
+    # For Oblique/unknown orientation, use geometric mean of all three
     return _geometric_mean((kx, ky, kz))

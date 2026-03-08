@@ -477,14 +477,14 @@ def apply_solution_gas_liberation(
 
     Physics:
         - Oil shrinks when Rs decreases: So_new = So_old * Bo_new / Bo_old
-        - Gas appears: dSg = (Rs_old - Rs_new) * So_old * Bg_new / (Bo_old * bbl_to_ft3)
+        - Gas appears: dSg = (Rs_old - Rs_new) * So_old * [Bg_new / (Bo_old * bbl_to_ft3)]
         - Re-dissolution is capped at available free gas
         - Rs is corrected if the PVT update assumed more gas could dissolve than exists
 
     :param fluid_properties: Fluid properties with updated PVT (new Rs, Bo, Bg)
         but old saturations.
-    :param old_solution_gas_to_oil_ratio_grid: Rs grid before PVT update (SCF/STB).
-    :param old_oil_formation_volume_factor_grid: Bo grid before PVT update (RB/STB).
+    :param old_solution_gas_to_oil_ratio_grid: solution gas-oil ratio grid before PVT update (SCF/STB).
+    :param old_oil_formation_volume_factor_grid: Oil FVF grid before PVT update (bbl/STB).
     :return: Updated fluid properties with post-flash saturations and corrected Rs.
     """
     new_solution_gas_to_oil_ratio_grid = fluid_properties.solution_gas_to_oil_ratio_grid
@@ -524,13 +524,14 @@ def apply_solution_gas_liberation(
         liberated_gas_saturation = (
             delta_solution_gas_to_oil_ratio[liberation_mask]
             * oil_saturation_grid[liberation_mask]
-            * new_gas_formation_volume_factor_grid[liberation_mask]
-            / (old_oil_formation_volume_factor_grid[liberation_mask] * bbl_to_ft3)
+            * (
+                new_gas_formation_volume_factor_grid[liberation_mask]
+                / (old_oil_formation_volume_factor_grid[liberation_mask] * bbl_to_ft3)
+            )
         )
         # Oil shrinks because Bo changed (less dissolved gas = lower FVF)
-        oil_saturation_grid[liberation_mask] = (
-            oil_saturation_grid[liberation_mask]
-            * new_oil_formation_volume_factor_grid[liberation_mask]
+        oil_saturation_grid[liberation_mask] = oil_saturation_grid[liberation_mask] * (
+            new_oil_formation_volume_factor_grid[liberation_mask]
             / old_oil_formation_volume_factor_grid[liberation_mask]
         )
         gas_saturation_grid[liberation_mask] = (
@@ -582,7 +583,7 @@ def apply_solution_gas_liberation(
 
     # No free gas to dissolve
     if np.any(no_gas_mask):
-        # Revert Rs to old value — can't dissolve gas that doesn't exist
+        # Revert Rs to old value since we can't dissolve gas that doesn't exist
         corrected_solution_gas_to_oil_ratio_grid[no_gas_mask] = (
             old_solution_gas_to_oil_ratio_grid[no_gas_mask]
         )

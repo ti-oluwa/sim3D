@@ -2,9 +2,12 @@
 Plotly-based 3D Visualization Suite for Reservoir Simulation Data and Results.
 """
 
+import atexit
+
 import itertools
 import logging
 import typing
+import weakref
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -31,13 +34,61 @@ from bores.visualization.base import (
     PropertyRegistry,
     property_registry,
 )
-from bores.visualization.config import (
-    MAX_VOLUME_CELLS_3D,
-    RECOMMENDED_VOLUME_CELLS_3D,
-)
+from bores.visualization.config import MAX_VOLUME_CELLS_3D, RECOMMENDED_VOLUME_CELLS_3D
+from bores.visualization.utils import get_data, slice_grid
 from bores.wells import Wells
 
 logger = logging.getLogger(__name__)
+
+
+_active_figures: typing.List[weakref.ref] = []
+
+
+def _register_figure(fig: go.Figure) -> None:
+    """Track active figures for memory cleanup."""
+    _active_figures.append(weakref.ref(fig, _on_figure_deleted))
+
+
+def _on_figure_deleted(ref: typing.Any) -> None:
+    """Remove dead weakref from registry."""
+    try:
+        _active_figures.remove(ref)
+    except ValueError:
+        pass
+
+
+def cleanup_figures() -> None:
+    """
+    Release memory from all tracked figures.
+
+    Clears figure data to free memory. Useful after creating large
+    animations or multiple figures. Call this when figures are no
+    longer needed.
+
+    Example:
+    ```python
+    from bores.visualization.plotly3d import cleanup_figures
+
+    # Create many figures
+    for i in range(100):
+        viz.make_plot(...)
+
+    # Free memory when done
+    cleanup_figures()
+    ```
+    """
+    for ref in _active_figures[:]:
+        fig = ref()
+        if fig is not None:
+            try:
+                fig.data = []
+                fig.frames = []
+            except (AttributeError, RuntimeError) as e:
+                logger.debug(f"Failed to cleanup figure: {e}")
+    _active_figures.clear()
+
+
+atexit.register(cleanup_figures)
 
 
 class PlotType(str, Enum):
@@ -49,8 +100,6 @@ class PlotType(str, Enum):
     """Isosurface plots for discrete value thresholds, showing surfaces at specific data values."""
     SCATTER_3D = "scatter_3d"
     """3D scatter plots for visualizing point data in 3D space."""
-    CELL_BLOCKS = "cell_blocks"
-    """Cell block plots for visualizing individual reservoir cells as blocks in 3D space."""
 
 
 class CameraPosition(TypedDict):
@@ -173,7 +222,7 @@ class PlotConfig:
     """Default color scheme for data visualization. Professional color schemes are optimized
     for scientific data visualization and accessibility."""
 
-    opacity: float = 0.85
+    opacity: float = 0.95
     """Default opacity level for plot elements (0.0 = transparent, 1.0 = opaque).
     Lower values allow better visualization of internal structures."""
 
@@ -191,18 +240,6 @@ class PlotConfig:
 
     title: str = ""
     """Plot title to display above the visualization. Empty string shows no title."""
-
-    show_cell_outlines: bool = False
-    """Whether to show wireframe outlines around individual cell blocks in cell block plots.
-    Helps distinguish individual cells but may impact performance with large datasets."""
-
-    cell_outline_color: str = "#404040"
-    """Color for cell block outlines when show_cell_outlines is True. 
-    Default is dark gray for better definition. Can be CSS color name, hex code, or rgb() string."""
-
-    cell_outline_width: float = 1.0
-    """Width/thickness of cell outline wireframes in pixels when show_cell_outlines is True.
-    Default 1.0 provides good visibility. Thicker lines are more visible but may obscure data details."""
 
     use_opacity_scaling: bool = False
     """Whether to apply data-driven opacity scaling for better depth perception.
@@ -483,7 +520,6 @@ class Label:
                 f"Label using index coordinates: ({x_position}, {y_position}, {z_position})"
             )
 
-        # Create a minimal annotation first to test if basic rendering works
         annotation = {
             "x": float(x_position),  # type: ignore
             "y": float(y_position),  # type: ignore
@@ -1095,7 +1131,7 @@ class BaseRenderer(ABC):
         # Calculate physical coordinate offsets from cell index offsets
         physical_offsets = (0.0, 0.0, 0.0)
         if coordinate_offsets is not None:
-            x_index_offset, y_index_offset, z_index_offset = coordinate_offsets
+            x_index_offset, y_index_offset, _ = coordinate_offsets
             x_start_offset = x_index_offset * dx
             y_start_offset = y_index_offset * dy
 
@@ -1331,8 +1367,8 @@ class BaseRenderer(ABC):
                 x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
 
                 # When using slices, the well coordinates are in the original grid space,
-                # but depth_grid is in the sliced space. We need to adjust.
-                # The coordinate_offsets tell us where the slice starts in the original grid.
+                # but `depth_grid` is in the sliced space. We need to adjust.
+                # The `coordinate_offsets` tell us where the slice starts in the original grid.
                 # So we need to convert original grid coords (i, j, k) to sliced coords.
                 i_sliced = i - x_offset
                 j_sliced = j - y_offset
@@ -1347,9 +1383,9 @@ class BaseRenderer(ABC):
                     # Well is outside the sliced region, skip it
                     return None
 
-                # Physical X and Y (use original grid coordinates for physical position)
-                x_phys = i * dx
-                y_phys = j * dy
+                # Physical X and Y (center wells in cells using +0.5 offset)
+                x_phys = (i + 0.5) * dx
+                y_phys = (j + 0.5) * dy
 
                 # Physical Z (depth) - use depth_grid with sliced indices
                 # Depth is positive downward, so negate for Z-axis (positive up)
@@ -1362,8 +1398,8 @@ class BaseRenderer(ABC):
 
                 return x_phys, y_phys, z_phys
             else:
-                # Use grid indices directly
-                return float(i), float(j), float(k)
+                # Use grid indices directly (center wells in cells)
+                return float(i) + 0.5, float(j) + 0.5, float(k) + 0.5
 
         # Process all injection wells
         for well in wells.injection_wells:
@@ -1536,7 +1572,7 @@ class BaseRenderer(ABC):
                     # Add cone/arrow pointing into reservoir at the SURFACE
                     # Build fluid info for hover text
                     if well.injected_fluid is not None:
-                        fluid_info = f"Injected Fluid: <b>{well.injected_fluid.name}</b>  ({well.injected_fluid.phase.value})"
+                        fluid_info = f"Injected Fluid: <b>{well.injected_fluid.name}</b>  ({well.injected_fluid.phase.value})"  # type: ignore
                     else:
                         fluid_info = "Injected Fluid: N/A"
 
@@ -1558,7 +1594,7 @@ class BaseRenderer(ABC):
                         # Use average layer depth spacing as base unit
                         avg_layer_depth = float(np.mean(np.diff(depth_grid, axis=2)))
                         # Make arrow about 1.5x average layer depth spacing (reasonable visibility)
-                        base_arrow_length = avg_layer_depth * 1.5
+                        base_arrow_length = avg_layer_depth * 0.3
                     else:
                         # Fallback to marker size
                         base_arrow_length = surface_marker_size
@@ -1815,7 +1851,7 @@ class BaseRenderer(ABC):
                     x_surf, y_surf, _ = surf_coords
 
                     # Surface should be at z_offset (the top of the grid)
-                    # coordinate_offsets contains the base Z coordinate
+                    # `coordinate_offsets` contains the base Z coordinate
                     x_offset, y_offset, z_offset = coordinate_offsets or (0, 0, 0)
                     z_surf = float(z_offset)  # Top of volume
 
@@ -1824,7 +1860,7 @@ class BaseRenderer(ABC):
                     fluid_names = []
                     if well.produced_fluids:
                         for fluid in well.produced_fluids:
-                            fluid_name = f"<b>{fluid.name}</b> ({fluid.phase.value})"
+                            fluid_name = f"<b>{fluid.name}</b> ({fluid.phase.value})"  # type: ignore
                             fluid_names.append(fluid_name)
 
                     fluid_info = (
@@ -1850,7 +1886,7 @@ class BaseRenderer(ABC):
                         # Use average layer depth spacing as base unit
                         avg_layer_depth = float(np.mean(np.diff(depth_grid, axis=2)))
                         # Make arrow about 1.5x average layer depth spacing (reasonable visibility)
-                        base_arrow_length = avg_layer_depth * 1.5
+                        base_arrow_length = avg_layer_depth * 0.3
                     else:
                         # Fallback to marker size
                         base_arrow_length = surface_marker_size
@@ -1958,11 +1994,7 @@ class BaseRenderer(ABC):
 
         :return: Help string
         """
-        return f"""
-{self.__class__.__name__} renderer
-
-{self.render.__doc__ or ""}
-        """
+        return f"{self.__class__.__name__} renderer\n{self.render.__doc__ or ''}"
 
 
 class VolumeRenderer(BaseRenderer):
@@ -2007,7 +2039,7 @@ class VolumeRenderer(BaseRenderer):
         1. Manual coarsening with `bores.grids.base.coarsen_grid()` before rendering
         2. Slicing to visualize specific regions: `data[::2, ::2, ::2]` (every other cell)
         3. Using `IsosurfaceRenderer` instead (supports up to 2M cells)
-        4. Using `CellBlockRenderer` for selective cell visualization
+        4. Using PyVista `pyvista3d.viz` with `PlotType.CELL_BLOCKS` for cell-level visualization
 
         :param figure: Plotly figure to add the volume rendering to
         :param data: 3D data array to render
@@ -2148,9 +2180,9 @@ class VolumeRenderer(BaseRenderer):
             for i, j, k in itertools.product(range(nx), range(ny), range(nz)):
                 z_centers[i, j, k] = (z_coords[i, j, k] + z_coords[i, j, k + 1]) / 2
 
-            # Note: Plotly Volume traces require regular rectangular grids
+            # Note: Plotly `Volume` traces require regular rectangular grids
             # We average Z coordinates across X,Y to get a representative profile
-            # For full dip visualization, use CellBlockRenderer instead
+            # For full dip visualization, use `pyvista3d.viz` instead
             z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
 
             # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
@@ -2222,7 +2254,10 @@ class VolumeRenderer(BaseRenderer):
             # For linear scale, use evenly spaced values
             scale_values = np.linspace(data_min, data_max, num=6)
 
-        scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
+        scale_text = [
+            self.format_value(value, metadata=metadata)  # type: ignore
+            for value in scale_values
+        ]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
@@ -2460,7 +2495,7 @@ class IsosurfaceRenderer(BaseRenderer):
 
             # Note: Plotly Isosurface traces require regular rectangular grids
             # We average Z coordinates across X,Y to get a representative profile
-            # For full dip visualization, use CellBlockRenderer instead
+            # For full dip visualization, use pyvista3d.viz instead
             z_profile = np.mean(z_centers, axis=(0, 1))  # Average across X,Y dimensions
 
             # Create meshgrid with averaged Z profile (reverse to show k=0 at top)
@@ -2531,7 +2566,10 @@ class IsosurfaceRenderer(BaseRenderer):
             # For linear scale, use evenly spaced values
             scale_values = np.linspace(data_min, data_max, num=6)
 
-        scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
+        scale_text = [
+            self.format_value(value, metadata=metadata)  # type: ignore
+            for value in scale_values
+        ]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
@@ -2656,533 +2694,6 @@ def interpolate_opacity(
     # scale_values: list of [fraction, opacity]
     fractions, opacities = zip(*scale_values)
     return np.interp(x, fractions, opacities)
-
-
-class CellBlockRenderer(BaseRenderer):
-    """
-    3D Cell block renderer that renders each cell as an individual voxel/block.
-
-    May be resource-intensive for large datasets; consider using `subsampling_factor` to reduce
-    the number of rendered cells.
-    """
-
-    supports_physical_dimensions: typing.ClassVar[bool] = True
-
-    def render(  # type: ignore[override]
-        self,
-        figure: go.Figure,
-        data: ThreeDimensionalGrid,
-        metadata: PropertyMeta,
-        cell_dimension: typing.Tuple[float, float],
-        depth_grid: ThreeDimensionalGrid,
-        cmin: typing.Optional[float] = None,
-        cmax: typing.Optional[float] = None,
-        subsampling_factor: int = 1,
-        downsampling_factor: int = 1,
-        downsampling_method: typing.Literal["mean", "max", "min"] = "mean",
-        opacity: typing.Optional[float] = None,
-        show_outline: typing.Optional[bool] = None,
-        outline_color: typing.Optional[str] = None,
-        outline_width: typing.Optional[float] = None,
-        use_opacity_scaling: bool = True,
-        z_scale: float = 1.0,
-        labels: typing.Optional["Labels"] = None,
-        **kwargs,
-    ) -> go.Figure:
-        """
-        Render a 3D cell block plot showing each cell as an individual voxel/block.
-
-        :param figure: Plotly figure to add the cell blocks to
-        :param data: 3D data array to render
-        :param metadata: Property metadata for labeling and scaling
-        :param cell_dimension: Physical size of each cell in x and y directions (feet)
-        :param depth_grid: 3D array with depth of each cell center (feet, positive downward)
-        :param cmin: Minimum data value for color mapping (defaults to data min).
-            This should mosttimes be the minimum of the original data range (not normalized).
-            When using log scale, cmin should be > 0.
-        :param cmax: Maximum data value for color mapping (defaults to data max).
-            This should mosttimes be the maximum of the original data range (not normalized).
-            When using log scale, cmax should be > 0.
-            Use cmin/cmax to control value to color mapping in the colorbar.
-        :param subsampling_factor: Factor to reduce the number of cells rendered for performance.
-            A value of 1 renders every cell, 2 renders every 2nd cell in each dimension
-            (reducing total cells by ~87.5%), 3 renders every 3rd cell (~96% reduction), etc.
-            For example, with a 100x100x50 grid: factor=1 shows 500K cells, factor=2 shows
-            ~62.5K cells, factor=5 shows ~8K cells. Use higher values for large datasets.
-        :param downsampling_factor: Factor to downsample (coarsen) the data and coordinates before rendering.
-            If >1, the data will be coarsened by this factor in each dimension using the specified method.
-        :param downsampling_method: Method to use for downsampling: "mean", "max", or "min"
-        :param opacity: Base opacity of the cell blocks (defaults to config value).
-        :param show_outline: Whether to show wireframe outlines around each cell block (defaults to config)
-        :param outline_color: Color of the cell block outlines (CSS color name, hex, or rgb, defaults to config)
-        :param outline_width: Width/thickness of the outline wireframes in pixels (defaults to config)
-        :param use_opacity_scaling: Whether to apply data-based opacity scaling for better depth perception
-        :param z_scale: Scale factor for Z-axis (thickness) to make layers appear thicker.
-            Values > 1.0 exaggerate vertical thickness, < 1.0 compress it. Default is 1.0 (true scale).
-            Useful with aspect_mode="data" when layers appear too thin.
-        :param labels: Optional collection of labels to add to the plot
-        :return: Plotly figure object with cell block visualization
-        """
-        if data.ndim != 3:
-            raise ValidationError("Cell block plotting requires 3D data")
-        if subsampling_factor < 1:
-            raise ValidationError("Subsample factor must be at least 1")
-
-        show_outline = (
-            show_outline if show_outline is not None else self.config.show_cell_outlines
-        )
-        outline_color = (
-            outline_color
-            if outline_color is not None
-            else self.config.cell_outline_color
-        )
-        outline_width = (
-            outline_width
-            if outline_width is not None
-            else self.config.cell_outline_width
-        )
-
-        # Create physical coordinate grids
-        coordinate_offsets = kwargs.get("coordinate_offsets", None)
-        x_coords, y_coords, z_coords = self.get_physical_coordinates(
-            cell_dimension, depth_grid, coordinate_offsets
-        )
-
-        normalized_data, display_data = self.normalize_data(
-            data, metadata=metadata, normalize_range=False
-        )
-        dx, dy = cell_dimension
-
-        # Apply downsampling if requested. Coarsen both data and coordinates.
-        if downsampling_factor > 1:
-            batch_size = (downsampling_factor,) * data.ndim
-            display_data, x_coords, y_coords, z_coords = coarsen_grid_and_coords(
-                display_data,
-                x_coords=x_coords,
-                y_coords=y_coords,
-                z_coords=z_coords,
-                batch_size=batch_size,
-                method=downsampling_method,
-            )
-
-        nx, ny, nz = display_data.shape
-
-        # Calculate opacity scaling based on data values if enabled
-        base_opacity = opacity if opacity is not None else self.config.opacity
-        if use_opacity_scaling and base_opacity < 1.0:
-            # Normalize data for opacity calculation (0-1 range)
-            data_min = float(np.nanmin(normalized_data))
-            data_max = float(np.nanmax(normalized_data))
-            if data_max > data_min:
-                cell_opacities = (normalized_data - data_min) / (data_max - data_min)
-                # Scale the opacity values to the range [base_opacity * 0.3, base_opacity]
-                # This ensures opacity scales with data while respecting the base value
-                cell_opacities = interpolate_opacity(
-                    cell_opacities, self.config.opacity_scale_values
-                )
-                # Scale to user's desired opacity range
-                cell_opacities = cell_opacities * base_opacity
-            else:
-                cell_opacities = np.full_like(display_data, base_opacity)
-        else:
-            cell_opacities = np.full_like(display_data, base_opacity)
-
-        # Extract index offsets to show original dataset indices in hover text
-        x_index_offset, y_index_offset, z_index_offset = coordinate_offsets or (0, 0, 0)
-
-        # Subsample for performance
-        i_indices = range(0, nx, subsampling_factor)
-        j_indices = range(0, ny, subsampling_factor)
-        k_indices = range(0, nz, subsampling_factor)
-
-        # Store original user-provided values in original units
-        original_cmin = cmin
-        original_cmax = cmax
-
-        # Convert user-provided values to internal processed units
-        if metadata.log_scale:
-            # Validate that user provided positive values for log scale
-            if original_cmin is not None and original_cmin <= 0:
-                raise ValidationError("cmin must be > 0 for log scale data")
-            if original_cmax is not None and original_cmax <= 0:
-                raise ValidationError("cmax must be > 0 for log scale data")
-
-            # Convert to log₁₀ space for internal use
-            cmin = np.log10(original_cmin) if original_cmin is not None else None
-            cmax = np.log10(original_cmax) if original_cmax is not None else None
-        else:
-            # For non-log scale, use values as-is
-            cmin = original_cmin
-            cmax = original_cmax
-
-        # If cmin/cmax not provided, calculate from normalized data
-        if cmin is None:
-            cmin = float(np.nanmin(normalized_data))
-        if cmax is None:
-            cmax = float(np.nanmax(normalized_data))
-
-        # Get data range for colorbar mapping using ORIGINAL values
-        data_min = (
-            original_cmin
-            if original_cmin is not None
-            else float(np.nanmin(display_data))
-        )
-        data_max = (
-            original_cmax
-            if original_cmax is not None
-            else float(np.nanmax(display_data))
-        )
-        colorscale = self.get_colorscale(
-            kwargs.get("color_scheme", metadata.color_scheme)
-        )
-
-        for i, j, k in itertools.product(i_indices, j_indices, k_indices):
-            # Get cell boundaries
-            x_min, x_max = x_coords[i], x_coords[i + 1]
-            y_min, y_max = y_coords[j], y_coords[j + 1]
-            z_min, z_max = z_coords[i, j, k], z_coords[i, j, k + 1]
-
-            # Calculate cell center for hover text
-            x_center = (x_min + x_max) / 2
-            y_center = (y_min + y_max) / 2
-            z_center = (z_min + z_max) / 2
-
-            # Create vertices for the cell block (cuboid)
-            # In our coordinate system: k=0 starts at visual top, Z increases downward
-            # So z_min is the top face (smaller Z value), z_max is the bottom face (larger Z value)
-            vertices = [
-                # Bottom face (z_min - higher elevation)
-                [x_min, y_min, z_min],  # 0
-                [x_max, y_min, z_min],  # 1
-                [x_max, y_max, z_min],  # 2
-                [x_min, y_max, z_min],  # 3
-                # Top face (z_max - lower elevation)
-                [x_min, y_min, z_max],  # 4
-                [x_max, y_min, z_max],  # 5
-                [x_max, y_max, z_max],  # 6
-                [x_min, y_max, z_max],  # 7
-            ]
-
-            # Convert to mesh3d format
-            vertices = np.array(vertices)
-            x_verts = vertices[:, 0]
-            y_verts = vertices[:, 1]
-            z_verts = vertices[:, 2]
-
-            # Define triangular faces with proper winding for correct normals
-            # Each face needs to be defined with counter-clockwise winding when viewed from outside
-            i_faces = []
-            j_faces = []
-            k_faces = []
-
-            # Bottom face (z_min) - normal pointing down (away from reservoir)
-            i_faces.extend([0, 0])
-            j_faces.extend([2, 3])
-            k_faces.extend([1, 0])
-
-            # Top face (z_max) - normal pointing up (into reservoir)
-            i_faces.extend([4, 4])
-            j_faces.extend([5, 6])
-            k_faces.extend([6, 7])
-
-            # Front face (y_min)
-            i_faces.extend([0, 0])
-            j_faces.extend([1, 4])
-            k_faces.extend([4, 5])
-            i_faces.extend([1, 1])
-            j_faces.extend([5, 4])
-            k_faces.extend([4, 0])
-
-            # Back face (y_max)
-            i_faces.extend([2, 2])
-            j_faces.extend([6, 7])
-            k_faces.extend([7, 3])
-            i_faces.extend([6, 6])
-            j_faces.extend([3, 7])
-            k_faces.extend([7, 2])
-
-            # Left face (x_min)
-            i_faces.extend([0, 0])
-            j_faces.extend([3, 7])
-            k_faces.extend([7, 4])
-            i_faces.extend([3, 3])
-            j_faces.extend([4, 7])
-            k_faces.extend([7, 0])
-
-            # Right face (x_max)
-            i_faces.extend([1, 1])
-            j_faces.extend([2, 6])
-            k_faces.extend([6, 5])
-            i_faces.extend([2, 2])
-            j_faces.extend([5, 6])
-            k_faces.extend([6, 1])
-
-            normalized_cell_value = normalized_data[i, j, k]  # For color mapping
-            cell_value = display_data[i, j, k]  # For hover text
-            cell_opacity = cell_opacities[i, j, k]
-
-            # Calculate cell thickness in Z direction (absolute value since z_max might be more negative)
-            cell_thickness_z = abs(z_max - z_min)
-
-            # Create hover text for this cell
-            hover_text = (
-                f"Cell ({x_index_offset + i}, {y_index_offset + j}, {z_index_offset + k})<br>"
-                f"X: {x_center:.2f} ft<br>"
-                f"Y: {y_center:.2f} ft<br>"
-                f"Z: {z_center:.2f} ft<br>"
-                f"{metadata.display_name}: {self.format_value(cell_value, metadata)} {metadata.unit}"
-                + (" (log scale)" if metadata.log_scale else "")
-                + "<br>"
-                f"Cell Size: {dx:.1f} x {dy:.1f} x {cell_thickness_z:.2f} ft<br>"
-                f"Opacity: {cell_opacity:.2f}"
-            )
-
-            # Create the main cell block with hover enabled directly on the mesh
-            # Apply hover text to all vertices so hover works on all faces
-            vertex_hover_text = [hover_text] * len(x_verts)
-
-            figure.add_trace(
-                go.Mesh3d(
-                    x=x_verts,
-                    y=y_verts,
-                    z=z_verts,
-                    i=i_faces,
-                    j=j_faces,
-                    k=k_faces,
-                    intensity=np.full(len(x_verts), normalized_cell_value),
-                    colorscale=colorscale,
-                    cmin=cmin,
-                    cmax=cmax,
-                    opacity=cell_opacity,
-                    showscale=False,  # Only show colorbar on the last trace
-                    lighting=self.config.lighting,
-                    lightposition=self.config.light_position,
-                    text=vertex_hover_text,  # Enables hover on all vertices
-                    hovertemplate="%{text}<extra></extra>",
-                    # Properties for better rendering, sharper, more defined blocks
-                    flatshading=True,  # Flat shading for more defined edges
-                    alphahull=0,  # Disable alphahull to reduce haloing
-                )
-            )
-
-            # Add wireframe outline if requested
-            if show_outline:
-                # Define edges of the cuboid for wireframe
-                edges = [
-                    # Bottom face edges
-                    (
-                        [x_min, x_max],
-                        [y_min, y_min],
-                        [z_min, z_min],
-                    ),  # front bottom
-                    (
-                        [x_max, x_max],
-                        [y_min, y_max],
-                        [z_min, z_min],
-                    ),  # right bottom
-                    (
-                        [x_max, x_min],
-                        [y_max, y_max],
-                        [z_min, z_min],
-                    ),  # back bottom
-                    (
-                        [x_min, x_min],
-                        [y_max, y_min],
-                        [z_min, z_min],
-                    ),  # left bottom
-                    # Top face edges
-                    (
-                        [x_min, x_max],
-                        [y_min, y_min],
-                        [z_max, z_max],
-                    ),  # front top
-                    (
-                        [x_max, x_max],
-                        [y_min, y_max],
-                        [z_max, z_max],
-                    ),  # right top
-                    (
-                        [x_max, x_min],
-                        [y_max, y_max],
-                        [z_max, z_max],
-                    ),  # back top
-                    (
-                        [x_min, x_min],
-                        [y_max, y_min],
-                        [z_max, z_max],
-                    ),  # left top
-                    # Vertical edges
-                    (
-                        [x_min, x_min],
-                        [y_min, y_min],
-                        [z_min, z_max],
-                    ),  # front left
-                    (
-                        [x_max, x_max],
-                        [y_min, y_min],
-                        [z_min, z_max],
-                    ),  # front right
-                    (
-                        [x_max, x_max],
-                        [y_max, y_max],
-                        [z_min, z_max],
-                    ),  # back right
-                    (
-                        [x_min, x_min],
-                        [y_max, y_max],
-                        [z_min, z_max],
-                    ),  # back left
-                ]
-
-                # Add each edge as a line
-                for x_edge, y_edge, z_edge in edges:
-                    figure.add_trace(
-                        go.Scatter3d(
-                            x=x_edge,
-                            y=y_edge,
-                            z=z_edge,
-                            mode="lines",
-                            line=dict(
-                                color=outline_color,
-                                width=outline_width,
-                            ),
-                            showlegend=False,
-                            hoverinfo="skip",  # Don't show hover for outline
-                        )
-                    )
-
-        # Add a dummy trace for the colorbar
-        if self.config.show_colorbar:
-            # Use the normalized data for the scale values
-            # For log scale, create evenly-spaced values in LOG space for better visual distribution
-            if metadata.log_scale and data_min > 0 and data_max > 0:
-                # Create values evenly spaced in log space
-                log_min = np.log10(data_min)
-                log_max = np.log10(data_max)
-                log_scale_values = np.linspace(log_min, log_max, num=6)
-                scale_values = 10**log_scale_values  # Convert back to original units
-            else:
-                # For linear scale, use evenly spaced values
-                scale_values = np.linspace(data_min, data_max, num=6)
-
-            scale_text = [
-                self.format_value(val, metadata=metadata) for val in scale_values
-            ]
-            scale_title = f"{metadata.display_name} ({metadata.unit})" + (
-                " - Log Scale" if metadata.log_scale else ""
-            )
-
-            figure.add_trace(
-                go.Scatter3d(
-                    x=[None],
-                    y=[None],
-                    z=[None],
-                    mode="markers",
-                    marker=dict(
-                        size=0.1,
-                        color=[cmin, cmax],  # Use normalized range (already set above)
-                        colorscale=colorscale,
-                        cmin=cmin,  # Match cell blocks
-                        cmax=cmax,  # Match cell blocks
-                        colorbar=dict(
-                            title=scale_title,
-                            tickmode="array",
-                            tickvals=scale_values,  # Positions within the normalized range
-                            ticktext=scale_text,
-                        ),
-                        opacity=0,
-                    ),
-                    showlegend=False,
-                    hoverinfo="skip",
-                )
-            )
-
-        # Calculate coordinate ranges for aspect ratio calculation
-        x_range = (
-            (float(x_coords.min()), float(x_coords.max()))
-            if x_coords.size > 0
-            else None
-        )
-        y_range = (
-            (float(y_coords.min()), float(y_coords.max()))
-            if y_coords.size > 0
-            else None
-        )
-        z_range = (
-            (float(z_coords.min()), float(z_coords.max()))
-            if z_coords.size > 0
-            else None
-        )
-
-        self.update_layout(
-            figure,
-            metadata,
-            x_title="X Distance (ft)",
-            y_title="Y Distance (ft)",
-            z_title="Z Distance (ft)",
-            z_scale=z_scale,
-            x_range=x_range,
-            y_range=y_range,
-            z_range=z_range,
-        )
-        if labels is not None:
-            self.apply_labels(
-                figure,
-                labels,
-                data=data,
-                metadata=metadata,
-                cell_dimension=cell_dimension,
-                depth_grid=depth_grid,
-                format_kwargs=kwargs.get("format_kwargs", None),
-                coordinate_offsets=kwargs.get("coordinate_offsets", None),
-            )
-        return figure
-
-    def update_layout(
-        self,
-        figure: go.Figure,
-        metadata: PropertyMeta,
-        x_title: str = "X Distance (ft)",
-        y_title: str = "Y Distance (ft)",
-        z_title: str = "Z Distance (ft)",
-        aspect_mode: typing.Optional[str] = None,
-        z_scale: float = 1.0,
-        x_range: typing.Optional[typing.Tuple[float, float]] = None,
-        y_range: typing.Optional[typing.Tuple[float, float]] = None,
-        z_range: typing.Optional[typing.Tuple[float, float]] = None,
-    ):
-        """
-        Update figure layout with dimensions and scene configuration for cell block plots.
-
-        :param figure: Plotly figure to update
-        :param metadata: Property metadata for title generation
-        :param x_title: Title for X axis
-        :param y_title: Title for Y axis
-        :param z_title: Title for Z axis
-        :param aspect_mode: Aspect mode ("auto", "cube", "data", or "manual")
-        :param z_scale: Scale factor for Z-axis visual spacing (affects display only, not coordinate values)
-        :param x_range: Tuple of (min, max) for x-axis data range
-        :param y_range: Tuple of (min, max) for y-axis data range
-        :param z_range: Tuple of (min, max) for z-axis data range
-        """
-        # CellBlock defaults to "data" to preserve physical dimensions
-        aspect_mode = aspect_mode or "data"
-        scene_config = self.get_scene_config(
-            x_title=x_title,
-            y_title=y_title,
-            z_title=z_title,
-            aspect_mode=aspect_mode,
-            z_scale=z_scale,
-            x_range=x_range,
-            y_range=y_range,
-            z_range=z_range,
-        )
-        figure.update_layout(
-            width=self.config.width,
-            height=self.config.height,
-            paper_bgcolor=self.config.paper_bgcolor,
-            scene=scene_config,
-        )
 
 
 class Scatter3DRenderer(BaseRenderer):
@@ -3382,7 +2893,10 @@ class Scatter3DRenderer(BaseRenderer):
             # For linear scale, use evenly spaced values
             scale_values = np.linspace(data_min, data_max, num=6)
 
-        scale_text = [self.format_value(val, metadata=metadata) for val in scale_values]
+        scale_text = [
+            self.format_value(value, metadata=metadata)  # type: ignore
+            for value in scale_values
+        ]
         scale_title = f"{metadata.display_name} ({metadata.unit})" + (
             " - Log Scale" if metadata.log_scale else ""
         )
@@ -3512,12 +3026,10 @@ PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
     # PlotType.CELL_BLOCKS: "3D Cell Blocks",
 }
 
-_missing = object()
-
 
 class DataVisualizer:
     """
-    3D visualizer for three-dimensional (reservoir) data.
+    Plotly-based 3D visualizer for three-dimensional (reservoir) data.
     """
 
     default_dashboard_title: typing.ClassVar[str] = "Model Properties"
@@ -3538,7 +3050,6 @@ class DataVisualizer:
             PlotType.VOLUME: VolumeRenderer(self._config),
             PlotType.ISOSURFACE: IsosurfaceRenderer(self._config),
             PlotType.SCATTER_3D: Scatter3DRenderer(self._config),
-            PlotType.CELL_BLOCKS: CellBlockRenderer(self._config),
         }
         self.registry = registry or property_registry
 
@@ -3558,7 +3069,7 @@ class DataVisualizer:
         Add a custom renderer for a specific plot type.
 
         :param plot_type: The type of plot to add (must be a valid PlotType)
-        :param renderer_type: The class implementing the ``BaseRenderer`` interface
+        :param renderer_type: The class implementing the `BaseRenderer` interface
         :param args: Initialization arguments for the renderer class
         :param kwargs: Initialization keyword arguments for the renderer class
         :raises ValidationError: If plot_type is not a valid PlotType
@@ -3605,61 +3116,7 @@ class DataVisualizer:
         :return: Tuple of (sliced_data, actual_slices_used)
         :raises ValidationError: If slicing would result in non-3D data
         """
-        nx, ny, nz = data.shape
-
-        def normalize_slice_spec(
-            spec: typing.Any, dim_size: int, dim_name: str
-        ) -> slice:
-            """Convert various slice specifications to a slice object."""
-            if spec is None:
-                return slice(None)  # Full dimension
-            elif isinstance(spec, int):
-                # Single index - convert to slice to maintain dimension
-                if spec < 0:
-                    spec = dim_size + spec  # Handle negative indexing
-                if spec < 0 or spec >= dim_size:
-                    raise ValidationError(
-                        f"{dim_name}_slice index {spec} out of range [0, {dim_size - 1}]"
-                    )
-                return slice(spec, spec + 1)  # Single element slice
-            elif isinstance(spec, tuple) and len(spec) == 2:
-                start, stop = spec
-                if start < 0:
-                    start = dim_size + start
-                if stop < 0:
-                    stop = dim_size + stop
-                return slice(start, stop)
-            elif isinstance(spec, slice):
-                return spec
-            else:
-                raise ValidationError(f"Invalid {dim_name}_slice specification: {spec}")
-
-        # Normalize all slice specifications
-        x_slice_obj = normalize_slice_spec(x_slice, nx, "x")
-        y_slice_obj = normalize_slice_spec(y_slice, ny, "y")
-        z_slice_obj = normalize_slice_spec(z_slice, nz, "z")
-
-        # Apply slicing
-        sliced_data = data[x_slice_obj, y_slice_obj, z_slice_obj]
-
-        # Validate result is still 3D
-        if sliced_data.ndim != 3:
-            raise ValidationError(
-                f"Slicing resulted in {sliced_data.ndim}D data. "
-                f"All slice specifications must preserve 3D structure. "
-                f"Result shape: {sliced_data.shape}"
-            )
-
-        # Check minimum size requirements
-        if any(dim < 1 for dim in sliced_data.shape):
-            raise ValidationError(
-                f"Slicing resulted in empty dimension(s). Shape: {sliced_data.shape}"
-            )
-        return typing.cast(ThreeDimensionalGrid, sliced_data), (
-            x_slice_obj,
-            y_slice_obj,
-            z_slice_obj,
-        )
+        return slice_grid(data, x_slice=x_slice, y_slice=y_slice, z_slice=z_slice)
 
     def _get_data(
         self,
@@ -3667,48 +3124,19 @@ class DataVisualizer:
         name: str,
     ) -> ThreeDimensionalGrid:
         """
-        Get property data from model state.
+        Extract property data from model state or reservoir model.
 
-        :param source: The model or model state containing reservoir model
-        :param name: Name of the property to extract as defined by the `PropertyMeta.name`
-        :return: A three-dimensional numpy array containing the state data
-        :raises AttributeError: If property is not found in reservoir model properties
-        :raises TypeError: If property is not a numpy array
+        Delegates to shared utility function for consistent behavior
+        across visualization modules.
+
+        :param source: The model or model state containing the property
+        :param name: Property name, supports dot notation (e.g., "permeability.x")
+        :return: 3D numpy array containing the property data
+        :raises ValidationError: If property name is invalid for the source type
+        :raises AttributeError: If property is not found
+        :raises TypeError: If property is not a 3-dimensional array
         """
-        source_type = "model state"
-        if isinstance(source, ReservoirModel):
-            if not name.startswith("model."):
-                raise ValidationError(
-                    f"Property {name.split('.')[-1]} not available on model"
-                )
-            name = name.removeprefix("model.")
-            source_type = "reservoir model"
-
-        state = source
-        name_parts = name.split(".")
-        data = None
-        if len(name_parts) == 1:
-            data = getattr(state, name_parts[0], _missing)
-        else:
-            # Nested property access (e.g., "permeability.x")
-            data = state
-            for part in name_parts:
-                value = getattr(data, part, _missing)
-                if value is not _missing:
-                    data = value
-                    continue
-                raise AttributeError(f"Property '{name}' not found in {source_type}.")
-
-        if data is None or data is _missing:
-            raise AttributeError(
-                f"Property '{name}' not found on {source_type} or property value is invalid."
-            )
-        elif not isinstance(data, np.ndarray):
-            data = np.array(data, dtype=get_dtype())
-
-        if data.ndim != 3:
-            raise TypeError(f"Property '{name}' is not a 3 dimensional array.")
-        return typing.cast(ThreeDimensionalGrid, data)
+        return get_data(source, name)
 
     def get_title(
         self,
@@ -3766,7 +3194,7 @@ class DataVisualizer:
         :param source: Either a `ReservoirModel` or `ModelState` containing reservoir model data, or a raw `ThreeDimensionalGrid`
         :param property: Name of the property to plot (from `PropertyRegistry`). Required when source is a ModelState,
             optional when source is a ThreeDimensionalGrid (will use generic metadata if not provided)
-        :param plot_type: Type of 3D plot to create (volume, isosurface, slice, scatter, cell_blocks)
+        :param plot_type: Type of 3D plot to create (volume, isosurface, scatter)
         :param figure: Optional existing Plotly figure to add to (creates new if None)
         :param title: Custom title for this plot (overrides config title)
         :param width: Custom width for this plot (overrides config width)
@@ -3798,8 +3226,8 @@ class DataVisualizer:
         viz.make_plot(grid_data, property="custom_prop")  # Uses registered property metadata if available
 
         # Plot with string plot type (converted internally)
-        viz.make_plot(state, "pressure", plot_type="volume_render")
-        viz.make_plot(grid_data, plot_type="cell_blocks")
+        viz.make_plot(state, "pressure", plot_type="volume")
+        viz.make_plot(grid_data, plot_type="isosurface")
 
         # Plot single layer at Z index 5
         viz.make_plot(state, "oil_saturation", z_slice=5)
@@ -3815,7 +3243,8 @@ class DataVisualizer:
 
         # Customize well visualization using kwargs (ModelState only)
         viz.make_plot(
-            state, "oil_saturation",
+            state,
+            property="oil_saturation",
             show_wells=True,
             injection_color='#ff6b6b',
             production_color='#51cf66',
@@ -3855,7 +3284,7 @@ class DataVisualizer:
                 cell_dimension = source.cell_dimension  # type: ignore
                 depth_grid = source.get_depth_grid(apply_dip=True)  # type: ignore
         else:
-            # Working with raw ThreeDimensionalGrid
+            # Working with raw `ThreeDimensionalGrid`
             data = source
 
             # Create or retrieve metadata
@@ -3944,7 +3373,7 @@ class DataVisualizer:
 
             # Extract well visualization kwargs from the kwargs dict using TypedDict keys
             well_kwargs: WellKwargs = {}
-            for key in WellKwargs.__annotations__.keys():
+            for key in WellKwargs.__annotations__:
                 if key in kwargs:
                     well_kwargs[key] = kwargs.pop(key)  # type: ignore
 
@@ -3973,6 +3402,7 @@ class DataVisualizer:
             layout_updates["height"] = height
 
         fig.update_layout(**layout_updates)
+        _register_figure(fig)
         return fig
 
     def animate(
@@ -4266,6 +3696,7 @@ class DataVisualizer:
                 }
             ],
         )
+        _register_figure(base_fig)
         return base_fig
 
     def help(self, plot_type: typing.Optional[PlotType] = None) -> str:

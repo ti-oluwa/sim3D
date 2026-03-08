@@ -94,9 +94,9 @@ class TwoPhaseCapillaryPressureTable(Serializable):
     Supports both scalar and array inputs up to 3D.
     """
 
-    wetting_phase: FluidPhase
+    wetting_phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """The first fluid phase (typically the wetting phase), e.g., 'water' or 'oil'."""
-    non_wetting_phase: FluidPhase
+    non_wetting_phase: typing.Union[FluidPhase, str] = attrs.field(converter=FluidPhase)
     """The second fluid phase (typically the non-wetting phase), e.g., 'oil' or 'gas'."""
     wetting_phase_saturation: npt.NDArray = attrs.field(converter=bores_array)
     """The saturation values for the wetting phase (phase1), ranging from 0 to 1."""

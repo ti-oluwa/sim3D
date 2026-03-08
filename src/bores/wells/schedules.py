@@ -731,11 +731,11 @@ class WellSchedule(Serializable, typing.Generic[Coordinates]):
     Each event is identified by a unique string identifier.
 
     Example:
+    
     ```python
     schedule = WellSchedule()
     schedule.add("event1", WellEvent(...))
     ```
-
     """
 
     events: typing.Dict[str, WellEvent[Coordinates]] = attrs.field(

@@ -226,7 +226,7 @@
     disable_capillary_effects: true
     disable_structural_dip: false
     miscibility_model: immiscible
-    saturation_cfl_threshold: 0.6
+    saturation_cfl_threshold: 0.7
     pressure_cfl_threshold: 0.9
     constants:
       STANDARD_PRESSURE:
