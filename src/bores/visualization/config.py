@@ -1,5 +1,5 @@
 """
-Configuration for BORES visualization module.
+Configuration for the visualization module.
 
 Loads visualization parameters from environment variables with sensible defaults.
 Override these by setting environment variables before importing BORES.

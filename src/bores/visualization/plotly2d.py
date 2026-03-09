@@ -288,11 +288,7 @@ class BaseRenderer(ABC):
 
         :return: Help string
         """
-        return f"""
-{self.__class__.__name__} renderer
-
-{self.render.__doc__ or ""}
-        """
+        return f"{self.__class__.__name__} renderer\n{self.render.__doc__ or ''}"
 
 
 class HeatmapRenderer(BaseRenderer):
@@ -343,7 +339,7 @@ class HeatmapRenderer(BaseRenderer):
         for i in range(data.shape[0]):
             hover_row = []
             for j in range(data.shape[1]):
-                hover_row.append(
+                hover_row.append(  # noqa
                     f"{x_label}: {x_coords[j]:.4f}<br>"
                     f"{y_label}: {y_coords[i]:.4f}<br>"
                     f"{metadata.display_name}: {self.format_value(display_data[i, j], metadata)} {metadata.unit}"
@@ -364,7 +360,7 @@ class HeatmapRenderer(BaseRenderer):
                 showscale=self.config.show_colorbar,
                 hovertemplate="%{text}<extra></extra>",
                 text=hover_text,
-                colorbar=dict(
+                colorbar=dict(  # noqa
                     title=f"{metadata.display_name} ({metadata.unit})"
                     + (" - Log Scale" if metadata.log_scale else "")
                 )
@@ -470,15 +466,15 @@ class ContourRenderer(BaseRenderer):
             zmin=data_min,
             zmax=data_max,
             showscale=self.config.show_colorbar,
-            contours=dict(
+            contours=dict(  # noqa
                 start=data_min,
                 end=data_max,
                 size=level_step,
                 showlabels=True,
-                labelfont=dict(size=10),
+                labelfont=dict(size=10),  # noqa
             ),
-            line=dict(width=self.config.contour_line_width),
-            colorbar=dict(
+            line=dict(width=self.config.contour_line_width),  # noqa
+            colorbar=dict(  # noqa
                 title=f"{metadata.display_name} ({metadata.unit})"
                 + (" - Log Scale" if metadata.log_scale else "")
             )
@@ -591,14 +587,14 @@ class ScatterRenderer(BaseRenderer):
                 x=x_scatter,
                 y=y_scatter,
                 mode="markers",
-                marker=dict(
+                marker=dict(  # noqa
                     size=marker_size,
                     color=values,
                     colorscale=colorscale,
                     cmin=cmin,
                     cmax=cmax,
                     opacity=self.config.opacity,
-                    colorbar=dict(
+                    colorbar=dict(  # noqa
                         title=f"{metadata.display_name} ({metadata.unit})"
                         + (" - Log Scale" if metadata.log_scale else "")
                     )
@@ -684,23 +680,26 @@ class LineRenderer(BaseRenderer):
             line_indices = [line_indices]
 
         # Plot horizontal lines (constant y, varying x)
-        if line_mode in ["horizontal", "both"]:
-            if len(line_indices) >= 1 and 0 <= line_indices[0] < data.shape[0]:
-                idx = line_indices[0]
-                figure.add_trace(
-                    go.Scatter(
-                        x=x_coords,
-                        y=display_data[idx, :],
-                        mode="lines+markers",
-                        name=f"{y_label}={y_coords[idx]:.4f}",
-                        line=dict(width=self.config.line_width),
-                        marker=dict(
-                            size=8,
-                            symbol="circle",
-                            line=dict(width=1, color="white"),
-                        ),
-                    )
+        if (
+            line_mode in ["horizontal", "both"]
+            and len(line_indices) >= 1
+            and 0 <= line_indices[0] < data.shape[0]
+        ):
+            idx = line_indices[0]
+            figure.add_trace(
+                go.Scatter(
+                    x=x_coords,
+                    y=display_data[idx, :],
+                    mode="lines+markers",
+                    name=f"{y_label}={y_coords[idx]:.4f}",
+                    line=dict(width=self.config.line_width),  # noqa
+                    marker=dict(  # noqa
+                        size=8,
+                        symbol="circle",
+                        line=dict(width=1, color="white"),
+                    ),
                 )
+            )
 
         # Plot vertical lines (constant x, varying y)
         if line_mode in ["vertical", "both"]:
@@ -712,11 +711,11 @@ class LineRenderer(BaseRenderer):
                         y=display_data[:, idx],
                         mode="lines+markers",
                         name=f"{x_label}={x_coords[idx]:.4f}",
-                        line=dict(width=self.config.line_width),
-                        marker=dict(
+                        line=dict(width=self.config.line_width),  # noqa
+                        marker=dict(  # noqa
                             size=8,
                             symbol="circle",
-                            line=dict(width=1, color="white"),
+                            line=dict(width=1, color="white"),  # noqa
                         ),
                     )
                 )
@@ -732,11 +731,11 @@ class LineRenderer(BaseRenderer):
                         y=display_data[:, idx],
                         mode="lines+markers",
                         name=f"{x_label}={x_coords[idx]:.4f}",
-                        line=dict(width=self.config.line_width),
-                        marker=dict(
+                        line=dict(width=self.config.line_width),  # noqa
+                        marker=dict(  # noqa
                             size=8,
                             symbol="circle",
-                            line=dict(width=1, color="white"),
+                            line=dict(width=1, color="white"),  # noqa
                         ),
                     )
                 )
@@ -822,7 +821,7 @@ class SurfaceRenderer(BaseRenderer):
                 cmin=cmin,
                 cmax=cmax,
                 showscale=self.config.show_colorbar,
-                colorbar=dict(
+                colorbar=dict(  # noqa
                     title=f"{metadata.display_name} ({metadata.unit})"
                     + (" - Log Scale" if metadata.log_scale else "")
                 )
@@ -849,7 +848,7 @@ class SurfaceRenderer(BaseRenderer):
         figure.update_layout(
             width=self.config.width,
             height=self.config.height,
-            scene=dict(
+            scene=dict(  # noqa
                 xaxis_title=x_label,
                 yaxis_title=y_label,
                 zaxis_title=title,

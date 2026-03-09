@@ -190,7 +190,7 @@ class Config(
     step is reduced or rejected.
     """
     max_pressure_change: float = attrs.field(  # type: ignore
-        default=100.0, validator=attrs.validators.ge(0)
+        default=500.0, validator=attrs.validators.ge(0)
     )
     """
     Maximum allowable pressure change (in psi) per time step.
@@ -198,7 +198,7 @@ class Config(
     Controls time step size by limiting pressure variations to maintain numerical stability
     and physical accuracy. When exceeded, the time step is reduced or rejected.
 
-    Default: 100 psi (~7 bar). This is suitable for most field-scale simulations with typical
+    Default: 500 psi (~35 bar). This is suitable for most field-scale simulations with typical
     reservoir pressures of 1000-5000 psi.
 
     Adjust based on simulation characteristics:

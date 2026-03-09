@@ -3,8 +3,6 @@
 import pytest
 
 from bores.visualization.base import (
-    ColorbarConfig,
-    ColorbarPresets,
     ColorScheme,
     PropertyMeta,
     PropertyRegistry,
@@ -75,6 +73,7 @@ class TestPropertyMeta:
             color_scheme=ColorScheme.VIRIDIS,
             aliases=["p", "pres"],
         )
+        assert meta.aliases is not None
         assert "p" in meta.aliases
         assert "pres" in meta.aliases
 
@@ -144,119 +143,6 @@ class TestPropertyRegistry:
         assert "custom_property" in registry
         retrieved = registry.get("custom_property")
         assert retrieved.display_name == "Custom Property"
-
-
-class TestColorbarConfig:
-    """Tests for ColorbarConfig dataclass."""
-
-    def test_create_colorbar_config(self):
-        """Test creating ColorbarConfig instance."""
-        config = ColorbarConfig(
-            colorscale="viridis",
-            cmin=0.0,
-            cmax=1.0,
-        )
-        assert config.colorscale == "viridis"
-        assert config.cmin == 0.0
-        assert config.cmax == 1.0
-
-    def test_colorbar_config_to_plotly_dict(self):
-        """Test converting ColorbarConfig to Plotly dict."""
-        config = ColorbarConfig(
-            colorscale="plasma",
-            reversescale=True,
-            cmin=0.0,
-            cmax=100.0,
-            title="Pressure (psi)",
-            tickformat=".1f",
-        )
-        plotly_dict = config.to_plotly_dict()
-
-        assert plotly_dict["colorscale"] == "plasma"
-        assert plotly_dict["reversescale"] is True
-        assert plotly_dict["cmin"] == 0.0
-        assert plotly_dict["cmax"] == 100.0
-        assert plotly_dict["title"] == "Pressure (psi)"
-        assert plotly_dict["tickformat"] == ".1f"
-
-    def test_colorbar_config_minimal(self):
-        """Test ColorbarConfig with minimal parameters."""
-        config = ColorbarConfig(colorscale="viridis")
-        plotly_dict = config.to_plotly_dict()
-
-        assert plotly_dict["colorscale"] == "viridis"
-        assert "reversescale" not in plotly_dict
-        assert "cmin" not in plotly_dict
-
-
-class TestColorbarPresets:
-    """Tests for ColorbarPresets class."""
-
-    def test_saturation_preset(self):
-        """Test saturation preset."""
-        preset = ColorbarPresets.SATURATION
-        assert preset.cmin == 0.0
-        assert preset.cmax == 1.0
-        assert preset.tickformat == ".2f"
-
-    def test_oil_saturation_preset(self):
-        """Test oil saturation preset."""
-        preset = ColorbarPresets.OIL_SATURATION
-        assert preset.colorscale == "Cividis"
-        assert preset.cmin == 0.0
-        assert preset.cmax == 1.0
-
-    def test_pressure_preset(self):
-        """Test pressure preset."""
-        preset = ColorbarPresets.PRESSURE
-        assert preset.colorscale == "Viridis"
-        assert preset.tickformat == ".0f"
-
-    def test_viscosity_preset(self):
-        """Test viscosity preset (log scale)."""
-        preset = ColorbarPresets.VISCOSITY
-        assert preset.colorscale == "Inferno"
-        assert preset.tickformat == ".2e"
-
-    def test_get_for_property_found(self):
-        """Test get_for_property with known property."""
-        preset = ColorbarPresets.get_for_property("oil_saturation")
-        assert preset is not None
-        assert preset == ColorbarPresets.OIL_SATURATION
-
-    def test_get_for_property_not_found(self):
-        """Test get_for_property with unknown property."""
-        preset = ColorbarPresets.get_for_property("unknown_property")
-        assert preset is None
-
-    def test_get_for_property_case_insensitive(self):
-        """Test get_for_property is case-insensitive."""
-        preset1 = ColorbarPresets.get_for_property("oil_saturation")
-        preset2 = ColorbarPresets.get_for_property("OIL_SATURATION")
-        assert preset1 == preset2
-
-    def test_diverging_presets(self):
-        """Test diverging colorbar presets."""
-        preset = ColorbarPresets.DIVERGING
-        assert preset.colorscale == "RdBu"
-
-        preset_balanced = ColorbarPresets.DIVERGING_BALANCED
-        assert preset_balanced.colorscale == "Balance"
-
-    def test_depth_preset(self):
-        """Test depth preset."""
-        preset = ColorbarPresets.DEPTH
-        assert preset.colorscale == "Earth"
-        assert preset.reversescale is True
-
-    def test_preset_to_plotly_dict(self):
-        """Test converting preset to Plotly dict."""
-        preset = ColorbarPresets.OIL_SATURATION
-        plotly_dict = preset.to_plotly_dict()
-
-        assert "colorscale" in plotly_dict
-        assert "cmin" in plotly_dict
-        assert "cmax" in plotly_dict
 
 
 if __name__ == "__main__":

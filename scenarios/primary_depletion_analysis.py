@@ -599,7 +599,7 @@ def _(analyst):
 
 @app.cell
 def _(bores):
-    viz = bores.pyvista3d.DataVisualizer(bores.pyvista3d.PlotConfig(notebook=True, off_screen=True))
+    viz = bores.plotly3d.DataVisualizer(bores.plotly3d.PlotConfig())
     return (viz,)
 
 
@@ -614,14 +614,14 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="cell_blocks",
+        plot_type="volume",
         width=960,
         height=600,
         opacity=1,
         labels=labels,
-        aspect_mode="cube",
+        aspect_mode="data",
         # z_scale=3.0,
-        marker_size=3,
+        # marker_size=3,
         show_wells=True,
         # show_surface_marker=True,
         show_perforations=True,
@@ -634,9 +634,9 @@ def _(bores, states, viz):
         # cmax=1,
     )
 
-    property = "oil-viscosity"
+    property = "water-saturation"
     figures = []
-    timesteps = [100]
+    timesteps = [104]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

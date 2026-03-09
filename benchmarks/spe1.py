@@ -670,7 +670,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         initial_step_size=bores.Time(days=5.0),
         max_step_size=bores.Time(days=30.0),
         min_step_size=bores.Time(minutes=20.0),
-        simulation_time=bores.Time(years=5.0),
+        simulation_time=bores.Time(years=10.0),
         max_cfl_number=0.9,
         ramp_up_factor=1.2,
         backoff_factor=0.5,
@@ -694,7 +694,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         rock_fluid_tables=rock_fluid_tables,
         scheme="impes",
         output_frequency=1,
-        pressure_solver="bicgstab",
+        pressure_solver="direct",
         pressure_preconditioner="cached_ilu",
         log_interval=10,
         pvt_tables=pvt_tables,
@@ -703,11 +703,11 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         disable_capillary_effects=True,
         freeze_saturation_pressure=True,
         miscibility_model="immiscible",
-        max_gas_saturation_change=0.05,
-        max_oil_saturation_change=0.05,
-        max_water_saturation_change=0.05,
-        max_pressure_change=200.0,
-        use_pseudo_pressure=False,
+        max_gas_saturation_change=0.2,
+        max_oil_saturation_change=0.4,
+        max_water_saturation_change=0.3,
+        max_pressure_change=800.0,
+        use_pseudo_pressure=True,
     )
 
     config.save(Path("./benchmarks/runs/spe1/setup/config.yaml"))
@@ -745,7 +745,7 @@ def run_simulation(Path, bores, store):
 
 @app.cell
 def load_states(stream):
-    states = list(stream.replay(steps=lambda s: s % 20 == 0))
+    states = list(stream.replay(steps=lambda s: s % 10 == 0))
     return (states,)
 
 
@@ -1164,14 +1164,14 @@ def _(bores, states, wells):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="volume",
-        width=1260,
-        height=960,
+        plot_type="cell_blocks",
+        width=1200,
+        height=720,
         opacity=0.7,
         # labels=labels,
-        # aspect_mode="data",
-        z_scale=1.0,
-        marker_size=12,
+        aspect_mode="data",
+        z_scale=10.0,
+        marker_size=6,
         show_wells=True,
         show_surface_marker=True,
         show_perforations=True,
@@ -1179,10 +1179,10 @@ def _(bores, states, wells):
         # cmax=1.1,
     )
 
-    viz = bores.plotly3d.DataVisualizer()
-    property = "pressure"
+    viz = bores.pyvista3d.DataVisualizer()
+    property = "oil-saturation"
     figures = []
-    timesteps = [100]
+    timesteps = [50]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

@@ -224,7 +224,7 @@ class MaterialBalanceError:
     """
     Per-phase material balance error for a simulation interval.
 
-    The error is computed as::
+    The error is computed as:
 
         MBE = (ΔPV_phase - (V_injected - V_produced)) / PV_phase_initial
 
@@ -2785,12 +2785,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             np.nanmean(current_model.fluid_properties.gas_formation_volume_factor_grid)
         )
 
-        BARRELS_TO_CUBIC_FEET = c.BARRELS_TO_CUBIC_FEET
+        bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
 
         oil_produced_stb = self.oil_produced(from_step, to_step)
         oil_injected_stb = self.oil_injected(from_step, to_step)
-        oil_produced_ft3 = oil_produced_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
-        oil_injected_ft3 = oil_injected_stb * avg_oil_fvf * BARRELS_TO_CUBIC_FEET
+        oil_produced_ft3 = oil_produced_stb * avg_oil_fvf * bbl_to_ft3
+        oil_injected_ft3 = oil_injected_stb * avg_oil_fvf * bbl_to_ft3
 
         injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
             wells=current_state.wells,
@@ -2811,10 +2811,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         water_produced_stb = self.water_produced(from_step, to_step)
         water_injected_stb = self.water_injected(from_step, to_step)
-        water_produced_ft3 = water_produced_stb * avg_water_fvf * BARRELS_TO_CUBIC_FEET
-        water_injected_ft3 = (
-            water_injected_stb * avg_water_fvf_injected * BARRELS_TO_CUBIC_FEET
-        )
+        water_produced_ft3 = water_produced_stb * avg_water_fvf * bbl_to_ft3
+        water_injected_ft3 = water_injected_stb * avg_water_fvf_injected * bbl_to_ft3
 
         gas_produced_scf = self.free_gas_produced(from_step, to_step)
         gas_injected_scf = self.gas_injected(from_step, to_step)

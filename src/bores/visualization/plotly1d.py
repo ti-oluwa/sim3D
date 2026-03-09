@@ -991,39 +991,41 @@ class TornadoRenderer(BaseRenderer):
         # Configure layout for tornado plot
         fig.update_layout(
             barmode="overlay",
-            title=dict(
+            title=dict(  # noqa
                 text=title
                 or self.config.title
                 or "Tornado Plot - Sensitivity Analysis",
                 x=0.5,
                 xanchor="center",
-                font=dict(size=self.config.title_font_size),
+                font=dict(size=self.config.title_font_size),  # noqa
             ),
-            xaxis_title=dict(
-                text=x_label, font=dict(size=self.config.axis_title_font_size)
+            xaxis_title=dict(  # noqa
+                text=x_label,
+                font=dict(size=self.config.axis_title_font_size),  # noqa
             ),
-            yaxis_title=dict(
-                text=y_label, font=dict(size=self.config.axis_title_font_size)
+            yaxis_title=dict(  # noqa
+                text=y_label,
+                font=dict(size=self.config.axis_title_font_size),  # noqa
             ),
             width=width if width is not None else self.config.width,
             height=height if height is not None else self.config.height,
             showlegend=self.config.show_legend,
             plot_bgcolor=self.config.plot_background_color,
             paper_bgcolor=self.config.background_color,
-            font=dict(family=self.config.font_family, size=self.config.font_size),
-            xaxis=dict(
+            font=dict(family=self.config.font_family, size=self.config.font_size),  # noqa
+            xaxis=dict(  # noqa
                 showgrid=self.config.show_grid,
                 gridcolor=self.config.xaxis_grid_color or self.config.grid_color,
                 zeroline=True,
                 zerolinewidth=2,
                 zerolinecolor="black",
             ),
-            yaxis=dict(
+            yaxis=dict(  # noqa
                 showgrid=False,
                 autorange="reversed",  # Top-to-bottom ordering
             ),
             hovermode="y" if self.config.show_hover else False,
-            margin=dict(
+            margin=dict(  # noqa
                 l=self.config.margin_left + 50,  # Extra space for variable names
                 r=self.config.margin_right,
                 t=self.config.margin_top,
@@ -1163,12 +1165,12 @@ class ScatterRenderer(BaseRenderer):
                 custom_hover = hover_template
 
             # Add scatter trace
-            trace_kwargs = dict(
+            trace_kwargs = dict(  # noqa
                 x=x_values,
                 y=y_values,
                 mode="markers",
                 name=name,
-                marker=dict(color=marker_color, size=sizes[i], symbol=symbols[i]),
+                marker=dict(color=marker_color, size=sizes[i], symbol=symbols[i]),  # noqa
                 hovertemplate=custom_hover if self.config.show_hover else None,
                 hoverinfo="skip" if not self.config.show_hover else None,
             )
@@ -1369,7 +1371,6 @@ class DataVisualizer:
                 f"Too many plots ({len(data_list)}) for {rows}x{cols} subplot grid"
             )
 
-        # Convert string plot_type to PlotType enum if needed
         if isinstance(plot_types, str):
             try:
                 plot_types = PlotType(plot_types)
@@ -1379,7 +1380,7 @@ class DataVisualizer:
                     f"Valid options are: {', '.join(pt.value for pt in PlotType)}"
                 )
 
-        # Handle plot types - expand to list if single value
+        # Handle plot types. Expand to list if single value
         if isinstance(plot_types, PlotType):
             plot_types_list = [plot_types] * len(data_list)
         elif isinstance(plot_types, collections.abc.Sequence):
@@ -1471,23 +1472,17 @@ def make_series_plot(
     **kwargs: typing.Any,
 ) -> go.Figure:
     """
-    Create a series plot (line plot) - convenience wrapper for LineRenderer.
-
-    This function provides backward compatibility with the old make_series_plot API.
+    Create a series plot (line plot). Convenience wrapper for `LineRenderer`.
 
     :param data: Series data to plot
     :param title: Plot title
     :param x_label: X-axis label
     :param y_label: Y-axis label
-    :param kwargs: Additional parameters passed to LineRenderer
+    :param kwargs: Additional parameters passed to `LineRenderer`
     :return: Plotly Figure
     """
     config = PlotConfig()
     renderer = LineRenderer(config)
     return renderer.render(
-        data,
-        x_label=x_label,
-        y_label=y_label,
-        title=title,
-        **kwargs,
+        data, x_label=x_label, y_label=y_label, title=title, **kwargs
     )

@@ -1,7 +1,7 @@
 """
 PyVista-based 3D Visualization Suite for Reservoir Simulation Data and Results.
 
-Drop-in replacement for plotly3d with VTK-powered rendering:
+Good drop-in replacement for plotly3d with VTK-powered rendering:
 - Single-mesh cell-block rendering (vs. N Plotly traces)
 - GPU-accelerated volume rendering (if available)
 - Correct structural-dip geometry via ExplicitStructuredGrid
@@ -21,7 +21,6 @@ from abc import ABC, abstractmethod
 from enum import Enum
 
 import attrs
-import imageio
 import numpy as np
 
 from bores._precision import get_dtype
@@ -40,12 +39,17 @@ from bores.visualization.config import MAX_VOLUME_CELLS_3D, RECOMMENDED_VOLUME_C
 from bores.visualization.plotly3d import (
     DEFAULT_CAMERA_POSITION,
     CameraPosition,
-    Label,  # type: ignore[import]
-    LabelCoordinate,  # type: ignore[import]
-    Labels,
     WellKwargs,
 )
-from bores.visualization.utils import get_data, slice_grid
+from bores.visualization.utils import (
+    FrameExporter,
+    Label,
+    LabelCoordinate,
+    Labels,
+    get_data,
+    resolve_exporter,
+    slice_grid,
+)
 from bores.wells import Wells
 
 try:
@@ -94,10 +98,15 @@ def _normalize_data(
     metadata: PropertyMeta,
 ) -> typing.Tuple[ThreeDimensionalGrid, ThreeDimensionalGrid]:
     """
-    Prepare data for visualization by applying log scaling and clipping.
+    Prepare data for visualization by clipping and handling zeros for log-scale.
 
-    Returns two arrays: `plot_data` (transformed for coloring) and `display_data`
-    (original units for labels/tooltips).
+    For log-scale properties, zeros/negatives are replaced with a small positive
+    value so PyVista's ``log_scale=True`` can map colors correctly. The data is
+    NOT log-transformed here — PyVista handles log color mapping internally and
+    displays original values on the colorbar.
+
+    Returns two arrays: `plot_data` (for coloring) and `display_data`
+    (original units for labels/tooltips). Both remain in original scale.
 
     :param data: Raw 3D data array
     :param metadata: Property metadata specifying transformations
@@ -108,10 +117,10 @@ def _normalize_data(
     plot = data.astype(dtype, copy=True)
 
     if metadata.log_scale:
+        # Replace zeros/negatives with small positive value for log color mapping
         pos_vals = data[data > 0]
         pos_min = float(np.nanmin(pos_vals)) if pos_vals.size > 0 else 1e-10
-        plot = np.where(data <= 0, pos_min * 0.1, data)
-        plot = np.log10(plot).astype(dtype)
+        plot = np.where(data <= 0, pos_min * 0.1, data).astype(dtype)
 
     if metadata.min_val is not None:
         plot = np.clip(plot, metadata.min_val, None).astype(dtype)
@@ -126,82 +135,28 @@ def _normalize_data(
     )
 
 
-def _to_log_space(
-    value: typing.Optional[float],
-    log_scale: bool,
-) -> typing.Optional[float]:
-    """
-    Convert scalar value to log10 space for log-scale visualizations.
-
-    :param value: Scalar value in original units (or None)
-    :param log_scale: Whether to apply log10 transformation
-    :return: Transformed value or None
-    :raises ValidationError: If value <= 0 for log-scale data
-    """
-    if value is None or not log_scale:
-        return value
-    if value <= 0:
-        raise ValidationError("cmin/cmax/isomin/isomax must be > 0 for log-scale data")
-    return float(np.log10(value))
-
-
 def _scalar_bar_args(
     metadata: PropertyMeta,
     extra: dict[str, typing.Any] | None = None,
-    clim: tuple[float, float] | None = None,
 ) -> dict[str, typing.Any]:
     """
     Build PyVista scalar bar configuration dictionary.
 
-    For log-scale properties, creates custom labels showing original values (10^x)
-    instead of log-transformed values (x).
-
     :param metadata: Property metadata containing display name, unit, and scale info
     :param extra: Optional dictionary to override default scalar bar settings
-    :param clim: Color limits (min, max) in plot space (log-transformed if log_scale=True)
     :return: Complete scalar bar arguments dict for `pv.Plotter.add_mesh()`
     """
-    # Build title
     label = f"{metadata.display_name} ({metadata.unit})"
     if metadata.log_scale:
         label += " (log scale)"
 
-    base: typing.Dict[str, typing.Any] = {
+    base: dict[str, typing.Any] = {
         "title": label,
         "n_labels": 6,
         "fmt": "%.3g",
         "title_font_size": 14,
         "label_font_size": 12,
     }
-
-    # For log-scale data, create custom labels showing original values
-    if metadata.log_scale and clim is not None:
-        log_min, log_max = clim
-
-        # Generate nice tick positions in log space
-        n_ticks = base.get("n_labels", 6)
-        log_ticks = np.linspace(log_min, log_max, n_ticks)
-
-        # Convert back to original space for labels
-        original_values = 10.0**log_ticks
-
-        # Create labels dict mapping log values to original values
-        # Format with appropriate precision based on magnitude
-        labels = {}
-        for log_val, orig_val in zip(log_ticks, original_values):
-            if orig_val >= 1000:
-                labels[f"{log_val:.6f}"] = f"{orig_val:.2f}"
-            elif orig_val >= 1:
-                labels[f"{log_val:.6f}"] = f"{orig_val:.3f}"
-            elif orig_val >= 0.01:
-                labels[f"{log_val:.6f}"] = f"{orig_val:.4f}"
-            elif orig_val >= 0.0001:
-                labels[f"{log_val:.6f}"] = f"{orig_val:.6f}"
-            else:
-                labels[f"{log_val:.6f}"] = f"{orig_val:.3e}"
-
-        base["labels"] = labels
-
     if extra:
         base.update(extra)
     return base
@@ -297,12 +252,18 @@ class PlotConfig:
     Overrides default title, position, formatting, etc.
     """
 
+    enable_interactive: bool = True
+    """
+    Enable interactive widgets (opacity slider, orthogonal clip planes,
+    keyboard shortcuts) for on-screen plots. Ignored for `off_screen` renders.
+    """
+
 
 def _make_image_data(
     data: ThreeDimensionalGrid,
     cell_dimension: typing.Optional[typing.Tuple[float, float]] = None,
     z_scale: float = 1.0,
-) -> typing.Any:
+) -> pv.ImageData:  # type: ignore
     """
     Build PyVista `ImageData` (uniform rectilinear grid) for flat reservoirs.
 
@@ -332,12 +293,12 @@ def _make_explicit_grid(
     depth_grid: ThreeDimensionalGrid,
     z_scale: float = 1.0,
     coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
-) -> typing.Any:
+) -> pv.StructuredGrid:  # type: ignore
     """
     Build PyVista `StructuredGrid` for reservoirs with structural dip.
 
     Corner-point coordinates computed via NumPy broadcasting (no Python loops).
-    Supports sliced grids via coordinate_offsets for proper spatial positioning.
+    Supports sliced grids via `coordinate_offsets` for proper spatial positioning.
 
     :param data: 3D array of cell values with shape (nx, ny, nz)
     :param cell_dimension: (dx, dy) cell spacing in physical units
@@ -406,7 +367,7 @@ def _render_wells(
     **kwargs: typing.Any,
 ) -> None:
     """
-    Render all wells with wellbore trajectories, casing, and surface markers.
+    Render all wells with wellbore trajectories, casing, and surface markers on the plotter.
 
     Renders complete well visualization including:
     - Wellbore trajectories through perforations (colored by well type)
@@ -422,12 +383,12 @@ def _render_wells(
     :param kwargs: Well rendering options:
         - show_wellbore: Show perforated intervals (default: True)
         - show_surface_marker: Show surface arrows (default: True)
-        - show_perforations: Highlight perforations with markers (default: False)
+        - show_well_labels: Show well name labels at surface (default: True)
         - injection_color: Injection well color (default: "#ff4444")
         - production_color: Production well color (default: "#44dd44")
         - shut_in_color: Shut-in well color (default: "#888888")
-        - wellbore_width: Line width (default: 5.0)
-        - surface_marker_size: Arrow scale factor (default: 2.0)
+        - wellbore_width: Line width (default: 11.0)
+        - surface_marker_size: Arrow thickness multiplier (default: 2.4)
     """
     if wells is None or not wells.exists():
         return
@@ -435,12 +396,12 @@ def _render_wells(
     # Extract kwargs with defaults
     show_wellbore = kwargs.get("show_wellbore", True)
     show_surface_marker = kwargs.get("show_surface_marker", True)
-    # show_perforations = kwargs.get("show_perforations", False)  # Reserved for future use
+    show_well_labels = kwargs.get("show_well_labels", True)
     injection_color = _normalize_hex_color(kwargs.get("injection_color", "#ff4444"))
     production_color = _normalize_hex_color(kwargs.get("production_color", "#44dd44"))
     shut_in_color = _normalize_hex_color(kwargs.get("shut_in_color", "#888888"))
-    line_width = float(kwargs.get("wellbore_width", 5.0))
-    surface_marker_size = float(kwargs.get("surface_marker_size", 2.0))
+    line_width = float(kwargs.get("wellbore_width", 11.0))
+    surface_marker_size = float(kwargs.get("surface_marker_size", 2.4))
 
     x_off, y_off, z_off = coordinate_offsets or (0, 0, 0)
 
@@ -468,12 +429,14 @@ def _render_wells(
     # Calculate surface Z coordinate
     z_surface = float(-z_off) if depth_grid is not None else 0.0
 
-    # Calculate arrow length for surface markers
+    # Calculate arrow length for surface markers (proportional to grid scale)
     if depth_grid is not None and depth_grid.size > 0:
         avg_layer_depth = float(np.mean(np.abs(np.diff(depth_grid, axis=2))))
-        arrow_length = avg_layer_depth * 1.5 * z_scale * surface_marker_size
+        arrow_length = avg_layer_depth * 3.0 * z_scale
     else:
-        arrow_length = 5.0 * surface_marker_size
+        arrow_length = 15.0
+    # Ensure a visible minimum
+    arrow_length = max(arrow_length, 5.0)
 
     # Process injection wells
     for well in wells.injection_wells:
@@ -543,17 +506,38 @@ def _render_wells(
 
         # Render surface marker (arrow pointing down)
         if show_surface_marker:
-            # Create arrow pointing from above surface down to surface
             arrow_top = z_surface + arrow_length
             arrow = pv.Arrow(  # type: ignore
                 start=(x_surf, y_surf, arrow_top),
-                direction=(0.0, 0.0, -arrow_length),
-                scale=surface_marker_size,
-                shaft_radius=0.015,
-                tip_radius=0.035,
+                direction=(0.0, 0.0, -1.0),
+                scale=arrow_length,
+                shaft_radius=0.04 * surface_marker_size,
+                tip_radius=0.08 * surface_marker_size,
                 tip_length=0.25,
             )
             plotter.add_mesh(arrow, color=color, opacity=opacity, smooth_shading=False)
+
+        # Render well name label with info
+        if show_well_labels and hasattr(well, "name") and well.name:
+            label_z = z_surface + arrow_length * 1.2
+            well_type = "Injection (Shut-in)" if well.is_shut_in else "Injection"
+            parts = [well.name, well_type]
+            if hasattr(well, "radius"):
+                parts.append(f"r={well.radius:.2f} ft")
+            if hasattr(well, "skin_factor"):
+                parts.append(f"S={well.skin_factor:.2f}")
+            if hasattr(well, "control") and well.control is not None:
+                parts.append(str(well.control)[:25])
+            label_text = "\n".join(parts)
+            plotter.add_point_labels(
+                [(x_surf, y_surf, label_z)],
+                [label_text],
+                font_size=10,
+                text_color=color,
+                bold=True,
+                show_points=False,
+                always_visible=True,
+            )
 
     # Process production wells
     for well in wells.production_wells:
@@ -623,17 +607,38 @@ def _render_wells(
 
         # Render surface marker (arrow pointing down into reservoir)
         if show_surface_marker:
-            # Create arrow pointing from above surface down into reservoir
             arrow_top = z_surface + arrow_length
             arrow = pv.Arrow(  # type: ignore
                 start=(x_surf, y_surf, arrow_top),
-                direction=(0.0, 0.0, -arrow_length),
-                scale=surface_marker_size,
-                shaft_radius=0.015,
-                tip_radius=0.035,
+                direction=(0.0, 0.0, -1.0),
+                scale=arrow_length,
+                shaft_radius=0.04 * surface_marker_size,
+                tip_radius=0.08 * surface_marker_size,
                 tip_length=0.25,
             )
             plotter.add_mesh(arrow, color=color, opacity=opacity, smooth_shading=False)
+
+        # Render well name label with info
+        if show_well_labels and hasattr(well, "name") and well.name:
+            label_z = z_surface + arrow_length * 1.2
+            well_type = "Production (Shut-in)" if well.is_shut_in else "Production"
+            parts = [well.name, well_type]
+            if hasattr(well, "radius"):
+                parts.append(f"r={well.radius:.2f} ft")
+            if hasattr(well, "skin_factor"):
+                parts.append(f"S={well.skin_factor:.2f}")
+            if hasattr(well, "control") and well.control is not None:
+                parts.append(str(well.control)[:25])
+            label_text = "\n".join(parts)
+            plotter.add_point_labels(
+                [(x_surf, y_surf, label_z)],
+                [label_text],
+                font_size=10,
+                text_color=color,
+                bold=True,
+                show_points=False,
+                always_visible=True,
+            )
 
 
 def _normalize_hex_color(color: str) -> str:
@@ -670,7 +675,7 @@ def _normalize_hex_color(color: str) -> str:
 _active_plotters: typing.List[weakref.ref] = []
 
 
-def _register_plotter(plotter: typing.Any) -> None:
+def _register_plotter(plotter: pv.Plotter) -> None:  # type: ignore
     """
     Track active plotter for automatic GPU resource cleanup.
 
@@ -740,7 +745,7 @@ class BaseRenderer(ABC):
         """
         self.config = config
 
-    def _plotter(self, title: str = "") -> typing.Any:
+    def _plotter(self, title: str = "") -> pv.Plotter:  # type: ignore
         """
         Create and configure PyVista Plotter instance.
 
@@ -769,7 +774,7 @@ class BaseRenderer(ABC):
         depth_grid: typing.Optional[ThreeDimensionalGrid],
         z_scale: float,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]],
-    ) -> typing.Any:
+    ) -> typing.Union[pv.ImageData, pv.StructuredGrid]:  # type: ignore
         """
         Build appropriate PyVista grid type based on geometry.
 
@@ -778,7 +783,7 @@ class BaseRenderer(ABC):
 
         :param plot_data: Normalized 3D data array
         :param cell_dimension: Optional (dx, dy) cell spacing
-        :param depth_grid: Optional depth array (triggers ExplicitStructuredGrid)
+        :param depth_grid: Optional depth array.
         :param z_scale: Vertical exaggeration factor
         :param coordinate_offsets: Optional (x, y, z) offsets for sliced grids
         :return: `pv.ImageData` or `pv.StructuredGrid`
@@ -800,8 +805,8 @@ class BaseRenderer(ABC):
         metadata: PropertyMeta,
         *args: typing.Any,
         **kwargs: typing.Any,
-    ) -> typing.Any:
-        """Render data and return configured Plotter."""
+    ) -> pv.Plotter:  # type: ignore
+        """Render data and return configured `Plotter`."""
         ...
 
     def help(self) -> str:
@@ -819,6 +824,7 @@ class VolumeRenderer(BaseRenderer):
     GPU ray-cast volume rendering via `pv.Plotter.add_volume(...)`.
 
     Auto-coarsens grids exceeding `MAX_VOLUME_CELLS_3D`.
+
     Falls back to `fixed_point` CPU mapper if GPU unavailable.
     """
 
@@ -840,7 +846,7 @@ class VolumeRenderer(BaseRenderer):
         title: str = "",
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         **kwargs: typing.Any,
-    ) -> typing.Any:
+    ) -> pv.Plotter:  # type: ignore
         """
         GPU-accelerated ray-cast volume rendering.
 
@@ -853,9 +859,9 @@ class VolumeRenderer(BaseRenderer):
         - **CPU alternatives**: For CPU-only systems, use `CELL_BLOCKS` or `ISOSURFACE`
           renderers instead for better performance.
         - **Mapper options**:
-            - "smart" (default): Auto-selects best available (GPU if available)
-            - "gpu": Force GPU ray-casting (fails if GPU unavailable)
-            - "fixed_point": CPU ray-casting (slower but works everywhere)
+            - `"smart"` (default): Auto-selects best available (GPU if available)
+            - `"gpu"`: Force GPU ray-casting (fails if GPU unavailable)
+            - `"fixed_point"`: CPU ray-casting (slower but works everywhere)
         - **Coarsening**: Set `auto_coarsen=True` (default) to reduce grid size
         - **Shading**: Disable shading (`shade=False`, default) for faster rendering
 
@@ -867,19 +873,18 @@ class VolumeRenderer(BaseRenderer):
         :param cmin: Minimum value for colormap in original data units
         :param cmax: Maximum value for colormap in original data units
         :param z_scale: Vertical exaggeration factor (default 1.0)
-        :param auto_coarsen: Coarsen grids exceeding MAX_VOLUME_CELLS_3D (default: True)
+        :param auto_coarsen: Coarsen grids exceeding `MAX_VOLUME_CELLS_3D` (default: True)
         :param volume_mapper: Volume mapper type: "smart", "gpu", or "fixed_point" (default: "smart")
         :param shade: Enable shading (slower but prettier) (default: False)
         :param title: Plot title (overrides config.title)
         :param coordinate_offsets: (x, y, z) offsets for sliced grids
         :param kwargs: Additional rendering options (color_scheme, n_colors, etc.)
-        :return: Configured pv.Plotter ready for .show() or .screenshot()
-        :raises ValidationError: If data is not 3-D or invalid volume_mapper
+        :return: Configured `pv.Plotter` ready for `.show()` or `.screenshot()`
+        :raises ValidationError: If data is not 3-D or invalid `volume_mapper`
         """
         if data.ndim != 3:
-            raise ValidationError("VolumeRenderer requires 3-D data")
+            raise ValidationError("Volume renderer requires 3-D data")
 
-        # Validate `volume_mapper` parameter
         valid_mappers = ("smart", "gpu", "fixed_point")
         if volume_mapper not in valid_mappers:
             raise ValidationError(
@@ -912,14 +917,7 @@ class VolumeRenderer(BaseRenderer):
         )
 
         plotter = self._plotter(title)
-        clim = (
-            (
-                _to_log_space(cmin, metadata.log_scale),
-                _to_log_space(cmax, metadata.log_scale),
-            )
-            if cmin is not None and cmax is not None
-            else None
-        )
+        clim = (cmin, cmax) if cmin is not None and cmax is not None else None
 
         # Use fewer colors for volume rendering by default (faster)
         n_colors = kwargs.get("n_colors", min(self.config.n_colors, 128))
@@ -932,6 +930,7 @@ class VolumeRenderer(BaseRenderer):
             "scalar_bar_args": _scalar_bar_args(metadata, self.config.scalar_bar_args),
             "n_colors": n_colors,
             "shade": shade,
+            "log_scale": metadata.log_scale,
         }
         if clim is not None:
             add_kwargs["clim"] = clim
@@ -967,7 +966,8 @@ class VolumeRenderer(BaseRenderer):
 class IsosurfaceRenderer(BaseRenderer):
     """
     Isosurface extraction via VTK Marching-Cubes (mesh.contour()).
-    cell_data_to_point_data is a single VTK filter pass.
+
+    `cell_data_to_point_data` is a single VTK filter pass.
     """
 
     supports_physical_dimensions = True
@@ -988,7 +988,7 @@ class IsosurfaceRenderer(BaseRenderer):
         title: str = "",
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         **kwargs: typing.Any,
-    ) -> typing.Any:
+    ) -> pv.Plotter:  # type: ignore
         """
         Extract and render isosurface contours via VTK Marching Cubes.
 
@@ -1009,7 +1009,7 @@ class IsosurfaceRenderer(BaseRenderer):
         :param title: Plot title
         :param coordinate_offsets: (x, y, z) offsets for sliced grids
         :param kwargs: Additional options (color_scheme, etc.)
-        :return: Configured pv.Plotter
+        :return: Configured `pv.Plotter`
         :raises ValidationError: If data is not 3-D
         """
         if data.ndim != 3:
@@ -1021,16 +1021,8 @@ class IsosurfaceRenderer(BaseRenderer):
         )
         grid_pts = grid.cell_data_to_point_data()
 
-        low = (
-            _to_log_space(isomin, metadata.log_scale)
-            if isomin is not None
-            else float(np.nanmin(plot_data))
-        )
-        high = (
-            _to_log_space(isomax, metadata.log_scale)
-            if isomax is not None
-            else float(np.nanmax(plot_data))
-        )
+        low = isomin if isomin is not None else float(np.nanmin(plot_data))
+        high = isomax if isomax is not None else float(np.nanmax(plot_data))
 
         contours = grid_pts.contour(
             isosurfaces=np.linspace(low, high, surface_count),  # type: ignore
@@ -1038,14 +1030,7 @@ class IsosurfaceRenderer(BaseRenderer):
         )
 
         plotter = self._plotter(title)
-        clim = (
-            (
-                _to_log_space(cmin, metadata.log_scale),
-                _to_log_space(cmax, metadata.log_scale),
-            )
-            if cmin is not None and cmax is not None
-            else None
-        )
+        clim = (cmin, cmax) if cmin is not None and cmax is not None else None
 
         add_kwargs: typing.Dict[str, typing.Any] = {
             "scalars": "values",
@@ -1055,6 +1040,7 @@ class IsosurfaceRenderer(BaseRenderer):
             "show_scalar_bar": self.config.show_colorbar,
             "scalar_bar_args": _scalar_bar_args(metadata, self.config.scalar_bar_args),
             "n_colors": self.config.n_colors,
+            "log_scale": metadata.log_scale,
         }
         if clim is not None:
             add_kwargs["clim"] = clim
@@ -1086,7 +1072,7 @@ class CellBlockRenderer(BaseRenderer):
         threshold_percentile: typing.Optional[float] = None,
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         **kwargs: typing.Any,
-    ) -> typing.Any:
+    ) -> pv.Plotter:  # type: ignore
         """
         Render grid as voxel blocks (single structured mesh).
 
@@ -1108,7 +1094,7 @@ class CellBlockRenderer(BaseRenderer):
         :param threshold_percentile: Hide cells below this percentile (0-100)
         :param coordinate_offsets: (x, y, z) offsets for sliced grids
         :param kwargs: Additional options (color_scheme, etc.)
-        :return: Configured pv.Plotter
+        :return: Configured `pv.Plotter`
         :raises ValidationError: If data not 3-D or subsampling_factor < 1
         """
         if data.ndim != 3:
@@ -1143,14 +1129,7 @@ class CellBlockRenderer(BaseRenderer):
             if show_edges is not None
             else (self.config.show_edges or self.config.show_cell_outlines or True)
         )
-        clim = (
-            (
-                _to_log_space(cmin, metadata.log_scale),
-                _to_log_space(cmax, metadata.log_scale),
-            )
-            if cmin is not None and cmax is not None
-            else None
-        )
+        clim = (cmin, cmax) if cmin is not None and cmax is not None else None
 
         add_kwargs: typing.Dict[str, typing.Any] = {
             "scalars": "values",
@@ -1163,11 +1142,13 @@ class CellBlockRenderer(BaseRenderer):
             "show_scalar_bar": self.config.show_colorbar,
             "scalar_bar_args": _scalar_bar_args(metadata, self.config.scalar_bar_args),
             "n_colors": self.config.n_colors,
+            "log_scale": metadata.log_scale,
         }
         if clim is not None:
             add_kwargs["clim"] = clim
 
         plotter.add_mesh(grid, **add_kwargs)
+        plotter._bores_mesh = grid  # type: ignore[attr-defined]
         return plotter
 
 
@@ -1192,7 +1173,7 @@ class Scatter3DRenderer(BaseRenderer):
         title: str = "",
         coordinate_offsets: typing.Optional[typing.Tuple[int, int, int]] = None,
         **kwargs: typing.Any,
-    ) -> typing.Any:
+    ) -> pv.Plotter:  # type: ignore
         """
         Render above-threshold cells as 3D point cloud.
 
@@ -1219,10 +1200,10 @@ class Scatter3DRenderer(BaseRenderer):
         if data.ndim != 3:
             raise ValidationError("Scatter3D renderer requires 3-D data")
 
-        plot_data, display_data = _normalize_data(data, metadata)
+        plot_data, _ = _normalize_data(data, metadata)
 
         xi, yi, zi = np.where(plot_data > threshold)
-        vals = display_data[xi, yi, zi]
+        vals = plot_data[xi, yi, zi]
 
         if vals.size == 0:
             raise ValidationError(
@@ -1254,14 +1235,7 @@ class Scatter3DRenderer(BaseRenderer):
         cloud["values"] = vals
 
         plotter = self._plotter(title)
-        clim = (
-            (
-                _to_log_space(cmin, metadata.log_scale),
-                _to_log_space(cmax, metadata.log_scale),
-            )
-            if cmin is not None and cmax is not None
-            else None
-        )
+        clim = (cmin, cmax) if cmin is not None and cmax is not None else None
 
         add_kwargs: typing.Dict[str, typing.Any] = {
             "scalars": "values",
@@ -1271,25 +1245,270 @@ class Scatter3DRenderer(BaseRenderer):
             "show_scalar_bar": self.config.show_colorbar,
             "scalar_bar_args": _scalar_bar_args(metadata, self.config.scalar_bar_args),
             "n_colors": self.config.n_colors,
+            "log_scale": metadata.log_scale,
         }
         if clim is not None:
             add_kwargs["clim"] = clim
 
         plotter.add_points(cloud, **add_kwargs)
+        plotter._bores_mesh = cloud  # type: ignore[attr-defined]
         return plotter
 
 
 _PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
-    PlotType.VOLUME: "3D Volume (PyVista)",
-    PlotType.ISOSURFACE: "3D Isosurface (PyVista)",
-    PlotType.SCATTER_3D: "3D Scatter (PyVista)",
-    PlotType.CELL_BLOCKS: "3D Cell Blocks (PyVista)",
+    PlotType.VOLUME: "3D Volume",
+    PlotType.ISOSURFACE: "3D Isosurface",
+    PlotType.SCATTER_3D: "3D Scatter",
+    PlotType.CELL_BLOCKS: "3D Cell Blocks",
 }
+
+
+def _setup_interactive_widgets(
+    plotter: typing.Any,
+    config: PlotConfig,
+    metadata: PropertyMeta,
+) -> None:
+    """
+    Add interactive widgets and keyboard shortcuts to a PyVista plotter.
+
+    **Sliders** (left side, vertical):
+        - Opacity
+        - Threshold (grid meshes only)
+
+    **Keyboard shortcuts** (press `h` to show/hide help overlay):
+        - `r` - reset camera
+        - `s` - save screenshot
+        - `a` - toggle axes
+        - `g` - toggle grid/cell edges
+        - `c` - toggle colorbar
+        - `1` / `2` / `3` - toggle X / Y / Z slice plane
+        - `b` - toggle box-crop widget
+        - `v` - cycle view presets (iso / top / front / right)
+        - `h` - toggle help overlay
+
+    Note: `e` is reserved by VTK (exit), `w` (wireframe), `f` (fly-to),
+    `p` (pick) - these are NOT overridden.
+    """
+    mesh = getattr(plotter, "_bores_mesh", None)
+    has_grid = mesh is not None and hasattr(mesh, "threshold")
+
+    cmap = _cmap(metadata.color_scheme)
+    mesh_kwargs: dict[str, typing.Any] = {
+        "scalars": "values",
+        "cmap": cmap,
+        "show_scalar_bar": False,
+        "log_scale": metadata.log_scale,
+    }
+
+    # Opacity slider (left side, upper)
+    def _set_opacity(value: float) -> None:
+        for actor in plotter.renderer.actors.values():
+            prop = getattr(actor, "GetProperty", None)
+            if prop is not None:
+                p = prop()
+                if hasattr(p, "SetOpacity"):
+                    p.SetOpacity(value)
+
+    plotter.add_slider_widget(
+        _set_opacity,
+        rng=[0.0, 1.0],
+        value=config.opacity,
+        title="Opacity",
+        pointa=(0.06, 0.92),
+        pointb=(0.06, 0.74),
+        style="modern",
+    )
+
+    # Threshold slider (left side, lower)
+    if has_grid:
+        scalars = mesh.active_scalars  # type: ignore
+        data_min = float(scalars.min()) if scalars is not None else 0.0
+        data_max = float(scalars.max()) if scalars is not None else 1.0
+
+        _thresh: dict[str, typing.Any] = {"actor": None}
+
+        def _apply_threshold(value: float) -> None:
+            if _thresh["actor"] is not None:
+                plotter.remove_actor(_thresh["actor"])
+                _thresh["actor"] = None
+            if value <= data_min:
+                return
+            try:
+                threshed = mesh.threshold(value, scalars="values")  # type: ignore
+                if threshed.n_cells > 0:
+                    _thresh["actor"] = plotter.add_mesh(
+                        threshed, opacity=config.opacity, **mesh_kwargs
+                    )
+            except Exception as exc:
+                logger.error(exc, exc_info=True)
+
+        plotter.add_slider_widget(
+            _apply_threshold,
+            rng=[data_min, data_max],
+            value=data_min,
+            title="Threshold",
+            pointa=(0.06, 0.64),
+            pointb=(0.06, 0.46),
+            style="modern",
+        )
+
+    # Orthogonal slice planes (1/2/3 keys)
+    # `add_mesh_slice()` shows a 2-D cross-section that the user can drag
+    # through the volume.  Press the key again to remove.
+    _slice_actors: dict[str, typing.Any] = {}
+
+    def _toggle_slice(axis: str, normal: str) -> None:
+        if not has_grid:
+            return
+        if axis in _slice_actors:
+            active = {k: v for k, v in _slice_actors.items() if k != axis}
+            plotter.clear_plane_widgets()
+            _slice_actors.clear()
+            for ax in active:
+                plotter.add_mesh_slice(
+                    mesh,
+                    normal=ax,
+                    interaction_event="always",
+                    **mesh_kwargs,
+                )
+                _slice_actors[ax] = True
+            logger.info("Removed %s slice plane", axis.upper())
+        else:
+            plotter.add_mesh_slice(
+                mesh,
+                normal=normal,
+                interaction_event="always",
+                **mesh_kwargs,
+            )
+            _slice_actors[axis] = True
+            logger.info("Added %s slice — drag to move through grid", axis.upper())
+
+    plotter.add_key_event("1", lambda: _toggle_slice("x", "x"))
+    plotter.add_key_event("2", lambda: _toggle_slice("y", "y"))
+    plotter.add_key_event("3", lambda: _toggle_slice("z", "z"))
+
+    # Box-crop widget (b key)
+    _box_state: dict[str, typing.Any] = {"active": False}
+
+    def _toggle_box() -> None:
+        if not has_grid:
+            return
+        if _box_state["active"]:
+            plotter.clear_box_widgets()
+            _box_state["active"] = False
+            logger.info("Box crop removed")
+        else:
+            plotter.add_mesh_clip_box(
+                mesh,
+                interaction_event="always",
+                color="grey",
+                **mesh_kwargs,
+            )
+            _box_state["active"] = True
+            logger.info("Box crop enabled — drag handles to crop")
+
+    plotter.add_key_event("b", _toggle_box)
+
+    # View presets (v key)
+    _VIEWS = ["isometric", "xy", "xz", "yz"]
+    _view_idx = {"i": 0}
+
+    def _cycle_view() -> None:
+        _view_idx["i"] = (_view_idx["i"] + 1) % len(_VIEWS)
+        view = _VIEWS[_view_idx["i"]]
+        if view == "isometric":
+            plotter.view_isometric()
+        else:
+            plotter.view_vector(
+                {"xy": (0, 0, 1), "xz": (0, -1, 0), "yz": (1, 0, 0)}[view]
+            )
+        logger.info("View: %s", view)
+
+    plotter.add_key_event("v", _cycle_view)
+
+    # Standard keyboard shortcuts
+    def _screenshot() -> None:
+        fname = "bores_screenshot.png"
+        plotter.screenshot(fname)
+        logger.info("Screenshot saved to %s", fname)
+
+    plotter.add_key_event("s", _screenshot)
+    plotter.add_key_event("0", lambda: plotter.reset_camera())
+
+    _axes_vis = {"v": config.show_axes}
+
+    def _toggle_axes() -> None:
+        (plotter.hide_axes if _axes_vis["v"] else plotter.show_axes)()
+        _axes_vis["v"] = not _axes_vis["v"]
+
+    plotter.add_key_event("a", _toggle_axes)
+
+    # g = toggle grid/cell edges (only affects 3D mesh actors, not text/labels)
+    _edge_vis = {"v": config.show_edges}
+
+    def _toggle_edges() -> None:
+        show = not _edge_vis["v"]
+        for actor in plotter.renderer.actors.values():
+            prop = getattr(actor, "GetProperty", None)
+            if prop is not None:
+                p = prop()
+                if hasattr(p, "SetEdgeVisibility"):
+                    p.SetEdgeVisibility(show)
+        _edge_vis["v"] = show
+
+    plotter.add_key_event("g", _toggle_edges)
+
+    _cbar_vis = {"v": config.show_colorbar}
+
+    def _toggle_colorbar() -> None:
+        _cbar_vis["v"] = not _cbar_vis["v"]
+        for name in list(plotter.scalar_bars.keys()):
+            actor = plotter.scalar_bars[name]
+            actor.SetVisibility(_cbar_vis["v"])
+        plotter.render()
+
+    plotter.add_key_event("k", _toggle_colorbar)
+
+    # Toggleable help overlay (h key)
+    _HELP_LINES = (
+        "  h  - toggle this help\n"
+        "  1  - X slice (YZ plane)\n"
+        "  2  - Y slice (XZ plane)\n"
+        "  3  - Z slice (XY plane)\n"
+        "  b  - box crop\n"
+        "  v  - cycle views\n"
+        "  0  - reset camera\n"
+        "  s  - screenshot\n"
+        "  a  - toggle axes\n"
+        "  g  - toggle edges\n"
+        "  k  - toggle colorbar"
+    )
+    _help_state: dict[str, typing.Any] = {"actor": None, "visible": False}
+
+    def _toggle_help() -> None:
+        if _help_state["visible"] and _help_state["actor"] is not None:
+            plotter.remove_actor(_help_state["actor"])
+            _help_state["actor"] = None
+            _help_state["visible"] = False
+        else:
+            _help_state["actor"] = plotter.add_text(
+                _HELP_LINES,
+                position="upper_left",
+                font_size=9,
+                color="#333333",
+                name="_bores_help",
+            )
+            _help_state["visible"] = True
+
+    plotter.add_key_event("h", _toggle_help)
+
+    # Small hint so users know help exists
+    plotter.add_text("h = help", position=(10, 10), font_size=8, color="#aaaaaa")
 
 
 class DataVisualizer:
     """
-    PyVista-based  3D visualizer for three-dimensional (reservoir) data.
+    PyVista-based 3D visualizer for three-dimensional (reservoir) data.
 
     ```python
     # Plotly
@@ -1438,13 +1657,13 @@ class DataVisualizer:
 
         Returns a PyVista `Plotter` instance ready for display or export.
         Call `.show()` to open interactive window, `.screenshot("file.png")`
-        for image export, or use in Jupyter notebooks with notebook=True.
+        for image export, or use in Jupyter notebooks with `notebook=True`.
 
         :param source: Data source - `ReservoirModel`, `ModelState`, or raw 3D array
         :param property: Property name to visualize (required for model/state sources).
             Supports dot notation like "permeability.x"
         :param plot_type: Visualization type - "volume", "isosurface", "scatter_3d",
-            "cell_blocks", or PlotType enum. Uses config default if None
+            "cell_blocks", or `PlotType` enum. Uses config default if None
         :param title: Plot title (auto-generated from property if None)
         :param width: Override window width in pixels
         :param height: Override window height in pixels
@@ -1585,6 +1804,7 @@ class DataVisualizer:
             )
 
         if labels is not None and self._config.show_labels:
+            z_sc = kwargs.get("z_scale", 1.0)
             for label in labels.visible():
                 if cell_dimension is not None and depth_grid is not None:
                     try:
@@ -1593,13 +1813,15 @@ class DataVisualizer:
                             depth_grid,  # type: ignore
                             coordinate_offsets,
                         )
+                        # as_physical returns -depth; apply z_scale to match mesh
+                        zp = zp * z_sc
                         position = [[xp, yp, zp]]
                         text = [
                             label.name
                             or f"({label.position.x},{label.position.y},{label.position.z})"
                         ]
                     except Exception as exc:
-                        logger.debug(f"Label physical coords failed: {exc}")
+                        logger.debug(f"Label physical coordinates failed: {exc}")
                         continue
                 else:
                     position = [[label.position.x, label.position.y, label.position.z]]
@@ -1613,20 +1835,44 @@ class DataVisualizer:
                     text,
                     font_size=label.font_size,
                     text_color=_normalize_hex_color(label.font_color),
-                    show_points=False,
+                    show_points=True,
+                    point_size=8,
+                    always_visible=True,
                 )
 
-        plotter.add_title(plot_title, font_size=14)
+        plotter.add_title(plot_title, font_size=10)
 
         # Enable cell/point picking for interactive data inspection
         if self._config.enable_picking and not self._config.off_screen:
-            plotter.enable_cell_picking(
-                callback=None,  # Use default callback (shows info in console/status)
-                show_message=True,
-                font_size=10,
-                color="black",
-                through=False,
-            )
+
+            def _on_pick(picked: typing.Any) -> None:
+                if picked is None or picked.n_cells == 0:
+                    return
+                center = picked.center
+                vals = picked.active_scalars
+                val = float(vals[0]) if vals is not None and len(vals) > 0 else None
+                parts = [
+                    f"Cell center: ({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f})"
+                ]
+                if val is not None:
+                    parts.append(f"Value: {val:.4g}")
+                logger.info(" | ".join(parts))
+
+            try:
+                plotter.enable_cell_picking(
+                    callback=_on_pick,
+                    show_message=False,
+                    through=False,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Cell picking unavailable in this PyVista version: \n{exc}",
+                    exc_info=True,
+                )
+
+        # Add interactive widgets
+        if cfg.enable_interactive and not cfg.off_screen:
+            _setup_interactive_widgets(plotter, cfg, metadata)
 
         return plotter
 
@@ -1653,24 +1899,25 @@ class DataVisualizer:
         z_slice: typing.Optional[
             typing.Union[int, slice, typing.Tuple[int, int]]
         ] = None,
+        save: typing.Union[FrameExporter, str, None] = None,
         output_gif: typing.Optional[str] = None,
         labels: typing.Optional[Labels] = None,
         **kwargs: typing.Any,
     ) -> typing.List[typing.Any]:
         """
-        Create animation from time-series data with optional GIF export.
+        Create animation from time-series data with optional export.
 
-        Renders each frame independently using `make_plot()`. When `output_gif` is specified,
-        frames are captured as images, composited into an animated GIF, and `Plotter`s
-        are closed to free GPU memory. Without `output_gif`, returns list of `Plotter`
-        instances for manual inspection or individual frame export.
+        Renders each frame independently using `make_plot(...)`. When a `save` is provided
+        (or `output_gif`), frames are captured as images,
+        passed to the save for export, and `Plotter`s are closed to free GPU memory.
+        Without a save, returns list of `Plotter` instances for manual inspection.
 
         :param sequence: Time-ordered collection of `ReservoirModel`s, `ModelState`s, or 3D arrays
         :param property: Property name to visualize (required for model/state sequences).
             Supports dot notation like "saturation.water"
         :param plot_type: Visualization type - "volume", "isosurface", "scatter_3d",
             "cell_blocks", or PlotType enum
-        :param frame_duration: Duration per frame in milliseconds (for GIF export)
+        :param frame_duration: Duration per frame in milliseconds
         :param step_size: Sample every Nth frame (1=all frames, 2=every other, etc.)
         :param width: Override window width in pixels for all frames
         :param height: Override window height in pixels for all frames
@@ -1678,55 +1925,51 @@ class DataVisualizer:
         :param x_slice: X-axis slice specification applied to all frames
         :param y_slice: Y-axis slice specification applied to all frames
         :param z_slice: Z-axis slice specification applied to all frames
-        :param output_gif: Output GIF file path. If provided, frames are exported and
-            Plotters are closed. If None, Plotters remain open for inspection
+        :param save: Animation exporter. Can be a FrameExporter instance, or a string
+            file path whose extension determines the format (e.g. "out.mp4", "out.gif",
+            "out.webp"). If None and `output_gif` is also None, no export is performed.
+        :param output_gif: Equivalent to `save=GifExporter(output_gif)`.
         :param labels: Optional Labels collection for annotations (same for all frames)
         :param kwargs: Additional renderer options (passed to make_plot):
             - cmin/cmax: Fixed colormap range across all frames (recommended)
             - opacity/z_scale/etc.: Other rendering options
         :return: List of `pv.Plotter` instances (one per frame after step_size sampling).
-            If `output_gif` specified, Plotters are closed but still returned
+            If exporting, `Plotter`s are closed but still returned
         :raises ValidationError: If sequence is empty or property required but missing
 
         Examples:
         ```python
         from bores.visualization.pyvista3d import viz
+        from bores.visualization.utils import Mp4Exporter
 
-        # Create GIF from simulation timesteps
-        viz.animate(
-            simulation_states,
-            property="saturation.oil",
-            plot_type="volume",
-            output_gif="oil_saturation.gif",
-            frame_duration=250,
-            step_size=5,  # Every 5th timestep
-            cmin=0.0, cmax=1.0  # Fixed range for consistent coloring
-        )
+        # Export as MP4 via string path
+        viz.animate(states, "saturation.oil", save="oil_saturation.mp4")
 
-        # Get individual plotters for manual export
-        plotters = viz.animate(
-            pressure_sequence,
-            property="pressure",
-            plot_type="isosurface",
-            step_size=10
-        )
-        # Export specific frames
-        plotters[0].screenshot("frame_000.png")
-        plotters[10].screenshot("frame_010.png")
+        # Export as GIF via string path
+        viz.animate(states, "pressure", save="pressure.gif")
+
+        # Export with explicit save for fine control
+        viz.animate(states, "pressure", save=Mp4Exporter("out.mp4", quality=10))
+
+        # Backward compatible GIF export
+        viz.animate(states, "pressure", output_gif="out.gif")
         ```
 
         Notes:
         - Automatically computes global cmin/cmax from all frames if not specified
-        - GIF export requires `imageio` package (included with pyvista optional dependency)
-        - For large sequences, use step_size > 1 to reduce frame count
+        - For large sequences, use `step_size > 1` to reduce frame count
         - Each frame uses same rendering options for visual consistency
         """
         if not sequence:
             raise ValidationError("Empty sequence")
 
+        resolved_exporter = resolve_exporter(save, output_gif)
+
         is_model_sequence = isinstance(sequence[0], (ModelState, ReservoirModel))
         if is_model_sequence and property is None:
-            raise ValidationError("property required for model / model state sequences")
+            raise ValidationError(
+                "`property` required for model / model state sequences"
+            )
 
         if isinstance(plot_type, str):
             plot_type = PlotType(plot_type)
@@ -1742,7 +1985,7 @@ class DataVisualizer:
             kwargs["cmax"] = float(np.nanmax([np.nanmax(a) for a in arrays]))  # type: ignore
 
         plotters: typing.List[typing.Any] = []
-        gif_frames: typing.List[np.ndarray] = []
+        frames: typing.List[np.ndarray] = []
 
         for i, item in enumerate(sequence[::step_size]):
             frame_title = title or (
@@ -1763,13 +2006,13 @@ class DataVisualizer:
             )
             plotters.append(plotter)
 
-            if output_gif is not None:
-                gif_frames.append(plotter.screenshot(return_img=True))
+            if resolved_exporter is not None:
+                frames.append(plotter.screenshot(return_img=True))
                 plotter.close()
 
-        if output_gif is not None and gif_frames:
-            imageio.mimsave(output_gif, gif_frames, duration=frame_duration / 1000)  # type: ignore
-            logger.info(f"Saved animation to {output_gif}")
+        if resolved_exporter is not None and frames:
+            fps = 1000.0 / frame_duration
+            resolved_exporter.write(frames, fps=fps)  # type: ignore
 
         return plotters
 
