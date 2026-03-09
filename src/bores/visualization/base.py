@@ -472,14 +472,14 @@ class PropertyRegistry:
             color_scheme=ColorScheme.MAGMA,
             aliases=["max_gas_sat", "max_sg", "max_gas_saturation"],
         ),
-        water_imbibtion_map=PropertyMeta(
+        water_imbibition_map=PropertyMeta(
             name="model.saturation_history.water_imbibition_flag_grid",
             display_name="Water Imbibition Map",
             unit="fraction",
             color_scheme=ColorScheme.CIVIDIS,
             aliases=["water_imbibition"],
         ),
-        gas_imbibtion_map=PropertyMeta(
+        gas_imbibition_map=PropertyMeta(
             name="model.saturation_history.gas_imbibition_flag_grid",
             display_name="Gas Imbibition Map",
             unit="fraction",

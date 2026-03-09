@@ -368,11 +368,13 @@ The `InstantaneousRates` result class contains:
 | Field | Unit | Description |
 | --- | --- | --- |
 | `oil_rate` | STB/day | Oil production/injection rate |
-| `gas_rate` | SCF/day | Gas production/injection rate |
+| `gas_rate` | SCF/day | Total gas rate (free gas + solution gas from oil) |
 | `water_rate` | STB/day | Water production/injection rate |
 | `total_liquid_rate` | STB/day | Oil + water rate |
-| `gas_oil_ratio` | SCF/STB | Producing GOR |
+| `gas_oil_ratio` | SCF/STB | Produced GOR (free gas + solution gas) / oil |
 | `water_cut` | fraction | Water cut (0 to 1) |
+| `free_gas_rate` | SCF/day | Free gas phase rate only |
+| `solution_gas_rate` | SCF/day | Solution gas (dissolved in produced oil, released at surface) |
 
 ### Instantaneous Rates History
 

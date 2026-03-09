@@ -438,11 +438,19 @@ import bores
 # Analytical relative permeability + analytical capillary pressure
 rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
         water_exponent=2.5,
         oil_exponent=2.0,
         gas_exponent=2.0,
     ),
     capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
         oil_water_entry_pressure_water_wet=5.0,
         oil_water_pore_size_distribution_index_water_wet=2.5,
         gas_oil_entry_pressure=1.0,
@@ -457,6 +465,10 @@ You can also combine tabular relative permeability with an analytical capillary 
 # Tabular capillary pressure with analytical relative permeability
 rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
         water_exponent=2.0,
         oil_exponent=2.0,
         gas_exponent=2.0,

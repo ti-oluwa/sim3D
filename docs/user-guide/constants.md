@@ -198,6 +198,13 @@ if const is not None:
 | `MIN_OIL_ZONE_THICKNESS` | 5 | Minimum oil zone thickness warning (ft) |
 | `FLUID_INCOMPRESSIBILITY_THRESHOLD` | 1e-6 | Minimum fluid compressibility below which the fluid should be considered incompressible |
 
+### Reservoir Fluid Defaults
+
+| Constant | Value | Description |
+|---|---|---|
+| `RESERVOIR_OIL_NAME` | `"n-Dodecane"` | Default displaced fluid for simulations (CoolProp compatible) |
+| `RESERVOIR_GAS_NAME` | `"Methane"` | Default gas that exists with oil in the reservoir (CoolProp compatible) |
+
 ### Valid Ranges
 
 | Constant | Value | Unit | Description |

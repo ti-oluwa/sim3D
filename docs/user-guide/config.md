@@ -19,11 +19,20 @@ import bores
 
 rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
         water_exponent=2.5,
         oil_exponent=2.0,
         gas_exponent=2.0,
     ),
-    capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(),
+    capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
+    ),
 )
 
 config = bores.Config(
@@ -133,12 +142,12 @@ See [Solvers](simulation/solvers.md) and [Preconditioners](simulation/preconditi
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `saturation_cfl_threshold` | `float` | `0.6` | Maximum saturation CFL number |
+| `saturation_cfl_threshold` | `float` | `0.7` | Maximum saturation CFL number |
 | `pressure_cfl_threshold` | `float` | `0.9` | Maximum pressure CFL number |
 | `max_oil_saturation_change` | `float` | `0.2` | Maximum oil saturation change per step |
 | `max_water_saturation_change` | `float` | `0.2` | Maximum water saturation change per step |
 | `max_gas_saturation_change` | `float` | `0.1` | Maximum gas saturation change per step |
-| `max_pressure_change` | `float` | `100.0` | Maximum pressure change per step (psi) |
+| `max_pressure_change` | `float` | `500.0` | Maximum pressure change per step (psi) |
 
 !!! tip "Gas Saturation Change Limits"
 
@@ -166,8 +175,8 @@ See [Time Step Control](simulation/timestep-control.md) for guidance on adjustin
 
 The default relative mobility ranges are:
 
-- Oil: $10^{-9}$ to $10^{6}$
-- Water: $10^{-9}$ to $10^{6}$
+- Oil: $10^{-12}$ to $10^{6}$
+- Water: $10^{-12}$ to $10^{6}$
 - Gas: $10^{-12}$ to $10^{6}$
 
 These ranges prevent division by zero and numerical overflow in mobility calculations. You rarely need to change them.

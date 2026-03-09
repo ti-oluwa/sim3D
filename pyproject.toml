@@ -114,7 +114,7 @@ dev = [
     "watchdog>=6.0.0",
 ]
 docs = [
-    "mkdocs>=1.6.0",
+    "mkdocs>=1.6.0,<2.0.0",
     "mkdocs-material>=9.5.0",
     "mkdocs-minify-plugin>=0.8.0",
     "pymdown-extensions>=10.11.0",

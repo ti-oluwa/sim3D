@@ -215,11 +215,20 @@ The `wells_()` factory groups wells into a `Wells` container. Since this is a de
 ```python
 rock_fluid_tables = bores.RockFluidTables(
     relative_permeability_table=bores.BrooksCoreyThreePhaseRelPermModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
         water_exponent=2.0,
         oil_exponent=2.0,
         gas_exponent=2.0,
     ),
-    capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(),
+    capillary_pressure_table=bores.BrooksCoreyCapillaryPressureModel(
+        irreducible_water_saturation=0.25,
+        residual_oil_saturation_water=0.30,
+        residual_oil_saturation_gas=0.15,
+        residual_gas_saturation=0.05,
+    ),
 )
 ```
 

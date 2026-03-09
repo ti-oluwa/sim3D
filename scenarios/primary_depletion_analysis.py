@@ -599,7 +599,7 @@ def _(analyst):
 
 @app.cell
 def _(bores):
-    viz = bores.plotly3d.DataVisualizer(bores.plotly3d.PlotConfig())
+    viz = bores.pyvista3d.DataVisualizer(bores.pyvista3d.PlotConfig(off_screen=False))
     return (viz,)
 
 
@@ -614,34 +614,35 @@ def _(bores, states, viz):
     labels.add_well_labels(well_positions, well_names)
 
     shared_kwargs = dict(
-        plot_type="volume",
+        plot_type="cell_blocks",
         width=960,
         height=600,
         opacity=1,
-        labels=labels,
+        # labels=labels,
         aspect_mode="data",
         # z_scale=3.0,
         # marker_size=3,
         show_wells=True,
-        # show_surface_marker=True,
+        surface_count=20,
+        show_surface_marker=False,
         show_perforations=True,
         show_cell_outlines=True,
         show_edges=True,
-        # x_slice=(10, 20),
-        # z_slice=(0, 8),
+        x_slice=(10, 20),
+        z_slice=(0, 5),
         # isomin=0.6,
         # cmin=0,
         # cmax=1,
     )
 
-    property = "water-saturation"
+    property = "pressure"
     figures = []
-    timesteps = [104]
+    timesteps = [14]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],
             property=property,
-            title=f"{property.strip('-').title()} Profile at Timestep {timestep}",
+            # title=f"{property.strip('-').title()} Profile at Timestep {timestep}",
             **shared_kwargs,
         )
         figures.append(figure)

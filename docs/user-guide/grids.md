@@ -96,7 +96,11 @@ top_depth = 5000.0  # ft subsea
 absolute_depth = depth + top_depth
 ```
 
-For elevation measured upward from the base, use `bores.build_elevation_grid()` instead.
+For elevation measured upward from the base, use `bores.build_elevation_grid()` instead. It also accepts an optional `datum` parameter:
+
+```python
+elevation = bores.build_elevation_grid(thickness, datum=5000.0)
+```
 
 !!! note "Depth Convention"
 
@@ -200,6 +204,46 @@ The `transition_curvature_exponent` controls the shape of the saturation profile
 !!! info "When to Use Transition Zones"
 
     Transition zones are most important when your grid is fine enough to resolve the capillary fringe (cells smaller than the transition thickness). For coarse field-scale grids, sharp contacts are usually sufficient and avoid potential numerical artifacts from partially saturated cells.
+
+---
+
+## Seeding Phase Saturation
+
+When an injection well targets a phase (gas or water) that has zero saturation at initial conditions, the injector cannot flow because its productivity index is proportional to phase mobility. With zero saturation, relative permeability is zero, PI is zero, and the injector contributes nothing regardless of BHP. This deadlock persists indefinitely.
+
+`bores.seed_phase_saturation()` breaks this by setting a small nonzero saturation at the injector perforations, just above the relative permeability threshold. Oil saturation is reduced by the same amount to preserve $S_o + S_w + S_g = 1$.
+
+```python
+import bores
+
+# After building initial saturation grids
+Sw, So, Sg = bores.build_saturation_grids(...)
+
+# Seed gas saturation at gas injector cells
+Sw, So, Sg = bores.seed_phase_saturation(
+    oil_saturation_grid=So,
+    cells=[(9, 9, 0), (9, 9, 1), (9, 9, 2)],  # Injector perforations
+    phase="gas",
+    gas_saturation_grid=Sg,
+    water_saturation_grid=Sw,
+    relperm_table=relperm_model,  # Auto-detects minimum kr > 0
+)
+```
+
+You can either provide a `relperm_table` for automatic seed detection (recommended), or specify an explicit `seed_saturation` value:
+
+```python
+# Explicit seed value
+Sw, So, Sg = bores.seed_phase_saturation(
+    oil_saturation_grid=So,
+    cells=injector_cells,
+    phase="water",
+    water_saturation_grid=Sw,
+    seed_saturation=0.05,  # 5% water saturation at injector cells
+)
+```
+
+Use `inplace=True` to modify grids in place instead of creating copies.
 
 ---
 

@@ -54,15 +54,19 @@ class InstantaneousRates:
     oil_rate: float
     """Oil production/injection rate in stock tank barrels per day (STB/day)."""
     gas_rate: float
-    """Gas production/injection rate in standard cubic feet per day (SCF/day)."""
+    """Total gas rate (free gas + solution gas from oil) in standard cubic feet per day (SCF/day)."""
     water_rate: float
     """Water production/injection rate in stock tank barrels per day (STB/day)."""
     total_liquid_rate: float
     """Total liquid (oil + water) rate in stock tank barrels per day (STB/day)."""
     gas_oil_ratio: float
-    """Gas-oil ratio in standard cubic feet per stock tank barrel (SCF/STB)."""
+    """Produced gas-oil ratio (free gas + solution gas) / oil in SCF/STB."""
     water_cut: float
     """Water cut as a fraction (0 to 1) of total liquid production."""
+    free_gas_rate: float = 0.0
+    """Free gas phase rate in standard cubic feet per day (SCF/day)."""
+    solution_gas_rate: float = 0.0
+    """Solution gas (dissolved in produced oil, released at surface) rate in SCF/day."""
 
 
 @attrs.frozen(slots=True)
@@ -2258,8 +2262,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
 
         oil_rate = 0.0
-        gas_rate = 0.0
+        free_gas_rate = 0.0
+        solution_gas_rate = 0.0
         water_rate = 0.0
+        oil_production_stb_day = None
 
         # Sum production rates from all grid cells
         if (oil_production := state.production.oil) is not None:
@@ -2273,12 +2279,21 @@ class ModelAnalyst(typing.Generic[NDimension]):
             oil_rate = np.nansum(oil_production_stb_day)
 
         if (gas_production := state.production.gas) is not None:
-            # Convert from ft³/day to SCF/day using gas FVF
+            # Convert from ft³/day to SCF/day using gas FVF (free gas phase only)
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
             gas_production_scf_day = gas_production / gas_fvf_grid
             if mask is not None:
                 gas_production_scf_day = np.where(mask, gas_production_scf_day, 0.0)
-            gas_rate = np.nansum(gas_production_scf_day)
+            free_gas_rate = float(np.nansum(gas_production_scf_day))
+
+        # Solution gas: gas dissolved in produced oil that flashes out at surface conditions.
+        # Amount = Rs (SCF/STB) * oil production (STB/day)
+        if oil_production_stb_day is not None:
+            rs_grid = state.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            solution_gas_rate = float(np.nansum(rs_grid * oil_production_stb_day))
+
+        # Total gas = free gas phase + solution gas from oil
+        gas_rate = free_gas_rate + solution_gas_rate
 
         if (water_production := state.production.water) is not None:
             # Convert from ft³/day to STB/day using water FVF
@@ -2298,7 +2313,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         logger.debug(
             f"Instantaneous production rates at time step {step}: "
-            f"oil={oil_rate:.2f} STB/day, gas={gas_rate:.2f} SCF/day, water={water_rate:.2f} STB/day, "
+            f"oil={oil_rate:.2f} STB/day, gas={gas_rate:.2f} SCF/day "
+            f"(free={free_gas_rate:.2f}, solution={solution_gas_rate:.2f}), "
+            f"water={water_rate:.2f} STB/day, "
             f"GOR={gas_oil_ratio:.2f}, WaterCut={water_cut:.4f}"
         )
         result = InstantaneousRates(
@@ -2308,6 +2325,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             total_liquid_rate=total_liquid_rate,
             gas_oil_ratio=gas_oil_ratio,
             water_cut=water_cut,
+            free_gas_rate=free_gas_rate,
+            solution_gas_rate=solution_gas_rate,
         )
         self._instantaneous_production_rates_cache[cache_key] = result
         return result
@@ -2399,6 +2418,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             total_liquid_rate=total_liquid_rate,
             gas_oil_ratio=gas_oil_ratio,
             water_cut=water_cut,
+            free_gas_rate=gas_rate,
+            solution_gas_rate=0.0,
         )
         self._instantaneous_injection_rates_cache[cache_key] = result
         return result
@@ -2611,7 +2632,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
 
         # Normalize drive contributions to get drive indices
-        # Single normalization pass - dividing by `total_drive` already ensures they sum to 1
         total_drive = (
             solution_gas_drive + gas_cap_drive + water_drive + compaction_drive
         )
@@ -2655,7 +2675,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         The check is based on the fundamental conservation equation expressed at
         *reservoir conditions*:
 
-        ```math
+        ```
         MBE_phase = (ΔPV_phase - (V_inj - V_prod)) / PV_phase_initial
         ```
 
@@ -2724,7 +2744,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         porosity = initial_model.rock_properties.porosity_grid
         net_to_gross = initial_model.rock_properties.net_to_gross_ratio_grid
 
-        # Bulk pore volume per cell (ft³) — constant through simulation
+        # Pore volume per cell (ft³)
         pore_volume_grid = cell_area_ft2 * thickness * porosity * net_to_gross  # ft³
 
         def _phase_pore_volume(saturation_grid: np.ndarray) -> np.ndarray:
@@ -2798,12 +2818,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             temperature_grid=current_model.fluid_properties.temperature_grid,
             grid_shape=current_model.grid_shape,
         )
-        avg_gas_fvf_injected = (
+        avg_injected_gas_fvf = (
             float(np.nanmean(injected_gas_fvf_grid))
             if not np.all(np.isnan(injected_gas_fvf_grid))
             else avg_gas_fvf
         )
-        avg_water_fvf_injected = (
+        avg_injected_water_fvf = (
             float(np.nanmean(injected_water_fvf_grid))
             if not np.all(np.isnan(injected_water_fvf_grid))
             else avg_water_fvf
@@ -2812,12 +2832,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
         water_produced_stb = self.water_produced(from_step, to_step)
         water_injected_stb = self.water_injected(from_step, to_step)
         water_produced_ft3 = water_produced_stb * avg_water_fvf * bbl_to_ft3
-        water_injected_ft3 = water_injected_stb * avg_water_fvf_injected * bbl_to_ft3
+        water_injected_ft3 = water_injected_stb * avg_injected_water_fvf * bbl_to_ft3
 
         gas_produced_scf = self.free_gas_produced(from_step, to_step)
         gas_injected_scf = self.gas_injected(from_step, to_step)
         gas_produced_ft3 = gas_produced_scf * avg_gas_fvf
-        gas_injected_ft3 = gas_injected_scf * avg_gas_fvf_injected
+        gas_injected_ft3 = gas_injected_scf * avg_injected_gas_fvf
 
         # MBE = (ΔPV - (V_inj - V_prod)) / PV_initial
         # Net flux into the reservoir is (injection - production).
@@ -3591,7 +3611,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             state.model.fluid_properties.water_formation_volume_factor_grid
         )  # bbl/STB
         # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
-        avg_water_fvf_injected = (
+        avg_injected_water_fvf = (
             float(np.nanmean(injected_water_fvf_grid))
             if not np.all(np.isnan(injected_water_fvf_grid))
             else avg_water_fvf_produced
@@ -3599,7 +3619,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # Get gas formation volume factor for injected gas
         # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
-        avg_gas_fvf_injected = (
+        avg_injected_gas_fvf = (
             float(np.nanmean(injected_gas_fvf_grid))
             if not np.all(np.isnan(injected_gas_fvf_grid))
             else avg_gas_fvf
@@ -3607,10 +3627,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # Calculate injected reservoir volumes (numerator)
         injected_water_reservoir_volume = (
-            cumulative_water_injected * avg_water_fvf_injected
+            cumulative_water_injected * avg_injected_water_fvf
         )  # bbl
         injected_gas_reservoir_volume = (
-            cumulative_gas_injected * avg_gas_fvf_injected
+            cumulative_gas_injected * avg_injected_gas_fvf
         )  # bbl
         total_injected_volume = (
             injected_water_reservoir_volume + injected_gas_reservoir_volume

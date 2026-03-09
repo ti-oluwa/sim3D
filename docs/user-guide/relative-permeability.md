@@ -121,6 +121,10 @@ import bores
 
 # Water-wet system (default)
 relperm_ww = bores.BrooksCoreyThreePhaseRelPermModel(
+    irreducible_water_saturation=0.25,
+    residual_oil_saturation_water=0.30,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.05,
     water_exponent=2.5,
     oil_exponent=2.0,
     gas_exponent=2.0,
@@ -129,6 +133,10 @@ relperm_ww = bores.BrooksCoreyThreePhaseRelPermModel(
 
 # Oil-wet system
 relperm_ow = bores.BrooksCoreyThreePhaseRelPermModel(
+    irreducible_water_saturation=0.15,
+    residual_oil_saturation_water=0.35,
+    residual_oil_saturation_gas=0.20,
+    residual_gas_saturation=0.05,
     water_exponent=3.0,
     oil_exponent=1.5,
     gas_exponent=2.0,
@@ -200,6 +208,10 @@ import bores
 
 # Using the default Eclipse rule
 relperm = bores.BrooksCoreyThreePhaseRelPermModel(
+    irreducible_water_saturation=0.25,
+    residual_oil_saturation_water=0.30,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.05,
     water_exponent=2.0,
     oil_exponent=2.0,
     gas_exponent=2.0,
@@ -208,6 +220,10 @@ relperm = bores.BrooksCoreyThreePhaseRelPermModel(
 
 # Using Stone I for a water-wet carbonate
 relperm_stone = bores.BrooksCoreyThreePhaseRelPermModel(
+    irreducible_water_saturation=0.25,
+    residual_oil_saturation_water=0.30,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.05,
     water_exponent=2.5,
     oil_exponent=2.0,
     gas_exponent=2.0,
@@ -535,6 +551,8 @@ If you have both a tabular model from lab data and an analytical model, you can 
 relperm_bc = bores.BrooksCoreyThreePhaseRelPermModel(
     irreducible_water_saturation=0.20,
     residual_oil_saturation_water=0.25,
+    residual_oil_saturation_gas=0.15,
+    residual_gas_saturation=0.05,
     water_exponent=2.5,
     oil_exponent=2.0,
 )

@@ -982,7 +982,7 @@ class IsosurfaceRenderer(BaseRenderer):
         isomax: typing.Optional[float] = None,
         cmin: typing.Optional[float] = None,
         cmax: typing.Optional[float] = None,
-        surface_count: int = 50,
+        surface_count: int = 20,
         opacity: typing.Optional[float] = None,
         z_scale: float = 1.0,
         title: str = "",
@@ -1264,7 +1264,7 @@ _PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
 
 
 def _setup_interactive_widgets(
-    plotter: typing.Any,
+    plotter: pv.Plotter,  # type: ignore
     config: PlotConfig,
     metadata: PropertyMeta,
 ) -> None:
@@ -1276,18 +1276,18 @@ def _setup_interactive_widgets(
         - Threshold (grid meshes only)
 
     **Keyboard shortcuts** (press `h` to show/hide help overlay):
-        - `r` - reset camera
+        - `0` - reset camera
         - `s` - save screenshot
         - `a` - toggle axes
         - `g` - toggle grid/cell edges
-        - `c` - toggle colorbar
+        - `k` - toggle colorbar
         - `1` / `2` / `3` - toggle X / Y / Z slice plane
         - `b` - toggle box-crop widget
         - `v` - cycle view presets (iso / top / front / right)
         - `h` - toggle help overlay
 
     Note: `e` is reserved by VTK (exit), `w` (wireframe), `f` (fly-to),
-    `p` (pick) - these are NOT overridden.
+    `p` (pick). These are not overridden.
     """
     mesh = getattr(plotter, "_bores_mesh", None)
     has_grid = mesh is not None and hasattr(mesh, "threshold")
@@ -1355,7 +1355,7 @@ def _setup_interactive_widgets(
     # Orthogonal slice planes (1/2/3 keys)
     # `add_mesh_slice()` shows a 2-D cross-section that the user can drag
     # through the volume.  Press the key again to remove.
-    _slice_actors: dict[str, typing.Any] = {}
+    _slice_actors = {}
 
     def _toggle_slice(axis: str, normal: str) -> None:
         if not has_grid:
@@ -1381,14 +1381,14 @@ def _setup_interactive_widgets(
                 **mesh_kwargs,
             )
             _slice_actors[axis] = True
-            logger.info("Added %s slice — drag to move through grid", axis.upper())
+            logger.info("Added %s slice. Drag to move through grid", axis.upper())
 
-    plotter.add_key_event("1", lambda: _toggle_slice("x", "x"))
-    plotter.add_key_event("2", lambda: _toggle_slice("y", "y"))
-    plotter.add_key_event("3", lambda: _toggle_slice("z", "z"))
+    plotter.add_key_event("1", lambda: _toggle_slice("x", "x"))  # type: ignore
+    plotter.add_key_event("2", lambda: _toggle_slice("y", "y"))  # type: ignore
+    plotter.add_key_event("3", lambda: _toggle_slice("z", "z"))  # type: ignore
 
     # Box-crop widget (b key)
-    _box_state: dict[str, typing.Any] = {"active": False}
+    _box_state = {"active": False}
 
     def _toggle_box() -> None:
         if not has_grid:
@@ -1405,9 +1405,9 @@ def _setup_interactive_widgets(
                 **mesh_kwargs,
             )
             _box_state["active"] = True
-            logger.info("Box crop enabled — drag handles to crop")
+            logger.info("Box crop enabled. Drag handles to crop")
 
-    plotter.add_key_event("b", _toggle_box)
+    plotter.add_key_event("b", _toggle_box)  # type: ignore
 
     # View presets (v key)
     _VIEWS = ["isometric", "xy", "xz", "yz"]
@@ -1417,14 +1417,14 @@ def _setup_interactive_widgets(
         _view_idx["i"] = (_view_idx["i"] + 1) % len(_VIEWS)
         view = _VIEWS[_view_idx["i"]]
         if view == "isometric":
-            plotter.view_isometric()
+            plotter.view_isometric()  # type: ignore
         else:
             plotter.view_vector(
-                {"xy": (0, 0, 1), "xz": (0, -1, 0), "yz": (1, 0, 0)}[view]
+                {"xy": (0, 0, 1), "xz": (0, -1, 0), "yz": (1, 0, 0)}[view]  # type: ignore
             )
         logger.info("View: %s", view)
 
-    plotter.add_key_event("v", _cycle_view)
+    plotter.add_key_event("v", _cycle_view)  # type: ignore
 
     # Standard keyboard shortcuts
     def _screenshot() -> None:
@@ -1432,16 +1432,16 @@ def _setup_interactive_widgets(
         plotter.screenshot(fname)
         logger.info("Screenshot saved to %s", fname)
 
-    plotter.add_key_event("s", _screenshot)
-    plotter.add_key_event("0", lambda: plotter.reset_camera())
+    plotter.add_key_event("s", _screenshot)  # type: ignore
+    plotter.add_key_event("0", lambda: plotter.reset_camera())  # type: ignore
 
     _axes_vis = {"v": config.show_axes}
 
     def _toggle_axes() -> None:
-        (plotter.hide_axes if _axes_vis["v"] else plotter.show_axes)()
+        (plotter.hide_axes if _axes_vis["v"] else plotter.show_axes)()  # type: ignore
         _axes_vis["v"] = not _axes_vis["v"]
 
-    plotter.add_key_event("a", _toggle_axes)
+    plotter.add_key_event("a", _toggle_axes)  # type: ignore
 
     # g = toggle grid/cell edges (only affects 3D mesh actors, not text/labels)
     _edge_vis = {"v": config.show_edges}
@@ -1456,7 +1456,7 @@ def _setup_interactive_widgets(
                     p.SetEdgeVisibility(show)
         _edge_vis["v"] = show
 
-    plotter.add_key_event("g", _toggle_edges)
+    plotter.add_key_event("g", _toggle_edges)  # type: ignore
 
     _cbar_vis = {"v": config.show_colorbar}
 
@@ -1467,23 +1467,23 @@ def _setup_interactive_widgets(
             actor.SetVisibility(_cbar_vis["v"])
         plotter.render()
 
-    plotter.add_key_event("k", _toggle_colorbar)
+    plotter.add_key_event("k", _toggle_colorbar)  # type: ignore
 
     # Toggleable help overlay (h key)
     _HELP_LINES = (
-        "  h  - toggle this help\n"
-        "  1  - X slice (YZ plane)\n"
-        "  2  - Y slice (XZ plane)\n"
-        "  3  - Z slice (XY plane)\n"
-        "  b  - box crop\n"
-        "  v  - cycle views\n"
-        "  0  - reset camera\n"
-        "  s  - screenshot\n"
-        "  a  - toggle axes\n"
-        "  g  - toggle edges\n"
-        "  k  - toggle colorbar"
+        "  'h'  - Toggle this help\n"
+        "  '1'  - X slice (YZ plane)\n"
+        "  '2'  - Y slice (XZ plane)\n"
+        "  '3'  - Z slice (XY plane)\n"
+        "  'b'  - Box crop\n"
+        "  'v'  - Cycle views\n"
+        "  '0'  - Reset camera\n"
+        "  's'  - Screenshot\n"
+        "  'a'  - Toggle axes\n"
+        "  'g'  - Toggle edges\n"
+        "  'k'  - Toggle colorbar"
     )
-    _help_state: dict[str, typing.Any] = {"actor": None, "visible": False}
+    _help_state: typing.Dict[str, typing.Any] = {"actor": None, "visible": False}
 
     def _toggle_help() -> None:
         if _help_state["visible"] and _help_state["actor"] is not None:
@@ -1493,17 +1493,19 @@ def _setup_interactive_widgets(
         else:
             _help_state["actor"] = plotter.add_text(
                 _HELP_LINES,
-                position="upper_left",
+                position="upper_right",
                 font_size=9,
                 color="#333333",
                 name="_bores_help",
             )
             _help_state["visible"] = True
 
-    plotter.add_key_event("h", _toggle_help)
+    plotter.add_key_event("h", _toggle_help)  # type: ignore
 
     # Small hint so users know help exists
-    plotter.add_text("h = help", position=(10, 10), font_size=8, color="#aaaaaa")
+    plotter.add_text(
+        "Press 'h' for help", position=(10, 10), font_size=8, color="#aaaaaa"
+    )
 
 
 class DataVisualizer:
@@ -1696,7 +1698,7 @@ class DataVisualizer:
 
         # Isosurface with custom colors and slicing
         plotter = viz.make_plot(
-            state, "saturation.oil",
+            state, "oil-saturation",
             plot_type="isosurface",
             z_slice=(0, 10),
             isomin=0.3, isomax=0.9,
@@ -1763,13 +1765,13 @@ class DataVisualizer:
 
         plot_type = plot_type or self._config.plot_type
 
-        cfg = self._config
+        config = self._config
         if width is not None or height is not None:
-            cfg = attrs.evolve(
-                cfg, width=width or cfg.width, height=height or cfg.height
+            config = attrs.evolve(
+                config, width=width or config.width, height=height or config.height
             )
 
-        renderer = type(self.get_renderer(plot_type))(cfg)
+        renderer = type(self.get_renderer(plot_type))(config)
 
         plot_title = title or (
             f"{_PLOT_TYPE_NAMES.get(plot_type, '3D')}: {metadata.display_name}"
@@ -1840,7 +1842,7 @@ class DataVisualizer:
                     always_visible=True,
                 )
 
-        plotter.add_title(plot_title, font_size=10)
+        plotter.add_title(plot_title, font_size=8)
 
         # Enable cell/point picking for interactive data inspection
         if self._config.enable_picking and not self._config.off_screen:
@@ -1863,6 +1865,7 @@ class DataVisualizer:
                     callback=_on_pick,
                     show_message=False,
                     through=False,
+                    style="surface",
                 )
             except Exception as exc:
                 logger.error(
@@ -1871,8 +1874,8 @@ class DataVisualizer:
                 )
 
         # Add interactive widgets
-        if cfg.enable_interactive and not cfg.off_screen:
-            _setup_interactive_widgets(plotter, cfg, metadata)
+        if config.enable_interactive and not config.off_screen:
+            _setup_interactive_widgets(plotter, config, metadata)
 
         return plotter
 
@@ -1925,7 +1928,7 @@ class DataVisualizer:
         :param x_slice: X-axis slice specification applied to all frames
         :param y_slice: Y-axis slice specification applied to all frames
         :param z_slice: Z-axis slice specification applied to all frames
-        :param save: Animation exporter. Can be a FrameExporter instance, or a string
+        :param save: Animation exporter. Can be a `FrameExporter` instance, or a string
             file path whose extension determines the format (e.g. "out.mp4", "out.gif",
             "out.webp"). If None and `output_gif` is also None, no export is performed.
         :param output_gif: Equivalent to `save=GifExporter(output_gif)`.
@@ -1943,7 +1946,7 @@ class DataVisualizer:
         from bores.visualization.utils import Mp4Exporter
 
         # Export as MP4 via string path
-        viz.animate(states, "saturation.oil", save="oil_saturation.mp4")
+        viz.animate(states, "oil-saturation", save="oil_saturation.mp4")
 
         # Export as GIF via string path
         viz.animate(states, "pressure", save="pressure.gif")
