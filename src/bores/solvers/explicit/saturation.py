@@ -117,7 +117,7 @@ def evolve_saturation(
     :param fluid_properties: `FluidProperties` object containing fluid physical properties,
         including current pressure and saturation grids.
 
-    :param wells: ``Wells`` object containing information about injection and production wells.
+    :param wells: `Wells` object containing information about injection and production wells.
     :param config: Simulation config and parameters.
     :param injection_grid: Object supporting setitem to set cell injection rates for each phase in ft³/day.
     :param production_grid: Object supporting setitem to set cell production rates for each phase in ft³/day.
@@ -133,7 +133,7 @@ def evolve_saturation(
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
-    oil_pressure_grid = fluid_properties.pressure_grid  # This is P_oil or Pⁿ_{i,j}
+    oil_pressure_grid = fluid_properties.pressure_grid  
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
@@ -181,8 +181,11 @@ def evolve_saturation(
         c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
-    net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
-        compute_net_phase_flux_contributions(
+    temperature_grid = fluid_properties.temperature_grid
+
+    if (pool := config.task_pool) is not None:
+        fluxes_future = pool.submit(
+            compute_net_phase_flux_contributions,
             oil_pressure_grid=oil_pressure_grid,
             cell_count_x=cell_count_x,
             cell_count_y=cell_count_y,
@@ -208,12 +211,8 @@ def evolve_saturation(
             gravitational_constant=gravitational_constant,
             dtype=dtype,
         )
-    )
-
-    # Compute well rate contributions
-    temperature_grid = fluid_properties.temperature_grid
-    net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid = (
-        compute_well_rate_grids(
+        well_rates_future = pool.submit(
+            compute_well_rate_grids,
             cell_count_x=cell_count_x,
             cell_count_y=cell_count_y,
             cell_count_z=cell_count_z,
@@ -239,7 +238,70 @@ def evolve_saturation(
             production_grid=production_grid,
             dtype=dtype,
         )
-    )
+        net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
+            fluxes_future.result()
+        )
+        net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid = (
+            well_rates_future.result()
+        )
+
+    else:
+        net_water_flux_grid, net_oil_flux_grid, net_gas_flux_grid = (
+            compute_net_phase_flux_contributions(
+                oil_pressure_grid=oil_pressure_grid,
+                cell_count_x=cell_count_x,
+                cell_count_y=cell_count_y,
+                cell_count_z=cell_count_z,
+                thickness_grid=thickness_grid,
+                cell_size_x=cell_size_x,
+                cell_size_y=cell_size_y,
+                water_mobility_grid_x=water_mobility_grid_x,
+                water_mobility_grid_y=water_mobility_grid_y,
+                water_mobility_grid_z=water_mobility_grid_z,
+                oil_mobility_grid_x=oil_mobility_grid_x,
+                oil_mobility_grid_y=oil_mobility_grid_y,
+                oil_mobility_grid_z=oil_mobility_grid_z,
+                gas_mobility_grid_x=gas_mobility_grid_x,
+                gas_mobility_grid_y=gas_mobility_grid_y,
+                gas_mobility_grid_z=gas_mobility_grid_z,
+                oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+                gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+                oil_density_grid=oil_density_grid,
+                water_density_grid=water_density_grid,
+                gas_density_grid=gas_density_grid,
+                elevation_grid=elevation_grid,
+                gravitational_constant=gravitational_constant,
+                dtype=dtype,
+            )
+        )
+        net_water_well_rate_grid, net_oil_well_rate_grid, net_gas_well_rate_grid = (
+            compute_well_rate_grids(
+                cell_count_x=cell_count_x,
+                cell_count_y=cell_count_y,
+                cell_count_z=cell_count_z,
+                wells=wells,
+                oil_pressure_grid=oil_pressure_grid,
+                temperature_grid=temperature_grid,
+                absolute_permeability=absolute_permeability,
+                water_relative_mobility_grid=water_relative_mobility_grid,
+                oil_relative_mobility_grid=oil_relative_mobility_grid,
+                gas_relative_mobility_grid=gas_relative_mobility_grid,
+                water_compressibility_grid=water_compressibility_grid,
+                oil_compressibility_grid=oil_compressibility_grid,
+                gas_compressibility_grid=gas_compressibility_grid,
+                fluid_properties=fluid_properties,
+                thickness_grid=thickness_grid,
+                cell_size_x=cell_size_x,
+                cell_size_y=cell_size_y,
+                time_step=time_step,
+                time_step_size=time_step_size,
+                config=config,
+                pad_width=pad_width,
+                injection_grid=injection_grid,
+                production_grid=production_grid,
+                dtype=dtype,
+            )
+        )
 
     # Apply saturation updates with PVT volume correction
     (
@@ -487,7 +549,7 @@ def compute_phase_fluxes_from_neighbour(
     :return: Tuple of volumetric fluxes (water_flux, oil_flux, gas_flux) in ft³/day.
     """
     # Calculate pressure differences relative to current cell (Neighbour - Current)
-    # These represent the gradients driving flow from Neighbour to currrent cell, or vice versa
+    # These represent the gradients driving flow from neighbour to currrent cell, or vice versa
     oil_pressure_difference = (
         oil_pressure_grid[neighbour_indices] - oil_pressure_grid[cell_indices]
     )
@@ -918,8 +980,15 @@ def compute_well_rate_grids(
         if not well.is_open or well.injected_fluid is None:
             continue
 
+        well_index_cache = []
+        total_well_index = 0.0
         injected_fluid = well.injected_fluid
         injected_phase = injected_fluid.phase
+        use_pseudo_pressure = (
+            config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+        )
+        is_bhp_controlled = well.control.is_bhp_control()
+
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
         )
@@ -927,9 +996,6 @@ def compute_well_rate_grids(
             fluid_properties.gas_formation_volume_factor_grid
         )
         gas_solubility_in_water_grid = fluid_properties.gas_solubility_in_water_grid
-
-        well_index_cache = []
-        total_well_index = 0.0
 
         # Iterate over perforated cells to compute total WI and cache well indices
         # Offset well coordinates by pad_width to account for ghost cells
@@ -988,44 +1054,32 @@ def compute_well_rate_grids(
             )
             phase_compressibility = typing.cast(float, phase_compressibility)
 
-            use_pseudo_pressure = (
-                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
-            )
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            if well.control.is_bhp_control():
+            if is_bhp_controlled:
                 # BHP-controlled injection: use phase mobility
-                cell_injection_rate = well.get_flow_rate(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    well_index=well_index,
-                    phase_mobility=phase_mobility,
-                    fluid=injected_fluid,
-                    fluid_compressibility=phase_compressibility,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    pvt_tables=None,
-                )
+                effective_mobility = phase_mobility
             else:
                 total_mobility = (
-                    typing.cast(float, water_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                    water_relative_mobility_grid[i, j, k]
+                    + oil_relative_mobility_grid[i, j, k]
+                    + gas_relative_mobility_grid[i, j, k]
                 )
-                cell_injection_rate = well.get_flow_rate(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    well_index=well_index,
-                    phase_mobility=total_mobility,
-                    fluid=injected_fluid,
-                    fluid_compressibility=phase_compressibility,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    pvt_tables=None,
-                )
+                effective_mobility = typing.cast(float, total_mobility)
+            
+            cell_injection_rate = well.get_flow_rate(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+                well_index=well_index,
+                phase_mobility=effective_mobility,
+                fluid=injected_fluid,
+                fluid_compressibility=phase_compressibility,
+                use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=phase_fvf,
+                allocation_fraction=allocation_fraction,
+                pvt_tables=None,
+            )
 
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(
@@ -1555,73 +1609,142 @@ def evolve_miscible_saturation(
         c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
-    (
-        net_water_flux_grid,
-        net_oil_flux_grid,
-        net_gas_flux_grid,
-        net_solvent_flux_grid,
-    ) = compute_net_phase_and_solvent_flux_contributions(
-        oil_pressure_grid=oil_pressure_grid,
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        thickness_grid=thickness_grid,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        water_mobility_grid_x=water_mobility_grid_x,
-        water_mobility_grid_y=water_mobility_grid_y,
-        water_mobility_grid_z=water_mobility_grid_z,
-        oil_mobility_grid_x=oil_mobility_grid_x,
-        oil_mobility_grid_y=oil_mobility_grid_y,
-        oil_mobility_grid_z=oil_mobility_grid_z,
-        gas_mobility_grid_x=gas_mobility_grid_x,
-        gas_mobility_grid_y=gas_mobility_grid_y,
-        gas_mobility_grid_z=gas_mobility_grid_z,
-        solvent_concentration_grid=current_solvent_concentration_grid,
-        oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-        gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-        oil_density_grid=oil_density_grid,
-        water_density_grid=water_density_grid,
-        gas_density_grid=gas_density_grid,
-        elevation_grid=elevation_grid,
-        gravitational_constant=gravitational_constant,
-        dtype=dtype,
-    )
-
-    # Compute well rate contributions for all cells
     temperature_grid = fluid_properties.temperature_grid
-    (
-        net_water_well_rate_grid,
-        net_oil_well_rate_grid,
-        net_gas_well_rate_grid,
-        solvent_injection_concentration_grid,
-        gas_injection_rate_grid,
-    ) = compute_miscible_well_rate_grids(
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        wells=wells,
-        oil_pressure_grid=oil_pressure_grid,
-        temperature_grid=temperature_grid,
-        absolute_permeability=absolute_permeability,
-        water_relative_mobility_grid=water_relative_mobility_grid,
-        oil_relative_mobility_grid=oil_relative_mobility_grid,
-        gas_relative_mobility_grid=gas_relative_mobility_grid,
-        water_compressibility_grid=water_compressibility_grid,
-        oil_compressibility_grid=oil_compressibility_grid,
-        gas_compressibility_grid=gas_compressibility_grid,
-        fluid_properties=fluid_properties,
-        thickness_grid=thickness_grid,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        time_step=time_step,
-        time_step_size=time_step_size,
-        config=config,
-        pad_width=pad_width,
-        injection_grid=injection_grid,
-        production_grid=production_grid,
-        dtype=dtype,
-    )
+    if (pool := config.task_pool) is not None:
+        fluxes_future = pool.submit(
+            compute_net_phase_and_solvent_flux_contributions,
+            oil_pressure_grid=oil_pressure_grid,
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            water_mobility_grid_x=water_mobility_grid_x,
+            water_mobility_grid_y=water_mobility_grid_y,
+            water_mobility_grid_z=water_mobility_grid_z,
+            oil_mobility_grid_x=oil_mobility_grid_x,
+            oil_mobility_grid_y=oil_mobility_grid_y,
+            oil_mobility_grid_z=oil_mobility_grid_z,
+            gas_mobility_grid_x=gas_mobility_grid_x,
+            gas_mobility_grid_y=gas_mobility_grid_y,
+            gas_mobility_grid_z=gas_mobility_grid_z,
+            solvent_concentration_grid=current_solvent_concentration_grid,
+            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+            oil_density_grid=oil_density_grid,
+            water_density_grid=water_density_grid,
+            gas_density_grid=gas_density_grid,
+            elevation_grid=elevation_grid,
+            gravitational_constant=gravitational_constant,
+            dtype=dtype,
+        )
+        well_rates_future = pool.submit(
+            compute_miscible_well_rate_grids,
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            wells=wells,
+            oil_pressure_grid=oil_pressure_grid,
+            temperature_grid=temperature_grid,
+            absolute_permeability=absolute_permeability,
+            water_relative_mobility_grid=water_relative_mobility_grid,
+            oil_relative_mobility_grid=oil_relative_mobility_grid,
+            gas_relative_mobility_grid=gas_relative_mobility_grid,
+            water_compressibility_grid=water_compressibility_grid,
+            oil_compressibility_grid=oil_compressibility_grid,
+            gas_compressibility_grid=gas_compressibility_grid,
+            fluid_properties=fluid_properties,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step=time_step,
+            time_step_size=time_step_size,
+            config=config,
+            pad_width=pad_width,
+            injection_grid=injection_grid,
+            production_grid=production_grid,
+            dtype=dtype,
+        )
+        (
+            net_water_flux_grid,
+            net_oil_flux_grid,
+            net_gas_flux_grid,
+            net_solvent_flux_grid,
+        ) = fluxes_future.result()
+        (
+            net_water_well_rate_grid,
+            net_oil_well_rate_grid,
+            net_gas_well_rate_grid,
+            solvent_injection_concentration_grid,
+            gas_injection_rate_grid,
+        ) = well_rates_future.result()
+
+    else:
+        (
+            net_water_flux_grid,
+            net_oil_flux_grid,
+            net_gas_flux_grid,
+            net_solvent_flux_grid,
+        ) = compute_net_phase_and_solvent_flux_contributions(
+            oil_pressure_grid=oil_pressure_grid,
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            water_mobility_grid_x=water_mobility_grid_x,
+            water_mobility_grid_y=water_mobility_grid_y,
+            water_mobility_grid_z=water_mobility_grid_z,
+            oil_mobility_grid_x=oil_mobility_grid_x,
+            oil_mobility_grid_y=oil_mobility_grid_y,
+            oil_mobility_grid_z=oil_mobility_grid_z,
+            gas_mobility_grid_x=gas_mobility_grid_x,
+            gas_mobility_grid_y=gas_mobility_grid_y,
+            gas_mobility_grid_z=gas_mobility_grid_z,
+            solvent_concentration_grid=current_solvent_concentration_grid,
+            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+            oil_density_grid=oil_density_grid,
+            water_density_grid=water_density_grid,
+            gas_density_grid=gas_density_grid,
+            elevation_grid=elevation_grid,
+            gravitational_constant=gravitational_constant,
+            dtype=dtype,
+        )
+        (
+            net_water_well_rate_grid,
+            net_oil_well_rate_grid,
+            net_gas_well_rate_grid,
+            solvent_injection_concentration_grid,
+            gas_injection_rate_grid,
+        ) = compute_miscible_well_rate_grids(
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            wells=wells,
+            oil_pressure_grid=oil_pressure_grid,
+            temperature_grid=temperature_grid,
+            absolute_permeability=absolute_permeability,
+            water_relative_mobility_grid=water_relative_mobility_grid,
+            oil_relative_mobility_grid=oil_relative_mobility_grid,
+            gas_relative_mobility_grid=gas_relative_mobility_grid,
+            water_compressibility_grid=water_compressibility_grid,
+            oil_compressibility_grid=oil_compressibility_grid,
+            gas_compressibility_grid=gas_compressibility_grid,
+            fluid_properties=fluid_properties,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step=time_step,
+            time_step_size=time_step_size,
+            config=config,
+            pad_width=pad_width,
+            injection_grid=injection_grid,
+            production_grid=production_grid,
+            dtype=dtype,
+        )
 
     # Apply saturation and solvent concentration updates
     cfl_threshold = config.saturation_cfl_threshold
@@ -2377,12 +2500,16 @@ def compute_miscible_well_rate_grids(
         if not well.is_open or well.injected_fluid is None:
             continue
 
-        injected_fluid = well.injected_fluid
-        injected_phase = injected_fluid.phase
-
         # Cache to store (cell_location, well_index) pairs
         well_index_cache = []
         total_well_index = 0.0
+        injected_fluid = well.injected_fluid
+        injected_phase = injected_fluid.phase
+        use_pseudo_pressure = (
+            config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
+        )
+        is_bhp_controlled = well.control.is_bhp_control()
+        
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
         )
@@ -2447,44 +2574,32 @@ def compute_miscible_well_rate_grids(
             )
             phase_compressibility = typing.cast(float, phase_compressibility)
 
-            use_pseudo_pressure = (
-                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
-            )
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            if well.control.is_bhp_control():
+            if is_bhp_controlled:
                 # BHP-controlled injection: use phase mobility
-                cell_injection_rate = well.get_flow_rate(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    well_index=well_index,
-                    phase_mobility=phase_mobility,
-                    fluid=injected_fluid,
-                    fluid_compressibility=phase_compressibility,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    pvt_tables=None,
-                )
+                effective_mobility = phase_mobility
             else:
                 total_mobility = (
-                    typing.cast(float, water_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                    water_relative_mobility_grid[i, j, k]
+                    + oil_relative_mobility_grid[i, j, k]
+                    + gas_relative_mobility_grid[i, j, k]
                 )
-                cell_injection_rate = well.get_flow_rate(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    well_index=well_index,
-                    phase_mobility=total_mobility,
-                    fluid=injected_fluid,
-                    fluid_compressibility=phase_compressibility,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    pvt_tables=None,
-                )
+                effective_mobility = typing.cast(float, total_mobility)
+            
+            cell_injection_rate = well.get_flow_rate(
+                pressure=cell_oil_pressure,
+                temperature=cell_temperature,
+                well_index=well_index,
+                phase_mobility=effective_mobility,
+                fluid=injected_fluid,
+                fluid_compressibility=phase_compressibility,
+                use_pseudo_pressure=use_pseudo_pressure,
+                formation_volume_factor=phase_fvf,
+                allocation_fraction=allocation_fraction,
+                pvt_tables=None,
+            )
 
             if cell_injection_rate < 0.0 and config.warn_well_anomalies:
                 _warn_injection_rate_is_negative(

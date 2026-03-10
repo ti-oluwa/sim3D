@@ -12,6 +12,10 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
+from bores.errors import PreconditionerError, SolverError
+from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
+from bores.grids.pvt import build_total_fluid_compressibility_grid
+from bores.models import FluidProperties, RockProperties
 from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_pressure_is_low,
@@ -20,10 +24,6 @@ from bores.solvers.base import (
     solve_linear_system,
     to_1D_index_interior_only,
 )
-from bores.errors import PreconditionerError, SolverError
-from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
-from bores.grids.pvt import build_total_fluid_compressibility_grid
-from bores.models import FluidProperties, RockProperties
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,
@@ -121,6 +121,9 @@ def evolve_pressure(
         capillary_pressure_grids
     )
 
+    md_per_cp_to_ft2_per_psi_per_day = (
+        c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY
+    )
     # Compute mobility grids for x, y, z directions
     x_mobilities, y_mobilities, z_mobilities = compute_mobility_grids(
         absolute_permeability_x=absolute_permeability.x,
@@ -129,7 +132,7 @@ def evolve_pressure(
         water_relative_mobility_grid=water_relative_mobility_grid,
         oil_relative_mobility_grid=oil_relative_mobility_grid,
         gas_relative_mobility_grid=gas_relative_mobility_grid,
-        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
+        md_per_cp_to_ft2_per_psi_per_day=md_per_cp_to_ft2_per_psi_per_day,
     )
     water_mobility_grid_x, oil_mobility_grid_x, gas_mobility_grid_x = x_mobilities
     water_mobility_grid_y, oil_mobility_grid_y, gas_mobility_grid_y = y_mobilities
@@ -138,20 +141,6 @@ def evolve_pressure(
     time_step_size_in_days = time_step_size * c.DAYS_PER_SECOND
     interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
 
-    # Compute accumulation terms (diagonal and RHS contributions)
-    diagonal_values, rhs_values = compute_accumulation_arrays(
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        thickness_grid=thickness_grid,
-        porosity_grid=porosity_grid,
-        total_compressibility_grid=total_compressibility_grid,  # type: ignore
-        current_oil_pressure_grid=current_oil_pressure_grid,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        time_step_size_in_days=time_step_size_in_days,
-        dtype=dtype,
-    )
     # Compute face transmissibilities (off-diagonal entries and additional diagonal/RHS contributions)
     # Compute gravitational constant conversion factor (ft/s² * lbf·s²/(lbm·ft) = lbf/lbm)
     # On Earth, this should normally be 1.0 in consistent units, but we include it for clarity
@@ -161,8 +150,23 @@ def evolve_pressure(
         c.ACCELERATION_DUE_TO_GRAVITY_FEET_PER_SECONDS_SQUARE
         / c.GRAVITATIONAL_CONSTANT_LBM_FT_PER_LBF_S2
     )
-    rows, cols, off_diag_values, diagonal_additions, rhs_additions = (
-        compute_face_transmissibility_arrays(
+    if (pool := config.task_pool) is not None:
+        accumulation_future = pool.submit(
+            compute_accumulation_arrays,
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            porosity_grid=porosity_grid,
+            total_compressibility_grid=total_compressibility_grid,  # type:ignore
+            current_oil_pressure_grid=current_oil_pressure_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step_size_in_days=time_step_size_in_days,
+            dtype=dtype,
+        )
+        face_transmissibility_future = pool.submit(
+            compute_face_transmissibility_arrays,
             cell_count_x=cell_count_x,
             cell_count_y=cell_count_y,
             cell_count_z=cell_count_z,
@@ -187,55 +191,140 @@ def evolve_pressure(
             gravitational_constant=gravitational_constant,
             dtype=dtype,
         )
+        wells_future = pool.submit(
+            compute_well_contributions,
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            current_oil_pressure_grid=current_oil_pressure_grid,
+            temperature_grid=fluid_properties.temperature_grid,
+            absolute_permeability=absolute_permeability,
+            water_relative_mobility_grid=water_relative_mobility_grid,
+            oil_relative_mobility_grid=oil_relative_mobility_grid,
+            gas_relative_mobility_grid=gas_relative_mobility_grid,
+            water_compressibility_grid=water_compressibility_grid,
+            oil_compressibility_grid=oil_compressibility_grid,
+            gas_compressibility_grid=gas_compressibility_grid,
+            fluid_properties=fluid_properties,
+            wells=wells,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step=time_step,
+            time_step_size=time_step_size,
+            config=config,
+            md_per_cp_to_ft2_per_psi_per_day=md_per_cp_to_ft2_per_psi_per_day,
+            pad_width=pad_width,
+        )
+
+        # Collect all three results
+        diagonal_values, rhs_values = accumulation_future.result()
+        (
+            sparse_rows,
+            sparse_cols,
+            sparse_off_diag,
+            diagonal_additions,
+            rhs_additions,
+        ) = face_transmissibility_future.result()
+        well_contributions = wells_future.result()
+
+    else:
+        diagonal_values, rhs_values = compute_accumulation_arrays(
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            porosity_grid=porosity_grid,
+            total_compressibility_grid=total_compressibility_grid,  # type:ignore
+            current_oil_pressure_grid=current_oil_pressure_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step_size_in_days=time_step_size_in_days,
+            dtype=dtype,
+        )
+        (
+            sparse_rows,
+            sparse_cols,
+            sparse_off_diag,
+            diagonal_additions,
+            rhs_additions,
+        ) = compute_face_transmissibility_arrays(
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            water_mobility_grid_x=water_mobility_grid_x,
+            oil_mobility_grid_x=oil_mobility_grid_x,
+            gas_mobility_grid_x=gas_mobility_grid_x,
+            water_mobility_grid_y=water_mobility_grid_y,
+            oil_mobility_grid_y=oil_mobility_grid_y,
+            gas_mobility_grid_y=gas_mobility_grid_y,
+            water_mobility_grid_z=water_mobility_grid_z,
+            oil_mobility_grid_z=oil_mobility_grid_z,
+            gas_mobility_grid_z=gas_mobility_grid_z,
+            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
+            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
+            oil_density_grid=oil_density_grid,
+            water_density_grid=water_density_grid,
+            gas_density_grid=gas_density_grid,
+            elevation_grid=elevation_grid,
+            gravitational_constant=gravitational_constant,
+            dtype=dtype,
+        )
+        well_contributions = compute_well_contributions(
+            cell_count_x=cell_count_x,
+            cell_count_y=cell_count_y,
+            cell_count_z=cell_count_z,
+            thickness_grid=thickness_grid,
+            current_oil_pressure_grid=current_oil_pressure_grid,
+            temperature_grid=fluid_properties.temperature_grid,
+            absolute_permeability=absolute_permeability,
+            water_relative_mobility_grid=water_relative_mobility_grid,
+            oil_relative_mobility_grid=oil_relative_mobility_grid,
+            gas_relative_mobility_grid=gas_relative_mobility_grid,
+            water_compressibility_grid=water_compressibility_grid,
+            oil_compressibility_grid=oil_compressibility_grid,
+            gas_compressibility_grid=gas_compressibility_grid,
+            fluid_properties=fluid_properties,
+            wells=wells,
+            cell_size_x=cell_size_x,
+            cell_size_y=cell_size_y,
+            time_step=time_step,
+            time_step_size=time_step_size,
+            config=config,
+            md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
+            pad_width=pad_width,
+        )
+
+    # Merge into final diagonal and b.
+    final_diagonal = diagonal_values + diagonal_additions
+    np.add.at(
+        final_diagonal,
+        well_contributions.diagonal_cell_indices,
+        well_contributions.diagonal_values,
     )
 
-    # Combine diagonal and RHS contributions from accumulation and face terms
-    final_diagonal = diagonal_values + diagonal_additions
     b = rhs_values + rhs_additions
+    np.add.at(
+        b,
+        well_contributions.rhs_cell_indices,
+        well_contributions.rhs_values,
+    )
 
-    # Build sparse matrix using COO format
-    # Diagonal entries
-    diag_rows = np.arange(interior_cell_count, dtype=np.int32)
-    diag_cols = np.arange(interior_cell_count, dtype=np.int32)
-
-    # Combine diagonal and off-diagonal entries into single arrays
-    all_rows = np.concatenate([diag_rows, rows])
-    all_cols = np.concatenate([diag_cols, cols])
-    all_values = np.concatenate([final_diagonal, off_diag_values])
-
-    # Create COO matrix and convert to `lil_matrix` for well modifications
-    A = coo_matrix(
-        (all_values, (all_rows, all_cols)),
+    interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
+    diag_indices = np.arange(interior_cell_count, dtype=np.int32)
+    A = coo_matrix(  # type: ignore
+        (
+            np.concatenate([final_diagonal, sparse_off_diag]),
+            (
+                np.concatenate([diag_indices, sparse_rows]),
+                np.concatenate([diag_indices, sparse_cols]),
+            ),
+        ),
         shape=(interior_cell_count, interior_cell_count),
-        dtype=dtype,  # type: ignore[arg-type]
-    ).tolil()
-
-    # Add well contributions (modifies diagonal entries of A for well productivity indices)
-    A, b = add_well_contributions(
-        A=A,
-        b=b,
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        thickness_grid=thickness_grid,
-        current_oil_pressure_grid=current_oil_pressure_grid,
-        temperature_grid=fluid_properties.temperature_grid,
-        absolute_permeability=absolute_permeability,
-        water_relative_mobility_grid=water_relative_mobility_grid,
-        oil_relative_mobility_grid=oil_relative_mobility_grid,
-        gas_relative_mobility_grid=gas_relative_mobility_grid,
-        water_compressibility_grid=water_compressibility_grid,
-        oil_compressibility_grid=oil_compressibility_grid,
-        gas_compressibility_grid=gas_compressibility_grid,
-        fluid_properties=fluid_properties,
-        wells=wells,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        time_step=time_step,
-        time_step_size=time_step_size,
-        config=config,
-        md_per_cp_to_ft2_per_psi_per_day=c.MILLIDARCIES_PER_CENTIPOISE_TO_SQUARE_FEET_PER_PSI_PER_DAY,
-        pad_width=pad_width,
+        dtype=dtype,  # type: ignore
     )
 
     # Solve the linear system A·pⁿ⁺¹ = b
@@ -390,62 +479,7 @@ def compute_accumulation_arrays(
     return diagonal_values, rhs_values
 
 
-@numba.njit(cache=True)
-def add_accumulation_terms(
-    A: lil_matrix,
-    b: np.typing.NDArray,
-    cell_count_x: int,
-    cell_count_y: int,
-    cell_count_z: int,
-    thickness_grid: ThreeDimensionalGrid,
-    porosity_grid: ThreeDimensionalGrid,
-    total_compressibility_grid: ThreeDimensionalGrid,
-    current_oil_pressure_grid: ThreeDimensionalGrid,
-    cell_size_x: float,
-    cell_size_y: float,
-    time_step_size_in_days: float,
-    dtype: np.typing.DTypeLike,
-) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
-    """
-    Initialize accumulation terms then populate sparse matrix.
-
-    :param A: Sparse coefficient matrix (lil_matrix format) to modify in place
-    :param b: RHS vector to modify in place
-    :param cell_count_x: Number of cells in x-direction (including boundaries)
-    :param cell_count_y: Number of cells in y-direction (including boundaries)
-    :param cell_count_z: Number of cells in z-direction (including boundaries)
-    :param thickness_grid: Cell thickness grid (ft)
-    :param porosity_grid: Cell porosity grid (fraction)
-    :param total_compressibility_grid: Total compressibility grid (1/psi)
-    :param current_oil_pressure_grid: Current oil pressure grid (psi)
-    :param cell_size_x: Cell size in x-direction (ft)
-    :param cell_size_y: Cell size in y-direction (ft)
-    :param time_step_size_in_days: Time step size (days)
-    :param dtype: Data type for arrays (np.float32 or np.float64)
-    :return: Tuple of (A, b) with accumulation terms initialized (same objects passed in, modified in place)
-    """
-    diagonal_values, rhs_values = compute_accumulation_arrays(
-        cell_count_x=cell_count_x,
-        cell_count_y=cell_count_y,
-        cell_count_z=cell_count_z,
-        thickness_grid=thickness_grid,
-        porosity_grid=porosity_grid,
-        total_compressibility_grid=total_compressibility_grid,
-        current_oil_pressure_grid=current_oil_pressure_grid,
-        cell_size_x=cell_size_x,
-        cell_size_y=cell_size_y,
-        time_step_size_in_days=time_step_size_in_days,
-        dtype=dtype,
-    )
-
-    # Populate sparse matrix
-    A.setdiag(diagonal_values)
-    b[:] = rhs_values
-    return A, b
-
-
-# NOTE: Do not usage parallel=True here. Prone to race conditions.
-@numba.njit(cache=True)
+@numba.njit(parallel=True, cache=True)
 def compute_face_transmissibility_arrays(
     cell_count_x: int,
     cell_count_y: int,
@@ -471,21 +505,63 @@ def compute_face_transmissibility_arrays(
     gravitational_constant: float,
     dtype: np.typing.DTypeLike,
 ) -> typing.Tuple[
-    np.typing.NDArray,
-    np.typing.NDArray,
-    np.typing.NDArray,
-    np.typing.NDArray,
-    np.typing.NDArray,
+    np.typing.NDArray,  # sparse_row_indices
+    np.typing.NDArray,  # sparse_col_indices
+    np.typing.NDArray,  # sparse_off_diagonal_values
+    np.typing.NDArray,  # diagonal_additions       (length = interior_cell_count)
+    np.typing.NDArray,  # rhs_additions            (length = interior_cell_count)
 ]:
     """
-    Compute face transmissibility arrays for all interior cell faces.
+    Compute face transmissibility contributions for the implicit pressure matrix.
 
-    This function processes each interior cell and computes transmissibilities
-    for faces in the positive x, y, and z directions only (to avoid double-counting).
-    Each face connects two cells, so we add symmetric entries to the sparse matrix.
+    For every interior cell we examine its three forward-facing neighbours:
+        east   = (i+1, j,   k  )
+        south  = (i,   j+1, k  )
+        bottom = (i,   j,   k+1)
 
-    The resulting arrays can be used to construct the sparse matrix A and update
-    the diagonal and RHS vectors.
+    Processing only forward-facing neighbours avoids double-counting each face.
+
+    For each face shared between `this_cell` and `neighbour_cell` we compute:
+
+        transmissibility  - total fluid mobility scaled by face geometry (ft²/psi·day)
+        rhs_term          - capillary + gravity pseudo-flux across the face (ft²/day)
+
+    These produce six contributions to the linear system A·p = b:
+
+        Sparse off-diagonal:
+            A[this_cell, neighbour_cell] -= transmissibility
+            A[neighbour_cell, this_cell] -= transmissibility   (matrix is symmetric)
+
+        Diagonal (resistance term, keeps matrix diagonally dominant):
+            A[this_cell,      this_cell]      += transmissibility
+            A[neighbour_cell, neighbour_cell] += transmissibility
+
+        RHS (non-pressure driving forces — capillary and gravity):
+            b[this_cell]      += rhs_term
+            b[neighbour_cell] -= rhs_term    (equal and opposite)
+
+    **Race-condition avoidance**
+
+    The diagonal and RHS contributions are scatter-adds: processing the face
+    between cells i and j updates both i and j. Running this naively with prange
+    would cause two threads to race on those shared diagonal/RHS slots.
+
+    Strategy:
+        1. `prange` over i-slices. Each thread writes exclusively into its own
+           row of the 2D thread-local buffers (indexed by [ii, local_slot]).
+           Zero shared writes and zero race conditions.
+
+        2. After the parallel loop, a single sequential pass over the 2D buffers
+           packs the sparse arrays and scatter-adds into `diagonal_additions` and
+           `rhs_additions` simultaneously. This is safe because it is single-threaded.
+
+    This avoids any intermediate flat arrays for diagonal/RHS, saving
+    two full-size allocations and an extra scan.
+
+    Memory layout note:
+        The 2D thread buffers are shaped (nx_interior, max_entries_per_i_slice).
+        Accessing `[ii, local_slot]` is row-major and therefore cache-friendly
+        since `local_slot` is the inner (fast-moving) index.
 
     :param cell_count_x: Number of cells in x-direction (including boundaries)
     :param cell_count_y: Number of cells in y-direction (including boundaries)
@@ -511,33 +587,65 @@ def compute_face_transmissibility_arrays(
     :param gravitational_constant: Gravitational constant conversion factor (lbf/lbm)
     :param dtype: Data type for arrays (np.float32 or np.float64)
     :return: Tuple of (rows, cols, off_diag_values, diagonal_additions, rhs_additions)
-        - rows: Row indices for off-diagonal entries
-        - cols: Column indices for off-diagonal entries
-        - off_diag_values: Values for off-diagonal entries (-T_face)
+        - rows: Sparse row indices for off-diagonal entries
+        - cols: Sparse column indices for off-diagonal entries
+        - off_diag_values: Values for sparse off-diagonal entries (-T_face)
         - diagonal_additions: Array to add to diagonal (indexed by cell_1D_index)
         - rhs_additions: Array to add to RHS (indexed by cell_1D_index)
     """
-    interior_cell_count = (cell_count_x - 2) * (cell_count_y - 2) * (cell_count_z - 2)
+    nx_interior = cell_count_x - 2
+    ny_interior = cell_count_y - 2
+    nz_interior = cell_count_z - 2
+    interior_cell_count = nx_interior * ny_interior * nz_interior
 
-    # Maximum number of faces: 3 directions per interior cell
-    max_faces = interior_cell_count * 3
+    # Each interior cell owns at most 3 forward faces.
+    # Each face generates 2 sparse entries (one per direction of the symmetric pair).
+    # The bound is tight for all-interior cells; boundary-adjacent cells generate fewer.
+    max_entries_per_i_slice = ny_interior * nz_interior * 3 * 2
 
-    # Arrays for off-diagonal entries (each face creates 2 entries: A[i,j] and A[j,i])
-    rows = np.zeros(max_faces * 2, dtype=np.int32)
-    cols = np.zeros(max_faces * 2, dtype=np.int32)
-    off_diag_values = np.zeros(max_faces * 2, dtype=dtype)
+    # Thread-local 2D buffers — row ii is private to the thread handling
+    # i-slice ii. No two threads ever write the same row.
+    # Shaped (nx_interior, max_entries_per_i_slice) so that the inner
+    # (slot) dimension is contiguous in memory which translates to cache-friendly writes.
 
-    # Diagonal and RHS additions (indexed by cell_1D_index)
-    diagonal_additions = np.zeros(interior_cell_count, dtype=dtype)
-    rhs_additions = np.zeros(interior_cell_count, dtype=dtype)
+    # Sparse COO entries for the off-diagonal part of A
+    thread_sparse_row_indices = np.zeros(
+        (nx_interior, max_entries_per_i_slice), dtype=np.int32
+    )
+    thread_sparse_col_indices = np.zeros(
+        (nx_interior, max_entries_per_i_slice), dtype=np.int32
+    )
+    thread_sparse_off_diag_vals = np.zeros(
+        (nx_interior, max_entries_per_i_slice), dtype=dtype
+    )
 
-    # Counter for entries
-    entry_idx = 0
+    # Transmissibility values stored alongside the sparse entries.
+    # The diagonal contribution for entry at sparse[ii, slot] is:
+    #     diagonal_additions[row[ii,slot]] += transmissibility[ii,slot]
+    #     diagonal_additions[col[ii,slot]] += transmissibility[ii,slot]
+    # We store transmissibility once per face pair (both entries share the same T_face)
+    # and reuse it for both the diagonal and RHS during the pack step.
+    thread_transmissibility = np.zeros(
+        (nx_interior, max_entries_per_i_slice), dtype=dtype
+    )
 
-    for i in range(1, cell_count_x - 1):  # Regular loop, not prange
+    # RHS term — stored once per face pair, applied with opposite signs to
+    # row-cell (+rhs_term) and col-cell (-rhs_term) during the pack step.
+    thread_rhs_term = np.zeros((nx_interior, max_entries_per_i_slice), dtype=dtype)
+
+    # How many entries each i-slice wrote — needed to know how far to read
+    # during the sequential pack step.
+    entries_written_per_i_slice = np.zeros(nx_interior, dtype=np.int32)
+
+    # Parallel loop — each ii maps to grid index i = ii + 1.
+    # All writes go to thread_*[ii, local_slot] which is private to this ii.
+    for ii in numba.prange(nx_interior):  # type: ignore[attr-defined]
+        i = ii + 1
+        local_slot = 0
+
         for j in range(1, cell_count_y - 1):
             for k in range(1, cell_count_z - 1):
-                cell_1D_index = to_1D_index_interior_only(
+                this_cell_1d_index = to_1D_index_interior_only(
                     i=i,
                     j=j,
                     k=k,
@@ -545,29 +653,33 @@ def compute_face_transmissibility_arrays(
                     cell_count_y=cell_count_y,
                     cell_count_z=cell_count_z,
                 )
-                cell_thickness = thickness_grid[i, j, k]
+                this_cell_thickness = thickness_grid[i, j, k]
 
-                # X-DIRECTION: Process East face (i+1, j, k) only to avoid double-counting
-                ni, nj, nk = i + 1, j, k
-                if ni < cell_count_x - 1:  # Check neighbor is interior
-                    neighbour_1D_index = to_1D_index_interior_only(
-                        i=ni,
-                        j=nj,
-                        k=nk,
+                # EAST FACE (i+1, j, k) — x-direction flow
+                east_i, east_j, east_k = i + 1, j, k
+                if east_i < cell_count_x - 1:
+                    east_cell_1d_index = to_1D_index_interior_only(
+                        i=east_i,
+                        j=east_j,
+                        k=east_k,
                         cell_count_x=cell_count_x,
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    neighbour_thickness = thickness_grid[ni, nj, nk]
-                    harmonic_thickness = compute_harmonic_mean(
-                        cell_thickness, neighbour_thickness
+                    # Harmonic mean thickness at the shared face — ensures
+                    # the effective flow path length is correctly weighted
+                    # when adjacent cells have different thicknesses.
+                    east_face_thickness = compute_harmonic_mean(
+                        this_cell_thickness, thickness_grid[east_i, east_j, east_k]
                     )
-                    geometric_factor = cell_size_y * harmonic_thickness / cell_size_x
-
-                    harmonic_mobility, cap_flux, grav_flux = (
+                    # x-direction: cross-sectional area = Δy × h_face, distance = Δx
+                    east_geometric_factor = (
+                        cell_size_y * east_face_thickness / cell_size_x
+                    )
+                    east_face_mobility, east_cap_flux, east_grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
                             cell_indices=(i, j, k),
-                            neighbour_indices=(ni, nj, nk),
+                            neighbour_indices=(east_i, east_j, east_k),
                             water_mobility_grid=water_mobility_grid_x,
                             oil_mobility_grid=oil_mobility_grid_x,
                             gas_mobility_grid=gas_mobility_grid_x,
@@ -580,50 +692,51 @@ def compute_face_transmissibility_arrays(
                             gravitational_constant=gravitational_constant,
                         )
                     )
+                    east_transmissibility = east_face_mobility * east_geometric_factor
+                    east_rhs_term = (
+                        east_cap_flux + east_grav_flux
+                    ) * east_geometric_factor
 
-                    T_face = harmonic_mobility * geometric_factor
-                    rhs_face_term = (cap_flux + grav_flux) * geometric_factor
+                    # Entry 0 of the pair: A[this_cell, east_cell]
+                    thread_sparse_row_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = east_cell_1d_index
+                    thread_sparse_off_diag_vals[ii, local_slot] = -east_transmissibility
+                    thread_transmissibility[ii, local_slot] = east_transmissibility
+                    thread_rhs_term[ii, local_slot] = east_rhs_term
+                    local_slot += 1
 
-                    # Store off-diagonal entries (symmetric)
-                    rows[entry_idx] = cell_1D_index
-                    cols[entry_idx] = neighbour_1D_index
-                    off_diag_values[entry_idx] = -T_face
+                    # Entry 1 of the pair: A[east_cell, this_cell] (symmetric)
+                    # Transmissibility and rhs_term are identical in magnitude;
+                    # the sign flip for rhs is applied during the pack step.
+                    thread_sparse_row_indices[ii, local_slot] = east_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_off_diag_vals[ii, local_slot] = -east_transmissibility
+                    thread_transmissibility[ii, local_slot] = east_transmissibility
+                    thread_rhs_term[ii, local_slot] = east_rhs_term
+                    local_slot += 1
 
-                    rows[entry_idx + 1] = neighbour_1D_index
-                    cols[entry_idx + 1] = cell_1D_index
-                    off_diag_values[entry_idx + 1] = -T_face
-
-                    entry_idx += 2
-
-                    # Update diagonals (both cells)
-                    diagonal_additions[cell_1D_index] += T_face
-                    diagonal_additions[neighbour_1D_index] += T_face
-
-                    # Update RHS (opposite signs)
-                    rhs_additions[cell_1D_index] += rhs_face_term
-                    rhs_additions[neighbour_1D_index] -= rhs_face_term
-
-                # Y-DIRECTION: Process South face (i, j+1, k) only
-                ni, nj, nk = i, j + 1, k
-                if nj < cell_count_y - 1:
-                    neighbour_1D_index = to_1D_index_interior_only(
-                        i=ni,
-                        j=nj,
-                        k=nk,
+                # SOUTH FACE (i, j+1, k) — y-direction flow
+                south_i, south_j, south_k = i, j + 1, k
+                if south_j < cell_count_y - 1:
+                    south_cell_1d_index = to_1D_index_interior_only(
+                        i=south_i,
+                        j=south_j,
+                        k=south_k,
                         cell_count_x=cell_count_x,
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    neighbour_thickness = thickness_grid[ni, nj, nk]
-                    harmonic_thickness = compute_harmonic_mean(
-                        cell_thickness, neighbour_thickness
+                    south_face_thickness = compute_harmonic_mean(
+                        this_cell_thickness, thickness_grid[south_i, south_j, south_k]
                     )
-                    geometric_factor = cell_size_x * harmonic_thickness / cell_size_y
-
-                    harmonic_mobility, cap_flux, grav_flux = (
+                    # y-direction: cross-sectional area = Δx × h_face, distance = Δy
+                    south_geometric_factor = (
+                        cell_size_x * south_face_thickness / cell_size_y
+                    )
+                    south_face_mobility, south_cap_flux, south_grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
                             cell_indices=(i, j, k),
-                            neighbour_indices=(ni, nj, nk),
+                            neighbour_indices=(south_i, south_j, south_k),
                             water_mobility_grid=water_mobility_grid_y,
                             oil_mobility_grid=oil_mobility_grid_y,
                             gas_mobility_grid=gas_mobility_grid_y,
@@ -636,46 +749,54 @@ def compute_face_transmissibility_arrays(
                             gravitational_constant=gravitational_constant,
                         )
                     )
+                    south_transmissibility = (
+                        south_face_mobility * south_geometric_factor
+                    )
+                    south_rhs_term = (
+                        south_cap_flux + south_grav_flux
+                    ) * south_geometric_factor
 
-                    T_face = harmonic_mobility * geometric_factor
-                    rhs_face_term = (cap_flux + grav_flux) * geometric_factor
+                    thread_sparse_row_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = south_cell_1d_index
+                    thread_sparse_off_diag_vals[
+                        ii, local_slot
+                    ] = -south_transmissibility
+                    thread_transmissibility[ii, local_slot] = south_transmissibility
+                    thread_rhs_term[ii, local_slot] = south_rhs_term
+                    local_slot += 1
 
-                    rows[entry_idx] = cell_1D_index
-                    cols[entry_idx] = neighbour_1D_index
-                    off_diag_values[entry_idx] = -T_face
+                    thread_sparse_row_indices[ii, local_slot] = south_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_off_diag_vals[
+                        ii, local_slot
+                    ] = -south_transmissibility
+                    thread_transmissibility[ii, local_slot] = south_transmissibility
+                    thread_rhs_term[ii, local_slot] = south_rhs_term
+                    local_slot += 1
 
-                    rows[entry_idx + 1] = neighbour_1D_index
-                    cols[entry_idx + 1] = cell_1D_index
-                    off_diag_values[entry_idx + 1] = -T_face
-
-                    entry_idx += 2
-
-                    diagonal_additions[cell_1D_index] += T_face
-                    diagonal_additions[neighbour_1D_index] += T_face
-                    rhs_additions[cell_1D_index] += rhs_face_term
-                    rhs_additions[neighbour_1D_index] -= rhs_face_term
-
-                # Z-DIRECTION: Process Bottom face (i, j, k+1) only
-                ni, nj, nk = i, j, k + 1
-                if nk < cell_count_z - 1:
-                    neighbour_1D_index = to_1D_index_interior_only(
-                        i=ni,
-                        j=nj,
-                        k=nk,
+                # BOTTOM FACE (i, j, k+1) — z-direction flow
+                bottom_i, bottom_j, bottom_k = i, j, k + 1
+                if bottom_k < cell_count_z - 1:
+                    bottom_cell_1d_index = to_1D_index_interior_only(
+                        i=bottom_i,
+                        j=bottom_j,
+                        k=bottom_k,
                         cell_count_x=cell_count_x,
                         cell_count_y=cell_count_y,
                         cell_count_z=cell_count_z,
                     )
-                    neighbour_thickness = thickness_grid[ni, nj, nk]
-                    harmonic_thickness = compute_harmonic_mean(
-                        cell_thickness, neighbour_thickness
+                    bottom_face_thickness = compute_harmonic_mean(
+                        this_cell_thickness,
+                        thickness_grid[bottom_i, bottom_j, bottom_k],
                     )
-                    geometric_factor = cell_size_x * cell_size_y / harmonic_thickness
-
-                    harmonic_mobility, cap_flux, grav_flux = (
+                    # z-direction: cross-sectional area = Δx × Δy, distance = h_face
+                    bottom_geometric_factor = (
+                        cell_size_x * cell_size_y / bottom_face_thickness
+                    )
+                    bottom_face_mobility, bottom_cap_flux, bottom_grav_flux = (
                         compute_pseudo_fluxes_from_neighbour(
                             cell_indices=(i, j, k),
-                            neighbour_indices=(ni, nj, nk),
+                            neighbour_indices=(bottom_i, bottom_j, bottom_k),
                             water_mobility_grid=water_mobility_grid_z,
                             oil_mobility_grid=oil_mobility_grid_z,
                             gas_mobility_grid=gas_mobility_grid_z,
@@ -688,137 +809,144 @@ def compute_face_transmissibility_arrays(
                             gravitational_constant=gravitational_constant,
                         )
                     )
+                    bottom_transmissibility = (
+                        bottom_face_mobility * bottom_geometric_factor
+                    )
+                    bottom_rhs_term = (
+                        bottom_cap_flux + bottom_grav_flux
+                    ) * bottom_geometric_factor
 
-                    T_face = harmonic_mobility * geometric_factor
-                    rhs_face_term = (cap_flux + grav_flux) * geometric_factor
+                    thread_sparse_row_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = bottom_cell_1d_index
+                    thread_sparse_off_diag_vals[
+                        ii, local_slot
+                    ] = -bottom_transmissibility
+                    thread_transmissibility[ii, local_slot] = bottom_transmissibility
+                    thread_rhs_term[ii, local_slot] = bottom_rhs_term
+                    local_slot += 1
 
-                    rows[entry_idx] = cell_1D_index
-                    cols[entry_idx] = neighbour_1D_index
-                    off_diag_values[entry_idx] = -T_face
+                    thread_sparse_row_indices[ii, local_slot] = bottom_cell_1d_index
+                    thread_sparse_col_indices[ii, local_slot] = this_cell_1d_index
+                    thread_sparse_off_diag_vals[
+                        ii, local_slot
+                    ] = -bottom_transmissibility
+                    thread_transmissibility[ii, local_slot] = bottom_transmissibility
+                    thread_rhs_term[ii, local_slot] = bottom_rhs_term
+                    local_slot += 1
 
-                    rows[entry_idx + 1] = neighbour_1D_index
-                    cols[entry_idx + 1] = cell_1D_index
-                    off_diag_values[entry_idx + 1] = -T_face
+        entries_written_per_i_slice[ii] = local_slot
 
-                    entry_idx += 2
-
-                    diagonal_additions[cell_1D_index] += T_face
-                    diagonal_additions[neighbour_1D_index] += T_face
-                    rhs_additions[cell_1D_index] += rhs_face_term
-                    rhs_additions[neighbour_1D_index] -= rhs_face_term
-
-    # Trim arrays to actual size
-    rows = rows[:entry_idx]
-    cols = cols[:entry_idx]
-    off_diag_values = off_diag_values[:entry_idx]
-
-    return rows, cols, off_diag_values, diagonal_additions, rhs_additions
-
-
-@numba.njit(cache=True)
-def add_face_transmissibilities_and_fluxes(
-    A: lil_matrix,
-    b: np.typing.NDArray,
-    cell_count_x: int,
-    cell_count_y: int,
-    cell_count_z: int,
-    thickness_grid: ThreeDimensionalGrid,
-    cell_size_x: float,
-    cell_size_y: float,
-    water_mobility_grid_x: ThreeDimensionalGrid,
-    oil_mobility_grid_x: ThreeDimensionalGrid,
-    gas_mobility_grid_x: ThreeDimensionalGrid,
-    water_mobility_grid_y: ThreeDimensionalGrid,
-    oil_mobility_grid_y: ThreeDimensionalGrid,
-    gas_mobility_grid_y: ThreeDimensionalGrid,
-    water_mobility_grid_z: ThreeDimensionalGrid,
-    oil_mobility_grid_z: ThreeDimensionalGrid,
-    gas_mobility_grid_z: ThreeDimensionalGrid,
-    oil_water_capillary_pressure_grid: ThreeDimensionalGrid,
-    gas_oil_capillary_pressure_grid: ThreeDimensionalGrid,
-    oil_density_grid: ThreeDimensionalGrid,
-    water_density_grid: ThreeDimensionalGrid,
-    gas_density_grid: ThreeDimensionalGrid,
-    elevation_grid: ThreeDimensionalGrid,
-    gravitational_constant: float,
-    dtype: np.typing.DTypeLike,
-) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
-    """
-    Add face transmissibilities then populate sparse matrix.
-
-    :param A: Sparse coefficient matrix (lil_matrix format) to modify in place
-    :param b: RHS vector to modify in place
-    :param cell_count_x: Number of cells in x-direction (including boundaries)
-    :param cell_count_y: Number of cells in y-direction (including boundaries)
-    :param cell_count_z: Number of cells in z-direction (including boundaries)
-    :param thickness_grid: Cell thickness grid (ft)
-    :param cell_size_x: Cell size in x-direction (ft)
-    :param cell_size_y: Cell size in y-direction (ft)
-    :param water_mobility_grid_x: Water mobility grid in x-direction (ft²/psi·day)
-    :param oil_mobility_grid_x: Oil mobility grid in x-direction (ft²/psi·day)
-    :param gas_mobility_grid_x: Gas mobility grid in x-direction (ft²/psi·day)
-    :param water_mobility_grid_y: Water mobility grid in y-direction (ft²/psi·day)
-    :param oil_mobility_grid_y: Oil mobility grid in y-direction (ft²/psi·day)
-    :param gas_mobility_grid_y: Gas mobility grid in y-direction (ft²/psi·day)
-    :param water_mobility_grid_z: Water mobility grid in z-direction (ft²/psi·day)
-    :param oil_mobility_grid_z: Oil mobility grid in z-direction (ft²/psi·day)
-    :param gas_mobility_grid_z: Gas mobility grid in z-direction (ft²/psi·day)
-    :param oil_water_capillary_pressure_grid: Oil-water capillary pressure (psi)
-    :param gas_oil_capillary_pressure_grid: Gas-oil capillary pressure (psi)
-    :param oil_density_grid: Oil density grid (lb/ft³)
-    :param water_density_grid: Water density grid (lb/ft³)
-    :param gas_density_grid: Gas density grid (lb/ft³)
-    :param elevation_grid: Elevation grid (ft)
-    :param gravitational_constant: Gravitational constant (lbf/lbm)
-    :param dtype: Data type for arrays (np.float32 or np.float64)
-    :return: Tuple of (A, b) with face contributions added (same objects passed in, modified in place)
-    """
-    # Compute using njitted function
-    rows, cols, off_diag_values, diagonal_additions, rhs_additions = (
-        compute_face_transmissibility_arrays(
-            cell_count_x=cell_count_x,
-            cell_count_y=cell_count_y,
-            cell_count_z=cell_count_z,
-            thickness_grid=thickness_grid,
-            cell_size_x=cell_size_x,
-            cell_size_y=cell_size_y,
-            water_mobility_grid_x=water_mobility_grid_x,
-            oil_mobility_grid_x=oil_mobility_grid_x,
-            gas_mobility_grid_x=gas_mobility_grid_x,
-            water_mobility_grid_y=water_mobility_grid_y,
-            oil_mobility_grid_y=oil_mobility_grid_y,
-            gas_mobility_grid_y=gas_mobility_grid_y,
-            water_mobility_grid_z=water_mobility_grid_z,
-            oil_mobility_grid_z=oil_mobility_grid_z,
-            gas_mobility_grid_z=gas_mobility_grid_z,
-            oil_water_capillary_pressure_grid=oil_water_capillary_pressure_grid,
-            gas_oil_capillary_pressure_grid=gas_oil_capillary_pressure_grid,
-            oil_density_grid=oil_density_grid,
-            water_density_grid=water_density_grid,
-            gas_density_grid=gas_density_grid,
-            elevation_grid=elevation_grid,
-            gravitational_constant=gravitational_constant,
-            dtype=dtype,
+    # Prefix-sum to find each i-slice's start offset in the flat output.
+    # Sequential, O(nx_interior), negligible cost.
+    slice_start_offsets = np.zeros(nx_interior + 1, dtype=np.int32)
+    for ii in range(nx_interior):
+        slice_start_offsets[ii + 1] = (
+            slice_start_offsets[ii] + entries_written_per_i_slice[ii]
         )
+    total_sparse_entries = slice_start_offsets[nx_interior]
+
+    # Output arrays
+    sparse_row_indices = np.empty(total_sparse_entries, dtype=np.int32)
+    sparse_col_indices = np.empty(total_sparse_entries, dtype=np.int32)
+    sparse_off_diagonal_values = np.empty(total_sparse_entries, dtype=dtype)
+    diagonal_additions = np.zeros(interior_cell_count, dtype=dtype)
+    rhs_additions = np.zeros(interior_cell_count, dtype=dtype)
+
+    # Single sequential pass: pack sparse arrays + scatter-add diagonal
+    # and RHS simultaneously.
+    #
+    # For each face pair stored at (ii, slot) and (ii, slot+1):
+    #   slot+0 → A[this_cell,      neighbour_cell]:  row=this,      col=neighbour
+    #   slot+1 → A[neighbour_cell, this_cell     ]:  row=neighbour, col=this
+    #
+    # Diagonal: both cells receive +transmissibility (stored identically in both slots)
+    # RHS:      row-cell receives +rhs_term, col-cell receives -rhs_term.
+    #           Since slot+0 has row=this and slot+1 has row=neighbour, we can
+    #           apply +rhs_term to row for both slots — the sign is already
+    #           encoded by whether the cell is the "owner" (slot+0) or "neighbour"
+    #           (slot+1) of the face.
+    #
+    # Wait — rhs_term has the same magnitude in both slots but opposite sign
+    # semantics. We apply:
+    #       diagonal_additions[row] += transmissibility   (same for both slots)
+    #       rhs_additions[row]      += rhs_term           (slot+0: this gets +)
+    #       rhs_additions[col]      -= rhs_term           (slot+0: neighbour gets -)
+    # We process pairs (step=2) so we only visit slot+0 and derive slot+1 from it.
+    for ii in range(nx_interior):
+        out_start = slice_start_offsets[ii]
+        count = entries_written_per_i_slice[ii]
+
+        # Process face pairs — entries are always written in pairs (step=2)
+        pair = 0
+        while pair < count:
+            out = out_start + pair
+
+            # Slot 0 of the pair: A[this_cell, neighbour_cell]
+            this_cell = thread_sparse_row_indices[ii, pair]
+            neighbour_cell = thread_sparse_col_indices[ii, pair]
+            transmissibility = thread_transmissibility[ii, pair]
+            rhs_term = thread_rhs_term[ii, pair]
+
+            # Pack sparse entry for slot 0
+            sparse_row_indices[out] = this_cell
+            sparse_col_indices[out] = neighbour_cell
+            sparse_off_diagonal_values[out] = thread_sparse_off_diag_vals[ii, pair]
+
+            # Pack sparse entry for slot 1 (symmetric)
+            sparse_row_indices[out + 1] = neighbour_cell
+            sparse_col_indices[out + 1] = this_cell
+            sparse_off_diagonal_values[out + 1] = thread_sparse_off_diag_vals[
+                ii, pair + 1
+            ]
+
+            # Diagonal: both cells accumulate +transmissibility
+            diagonal_additions[this_cell] += transmissibility
+            diagonal_additions[neighbour_cell] += transmissibility
+
+            # RHS: this_cell gets +rhs_term, neighbour_cell gets -rhs_term
+            rhs_additions[this_cell] += rhs_term
+            rhs_additions[neighbour_cell] -= rhs_term
+
+            pair += 2
+
+    return (
+        sparse_row_indices,
+        sparse_col_indices,
+        sparse_off_diagonal_values,
+        diagonal_additions,
+        rhs_additions,
     )
 
-    # Add to diagonal (element-wise addition)
-    current_diagonal = A.diagonal()
-    new_diagonal = current_diagonal + diagonal_additions
-    A.setdiag(new_diagonal)
 
-    # Add off-diagonal entries
-    for i in range(len(rows)):
-        A[rows[i], cols[i]] = off_diag_values[i]
+@attrs.frozen
+class WellContributions:
+    """
+    COO-style arrays representing well contributions to the linear system A·p = b.
 
-    # Add to RHS
-    b[:] += rhs_additions
-    return A, b
+    Wells only ever touch the diagonal of A (each perforated cell couples only
+    to itself via the productivity index). This means we never need off-diagonal
+    entries, just two flat arrays of (index, value) pairs that get scatter-added
+    into the final diagonal and RHS vectors before COO matrix construction.
+
+    diagonal_cell_indices[k] and diagonal_values[k] represent:
+        A[diagonal_cell_indices[k], diagonal_cell_indices[k]] += diagonal_values[k]
+
+    rhs_cell_indices[k] and rhs_values[k] represent:
+        b[rhs_cell_indices[k]] += rhs_values[k]
+
+    In practice diagonal_cell_indices == rhs_cell_indices since every perforation
+    contributes to both A and b at the same cell. They are stored separately to
+    keep the interface clean and to allow skipped perforations (non-finite BHP)
+    to contribute to neither without special-casing the reduction.
+    """
+
+    diagonal_cell_indices: np.ndarray
+    diagonal_values: np.ndarray
+    rhs_cell_indices: np.ndarray
+    rhs_values: np.ndarray
 
 
-def add_well_contributions(
-    A: lil_matrix,
-    b: np.typing.NDArray,
+def compute_well_contributions(
     cell_count_x: int,
     cell_count_y: int,
     cell_count_z: int,
@@ -841,37 +969,45 @@ def add_well_contributions(
     config: Config,
     md_per_cp_to_ft2_per_psi_per_day: float,
     pad_width: int = 1,
-) -> typing.Tuple[lil_matrix, np.typing.NDArray]:
+) -> WellContributions:
     """
-    Compute well flow rates and add contributions to the RHS vector b.
+    Compute well contributions to the implicit pressure linear system A·p = b
+    and return them as COO-style flat arrays.
 
-    Production well treatment is semi-implicit in time.
+    Wells contribute only to the diagonal of A and to b.  The semi-implicit
+    Robin boundary condition for both injection and production takes the form:
 
-    :param A: Sparse coefficient matrix (lil_matrix format) - not modified, returned for consistency
-    :param b: RHS vector to modify in place
-    :param cell_count_x: Number of cells in x-direction (including boundaries)
-    :param cell_count_y: Number of cells in y-direction (including boundaries)
-    :param cell_count_z: Number of cells in z-direction (including boundaries)
+        A[cell, cell] += PI_phase          (productivity index adds to diagonal)
+        b[cell]       += PI_phase * BHP    (BHP-weighted PI adds to RHS)
+
+    Perforations where BHP is non-finite are silently skipped. They contribute
+    zero to both arrays, which is equivalent to closing that perforation for
+    this time step.
+
+    :param cell_count_x: Number of cells in x-direction (including ghost cells)
+    :param cell_count_y: Number of cells in y-direction (including ghost cells)
+    :param cell_count_z: Number of cells in z-direction (including ghost cells)
     :param thickness_grid: Cell thickness grid (ft)
     :param current_oil_pressure_grid: Current oil pressure grid (psi)
-    :param temperature_grid: Temperature grid (°F or °R)
-    :param absolute_permeability: Absolute permeability in x, y, z directions (mD)
-    :param water_relative_mobility_grid: Water relative mobility (1/cP)
-    :param oil_relative_mobility_grid: Oil relative mobility (1/cP)
-    :param gas_relative_mobility_grid: Gas relative mobility (1/cP)
-    :param water_compressibility_grid: Water compressibility grid (1/psi)
-    :param oil_compressibility_grid: Oil compressibility grid (1/psi)
-    :param gas_compressibility_grid: Gas compressibility grid (1/psi)
-    :param fluid_properties: Fluid properties container
-    :param wells: Wells grid containing injection and production wells
+    :param temperature_grid: Temperature grid (°F)
+    :param absolute_permeability: Absolute permeability in x, y, z (mD)
+    :param water_relative_mobility_grid: Water relative mobility (ft²/psi·day)
+    :param oil_relative_mobility_grid: Oil relative mobility (ft²/psi·day)
+    :param gas_relative_mobility_grid: Gas relative mobility (ft²/psi·day)
+    :param water_compressibility_grid: Water compressibility (1/psi)
+    :param oil_compressibility_grid: Oil compressibility (1/psi)
+    :param gas_compressibility_grid: Gas compressibility (1/psi)
+    :param fluid_properties: Full fluid properties container
+    :param wells: Wells container with injection and production wells
     :param cell_size_x: Cell size in x-direction (ft)
     :param cell_size_y: Cell size in y-direction (ft)
-    :param time_step: Current time step number
-    :param time_step_size: Time step size (seconds)
-    :param config: Simulation config
-    :param md_per_cp_to_ft2_per_psi_per_day: Conversion factor from mD·ft/cP to ft²/psi·day
-    :param pad_width: Number of ghost cells used for grid padding. Well coordinates are offset by this amount.
-    :return: Tuple of (A, b) with well contributions added to b (A unchanged, returned for consistency)
+    :param time_step: Current time step number (used for anomaly warnings)
+    :param time_step_size: Time step size in seconds (used for anomaly warnings)
+    :param config: Simulation configuration
+    :param md_per_cp_to_ft2_per_psi_per_day: Unit conversion factor
+    :param pad_width: Ghost cell offset applied to well coordinates
+    :return: `WellContributions` with four flat arrays ready for scatter-add
+        into the final diagonal and RHS before COO matrix construction.
     """
     _to_1D_index = functools.partial(
         to_1D_index_interior_only,
@@ -880,64 +1016,98 @@ def add_well_contributions(
         cell_count_z=cell_count_z,
     )
 
-    # Process injection wells
+    # Pre-extract grids used by both injection and production to avoid
+    # repeated attribute lookups inside the perforation loops
+    water_bubble_point_pressure_grid = fluid_properties.water_bubble_point_pressure_grid
+    gas_formation_volume_factor_grid = fluid_properties.gas_formation_volume_factor_grid
+    gas_solubility_in_water_grid = fluid_properties.gas_solubility_in_water_grid
+    water_fvf_grid = fluid_properties.water_formation_volume_factor_grid
+    oil_fvf_grid = fluid_properties.oil_formation_volume_factor_grid
+
+    # Accumulate contributions into plain Python lists — well perforation count
+    # is O(10–1000) so list append is perfectly fast here and avoids
+    # pre-allocating a fixed-size array that we would need to trim later.
+    diagonal_cell_indices: typing.List[int] = []
+    diagonal_values: typing.List[float] = []
+    rhs_cell_indices: typing.List[int] = []
+    rhs_values: typing.List[float] = []
+
+    def _record_contribution(
+        cell_1d_index: int,
+        productivity_index: float,
+        effective_bhp: float,
+    ) -> None:
+        """
+        Local helper that appends one (diagonal, rhs) contribution pair.
+
+        Skips automatically when productivity_index is zero (no mobility)
+        or when bhp is non-finite (degenerate well state).
+        """
+        if not np.isfinite(effective_bhp) or productivity_index == 0.0:
+            return
+        diagonal_cell_indices.append(cell_1d_index)
+        diagonal_values.append(productivity_index)
+        rhs_cell_indices.append(cell_1d_index)
+        rhs_values.append(productivity_index * effective_bhp)
+
     for well in wells.injection_wells:
         if not well.is_open or well.injected_fluid is None:
             continue
 
-        well_index_cache = []
-        total_well_index = 0.0
-
-        # For the first pass over perforated cells, we compute total WI and cache well indices
-        # Offset well coordinates by pad_width to account for ghost cells
-        for start, end in well.perforating_intervals:
-            for i, j, k in itertools.product(
-                range(start[0] + pad_width, end[0] + pad_width + 1),
-                range(start[1] + pad_width, end[1] + pad_width + 1),
-                range(start[2] + pad_width, end[2] + pad_width + 1),
-            ):
-                cell_thickness = thickness_grid[i, j, k]
-                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
-                permeability = (
-                    absolute_permeability.x[i, j, k],
-                    absolute_permeability.y[i, j, k],
-                    absolute_permeability.z[i, j, k],
-                )
-                well_index = well.get_well_index(
-                    interval_thickness=interval_thickness,
-                    permeability=permeability,
-                    skin_factor=well.skin_factor,
-                )
-                cell_1D_index = _to_1D_index(i, j, k)
-                well_index_cache.append(((i, j, k, cell_1D_index), well_index))
-                total_well_index += well_index
-
-        # For the second pass, compute rates using cached well indices
         injected_fluid = well.injected_fluid
         injected_phase = injected_fluid.phase
-        water_bubble_point_pressure_grid = (
-            fluid_properties.water_bubble_point_pressure_grid
+        is_bhp_controlled = well.control.is_bhp_control()
+        use_pseudo_pressure = (
+            config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
-        gas_formation_volume_factor_grid = (
-            fluid_properties.gas_formation_volume_factor_grid
-        )
-        gas_solubility_in_water_grid = fluid_properties.gas_solubility_in_water_grid
 
-        for (i, j, k, cell_1D_index), well_index in well_index_cache:
+        # First pass: cache well indices and accumulate total WI for
+        # allocation fraction computation in the second pass.
+        well_index_cache: typing.List[
+            typing.Tuple[typing.Tuple[int, int, int, int], float]
+        ] = []
+        total_well_index = 0.0
+        for interval_start, interval_end in well.perforating_intervals:
+            for i, j, k in itertools.product(
+                range(interval_start[0] + pad_width, interval_end[0] + pad_width + 1),
+                range(interval_start[1] + pad_width, interval_end[1] + pad_width + 1),
+                range(interval_start[2] + pad_width, interval_end[2] + pad_width + 1),
+            ):
+                well_index = well.get_well_index(
+                    interval_thickness=(
+                        cell_size_x,
+                        cell_size_y,
+                        thickness_grid[i, j, k],
+                    ),
+                    permeability=(
+                        absolute_permeability.x[i, j, k],
+                        absolute_permeability.y[i, j, k],
+                        absolute_permeability.z[i, j, k],
+                    ),
+                    skin_factor=well.skin_factor,
+                )
+                well_index_cache.append(((i, j, k, _to_1D_index(i, j, k)), well_index))
+                total_well_index += well_index
+
+        # Second pass: compute BHP and productivity index per perforation.
+        for (i, j, k, cell_1d_index), well_index in well_index_cache:
+            cell_pressure = typing.cast(float, current_oil_pressure_grid[i, j, k])
             cell_temperature = typing.cast(float, temperature_grid[i, j, k])
-            cell_oil_pressure = typing.cast(float, current_oil_pressure_grid[i, j, k])
-
-            phase_fvf = injected_fluid.get_formation_volume_factor(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
+            allocation_fraction = (
+                well_index / total_well_index if total_well_index > 0.0 else 1.0
             )
-            phase_fvf = typing.cast(float, phase_fvf)
+            phase_fvf = typing.cast(
+                float,
+                injected_fluid.get_formation_volume_factor(
+                    pressure=cell_pressure,
+                    temperature=cell_temperature,
+                ),
+            )
 
-            # Get phase mobility
             if injected_phase == FluidPhase.GAS:
                 phase_mobility = typing.cast(float, gas_relative_mobility_grid[i, j, k])
-                compressibility_kwargs = {}
-            else:  # Water injection
+                compressibility_kwargs: dict = {}
+            else:
                 phase_mobility = typing.cast(
                     float, water_relative_mobility_grid[i, j, k]
                 )
@@ -949,140 +1119,104 @@ def add_well_contributions(
                     "gas_solubility_in_water": gas_solubility_in_water_grid[i, j, k],
                 }
 
-            # Get fluid properties
-            phase_compressibility = injected_fluid.get_compressibility(
-                pressure=cell_oil_pressure,
-                temperature=cell_temperature,
-                **compressibility_kwargs,
-            )
-            phase_compressibility = typing.cast(float, phase_compressibility)
-
-            use_pseudo_pressure = (
-                config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
-            )
-            allocation_fraction = (
-                well_index / total_well_index if total_well_index > 0 else 1.0
-            )
-
-            if well.control.is_bhp_control():
-                # BHP-controlled injection: Robin BC with phase mobility
-                effective_bhp = well.get_bottom_hole_pressure(
-                    pressure=cell_oil_pressure,
+            phase_compressibility = typing.cast(
+                float,
+                injected_fluid.get_compressibility(
+                    pressure=cell_pressure,
                     temperature=cell_temperature,
-                    phase_mobility=phase_mobility,
-                    well_index=well_index,
-                    fluid=injected_fluid,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    fluid_compressibility=phase_compressibility,
-                    pvt_tables=None,
-                )
-                if not np.isfinite(effective_bhp):
-                    logger.error(
-                        f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
-                        f"Skipping this perforation. Check for low mobility or numerical issues."
-                    )
-                    continue
+                    **compressibility_kwargs,
+                ),
+            )
 
-                if abs(effective_bhp - cell_oil_pressure) > 1e6:
-                    logger.warning(
-                        f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
-                        f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
-                        f"This may indicate numerical instability or inappropriate well control."
-                    )
-
-                if cell_oil_pressure > effective_bhp and config.warn_well_anomalies:
-                    _warn_injection_pressure_is_low(
-                        bhp=effective_bhp,
-                        cell_pressure=cell_oil_pressure,
-                        well_name=well.name,
-                        time=time_step * time_step_size,
-                        cell=(i, j, k),
-                    )
-
-                phase_productivity_index = (
-                    well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
-                )
-                A[cell_1D_index, cell_1D_index] += phase_productivity_index
-                b[cell_1D_index] += phase_productivity_index * effective_bhp
+            if is_bhp_controlled:
+                effective_mobility = phase_mobility
             else:
-                # Rate-controlled injection.
-                total_mobility = (
-                    typing.cast(float, water_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, oil_relative_mobility_grid[i, j, k])
-                    + typing.cast(float, gas_relative_mobility_grid[i, j, k])
+                # Rate-controlled: BHP is derived from total mobility
+                effective_mobility = typing.cast(
+                    float,
+                    water_relative_mobility_grid[i, j, k]
+                    + oil_relative_mobility_grid[i, j, k]
+                    + gas_relative_mobility_grid[i, j, k],
                 )
-                effective_bhp = well.get_bottom_hole_pressure(
-                    pressure=cell_oil_pressure,
-                    temperature=cell_temperature,
-                    phase_mobility=total_mobility,
-                    well_index=well_index,
-                    fluid=injected_fluid,
-                    formation_volume_factor=phase_fvf,
-                    allocation_fraction=allocation_fraction,
-                    use_pseudo_pressure=use_pseudo_pressure,
-                    fluid_compressibility=phase_compressibility,
-                    pvt_tables=None,
-                )
-                total_productivity_index = (
-                    well_index * total_mobility * md_per_cp_to_ft2_per_psi_per_day
-                )
-                # Semi-implicit Robin BC: q = PI_total * (P_wf - P_cell)
-                A[cell_1D_index, cell_1D_index] += total_productivity_index
-                b[cell_1D_index] += total_productivity_index * effective_bhp
 
-    # Process production wells
+            effective_bhp = well.get_bottom_hole_pressure(
+                pressure=cell_pressure,
+                temperature=cell_temperature,
+                phase_mobility=effective_mobility,
+                well_index=well_index,
+                fluid=injected_fluid,
+                formation_volume_factor=phase_fvf,
+                allocation_fraction=allocation_fraction,
+                use_pseudo_pressure=use_pseudo_pressure,
+                fluid_compressibility=phase_compressibility,
+                pvt_tables=None,
+            )
+
+            if not np.isfinite(effective_bhp):
+                logger.error(
+                    f"Non-finite BHP for injection well {well.name!r} "
+                    f"at cell ({i},{j},{k}): {effective_bhp}. Skipping perforation."
+                )
+                continue
+
+            if abs(effective_bhp - cell_pressure) > 1e6:
+                logger.warning(
+                    f"Extreme BHP for injection well {well.name!r} "
+                    f"at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                    f"(reservoir pressure: {cell_pressure:.1f} psi)."
+                )
+
+            if cell_pressure > effective_bhp and config.warn_well_anomalies:
+                _warn_injection_pressure_is_low(
+                    bhp=effective_bhp,
+                    cell_pressure=cell_pressure,
+                    well_name=well.name,
+                    time=time_step * time_step_size,
+                    cell=(i, j, k),
+                )
+
+            productivity_index = (
+                well_index * effective_mobility * md_per_cp_to_ft2_per_psi_per_day
+            )
+            _record_contribution(cell_1d_index, productivity_index, effective_bhp)
+
     for well in wells.production_wells:
         if not well.is_open:
             continue
 
+        # First pass: cache well indices
         well_index_cache = []
         total_well_index = 0.0
-
-        # First pass over perforated cells, compute total WI and cache well indices
-        # Offset well coordinates by pad_width to account for ghost cells
-        for start, end in well.perforating_intervals:
+        for interval_start, interval_end in well.perforating_intervals:
             for i, j, k in itertools.product(
-                range(start[0] + pad_width, end[0] + pad_width + 1),
-                range(start[1] + pad_width, end[1] + pad_width + 1),
-                range(start[2] + pad_width, end[2] + pad_width + 1),
+                range(interval_start[0] + pad_width, interval_end[0] + pad_width + 1),
+                range(interval_start[1] + pad_width, interval_end[1] + pad_width + 1),
+                range(interval_start[2] + pad_width, interval_end[2] + pad_width + 1),
             ):
-                cell_thickness = thickness_grid[i, j, k]
-                interval_thickness = (cell_size_x, cell_size_y, cell_thickness)
-                permeability = (
-                    absolute_permeability.x[i, j, k],
-                    absolute_permeability.y[i, j, k],
-                    absolute_permeability.z[i, j, k],
-                )
                 well_index = well.get_well_index(
-                    interval_thickness=interval_thickness,
-                    permeability=permeability,
+                    interval_thickness=(
+                        cell_size_x,
+                        cell_size_y,
+                        thickness_grid[i, j, k],
+                    ),
+                    permeability=(
+                        absolute_permeability.x[i, j, k],
+                        absolute_permeability.y[i, j, k],
+                        absolute_permeability.z[i, j, k],
+                    ),
                     skin_factor=well.skin_factor,
                 )
-                cell_1D_index = _to_1D_index(i, j, k)
-                well_index_cache.append(((i, j, k, cell_1D_index), well_index))
+                well_index_cache.append(((i, j, k, _to_1D_index(i, j, k)), well_index))
                 total_well_index += well_index
 
-        # For the second pass, compute rates using cached well indices
-        water_formation_volume_factor_grid = (
-            fluid_properties.water_formation_volume_factor_grid
-        )
-        oil_formation_volume_factor_grid = (
-            fluid_properties.oil_formation_volume_factor_grid
-        )
-        gas_formation_volume_factor_grid = (
-            fluid_properties.gas_formation_volume_factor_grid
-        )
-
-        for (i, j, k, cell_1D_index), well_index in well_index_cache:
+        # Second pass: one contribution per (perforation, produced phase) pair
+        for (i, j, k, cell_1d_index), well_index in well_index_cache:
+            cell_pressure = typing.cast(float, current_oil_pressure_grid[i, j, k])
             cell_temperature = typing.cast(float, temperature_grid[i, j, k])
-            cell_oil_pressure = typing.cast(float, current_oil_pressure_grid[i, j, k])
             allocation_fraction = (
-                well_index / total_well_index if total_well_index > 0 else 1.0
+                well_index / total_well_index if total_well_index > 0.0 else 1.0
             )
 
-            # Build primary phase context if using CoupledRateControl
             primary_phase_kwargs: dict = {}
             if isinstance(well.control, CoupledRateControl):
                 primary_phase_kwargs = well.control.build_primary_phase_context(
@@ -1096,12 +1230,8 @@ def add_well_contributions(
                     gas_mobility=typing.cast(
                         float, gas_relative_mobility_grid[i, j, k]
                     ),
-                    oil_fvf=typing.cast(
-                        float, oil_formation_volume_factor_grid[i, j, k]
-                    ),
-                    water_fvf=typing.cast(
-                        float, water_formation_volume_factor_grid[i, j, k]
-                    ),
+                    oil_fvf=typing.cast(float, oil_fvf_grid[i, j, k]),
+                    water_fvf=typing.cast(float, water_fvf_grid[i, j, k]),
                     gas_fvf=typing.cast(
                         float, gas_formation_volume_factor_grid[i, j, k]
                     ),
@@ -1119,7 +1249,6 @@ def add_well_contributions(
             for produced_fluid in well.produced_fluids:
                 produced_phase = produced_fluid.phase
 
-                # Get phase-specific properties
                 if produced_phase == FluidPhase.GAS:
                     phase_mobility = typing.cast(
                         float, gas_relative_mobility_grid[i, j, k]
@@ -1137,9 +1266,7 @@ def add_well_contributions(
                     phase_compressibility = typing.cast(
                         float, water_compressibility_grid[i, j, k]
                     )
-                    phase_fvf = typing.cast(
-                        float, water_formation_volume_factor_grid[i, j, k]
-                    )
+                    phase_fvf = typing.cast(float, water_fvf_grid[i, j, k])
                 else:  # Oil
                     phase_mobility = typing.cast(
                         float, oil_relative_mobility_grid[i, j, k]
@@ -1147,15 +1274,13 @@ def add_well_contributions(
                     phase_compressibility = typing.cast(
                         float, oil_compressibility_grid[i, j, k]
                     )
-                    phase_fvf = typing.cast(
-                        float, oil_formation_volume_factor_grid[i, j, k]
-                    )
+                    phase_fvf = typing.cast(float, oil_fvf_grid[i, j, k])
 
                 use_pseudo_pressure = (
                     config.use_pseudo_pressure and produced_phase == FluidPhase.GAS
                 )
                 effective_bhp = well.get_bottom_hole_pressure(
-                    pressure=cell_oil_pressure,
+                    pressure=cell_pressure,
                     temperature=cell_temperature,
                     phase_mobility=phase_mobility,
                     well_index=well_index,
@@ -1168,41 +1293,40 @@ def add_well_contributions(
                     **primary_phase_kwargs,
                 )
 
-                # Check for non-finite BHP before using it
                 if not np.isfinite(effective_bhp):
                     logger.error(
-                        f"Non-finite BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp}. "
-                        f"Skipping this perforation. Check for low mobility or numerical issues."
+                        f"Non-finite BHP for production well {well.name!r} "
+                        f"at cell ({i},{j},{k}): {effective_bhp}. Skipping perforation."
                     )
-                    continue  # Skip this perforation
+                    continue
 
-                # Check for unrealistic BHP (orders of magnitude off)
-                if abs(effective_bhp - cell_oil_pressure) > 1e6:
+                if abs(effective_bhp - cell_pressure) > 1e6:
                     logger.warning(
-                        f"Extreme BHP computed for {well.name} at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
-                        f"(reservoir pressure: {cell_oil_pressure:.1f} psi). "
-                        f"This may indicate numerical instability or inappropriate well control."
+                        f"Extreme BHP for production well {well.name!r} "
+                        f"at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                        f"(reservoir pressure: {cell_pressure:.1f} psi)."
                     )
 
-                # Check for backflow (positive production = injection)
-                if cell_oil_pressure < effective_bhp and config.warn_well_anomalies:
+                if cell_pressure < effective_bhp and config.warn_well_anomalies:
                     _warn_production_pressure_is_high(
                         bhp=effective_bhp,
-                        cell_pressure=cell_oil_pressure,
+                        cell_pressure=cell_pressure,
                         well_name=well.name,
                         time=time_step * time_step_size,
                         cell=(i, j, k),
                     )
 
-                # Compute productivity index
-                phase_productivity_index = (
+                productivity_index = (
                     well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
                 )
-                # Semi-implicit coupling (same form for production)
-                A[cell_1D_index, cell_1D_index] += phase_productivity_index
-                b[cell_1D_index] += phase_productivity_index * effective_bhp
+                _record_contribution(cell_1d_index, productivity_index, effective_bhp)
 
-    return A, b
+    return WellContributions(
+        diagonal_cell_indices=np.array(diagonal_cell_indices, dtype=np.int32),
+        diagonal_values=np.array(diagonal_values, dtype=np.float64),
+        rhs_cell_indices=np.array(rhs_cell_indices, dtype=np.int32),
+        rhs_values=np.array(rhs_values, dtype=np.float64),
+    )
 
 
 @numba.njit(cache=True)

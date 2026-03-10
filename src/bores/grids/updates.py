@@ -396,7 +396,7 @@ def update_pvt_grids(
 
     new_oil_effective_viscosity_grid = new_oil_viscosity_grid
     # If there are miscible injections, update the effective oil viscosity and density grids
-    if miscibility_model != "immiscible":
+    if miscibility_model == "todd_longstaff":
         for well in wells.injection_wells:
             injected_fluid = well.injected_fluid
             if injected_fluid is not None and injected_fluid.is_miscible:

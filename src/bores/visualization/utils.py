@@ -9,7 +9,9 @@ import typing
 from pathlib import Path
 
 import attrs
+import imageio
 import numpy as np
+import plotly.graph_objects as go
 from typing_extensions import TypedDict
 
 from bores._precision import get_dtype
@@ -56,11 +58,11 @@ def _format_value(value: float, metadata: PropertyMeta) -> str:
     # If value is very small or would have more than 6 decimal places, use scientific notation
     if abs_val == 0:
         return "0.000"
-    elif abs_val < 1e-6 or (
-        abs_val < 1 and len(f"{abs_val:.10f}".rstrip("0").split(".")[1]) > 6
+    elif (
+        abs_val < 1e-6
+        or (abs_val < 1 and len(f"{abs_val:.10f}".rstrip("0").split(".")[1]) > 6)
+        or abs_val >= 1e6
     ):
-        return f"{value:.4e}"
-    elif abs_val >= 1e6:
         return f"{value:.4e}"
     elif abs_val >= 1000:
         return f"{value:.1f}"
@@ -854,15 +856,13 @@ class GifExporter:
 
     def __init__(self, path: typing.Union[str, os.PathLike], loop: int = 0) -> None:
         """
-        :param path: Output file path (e.g. ``"animation.gif"``)
+        :param path: Output file path (e.g. `"animation.gif"`)
         :param loop: Number of loops (0 = infinite)
         """
         self.path = Path(path).resolve()
         self.loop = loop
 
     def write(self, frames: typing.List[np.typing.NDArray], fps: float) -> None:
-        import imageio
-
         imageio.mimsave(self.path, frames, duration=1.0 / fps, loop=self.loop)  # type: ignore
         logger.info("Wrote GIF (%d frames) to %s", len(frames), self.path)
 
@@ -877,8 +877,8 @@ class Mp4Exporter:
         quality: int = 8,
     ) -> None:
         """
-        :param path: Output file path (e.g. ``"animation.mp4"``)
-        :param codec: Video codec (default ``"libx264"``)
+        :param path: Output file path (e.g. `"animation.mp4"`)
+        :param codec: Video codec (default `"libx264"`)
         :param quality: Quality level 0-10, higher is better (default 8)
         """
         self.path = Path(path).resolve()
@@ -886,8 +886,6 @@ class Mp4Exporter:
         self.quality = quality
 
     def write(self, frames: typing.List[np.typing.NDArray], fps: float) -> None:
-        import imageio
-
         writer = imageio.get_writer(
             self.path, fps=fps, codec=self.codec, quality=self.quality
         )
@@ -902,15 +900,13 @@ class WebPExporter:
 
     def __init__(self, path: typing.Union[str, os.PathLike], loop: int = 0) -> None:
         """
-        :param path: Output file path (e.g. ``"animation.webp"``)
+        :param path: Output file path (e.g. `"animation.webp"`)
         :param loop: Number of loops (0 = infinite)
         """
         self.path = Path(path).resolve()
         self.loop = loop
 
     def write(self, frames: typing.List[np.typing.NDArray], fps: float) -> None:
-        import imageio
-
         imageio.mimsave(self.path, frames, duration=1.0 / fps, loop=self.loop)  # type: ignore
         logger.info("Wrote WebP (%d frames) to %s", len(frames), self.path)
 
@@ -933,11 +929,11 @@ class HtmlExporter:
         self.auto_open = auto_open
         self.include_plotlyjs = include_plotlyjs
 
-    def write(self, figure: typing.Any) -> None:
+    def write(self, figure: go.Figure) -> None:
         """
         Write a Plotly figure (with animation frames) to an HTML file.
 
-        :param figure: A ``plotly.graph_objects.Figure``
+        :param figure: A `plotly.graph_objects.Figure`
         """
         figure.write_html(
             str(self.path),

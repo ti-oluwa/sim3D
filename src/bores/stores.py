@@ -1,14 +1,14 @@
 """State storage backends."""
 
-import shutil
-
 import base64
 import functools
 import logging
+import shutil
 import sys
 import typing
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from os import PathLike
 from pathlib import Path
 
@@ -30,8 +30,8 @@ __all__ = [
     "JSONStore",
     "YAMLStore",
     "ZarrStore",
+    "data_store",
     "new_store",
-    "storage_backend",
 ]
 
 IS_PYTHON_310_OR_LOWER = sys.version_info < (3, 11)
@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 DataValidator = typing.Callable[[SerializableT], SerializableT]
+HandleT = typing.TypeVar("HandleT")
 
 
 class EntryMeta(typing.NamedTuple):
@@ -58,14 +59,41 @@ class EntryMeta(typing.NamedTuple):
     """JSON serializable metadata dictionary"""
 
 
-class DataStore(typing.Generic[SerializableT], ABC):
+class DataStore(ABC, typing.Generic[SerializableT, HandleT]):
     """
     Abstract base class for all storage backends.
 
-    Every backend maintains a compact metadata index (``list[EntryMeta]``) so
+    Every backend maintains a compact metadata index (`list[EntryMeta]`) so
     callers can inspect stored entries and jump directly to specific ones without
     a full scan.  Group naming is internal and fixed — callers never supply it.
     All writes overwrite existing content.
+
+    **Persistent handle (open / close / __call__)**
+
+    By default every method (`dump`, `load`, `append`, `entries`) opens
+    the underlying file/directory, performs its work, and closes it again.  For
+    workloads that call `append` in a tight loop (e.g. a background I/O
+    thread) this per-call overhead is significant.
+
+    Call `open(**kwargs)` once to obtain a persistent handle that all
+    subsequent methods will reuse.  Call `close()` when finished.  The
+    `__call__(**kwargs)` context manager does both automatically:
+
+    ```python
+    # Low-level
+    store.open(mode="a")
+    for state in states:
+        store.append(state)
+    store.close()
+
+    # Context manager (Preferred)
+    with store(mode="a"):
+        for state in states:
+            store.append(state)
+    ```
+
+    When no handle is open (`_handle is None`) every method falls back to
+    opening and closing internally, so existing call-sites require no changes.
 
     **Interface**
     `dump(data)`
@@ -82,10 +110,61 @@ class DataStore(typing.Generic[SerializableT], ABC):
 
     `entries()`
         Return the full `list[EntryMeta]` without deserialising any payload.
-        Use this for `count()`, `max_index()`, membership checks, etc.
+        Uses this for `count()`, `max_index()`, membership checks, etc.
     """
 
     supports_append: bool = False
+
+    def __init__(self) -> None:
+        self._handle: typing.Optional[HandleT] = None
+        """The open handle. `None` means "no persistent handle; open/close per call"."""
+
+    @abstractmethod
+    def open(self, **kwargs: typing.Any) -> None:
+        """
+        Open the underlying storage and attach the handle to `self._handle`.
+
+        Subsequent calls to `dump`, `load`, `append`, and `entries`
+        will use this handle instead of opening the file themselves.
+
+        :param kwargs: Backend-specific keyword arguments (e.g. `mode="a"`).
+        :raises StorageError: If the store cannot be opened.
+        """
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Flush and release the persistent handle (`self._handle`).
+
+        After this call `self._handle` must be `None`.  It is safe to call
+        `close()` when no handle is open.
+
+        Implementations should be idempotent.
+        """
+        ...
+
+    @contextmanager
+    def __call__(self, **kwargs: typing.Any) -> typing.Generator[Self, None, None]:
+        """
+        Context manager that opens the store, yields `self`, then closes it.
+
+        Usage:
+
+        ```python
+        with store(mode="a") as s:
+            for item in items:
+                s.append(item)
+        ```
+
+        :param kwargs: Forwarded verbatim to `open(**kwargs)`.
+        :raises StorageError: Re-raised from `open` or `close`.
+        """
+        self.open(**kwargs)
+        try:
+            yield self
+        finally:
+            self.close()
 
     @abstractmethod
     def dump(
@@ -160,9 +239,10 @@ class DataStore(typing.Generic[SerializableT], ABC):
 
         The item is assigned the next available insertion-order index.  Unlike
         `dump`, existing entries are never touched.  Backends that do not
-        support append-style writes (e.g. `JSONStore`, `YAMLStore`) raise
-        `NotImplementedError` at call time rather than at construction time;
-        check `supports_append` before calling if in doubt.
+        support append-style writes raise `NotImplementedError` at call time
+        rather than at construction time.
+
+        Check `supports_append` before calling if in doubt.
 
         :param item: The `Serializable` instance to persist.
         :param validator: Optional callable applied to *item* before it is
@@ -187,7 +267,7 @@ class DataStore(typing.Generic[SerializableT], ABC):
         Return metadata for every stored item in insertion order.
 
         This method must not deserialise any payload data.  Implementations
-        should read only group names, file keys, and lightweight attributes —
+        should read only group names, file keys, and lightweight attributes,
         never array datasets.  The returned list can therefore be used for
         cheap introspection (counts, step lookups, predicate filtering) without
         triggering any significant I/O.
@@ -233,23 +313,19 @@ _STORAGE_BACKENDS: typing.Dict[str, typing.Type[DataStore]] = {}
 
 
 @typing.overload
-def storage_backend(
+def data_store(
     *names: str,
     store_cls: typing.Type[StoreT],
-) -> typing.Type[StoreT]:
-    """Register a data store class with a given name."""
-    ...
+) -> typing.Type[StoreT]: ...
 
 
 @typing.overload
-def storage_backend(
+def data_store(
     *names: str,
-) -> typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]:
-    """Register a data store class with a given name."""
-    ...
+) -> typing.Callable[[typing.Type[StoreT]], typing.Type[StoreT]]: ...
 
 
-def storage_backend(
+def data_store(
     *names: str,
     store_cls: typing.Optional[typing.Type[StoreT]] = None,
 ) -> typing.Union[
@@ -295,24 +371,19 @@ def _validate_filepath(
     """
     path = Path(filepath)
 
-    # Check for empty path
     if not str(path).strip():
         raise StorageError("Filepath cannot be empty")
 
-    # Check for invalid characters
     if "\x00" in str(path):
         raise StorageError("Filepath contains null characters")
 
-    # For directory-based stores
     if is_directory:
-        # If an extension is expected, ensure it matches (e.g., '.zarr')
         if expected_extension and path.suffix:
             if expected_extension not in path.suffixes:
                 raise StorageError(
                     f"Directory-based store expected extension '{expected_extension}', "
                     f"got '{''.join(path.suffixes)}'. Use '{path.with_suffix(expected_extension)}' instead."
                 )
-        # Warn if the path looks like a file (has an unexpected extension)
         elif path.suffix and ".zarr" not in path.suffixes:
             logger.warning(
                 f"Path '{path}' has extension '{path.suffix}' but will be treated as a directory. "
@@ -320,10 +391,8 @@ def _validate_filepath(
             )
         return path
 
-    # For file-based stores
     if expected_extension:
         if not path.suffix:
-            # Auto-add extension if missing
             path = path.with_suffix(expected_extension)
             logger.debug(f"Added extension: {path}")
         elif expected_extension not in path.suffixes:
@@ -333,7 +402,6 @@ def _validate_filepath(
             )
 
     if create_if_not_exists:
-        # Ensure parent directory exists
         is_file = path.suffix != ""
         directory = path.parent if is_file else path
         if not directory.exists():
@@ -369,6 +437,8 @@ def reraise_storage_error(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
     def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return func(*args, **kwargs)
+        except StorageError:
+            raise
         except Exception as exc:
             raise StorageError(exc) from exc
 
@@ -392,16 +462,13 @@ def _sequence_to_ndarray(value: Sequence, path: str) -> np.typing.NDArray:
     Raises if the sequence would produce dtype=object.
     """
     if not value:
-        # Empty to int8 empty array (safe default)
         return np.empty((0,), dtype=np.int8)
 
-    # Check for mappings (should be stored as groups)
     if any(isinstance(v, Mapping) for v in value):
         raise TypeError(
             f"Sequence of mappings must be stored as groups, not datasets: {path}"
         )
 
-    # Nested sequences
     if isinstance(value[0], Sequence) and not isinstance(value[0], (str, bytes)):
         arrays = [_sequence_to_ndarray(v, path) for v in value]
         try:
@@ -410,28 +477,22 @@ def _sequence_to_ndarray(value: Sequence, path: str) -> np.typing.NDArray:
             raise TypeError(f"Inconsistent nested sequence shapes at {path}") from exc
         return arr
 
-    # Flat bool (check before numeric since bool is subclass of int)
     if all(isinstance(v, (bool, np.bool_)) for v in value):
         return np.asarray(value, dtype=bool)
 
-    # Flat integer (pure int, no floats)
     if all(
         isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
         for v in value
     ):
-        return np.asarray(value)  # Preserves int32/int64 based on values
+        return np.asarray(value)
 
-    # Flat numeric (mixed int/float or pure float)
     if all(isinstance(v, (int, float, np.integer, np.floating)) for v in value):
-        return np.asarray(value)  # Preserves dtype (float32/float64 based on input)
+        return np.asarray(value)
 
-    # Flat strings (including None sentinels)
     if all(isinstance(v, str) for v in value):
-        # For HDF5
         if hasattr(h5py, "string_dtype"):
             dtype = h5py.string_dtype(encoding="utf-8")
             return np.asarray(value, dtype=dtype)
-        # For Zarr (doesn't have string_dtype)
         return np.asarray(value, dtype="U")
 
     raise TypeError(
@@ -467,11 +528,9 @@ def _denormalize_from_storage(value: typing.Any) -> typing.Any:
 def _normalize_loaded_value(value: typing.Any) -> typing.Any:
     """Normalize values loaded from HDF5/Zarr datasets."""
     if isinstance(value, np.ndarray):
-        # String arrays
         if value.dtype.kind in ("U", "S", "O"):
             result = value.astype(str).tolist()
             return _denormalize_from_storage(result)
-        # Numeric arrays
         return value
     return _denormalize_from_storage(value)
 
@@ -485,17 +544,15 @@ def _normalize_loaded_mapping_sequence(value: typing.Any) -> typing.Any:
     if (
         isinstance(value, dict)
         and value
-        and all(isinstance(k, str) and k.isdigit() for k in value.keys())
+        and all(isinstance(k, str) and k.isdigit() for k in value)
     ):
-        # Reconstruct list in order
-        max_idx = max(int(k) for k in value.keys())
+        max_idx = max(int(k) for k in value)
         result = []
         for i in range(max_idx + 1):
             key = str(i)
             if key in value:
                 result.append(value[key])
             else:
-                # Missing index - shouldn't happen but handle gracefully
                 result.append(None)
         return result
     return value
@@ -521,8 +578,8 @@ def _get_index_from_group_name(name: str) -> typing.Optional[int]:
     return None
 
 
-@storage_backend("zarr")
-class ZarrStore(DataStore[SerializableT]):
+@data_store("zarr")
+class ZarrStore(DataStore[SerializableT, zarr.Group]):
     """
     Zarr-based storage.
 
@@ -541,6 +598,25 @@ class ZarrStore(DataStore[SerializableT]):
         ...
         (root attrs: count)
     ```
+
+    **Persistent-handle notes**
+
+    `open(mode="a")` opens the Zarr root group once and stores it in
+    `self._handle`.  All subsequent `append` / `load` / `entries`
+    calls reuse that group without re-opening the directory.  `close()`
+    consolidates metadata (zarr v2) and sets `self._handle = None`.
+
+    Typical high-throughput usage:
+
+    ```python
+    with store(mode="a"):
+        for state in simulation():
+            store.append(state)
+    ```
+
+    Note: Calling `dump()` while a handle is open will temporarily close the
+    handle (to safely truncate the store), perform the write, then reopen
+    it in `"a"` mode so subsequent `append` calls continue to work.
     """
 
     supports_append: bool = True
@@ -548,26 +624,30 @@ class ZarrStore(DataStore[SerializableT]):
     def __init__(
         self,
         store: typing.Union[StoreLike, PathLike, str],
-        compressor: typing.Literal["zstd", "lz4", "blosclz"] = "zstd",
-        compression_level: int = 3,
+        compressor: typing.Literal["zstd", "lz4", "blosclz"] = "lz4",
+        compression_level: int = 1,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
     ):
         """
         Initialize the store
 
         :param store: Zarr store (file path, directory, or `Store` object)
-        :param compressor: Compression algorithm - 'zstd', 'lz4', 'blosclz'. blosc with zstd is fastest for scientific data
+        :param compressor: Compression algorithm, e.g, 'zstd', 'lz4', 'blosclz'.
         :param compression_level: Compression level (1-9)
         :param chunks: Chunk size for the Zarr arrays
-        :param group_name_gen: Optional callable to generate group names based on index and item
         :raises StorageError: If filepath is invalid or has incompatible extension
         """
+        super().__init__()
         self.store = (
             _validate_filepath(store, is_directory=True, create_if_not_exists=True)
             if isinstance(store, (str, PathLike))
             else store
         )
         self.chunks = chunks
+        # In-memory count cache. Helps us avoid reading/writing root .zattrs on every append
+        # when a persistent handle is open. Only flushed to disk on `close()`.
+        self._pending_count: int = 0
+
         if IS_PYTHON_310_OR_LOWER:
             self.compressor = Blosc(
                 cname=compressor,
@@ -583,44 +663,77 @@ class ZarrStore(DataStore[SerializableT]):
                 shuffle=BloscShuffle.bitshuffle,
             )
 
+    def open(self, mode: str = "a", **kwargs: typing.Any) -> None:
+        """
+        Open the Zarr root group and attach it to `self._handle`.
+
+        :param mode: Zarr open mode.  Use `"a"` for append/create,
+            `"r"` for read-only, `"w"` to truncate.
+        :raises StorageError: If the group cannot be opened.
+        """
+        if self._handle is not None:
+            logger.debug(
+                f"`{self.__class__.__name__}.open()` called while handle already open; ignored"
+            )
+            return
+
+        try:
+            self._handle = zarr.open_group(
+                store=self.store,
+                mode=mode,
+                zarr_version=2,  # type: ignore[arg-type]
+            )
+            # Seed the in-memory counter from whatever is already on disk so that
+            # `append()` never needs to touch root .zattrs while the handle is open.
+            self._pending_count = int(self._handle.attrs.get("count", 0))
+            logger.debug(
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.store}"
+            )
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to open {self.__class__.__name__}: {exc}"
+            ) from exc
+
+    def close(self, consolidate: bool = False) -> None:
+        """
+        Consolidate metadata and release the open Zarr handle.
+
+        For zarr v2 directory stores the handle is just a Python object with
+        no explicit close method, but we call `zarr.consolidate_metadata`
+        so subsequent `open(mode="r")` calls can skip scanning every chunk.
+        """
+        if self._handle is None:
+            return
+        try:
+            # Flush the in-memory count to disk
+            self._handle.attrs["count"] = self._pending_count
+            # Consolidate metadata for faster subsequent reads (zarr v2).
+            # Callers opt in when they want fast subsequent reads
+            # and are willing to pay the one-time directory scan cost.
+            if consolidate and isinstance(self.store, Path) and self.store.exists():
+                try:
+                    zarr.consolidate_metadata(self.store)  # type: ignore[arg-type]
+                except Exception:  # noqa
+                    pass  # Non-fatal: consolidated metadata is an optimisation
+        finally:
+            self._handle = None
+            self._pending_count = 0
+            logger.debug(f"{self.__class__.__name__} closed: {self.store}")
+
     def _get_chunks(
         self, shape: typing.Tuple[int, ...]
     ) -> typing.Optional[typing.Tuple[int, ...]]:
-        """
-        Determine optimal chunk size if not provided.
-
-        :param shape: Shape of the array to chunk
-        :return: Optimal chunk shape or None for auto-chunking
-        """
         if self.chunks:
             return self.chunks
-
-        # As a rule of thumb, use chunks of ~1-10 MB for good performance
-        # For 3D grids, use smaller chunks for better I/O
         if len(shape) == 3:
-            return (
-                min(20, shape[0]),
-                min(20, shape[1]),
-                min(20, shape[2]),
-            )
+            return (min(20, shape[0]), min(20, shape[1]), min(20, shape[2]))
         elif len(shape) == 2:
-            return (
-                min(100, shape[0]),
-                min(100, shape[1]),
-            )
-        return None  # Auto-chunking
+            return (min(100, shape[0]), min(100, shape[1]))
+        return None
 
     def _create_dataset(
         self, group: zarr.Group, name: str, data: np.typing.NDArray
     ) -> zarr.Array:
-        """
-        Helper to create compressed dataset.
-
-        :param group: Zarr group to create dataset in
-        :param name: Name of the dataset
-        :param data: NumPy array data to store
-        :return: Created Zarr array
-        """
         chunks = self._get_chunks(shape=data.shape)
         return group.create_dataset(
             name=name,
@@ -633,22 +746,13 @@ class ZarrStore(DataStore[SerializableT]):
     def _write_data(
         self, group: zarr.Group, data: typing.Mapping[str, typing.Any]
     ) -> None:
-        """
-        Write data to a Zarr group with nested structure support.
-
-        :param group: Zarr group to write data to
-        :param data: Dictionary of data to write
-        """
         for key, value in data.items():
-            # Normalize values
             value = _normalize_for_storage(value)
 
-            # Mapping to subgroup
             if isinstance(value, Mapping):
                 sub_group = group.require_group(name=key)
                 self._write_data(group=sub_group, data=value)
 
-            # NumPy array to dataset
             elif isinstance(value, np.ndarray):
                 if value.dtype == object:
                     raise TypeError(
@@ -656,69 +760,53 @@ class ZarrStore(DataStore[SerializableT]):
                     )
                 self._create_dataset(group=group, name=key, data=value)
 
-            # Python scalars to attributes
             elif isinstance(value, (np.integer, np.floating)):
                 group.attrs[key] = value.item()
             elif isinstance(value, np.bool_):
                 group.attrs[key] = bool(value)
 
-            # Sequence to dataset or subgroup (depending on contents)
             elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                # Empty sequence
                 if not value:
                     self._create_dataset(
                         group=group, name=key, data=np.empty((0,), dtype=np.int8)
                     )
                     continue
-
-                # Sequence of mappings to subgroup with indexed keys
                 if isinstance(value[0], Mapping):
                     seq_group = group.require_group(key)
                     for i, item in enumerate(value):
                         item_group = seq_group.require_group(str(i))
                         self._write_data(group=item_group, data=item)
                     continue
-
-                # Other sequences to dataset
-                array = _sequence_to_ndarray(
-                    value=value,
-                    path=f"{group.name}/{key}",
-                )
+                array = _sequence_to_ndarray(value=value, path=f"{group.name}/{key}")
                 self._create_dataset(group=group, name=key, data=array)
 
-            # Simple scalars to attributes
             else:
                 group.attrs[key] = value
 
     def _load_data(self, group: zarr.Group) -> typing.Dict[str, typing.Any]:
-        """
-        Load data from a Zarr group with nested structure support.
-
-        :param group: Zarr group to load data from
-        :param lazy: If True, returns Lazy objects that defer loading until accessed
-        :return: Dictionary of loaded data
-        """
         data: typing.Dict[str, typing.Any] = {}
-
-        # Load datasets
         for key in group.array_keys():  # type: ignore
             array = group[key]  # type: ignore
             data[key] = _normalize_loaded_value(array[:])  # type: ignore
-
-        # Load subgroups
         for key in group.group_keys():  # type: ignore
             sub_group = typing.cast(zarr.Group, group[key])  # type: ignore
             loaded = self._load_data(group=sub_group)
-            # Check if subgroup represents a sequence
             data[key] = _normalize_loaded_mapping_sequence(loaded)
-
-        # Load attributes
-        for attr_name in group.attrs.keys():
+        for attr_name in group.attrs:
             data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
-
         return data
 
     def _open_root(self, mode: str) -> zarr.Group:
+        """
+        Return the active root group.
+
+        If a persistent handle is open, return it directly (ignoring *mode*
+        since the caller must have opened with the correct mode).  Otherwise
+        open a transient group for this call only. The caller is responsible
+        for not holding references after their operation completes.
+        """
+        if self._handle is not None:
+            return self._handle
         return zarr.open_group(store=self.store, mode=mode, zarr_version=2)  # type: ignore[arg-type]
 
     def _write_entry(
@@ -733,10 +821,13 @@ class ZarrStore(DataStore[SerializableT]):
         group_name = _get_group_name(index)
         item_group = root.require_group(group_name)
         self._write_data(item_group, item.dump(recurse=True))
-
-        item_group.attrs["_meta"] = meta(item) if meta is not None else {}
-        item_group.attrs["_index"] = index
-        item_group.attrs["_group_name"] = group_name
+        item_group.attrs.update(
+            {
+                "_meta": meta(item) if meta is not None else {},
+                "_index": index,
+                "_group_name": group_name,
+            }
+        )
         return EntryMeta(idx=index, group_name=group_name)
 
     @reraise_storage_error
@@ -748,17 +839,25 @@ class ZarrStore(DataStore[SerializableT]):
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> None:
-        root = self._open_root("w")  # always overwrite
+        had_open_handle = self._handle is not None
+        if had_open_handle:
+            self.close()  # Flush and close existing handle before truncating
+
+        # `dump` always truncates, so we must never reuse a persistent handle for this
+        root = zarr.open_group(store=self.store, mode="w", zarr_version=2)  # type: ignore[arg-type]
         count = 0
         for index, item in enumerate(data):
             if validator is not None:
                 item = validator(item)
-
             self._write_entry(root, index, item, meta)
             logger.debug(f"{self.__class__.__name__}: wrote entry {index}")
             count += 1
+
         root.attrs["count"] = count
         logger.debug(f"{self.__class__.__name__}: dump complete, {count} entries")
+
+        if had_open_handle:
+            self.open(mode="a")  # Re-open so subsequent operations still work
 
     @reraise_storage_error
     def append(
@@ -770,11 +869,23 @@ class ZarrStore(DataStore[SerializableT]):
         ] = None,
     ) -> EntryMeta:
         root = self._open_root("a")
-        current_count = int(root.attrs.get("count", 0))
+
+        if self._handle is not None:
+            # Use the in-memory counter.
+            index = self._pending_count
+        else:
+            index = int(root.attrs.get("count", 0))
+
         if validator is not None:
             item = validator(item)
-        entry = self._write_entry(root, current_count, item, meta)
-        root.attrs["count"] = current_count + 1
+
+        entry = self._write_entry(root, index, item, meta)
+
+        if self._handle is not None:
+            self._pending_count += 1  # To be flushed to disk on `close()`
+        else:
+            root.attrs["count"] = index + 1
+
         logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
         return entry
 
@@ -782,7 +893,8 @@ class ZarrStore(DataStore[SerializableT]):
     def entries(self) -> typing.List[EntryMeta]:
         try:
             root = self._open_root("r")
-        except Exception:
+        except Exception as exc:
+            logger.error(exc, exc_info=True)
             return []
 
         metas = []
@@ -833,7 +945,6 @@ class ZarrStore(DataStore[SerializableT]):
                         group_name=name,
                         meta=dict(group.attrs.get("_meta", {})),
                     )
-
                     if predicate is None or predicate(entry_meta):
                         item_group = typing.cast(
                             zarr.Group, root[entry_meta.group_name]
@@ -860,8 +971,8 @@ class ZarrStore(DataStore[SerializableT]):
         return f"{self.__class__.__name__}(store={self.store!r}, compressor={cname!r})"
 
 
-@storage_backend("hdf5", "h5")
-class HDF5Store(DataStore[SerializableT]):
+@data_store("hdf5", "h5")
+class HDF5Store(DataStore[SerializableT, h5py.File]):
     """
     HDF5-based storage.
 
@@ -879,6 +990,26 @@ class HDF5Store(DataStore[SerializableT]):
         ...
         (file attrs: count)
     ```
+
+    **Persistent-handle notes**
+
+    `open(mode="a")` opens the HDF5 file once via `h5py.File` and stores
+    the file object in `self._handle`.  All subsequent `append` /
+    `load` / `entries` calls reuse the same open file descriptor, avoiding
+    the open/close cost on every call.  `close()` flushes and closes the
+    `h5py.File` and sets `self._handle = None`.
+
+    Typical high-throughput usage:
+
+    ```python
+    with store(mode="a"):
+        for state in simulation():
+            store.append(state)
+    ```
+
+    Note: Calling `dump()` while a handle is open will temporarily close the
+    handle (to safely truncate the file), perform the write, then reopen
+    it in `"a"` mode so subsequent `append` calls continue to work.
     """
 
     supports_append: bool = True
@@ -896,55 +1027,82 @@ class HDF5Store(DataStore[SerializableT]):
         :param filepath: Path to the HDF5 file
         :param compression: Compression algorithm - 'gzip', 'lzf', or 'szip'
         :param compression_opts: Compression level (1-9 for gzip)
-        :param chunks: Custom chunk shape for datasets. If None, uses optimized defaults based on array dimensions.
+        :param chunks: Custom chunk shape for datasets.
         :raises StorageError: If filepath is invalid or has wrong extension
         """
+        super().__init__()
         self.filepath = _validate_filepath(
             filepath, expected_extension=".h5", create_if_not_exists=True
         )
         self.compression = compression
-        self.compression_opts = compression_opts  # 1-9 for gzip
+        self.compression_opts = compression_opts
         self.chunks = chunks
+        # In-memory count cache. Helps us avoid reading/writing file attrs on every append
+        # when a persistent handle is open. Only flushed to disk on `close()`.
+        self._pending_count: int = 0
+
+    def open(self, mode: str = "a", **kwargs: typing.Any) -> None:
+        """
+        Open the HDF5 file and attach the `h5py.File` to `self._handle`.
+
+        :param mode: h5py open mode — `"a"` (append/create), `"r"`
+            (read-only), `"w"` (truncate).
+        :raises StorageError: If the file cannot be opened.
+        """
+        if self._handle is not None:
+            logger.debug(
+                f"`{self.__class__.__name__}.open()` called while handle already open; ignored."
+            )
+            return
+
+        try:
+            self._handle = h5py.File(str(self.filepath), mode=mode, **kwargs)
+            # Seed the in-memory counter from whatever is already on disk so that
+            # `append()` never needs to touch file attrs while the handle is open.
+            self._pending_count = int(self._handle.attrs.get("count", 0))
+            logger.debug(
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.filepath}"
+            )
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to open {self.__class__.__name__}: {exc}"
+            ) from exc
+
+    def close(self) -> None:
+        """
+        Flush and close the open `h5py.File`.
+
+        Idempotent. Safe to call when no handle is open.
+        """
+        if self._handle is None:
+            return
+
+        try:
+            # Flush the in-memory count to disk in a single attrs write.
+            self._handle.attrs["count"] = self._pending_count
+            self._handle.flush()
+            self._handle.close()
+            logger.debug(f"{self.__class__.__name__} closed: {self.filepath}")
+        except Exception as exc:
+            logger.warning(f"Error closing {self.__class__.__name__}: {exc}")
+        finally:
+            self._handle = None
+            self._pending_count = 0
 
     def _get_chunks(
         self, shape: typing.Tuple[int, ...]
     ) -> typing.Optional[typing.Tuple[int, ...]]:
-        """
-        Determine optimal chunk size if not provided.
-
-        :param shape: Shape of the array to chunk
-        :return: Optimal chunk shape or None for auto-chunking
-        """
         if self.chunks:
             return self.chunks
-
-        # As a rule of thumb, use chunks of ~1-10 MB for good performance
-        # For 3D grids, use smaller chunks for better I/O
         if len(shape) == 3:
-            return (
-                min(20, shape[0]),
-                min(20, shape[1]),
-                min(20, shape[2]),
-            )
+            return (min(20, shape[0]), min(20, shape[1]), min(20, shape[2]))
         elif len(shape) == 2:
-            return (
-                min(100, shape[0]),
-                min(100, shape[1]),
-            )
-        return None  # Auto-chunking
+            return (min(100, shape[0]), min(100, shape[1]))
+        return None
 
     def _create_dataset(self, group: h5py.Group, name: str, data: np.ndarray):
-        """
-        Create a compressed dataset with optimized chunking. Deletes the dataset if it already exists to recreate a new one.
-
-        :param group: HDF5 group to create dataset in
-        :param name: Name of the dataset
-        :param data: NumPy array data to store
-        :return: Created HDF5 dataset
-        """
         if group.get(name) is not None:
             del group[name]
-
         chunks = self._get_chunks(shape=data.shape)
         return group.create_dataset(
             name=name,
@@ -955,25 +1113,13 @@ class HDF5Store(DataStore[SerializableT]):
         )
 
     def _write_data(self, group: h5py.Group, data: Mapping[str, typing.Any]) -> None:
-        """
-        Write data to an HDF5 group with nested structure support.
-
-        Rules:
-        - Mappings to subgroups (recursive)
-        - Scalars to attributes
-        - Sequences/arrays to datasets (never attributes)
-        - None values to sentinel string
-        """
         for key, value in data.items():
-            # Normalize None values
             value = _normalize_for_storage(value)
 
-            # Mapping to subgroup
             if isinstance(value, Mapping):
                 sub_group = group.require_group(name=key)
                 self._write_data(group=sub_group, data=value)
 
-            # NumPy array to dataset
             elif isinstance(value, np.ndarray):
                 if value.dtype == object:
                     raise TypeError(
@@ -981,64 +1127,60 @@ class HDF5Store(DataStore[SerializableT]):
                     )
                 self._create_dataset(group=group, name=key, data=value)
 
-            # Python scalars to attributes
             elif isinstance(value, (np.integer, np.floating)):
                 group.attrs[key] = value.item()
             elif isinstance(value, np.bool_):
                 group.attrs[key] = bool(value)
 
-            # Sequence to dataset or subgroup (depending on contents)
             elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                # Empty sequence
                 if not value:
                     self._create_dataset(
                         group=group, name=key, data=np.empty((0,), dtype=np.int8)
                     )
                     continue
-
-                # Sequence of mappings to subgroup with indexed keys
                 if isinstance(value[0], Mapping):
                     seq_group = group.require_group(key)
                     for i, item in enumerate(value):
                         item_group = seq_group.require_group(str(i))
                         self._write_data(group=item_group, data=item)
                     continue
-
-                # Other sequences to dataset
-                array = _sequence_to_ndarray(
-                    value=value,
-                    path=f"{group.name}/{key}",
-                )
+                array = _sequence_to_ndarray(value=value, path=f"{group.name}/{key}")
                 self._create_dataset(group=group, name=key, data=array)
 
-            # Simple scalars to attributes
             else:
                 group.attrs[key] = value
 
     def _load_data(self, group: h5py.Group) -> typing.Dict[str, typing.Any]:
-        """
-        Load data from an HDF5 group with nested structure support.
-
-        :param group: HDF5 group to load data from
-        :return: Dictionary of loaded data
-        """
         data: typing.Dict[str, typing.Any] = {}
-
-        # Load datasets
-        for key in group.keys():
+        for key in group:
             item = group[key]
             if isinstance(item, h5py.Dataset):
                 data[key] = _normalize_loaded_value(item[:])  # type: ignore
             elif isinstance(item, h5py.Group):
                 loaded = self._load_data(group=item)
-                # Check if subgroup represents a sequence
-                data[key] = _normalize_loaded_mapping_sequence(loaded)
+                data[key] = _normalize_loaded_mapping_sequence(loaded)  # type: ignore
 
-        # Load attributes
-        for attr_name in group.attrs.keys():
+        for attr_name in group.attrs:
             data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
-
         return data
+
+    @contextmanager
+    def _get_file(self, mode: str) -> typing.Generator[h5py.File, None, None]:
+        """
+        Yield an open `h5py.File.`
+
+        If a persistent handle is open, yield it directly (ignoring *mode*).
+        Otherwise open a transient file, yield it, and close it on exit.
+        """
+        if self._handle is not None:
+            yield self._handle
+            return  # Caller owns the handle, hence we must not close it
+        else:
+            f = h5py.File(str(self.filepath), mode=mode)
+            try:
+                yield f
+            finally:
+                f.close()
 
     def _write_entry(
         self,
@@ -1052,10 +1194,13 @@ class HDF5Store(DataStore[SerializableT]):
         group_name = _get_group_name(index)
         item_group = f.require_group(group_name)
         self._write_data(item_group, item.dump(recurse=True))
-
-        item_group.attrs["_meta"] = orjson.dumps(meta(item) if meta is not None else {})
-        item_group.attrs["_index"] = index
-        item_group.attrs["_group_name"] = group_name
+        item_group.attrs.update(
+            {
+                "_meta": orjson.dumps(meta(item) if meta is not None else {}),
+                "_index": index,
+                "_group_name": group_name,
+            }
+        )
         return EntryMeta(idx=index, group_name=group_name)
 
     @reraise_storage_error
@@ -1067,12 +1212,17 @@ class HDF5Store(DataStore[SerializableT]):
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> None:
-        with h5py.File(str(self.filepath), mode="w") as f:  # always truncate
+        had_open_handle = self._handle is not None
+        if had_open_handle:
+            self.close()  # Flush and close existing handle before truncating
+
+        # `dump` always truncates. so we open a dedicated truncating file and never
+        # reuse a persistent append handle
+        with h5py.File(str(self.filepath), mode="w") as f:
             count = 0
             for index, item in enumerate(data):
                 if validator is not None:
                     item = validator(item)
-
                 self._write_entry(f, index, item, meta)
                 logger.debug(f"{self.__class__.__name__}: wrote entry {index}")
                 count += 1
@@ -1080,6 +1230,9 @@ class HDF5Store(DataStore[SerializableT]):
         logger.debug(
             f"{self.__class__.__name__}: dump complete, {count} entries → {self.filepath}"
         )
+
+        if had_open_handle:
+            self.open(mode="a")  # Re-open so subsequent operations still work
 
     @reraise_storage_error
     def append(
@@ -1091,13 +1244,23 @@ class HDF5Store(DataStore[SerializableT]):
         ] = None,
     ) -> EntryMeta:
         mode = "a" if self.filepath.exists() else "w"
-        with h5py.File(str(self.filepath), mode=mode) as f:
-            current_count = int(f.attrs.get("count", 0))
+        with self._get_file(mode) as f:
+            if self._handle is not None:
+                # Use the in-memory counter
+                index = self._pending_count
+            else:
+                index = int(f.attrs.get("count", 0))
+
             if validator is not None:
                 item = validator(item)
 
-            entry = self._write_entry(f, current_count, item, meta)
-            f.attrs["count"] = current_count + 1
+            entry = self._write_entry(f, index, item, meta)
+
+            if self._handle is not None:
+                self._pending_count += 1  # To be flushed to disk on `close()`
+            else:
+                f.attrs["count"] = index + 1
+
         logger.debug(f"{self.__class__.__name__}: appended entry {entry.idx}")
         return entry
 
@@ -1105,8 +1268,9 @@ class HDF5Store(DataStore[SerializableT]):
     def entries(self) -> typing.List[EntryMeta]:
         if not self.filepath.exists():
             return []
+
         metas = []
-        with h5py.File(str(self.filepath), mode="r") as f:
+        with self._get_file("r") as f:
             for name in sorted(f.keys()):
                 idx = _get_index_from_group_name(name)
                 if idx is not None:
@@ -1128,7 +1292,7 @@ class HDF5Store(DataStore[SerializableT]):
         predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
     ) -> typing.Generator[SerializableT, None, None]:
-        with h5py.File(str(self.filepath), mode="r") as f:
+        with self._get_file("r") as f:
             if indices is not None:
                 index_set = set(indices)
                 for name in sorted(f.keys()):
@@ -1152,7 +1316,6 @@ class HDF5Store(DataStore[SerializableT]):
                             group_name=name,
                             meta=orjson.loads(group.attrs.get("_meta", "{}")),
                         )
-
                         if predicate is None or predicate(entry_meta):
                             item_group = typing.cast(
                                 h5py.Group, f[entry_meta.group_name]
@@ -1180,9 +1343,34 @@ class HDF5Store(DataStore[SerializableT]):
         )
 
 
-@storage_backend("json")
-class JSONStore(DataStore[SerializableT]):
-    """JSON-based storage.  Human-readable, no compression.  Good for configs."""
+@data_store("json")
+class JSONStore(DataStore[SerializableT, typing.List[typing.Any]]):
+    """
+    JSON-based storage.  Human-readable, no compression.  Good for configs.
+
+    **Persistent-handle notes**
+
+    JSON files must be read and written in their entirety (there is no
+    append-friendly on-disk format), so `open()` loads the current file
+    contents into `self._handle` (a plain Python list) and `close()`
+    serialises that list back to disk.
+
+    While the handle is open, `dump` replaces `_handle` in memory and
+    `append` pushes a new entry onto `_handle`.  Neither touches the
+    file until `close()` is called, so you get one write per session
+    instead of one write per append:
+
+    ```python
+    with store(mode="a"):
+        for item in items:
+            store.append(item)   # in-memory only
+    # ← file written once here by close()
+    ```
+
+    Note: `JSONStore.supports_append` is `False` as a class attribute
+    (plain append calls without an open handle still rewrite the whole file),
+    but the persistent-handle pattern above achieves efficient bulk appending.
+    """
 
     supports_append: bool = False
 
@@ -1196,9 +1384,63 @@ class JSONStore(DataStore[SerializableT]):
         :param filepath: Path to the JSON file
         :raises StorageError: If filepath is invalid or has wrong extension
         """
+        super().__init__()
         self.filepath = _validate_filepath(
             filepath, expected_extension=".json", create_if_not_exists=True
         )
+
+    def open(self, mode: str = "a", **kwargs: typing.Any) -> None:
+        """
+        Load the JSON file into memory as `self._handle` (a list).
+
+        :param mode: `"a"` to load existing contents for appending (default),
+            `"w"` to start with an empty list (discard existing data).
+        :raises StorageError: If the file cannot be read.
+        """
+        if self._handle is not None:
+            logger.debug(
+                f"`{self.__class__.__name__}.open()` called while handle already open; ignored."
+            )
+            return
+        try:
+            if mode == "w" or not self.filepath.exists():
+                self._handle = []
+            else:
+                with open(self.filepath, "rb") as f:
+                    self._handle = orjson.loads(f.read()) if f.read(1) else []
+                    # Re-read properly
+                with open(self.filepath, "rb") as f:
+                    content = f.read()
+                    self._handle = orjson.loads(content) if content.strip() else []
+            logger.debug(
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.filepath}"
+            )
+        except Exception as exc:
+            self._handle = None
+            raise StorageError(
+                f"Failed to open {self.__class__.__name__}: {exc}"
+            ) from exc
+
+    def close(self) -> None:
+        """
+        Serialise ``self._handle`` back to disk and release it.
+
+        Idempotent. Safe to call when no handle is open.
+        """
+        if self._handle is None:
+            return
+        try:
+            with open(self.filepath, mode="wb") as f:
+                f.write(safe_json_dumps(self._handle))
+            logger.debug(
+                f"{self.__class__.__name__} closed (wrote {len(self._handle)} entries): {self.filepath}"
+            )
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to close/write {self.__class__.__name__}: {exc}"
+            ) from exc
+        finally:
+            self._handle = None
 
     @reraise_storage_error
     def dump(
@@ -1222,16 +1464,24 @@ class JSONStore(DataStore[SerializableT]):
                 }
             )
 
-        with open(self.filepath, mode="wb") as f:
-            f.write(safe_json_dumps(items))
+        if self._handle is not None:
+            # Replace in-memory list; file written on close()
+            self._handle.clear()
+            self._handle.extend(items)
+        else:
+            with open(self.filepath, mode="wb") as f:
+                f.write(safe_json_dumps(items))
 
     @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
-        if not self.filepath.exists():
-            return []
+        if self._handle is not None:
+            items = self._handle
+        else:
+            if not self.filepath.exists():
+                return []
+            with open(self.filepath, "rb") as f:
+                items = safe_json_loads(f.read())
 
-        with open(self.filepath, "rb") as f:
-            items = safe_json_loads(f.read())
         return [
             EntryMeta(
                 idx=e["_index"],
@@ -1249,8 +1499,11 @@ class JSONStore(DataStore[SerializableT]):
         predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
     ) -> typing.Generator[SerializableT, None, None]:
-        with open(self.filepath, mode="rb") as f:
-            items = orjson.loads(f.read())
+        if self._handle is not None:
+            items = list(self._handle)
+        else:
+            with open(self.filepath, mode="rb") as f:
+                items = orjson.loads(f.read())
 
         if indices is not None:
             index_set = set(indices)
@@ -1277,9 +1530,6 @@ class JSONStore(DataStore[SerializableT]):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(filepath={self.filepath!r})"
-
-
-# Register constructors and representers to make yaml atleast work with numpy scalars and arrays
 
 
 def _ndarray_representer(
@@ -1328,16 +1578,12 @@ def _ndarray_constructor(
     try:
         if not isinstance(node, yaml.MappingNode):
             raise TypeError(f"Expected MappingNode, got {type(node)}")
-
         mapping = loader.construct_mapping(node, deep=True)
         data = mapping["data"]
-        dtype = mapping["dtype"]
         dtype = np.dtype(mapping["dtype"])
         shape = tuple(mapping["shape"])
-
         if isinstance(data, str):
             return _ndarray_from_base64(data, dtype=dtype, shape=shape)
-
         arr = np.array(data, dtype=dtype)
         if arr.size != np.prod(shape):
             raise ValueError(f"Array size {arr.size} does not match shape {shape}")
@@ -1370,8 +1616,7 @@ yaml.SafeDumper.add_representer(np.ndarray, _ndarray_representer)
 yaml.add_representer(np.ndarray, _ndarray_representer)
 
 yaml.SafeDumper.add_representer(np.generic, _np_scalar_representer)
-# Register scalar representer for all np.generic types too
-for t in [
+for _t in [
     np.float16,
     np.float32,
     np.float64,
@@ -1385,16 +1630,30 @@ for t in [
     np.uint32,
     np.uint64,
 ]:
-    yaml.SafeDumper.add_representer(t, _np_scalar_representer)
+    yaml.SafeDumper.add_representer(_t, _np_scalar_representer)
     yaml.add_representer(np.generic, _np_scalar_representer)
 
 
-@storage_backend("yaml", "yml")
-class YAMLStore(DataStore[SerializableT]):
+@data_store("yaml", "yml")
+class YAMLStore(DataStore[SerializableT, typing.List[typing.Any]]):
     """
     YAML-based storage.
 
     Human-readable format, good for configs, small datasets, and debugging.
+
+    **Persistent-handle notes**
+
+    Like `JSONStore`, YAML files must be read/written as a whole.
+    `open()` deserialises the file into `self._handle` (a list) and
+    `close()` serialises it back.  All mutations happen in memory; the file
+    is touched only on `close()`:
+
+    ```python
+    with store(mode="a"):
+        for item in items:
+            store.append(item)   # in-memory only
+    # ← file written once here by `close()`
+    ```
     """
 
     supports_append: bool = False
@@ -1406,9 +1665,59 @@ class YAMLStore(DataStore[SerializableT]):
         :param filepath: Path to the YAML file
         :raises StorageError: If filepath is invalid or has wrong extension
         """
+        super().__init__()
         self.filepath = _validate_filepath(
             filepath, expected_extension=".yaml", create_if_not_exists=True
         )
+
+    def open(self, mode: str = "a", **kwargs: typing.Any) -> None:
+        """
+        Load the YAML file into memory as `self._handle` (a list).
+
+        :param mode: `"a"` to load existing contents for appending (default),
+            `"w"` to start with an empty list (discard existing data).
+        :raises StorageError: If the file cannot be parsed.
+        """
+        if self._handle is not None:
+            logger.debug(
+                f"`{self.__class__.__name__}.open()` called while handle already open; ignored."
+            )
+            return
+        try:
+            if mode == "w" or not self.filepath.exists():
+                self._handle = []
+            else:
+                with open(self.filepath, mode="r", encoding="utf-8") as f:
+                    self._handle = yaml.load(f, Loader=yaml.FullLoader) or []
+            logger.debug(
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.filepath}"
+            )
+        except Exception as exc:
+            self._handle = None
+            raise StorageError(
+                f"Failed to open {self.__class__.__name__}: {exc}"
+            ) from exc
+
+    def close(self) -> None:
+        """
+        Serialise `self._handle` back to disk and release it.
+
+        Idempotent. Safe to call when no handle is open.
+        """
+        if self._handle is None:
+            return
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(self._handle, f, sort_keys=False)
+            logger.debug(
+                f"{self.__class__.__name__} closed (wrote {len(self._handle)} entries): {self.filepath}"
+            )
+        except Exception as exc:
+            raise StorageError(
+                f"Failed to close/write {self.__class__.__name__}: {exc}"
+            ) from exc
+        finally:
+            self._handle = None
 
     @reraise_storage_error
     def dump(
@@ -1431,16 +1740,24 @@ class YAMLStore(DataStore[SerializableT]):
                     "data": item.dump(recurse=True),
                 }
             )
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            yaml.safe_dump(items, f, sort_keys=False)
+
+        if self._handle is not None:
+            self._handle.clear()
+            self._handle.extend(items)
+        else:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(items, f, sort_keys=False)
 
     @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
-        if not self.filepath.exists():
-            return []
+        if self._handle is not None:
+            items = self._handle
+        else:
+            if not self.filepath.exists():
+                return []
+            with open(self.filepath, mode="r", encoding="utf-8") as f:
+                items = yaml.load(f, Loader=yaml.FullLoader) or []
 
-        with open(self.filepath, mode="r", encoding="utf-8") as f:
-            items = yaml.load(f, Loader=yaml.FullLoader) or []
         return [
             EntryMeta(
                 idx=e["_index"],
@@ -1458,8 +1775,11 @@ class YAMLStore(DataStore[SerializableT]):
         predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
         validator: typing.Optional[DataValidator[SerializableT]] = None,
     ) -> typing.Generator[SerializableT, None, None]:
-        with open(self.filepath, mode="r", encoding="utf-8") as f:
-            items = yaml.load(f, Loader=yaml.FullLoader) or []
+        if self._handle is not None:
+            items = list(self._handle)
+        else:
+            with open(self.filepath, mode="r", encoding="utf-8") as f:
+                items = yaml.load(f, Loader=yaml.FullLoader) or []
 
         if indices is not None:
             index_set = set(indices)
@@ -1524,7 +1844,7 @@ class StoreSerializable(Serializable):
 
     @classmethod
     def from_store(
-        cls, store: DataStore[Self], **load_kwargs: typing.Any
+        cls, store: DataStore[Self, typing.Any], **load_kwargs: typing.Any
     ) -> typing.Optional[Self]:
         """
         Load a `Serializable` instance from a `DataStore`.
@@ -1534,11 +1854,13 @@ class StoreSerializable(Serializable):
         """
         return next(iter(store.load(cls, **load_kwargs)), None)
 
-    def to_store(self, store: DataStore[Self], **dump_kwargs: typing.Any) -> None:
+    def to_store(
+        self, store: DataStore[Self, typing.Any], **dump_kwargs: typing.Any
+    ) -> None:
         """
         Dump the `Serializable` instance to a `DataStore`.
 
-        :param store: `DataStore` to dump the Serializable to.
+        :param store: `DataStore` to dump the `Serializable` to.
         """
         store.dump([self], **dump_kwargs)
 

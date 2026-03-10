@@ -411,7 +411,7 @@ See the [Model Analysis](../user-guide/advanced/model-analysis.md) page for deta
 | `JSONStore` | class | JSON file storage backend (human-readable, small simulations only). |
 | `YAMLStore` | class | YAML file storage backend (human-readable, small simulations only). |
 | `new_store()` | function | Create a new store from a file path (auto-detects backend from extension). |
-| `storage_backend()` | decorator | Register a custom storage backend. |
+| `data_store()` | decorator | Register a custom storage backend. |
 
 ---
 

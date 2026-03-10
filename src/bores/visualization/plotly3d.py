@@ -967,9 +967,7 @@ class BaseRenderer(ABC):
                     cone_size_multiplier = 1.0  # Default multiplier for cube mode
                     if cell_dimension is not None:
                         dx, dy = cell_dimension
-                        cone_size_multiplier = (
-                            max(dx, dy) * 0.04 / surface_marker_size
-                        )
+                        cone_size_multiplier = max(dx, dy) * 0.04 / surface_marker_size
 
                     # Arrow sizing - base it on actual grid depth spacing
                     if depth_grid is not None:
@@ -1030,7 +1028,7 @@ class BaseRenderer(ABC):
                                 f"Type: {well_type}<br>"
                                 f"Status: {status}<br>"
                                 f"{fluid_info}<br>"
-                                f"Control: {str(well.control)[:20]}...<br>"
+                                f"Control: {str(well.control)[:100]}<br>"
                                 f"Wellbore Radius: {well.radius:.2f} ft<br>"
                                 f"Skin Factor: {well.skin_factor:.2f}<br>"
                                 f"<br>"
@@ -1161,7 +1159,7 @@ class BaseRenderer(ABC):
                             hovertemplate=(
                                 f"<b>{well.name}</b><br>"
                                 f"Type: {well_type}<br>"
-                                f"Control: {str(well.control)[:20]}...<br>"
+                                f"Control: {str(well.control)[:100]}<br>"
                                 f"Radius: {well.radius:.2f} ft<br>"
                                 f"Skin: {well.skin_factor:.2f}<br>"
                                 "<extra></extra>"
@@ -1253,9 +1251,7 @@ class BaseRenderer(ABC):
                     cone_size_multiplier = 1.0  # Default multiplier for cube mode
                     if cell_dimension is not None:
                         dx, dy = cell_dimension
-                        cone_size_multiplier = (
-                            max(dx, dy) * 0.04 / surface_marker_size
-                        )
+                        cone_size_multiplier = max(dx, dy) * 0.04 / surface_marker_size
 
                     # Arrow sizing - base it on actual grid depth spacing
                     if depth_grid is not None:

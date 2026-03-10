@@ -1226,15 +1226,15 @@ def run(
         # Ensure ghost cells mirror neighbour values by default
         pad_width = 1
         padded_fluid_properties = model.fluid_properties.pad(pad_width=pad_width)
-        padded_rock_properties = model.rock_properties.pad(pad_width=1)
-        padded_saturation_history = model.saturation_history.pad(pad_width=1)
+        padded_rock_properties = model.rock_properties.pad(pad_width=pad_width)
+        padded_saturation_history = model.saturation_history.pad(pad_width=pad_width)
         thickness_grid = model.thickness_grid
-        padded_thickness_grid = pad_grid(thickness_grid, pad_width=1)
+        padded_thickness_grid = pad_grid(thickness_grid, pad_width=pad_width)
         padded_thickness_grid = mirror_neighbour_cells(padded_thickness_grid)
         elevation_grid = model.get_elevation_grid(
             apply_dip=not config.disable_structural_dip
         )
-        padded_elevation_grid = pad_grid(elevation_grid, pad_width=1)
+        padded_elevation_grid = pad_grid(elevation_grid, pad_width=pad_width)
         padded_elevation_grid = mirror_neighbour_cells(padded_elevation_grid)
 
         # Apply boundary conditions to relevant padded grids
@@ -1247,7 +1247,7 @@ def run(
             grid_shape=grid_shape,
             thickness_grid=thickness_grid,
             time=0.0,
-            pad_width=1,
+            pad_width=pad_width,
         )
 
         # Initialize fluid properties before starting the simulation
@@ -1263,7 +1263,7 @@ def run(
 
         # Unpad the fluid properties back to the original grid shape for model state snapshots
         model = model.evolve(
-            fluid_properties=padded_fluid_properties.unpad(pad_width=1)
+            fluid_properties=padded_fluid_properties.unpad(pad_width=pad_width)
         )
         padded_water_saturation_grid = padded_fluid_properties.water_saturation_grid
         padded_oil_saturation_grid = padded_fluid_properties.oil_saturation_grid
@@ -1307,9 +1307,13 @@ def run(
             relative_mobility_range=config.relative_mobility_range,
             phase_appearance_tolerance=config.phase_appearance_tolerance,
         )
-        relative_mobility_grids = padded_relative_mobility_grids.unpad(pad_width=1)
-        relperm_grids = padded_relperm_grids.unpad(pad_width=1)
-        capillary_pressure_grids = padded_capillary_pressure_grids.unpad(pad_width=1)
+        relative_mobility_grids = padded_relative_mobility_grids.unpad(
+            pad_width=pad_width
+        )
+        relperm_grids = padded_relperm_grids.unpad(pad_width=pad_width)
+        capillary_pressure_grids = padded_capillary_pressure_grids.unpad(
+            pad_width=pad_width
+        )
         zeros_grid = build_uniform_grid(model.grid_shape, value=0.0)
         oil_injection_grid = zeros_grid
         water_injection_grid = zeros_grid.copy()
@@ -1346,9 +1350,9 @@ def run(
         no_flow_pressure_bc = isinstance(
             boundary_conditions["pressure"], type(default_bc)
         )
-        padded_zeros_grid = pad_grid(zeros_grid, pad_width=1)
+        padded_zeros_grid = pad_grid(zeros_grid, pad_width=pad_width)
         while not timer.done():
-            # WE FIRST PROPOSE THE TIME STEP SIZE FOR THE NEXT STEP
+            # We first propose the time step size for the next step
             # `timer.step` is still the last accepted step
             # since we have not accepted the new step size proposal and hence, the step yet.
             # So we use `timer.next_step` to indicate the new step we are attempting
@@ -1379,7 +1383,7 @@ def run(
                             grid_shape=grid_shape,
                             thickness_grid=thickness_grid,
                             time=timer.elapsed_time + step_size,
-                            pad_width=1,
+                            pad_width=pad_width,
                         )
                     )
                     logger.debug("Boundary conditions applied.")
@@ -1480,7 +1484,7 @@ def run(
                         wells=wells,
                         miscibility_model=miscibility_model,
                         config=config,
-                        pad_width=1,
+                        pad_width=pad_width,
                     )
                 else:
                     result = _run_explicit_step(
@@ -1498,7 +1502,7 @@ def run(
                         wells=wells,
                         miscibility_model=miscibility_model,
                         config=config,
-                        pad_width=1,
+                        pad_width=pad_width,
                     )
 
                 # If the step was successful, accept that step proposal
@@ -1551,22 +1555,22 @@ def run(
                         "Preparing injection and production rate grids for output"
                     )
                     oil_injection_grid = unpad_grid(
-                        result.oil_injection_grid, pad_width=1
+                        result.oil_injection_grid, pad_width=pad_width
                     )
                     water_injection_grid = unpad_grid(
-                        result.water_injection_grid, pad_width=1
+                        result.water_injection_grid, pad_width=pad_width
                     )
                     gas_injection_grid = unpad_grid(
-                        result.gas_injection_grid, pad_width=1
+                        result.gas_injection_grid, pad_width=pad_width
                     )
                     oil_production_grid = unpad_grid(
-                        result.oil_production_grid, pad_width=1
+                        result.oil_production_grid, pad_width=pad_width
                     )
                     water_production_grid = unpad_grid(
-                        result.water_production_grid, pad_width=1
+                        result.water_production_grid, pad_width=pad_width
                     )
                     gas_production_grid = unpad_grid(
-                        result.gas_production_grid, pad_width=1
+                        result.gas_production_grid, pad_width=pad_width
                     )
 
                     # Negate production rates in-place (use out parameter to avoid -0.0 issues)
@@ -1588,16 +1592,22 @@ def run(
                     wells_snapshot = copy.deepcopy(wells)
                     # Capture the current model with updated fluid properties
                     model_snapshot = model.evolve(
-                        fluid_properties=padded_fluid_properties.unpad(pad_width=1),
-                        rock_properties=padded_rock_properties.unpad(pad_width=1),
-                        saturation_history=padded_saturation_history.unpad(pad_width=1),
+                        fluid_properties=padded_fluid_properties.unpad(
+                            pad_width=pad_width
+                        ),
+                        rock_properties=padded_rock_properties.unpad(
+                            pad_width=pad_width
+                        ),
+                        saturation_history=padded_saturation_history.unpad(
+                            pad_width=pad_width
+                        ),
                     )
                     relative_mobility_grids = padded_relative_mobility_grids.unpad(
-                        pad_width=1
+                        pad_width=pad_width
                     )
-                    relperm_grids = padded_relperm_grids.unpad(pad_width=1)
+                    relperm_grids = padded_relperm_grids.unpad(pad_width=pad_width)
                     capillary_pressure_grids = padded_capillary_pressure_grids.unpad(
-                        pad_width=1
+                        pad_width=pad_width
                     )
                     state = ModelState(
                         step=timer.step,

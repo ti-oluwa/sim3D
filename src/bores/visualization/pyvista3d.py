@@ -183,7 +183,7 @@ class PlotConfig:
     height: int = 960
     """Plot height in pixels. Affects render window size and screenshot resolution."""
 
-    plot_type: PlotType = PlotType.VOLUME
+    plot_type: PlotType = PlotType.CELL_BLOCKS
     """Default plot type to use. Options: `VOLUME` (ray-cast), `ISOSURFACE` (contours),
     `SCATTER_3D` (point cloud), `CELL_BLOCKS` (voxel mesh)."""
 
@@ -472,8 +472,8 @@ def _render_wells(
 
         # Render perforating intervals
         if show_wellbore:
-            perforation_points: list = []
-            perforation_cells: list[int] = []
+            perforation_points = []
+            perforation_cells = []
 
             for (si, sj, sk), (ei, ej, ek) in well.perforating_intervals:
                 sc = _to_physical(si, sj, sk)
@@ -527,7 +527,7 @@ def _render_wells(
             if hasattr(well, "skin_factor"):
                 parts.append(f"S={well.skin_factor:.2f}")
             if hasattr(well, "control") and well.control is not None:
-                parts.append(str(well.control)[:25])
+                parts.append(str(well.control)[:100])
             label_text = "\n".join(parts)
             plotter.add_point_labels(
                 [(x_surf, y_surf, label_z)],
@@ -605,12 +605,12 @@ def _render_wells(
                     opacity=opacity,
                 )
 
-        # Render surface marker (arrow pointing down into reservoir)
+        # Render surface marker (arrow outward of reservoir)
         if show_surface_marker:
             arrow_top = z_surface + arrow_length
             arrow = pv.Arrow(  # type: ignore
-                start=(x_surf, y_surf, arrow_top),
-                direction=(0.0, 0.0, -1.0),
+                start=(x_surf, y_surf, z_surface),
+                direction=(0.0, 0.0, 1.0),
                 scale=arrow_length,
                 shaft_radius=0.04 * surface_marker_size,
                 tip_radius=0.08 * surface_marker_size,
@@ -628,7 +628,7 @@ def _render_wells(
             if hasattr(well, "skin_factor"):
                 parts.append(f"S={well.skin_factor:.2f}")
             if hasattr(well, "control") and well.control is not None:
-                parts.append(str(well.control)[:25])
+                parts.append(str(well.control)[:100])
             label_text = "\n".join(parts)
             plotter.add_point_labels(
                 [(x_surf, y_surf, label_z)],
@@ -665,7 +665,6 @@ def _normalize_hex_color(color: str) -> str:
 
         # If it's a 3-digit hex code, expand to 6 digits
         if len(hex_code) == 3:
-            # Expand each digit: #abc -> #aabbcc
             return f"#{hex_code[0]}{hex_code[0]}{hex_code[1]}{hex_code[1]}{hex_code[2]}{hex_code[2]}"
 
     # Return as-is for 6-digit hex or named colors
@@ -1263,6 +1262,93 @@ _PLOT_TYPE_NAMES: typing.Dict[PlotType, str] = {
 }
 
 
+def _apply_slider_theme() -> None:
+    """
+    Apply a dark, minimal slider theme to both PyVista slider styles.
+
+    Should be called once before any `add_slider_widget` calls so every slider in the plotter picks it up.
+
+    Design:
+    - Thin flat track (tube_width 0.006) in muted steel-blue  #4a90d9
+    - Slim pill handle (slider_width 0.022) in bright white
+    - Zero-opacity caps so only the handle/track are visible
+    - Applies to both "classic" and "modern" named styles
+    """
+    ss = pv.global_theme.slider_styles  # type: ignore
+    for style in (ss.classic, ss.modern):
+        style.slider_length = 0.015  # short pill handle
+        style.slider_width = 0.022  # slim — not a fat disk
+        style.slider_color = (1.0, 1.0, 1.0)  # white handle
+        style.tube_width = 0.006  # thin track
+        style.tube_color = (0.29, 0.56, 0.85)  # #4a90d9 steel-blue
+        style.cap_opacity = 0.0  # invisible end-caps
+        style.cap_length = 0.008
+        style.cap_width = 0.02
+
+
+def _styled_slider(
+    plotter: pv.Plotter,  # type: ignore
+    callback: typing.Callable,
+    rng: typing.Tuple[float, float],
+    value: float,
+    title: str,
+    pointa: typing.Tuple[float, float],
+    pointb: typing.Tuple[float, float],
+    fmt: str = "%.3g",
+) -> None:
+    """
+    Add a styled vertical slider and apply post-creation VTK tweaks.
+
+    PyVista exposes geometry/colour via `global_theme.slider_styles` but
+    font size and label colour require reaching into the VTK representation
+    directly after the widget is created.
+
+    :param plotter: Active PyVista Plotter
+    :param callback: Single-argument callable receiving the slider value
+    :param rng: (min, max) value range
+    :param value: Initial value
+    :param title: Label shown alongside the slider
+    :param pointa: Normalised (x, y) start position in the viewport
+    :param pointb: Normalised (x, y) end position in the viewport
+    :param fmt: `printf`-style format string for the live value readout
+    """
+    widget = plotter.add_slider_widget(
+        callback,
+        rng=rng,
+        value=value,
+        title=title,
+        pointa=pointa,
+        pointb=pointb,
+        style="modern",
+        title_height=0.022,
+        title_opacity=0.92,
+        title_color="#e0e8f4",  # cool off-white, readable on dark/light BG
+        color="#4a90d9",  # handle colour echoes the track
+        fmt=fmt,
+        interaction_event="always",
+    )
+
+    # VTK post-creation tweaks, things PyVista doesn't expose in the call sig
+    rep = widget.GetRepresentation()
+
+    # Title (static label)
+    title_prop = rep.GetTitleProperty()
+    title_prop.SetColor(0.88, 0.91, 0.96)  # #e0e8f4 in float RGB
+    title_prop.SetFontFamilyToArial()
+    title_prop.BoldOff()
+    title_prop.ItalicOff()
+    title_prop.ShadowOff()
+
+    # Live value label
+    label_prop = rep.GetLabelProperty()
+    label_prop.SetColor(0.55, 0.75, 0.98)  # brighter accent blue for the number
+    label_prop.SetFontFamilyToArial()
+    label_prop.BoldOff()
+    label_prop.ShadowOff()
+
+    rep.SetLabelFormat(fmt)
+
+
 def _setup_interactive_widgets(
     plotter: pv.Plotter,  # type: ignore
     config: PlotConfig,
@@ -1273,22 +1359,33 @@ def _setup_interactive_widgets(
 
     **Sliders** (left side, vertical):
         - Opacity
-        - Threshold (grid meshes only)
+        - Threshold    (grid meshes only)
+        - Z-scale      (vertical exaggeration)
+        - C-min        (colormap lower bound, grid meshes only)
+        - C-max        (colormap upper bound, grid meshes only)
 
     **Keyboard shortcuts** (press `h` to show/hide help overlay):
-        - `0` - reset camera
-        - `s` - save screenshot
-        - `a` - toggle axes
-        - `g` - toggle grid/cell edges
-        - `k` - toggle colorbar
-        - `1` / `2` / `3` - toggle X / Y / Z slice plane
-        - `b` - toggle box-crop widget
-        - `v` - cycle view presets (iso / top / front / right)
-        - `h` - toggle help overlay
+        - `0`       - reset camera
+        - `s`       - save screenshot
+        - `a`       - toggle axes
+        - `g`       - toggle grid/cell edges
+        - `k`       - toggle colorbar
+        - `1/2/3`   - add/remove X/Y/Z slice plane → drag the orange handle
+        - `b`       - toggle box-crop widget
+        - `v`       - cycle view presets (iso / top / front / right)
+        - `h`       - toggle help overlay
 
-    Note: `e` is reserved by VTK (exit), `w` (wireframe), `f` (fly-to),
-    `p` (pick). These are not overridden.
+    **Slicing how-to:**
+        Press `1`, `2`, or `3` to insert a cutting plane along that axis.
+        An orange rectangular handle appears on the mesh — click and drag it to
+        move the plane through the grid.  Press the same key again to remove it.
+        Multiple planes can be active simultaneously.
+
+    Note: `e` (exit), `w` (wireframe), `f` (fly-to), `p` (pick) are
+    reserved by VTK and are not overridden.
     """
+    _apply_slider_theme()
+
     mesh = getattr(plotter, "_bores_mesh", None)
     has_grid = mesh is not None and hasattr(mesh, "threshold")
 
@@ -1300,7 +1397,7 @@ def _setup_interactive_widgets(
         "log_scale": metadata.log_scale,
     }
 
-    # Opacity slider (left side, upper)
+    # Slider: Opacity
     def _set_opacity(value: float) -> None:
         for actor in plotter.renderer.actors.values():
             prop = getattr(actor, "GetProperty", None)
@@ -1309,17 +1406,18 @@ def _setup_interactive_widgets(
                 if hasattr(p, "SetOpacity"):
                     p.SetOpacity(value)
 
-    plotter.add_slider_widget(
+    _styled_slider(
+        plotter,
         _set_opacity,
-        rng=[0.0, 1.0],
+        rng=(0.0, 1.0),
         value=config.opacity,
         title="Opacity",
-        pointa=(0.06, 0.92),
-        pointb=(0.06, 0.74),
-        style="modern",
+        pointa=(0.06, 0.95),
+        pointb=(0.06, 0.82),
+        fmt="%.2f",
     )
 
-    # Threshold slider (left side, lower)
+    # Slider: Threshold  (grid meshes only)
     if has_grid:
         scalars = mesh.active_scalars  # type: ignore
         data_min = float(scalars.min()) if scalars is not None else 0.0
@@ -1342,25 +1440,121 @@ def _setup_interactive_widgets(
             except Exception as exc:
                 logger.error(exc, exc_info=True)
 
-        plotter.add_slider_widget(
+        _styled_slider(
+            plotter,
             _apply_threshold,
-            rng=[data_min, data_max],
+            rng=(data_min, data_max),
             value=data_min,
             title="Threshold",
-            pointa=(0.06, 0.64),
-            pointb=(0.06, 0.46),
-            style="modern",
+            pointa=(0.06, 0.76),
+            pointb=(0.06, 0.63),
+            fmt="%.3g",
         )
 
-    # Orthogonal slice planes (1/2/3 keys)
-    # `add_mesh_slice()` shows a 2-D cross-section that the user can drag
-    # through the volume.  Press the key again to remove.
-    _slice_actors = {}
+    # Slider: Z-scale  (vertical exaggeration)
+    # Live-rescales the mesh by adjusting the renderer's Z-scale rather
+    # than rebuilding geometry, so it works for any renderer type.
+    _zscale_state = {"current": 1.0}
+
+    def _set_zscale(value: float) -> None:
+        # Clamp to avoid zero/negative which would invert the grid
+        value = max(value, 0.05)
+        factor = value / _zscale_state["current"]
+        _zscale_state["current"] = value
+        # Scale every actor's Z; avoids rebuilding the mesh entirely
+        for actor in plotter.renderer.actors.values():
+            if hasattr(actor, "SetScale"):
+                sx, sy, sz = actor.GetScale()  # type: ignore
+                actor.SetScale(sx, sy, sz * factor)  # type: ignore
+        plotter.render()
+
+    _styled_slider(
+        plotter,
+        _set_zscale,
+        rng=(0.1, 20.0),
+        value=1.0,
+        title="Z-scale",
+        pointa=(0.06, 0.57),
+        pointb=(0.06, 0.44),
+        fmt="%.1fx",
+    )
+
+    # Sliders: C-min / C-max  (colormap range, grid meshes only)
+    # Two stacked sliders.  Guards prevent min > max and max < min.
+    if has_grid:
+        scalars = mesh.active_scalars  # type: ignore
+        _cdata_min = float(scalars.min()) if scalars is not None else 0.0
+        _cdata_max = float(scalars.max()) if scalars is not None else 1.0
+        _clim: dict[str, float] = {"lo": _cdata_min, "hi": _cdata_max}
+
+        def _apply_clim() -> None:
+            """Push current lo/hi to every scalar-bar-linked actor."""
+            for name in list(plotter.scalar_bars.keys()):
+                mapper = plotter.scalar_bars[name].GetMapper()
+                if mapper is not None:
+                    mapper.SetScalarRange(_clim["lo"], _clim["hi"])
+            plotter.render()
+
+        def _set_cmin(value: float) -> None:
+            _clim["lo"] = min(value, _clim["hi"] - 1e-9)
+            _apply_clim()
+
+        def _set_cmax(value: float) -> None:
+            _clim["hi"] = max(value, _clim["lo"] + 1e-9)
+            _apply_clim()
+
+        _styled_slider(
+            plotter,
+            _set_cmin,
+            rng=(_cdata_min, _cdata_max),
+            value=_cdata_min,
+            title="C-min",
+            pointa=(0.06, 0.38),
+            pointb=(0.06, 0.27),
+            fmt="%.3g",
+        )
+
+        _styled_slider(
+            plotter,
+            _set_cmax,
+            rng=(_cdata_min, _cdata_max),
+            value=_cdata_max,
+            title="C-max",
+            pointa=(0.06, 0.21),
+            pointb=(0.06, 0.10),
+            fmt="%.3g",
+        )
+
+    # Slice planes  (1/2/3 keys)
+    # Inserts a draggable orange cutting plane.  User clicks the handle
+    # and drags it through the volume.  Same key removes it.
+    _slice_actors: dict[str, bool] = {}
+    _slice_status: dict[str, typing.Any] = {"actor": None}
+
+    def _update_slice_status() -> None:
+        """Show/hide a small HUD line telling the user what to do."""
+        if _slice_status["actor"] is not None:
+            plotter.remove_actor(_slice_status["actor"])
+            _slice_status["actor"] = None
+
+        active = sorted(_slice_actors.keys())
+        if not active:
+            return
+
+        axes_label = "/".join(a.upper() for a in active)
+        _slice_status["actor"] = plotter.add_text(
+            f"Slice active ({axes_label}). Click the orange handle and drag to move",
+            position=(10, 30),
+            font_size=8,
+            color="#4a90d9",
+            name="_bores_slice_hint",
+        )
 
     def _toggle_slice(axis: str, normal: str) -> None:
         if not has_grid:
             return
         if axis in _slice_actors:
+            # Remove this plane: rebuild remaining ones from scratch
             active = {k: v for k, v in _slice_actors.items() if k != axis}
             plotter.clear_plane_widgets()
             _slice_actors.clear()
@@ -1381,13 +1575,17 @@ def _setup_interactive_widgets(
                 **mesh_kwargs,
             )
             _slice_actors[axis] = True
-            logger.info("Added %s slice. Drag to move through grid", axis.upper())
+            logger.info(
+                "Added %s slice. Click the orange handle on the mesh and drag",
+                axis.upper(),
+            )
+        _update_slice_status()
 
     plotter.add_key_event("1", lambda: _toggle_slice("x", "x"))  # type: ignore
     plotter.add_key_event("2", lambda: _toggle_slice("y", "y"))  # type: ignore
     plotter.add_key_event("3", lambda: _toggle_slice("z", "z"))  # type: ignore
 
-    # Box-crop widget (b key)
+    # Box-crop widget  (b key)
     _box_state = {"active": False}
 
     def _toggle_box() -> None:
@@ -1405,11 +1603,11 @@ def _setup_interactive_widgets(
                 **mesh_kwargs,
             )
             _box_state["active"] = True
-            logger.info("Box crop enabled. Drag handles to crop")
+            logger.info("Box crop enabled. Drag the grey handles to crop")
 
     plotter.add_key_event("b", _toggle_box)  # type: ignore
 
-    # View presets (v key)
+    # View presets  (v key)
     _VIEWS = ["isometric", "xy", "xz", "yz"]
     _view_idx = {"i": 0}
 
@@ -1426,7 +1624,7 @@ def _setup_interactive_widgets(
 
     plotter.add_key_event("v", _cycle_view)  # type: ignore
 
-    # Standard keyboard shortcuts
+    # Misc shortcuts
     def _screenshot() -> None:
         fname = "bores_screenshot.png"
         plotter.screenshot(fname)
@@ -1443,18 +1641,37 @@ def _setup_interactive_widgets(
 
     plotter.add_key_event("a", _toggle_axes)  # type: ignore
 
-    # g = toggle grid/cell edges (only affects 3D mesh actors, not text/labels)
-    _edge_vis = {"v": config.show_edges}
+    # Snapshot original edge visibility per actor, keyed by actor id.
+    # Captured after all meshes have been added so arrows / tubes / wells
+    # are already present. Toggle-off restores this instead of forcing True
+    # on every actor (which would add outlines to surface markers etc.).
+    _original_edge_vis: dict[int, bool] = {}
+    for actor in plotter.renderer.actors.values():
+        prop = getattr(actor, "GetProperty", None)
+        if prop is not None:
+            p = prop()
+            if hasattr(p, "GetEdgeVisibility"):
+                _original_edge_vis[id(actor)] = bool(p.GetEdgeVisibility())
+
+    _edge_vis = {"on": True}  # tracks whether edges are currently shown
 
     def _toggle_edges() -> None:
-        show = not _edge_vis["v"]
+        turning_off = _edge_vis["on"]
+        _edge_vis["on"] = not turning_off
         for actor in plotter.renderer.actors.values():
             prop = getattr(actor, "GetProperty", None)
             if prop is not None:
                 p = prop()
                 if hasattr(p, "SetEdgeVisibility"):
-                    p.SetEdgeVisibility(show)
-        _edge_vis["v"] = show
+                    if turning_off:
+                        p.SetEdgeVisibility(False)
+                    else:
+                        # Restore to whatever the actor originally had —
+                        # arrows/tubes/wells had False, grid mesh had True/False
+                        # per config. Never force True on actors that didn't have it.
+                        original = _original_edge_vis.get(id(actor), False)
+                        p.SetEdgeVisibility(original)
+        plotter.render()
 
     plotter.add_key_event("g", _toggle_edges)  # type: ignore
 
@@ -1469,19 +1686,27 @@ def _setup_interactive_widgets(
 
     plotter.add_key_event("k", _toggle_colorbar)  # type: ignore
 
-    # Toggleable help overlay (h key)
+    # Help overlay  (h key)
     _HELP_LINES = (
-        "  'h'  - Toggle this help\n"
-        "  '1'  - X slice (YZ plane)\n"
-        "  '2'  - Y slice (XZ plane)\n"
-        "  '3'  - Z slice (XY plane)\n"
-        "  'b'  - Box crop\n"
-        "  'v'  - Cycle views\n"
-        "  '0'  - Reset camera\n"
-        "  's'  - Screenshot\n"
-        "  'a'  - Toggle axes\n"
-        "  'g'  - Toggle edges\n"
-        "  'k'  - Toggle colorbar"
+        "  ── Keyboard shortcuts ──────────────────\n"
+        "  '1' '2' '3' - Add X / Y / Z slice plane\n"
+        "               → click the orange handle\n"
+        "                 and drag to move it\n"
+        "               → press same key to remove\n"
+        "  'b'         - Box crop (drag grey handles)\n"
+        "  'v'         - Cycle views (iso/top/front/side)\n"
+        "  '0'         - Reset camera\n"
+        "  's'         - Save screenshot\n"
+        "  'a'         - Toggle axes\n"
+        "  'g'         - Toggle cell edges\n"
+        "  'k'         - Toggle colorbar\n"
+        "  'h'         - Toggle this help\n"
+        "\n"
+        "  ── Sliders (left panel) ─────────────────\n"
+        "  Opacity     - Fade the entire mesh\n"
+        "  Threshold   - Hide cells below value\n"
+        "  Z-scale     - Vertical exaggeration\n"
+        "  C-min/C-max - Narrow colormap range"
     )
     _help_state: typing.Dict[str, typing.Any] = {"actor": None, "visible": False}
 
@@ -1494,17 +1719,18 @@ def _setup_interactive_widgets(
             _help_state["actor"] = plotter.add_text(
                 _HELP_LINES,
                 position="upper_right",
-                font_size=9,
-                color="#333333",
+                font_size=7,
+                color="#2c3e50",
                 name="_bores_help",
             )
             _help_state["visible"] = True
 
     plotter.add_key_event("h", _toggle_help)  # type: ignore
-
-    # Small hint so users know help exists
     plotter.add_text(
-        "Press 'h' for help", position=(10, 10), font_size=8, color="#aaaaaa"
+        "Press 'h' for help | '1/2/3' to slice",
+        position=(10, 10),
+        font_size=8,
+        color="#aaaaaa",
     )
 
 
@@ -1557,7 +1783,7 @@ class DataVisualizer:
         Retrieve renderer instance for specified plot type.
 
         :param plot_type: Type of renderer to retrieve
-        :return: Renderer instance configured with current config
+        :return: `BaseRenderer` instance configured with current config
         :raises ValidationError: If `plot_type` has no registered renderer
         """
         renderer = self._renderers.get(plot_type)
@@ -1917,9 +2143,9 @@ class DataVisualizer:
 
         :param sequence: Time-ordered collection of `ReservoirModel`s, `ModelState`s, or 3D arrays
         :param property: Property name to visualize (required for model/state sequences).
-            Supports dot notation like "saturation.water"
+            Supports dot notation like "permeability.x"
         :param plot_type: Visualization type - "volume", "isosurface", "scatter_3d",
-            "cell_blocks", or PlotType enum
+            "cell_blocks", or `PlotType` enum
         :param frame_duration: Duration per frame in milliseconds
         :param step_size: Sample every Nth frame (1=all frames, 2=every other, etc.)
         :param width: Override window width in pixels for all frames
@@ -2034,4 +2260,4 @@ class DataVisualizer:
 
 
 viz = DataVisualizer()
-"""Global `PyVista` visualizer instance. Can be used as a drop-in replacement for `plotly3d.viz`."""
+"""Global `PyVista` visualizer instance. Has a similar API to `plotly3d.viz`."""

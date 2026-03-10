@@ -320,7 +320,7 @@ well_type = make_serializable_type_registrar(
     lock=threading.Lock(),
     key_attr="__type__",
     override=False,
-    # Do not register serializers/deserializers for the base Well class yet
+    # Do not register serializers/deserializers for the base `Well` class yet
     auto_register_serializer=False,
     auto_register_deserializer=False,
 )

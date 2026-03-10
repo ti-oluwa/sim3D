@@ -599,7 +599,7 @@ def _(analyst):
 
 @app.cell
 def _(bores):
-    viz = bores.pyvista3d.DataVisualizer(bores.pyvista3d.PlotConfig(off_screen=False))
+    viz = bores.pyvista3d.DataVisualizer(bores.pyvista3d.PlotConfig(off_screen=True))
     return (viz,)
 
 
@@ -618,18 +618,18 @@ def _(bores, states, viz):
         width=960,
         height=600,
         opacity=1,
-        # labels=labels,
+        labels=labels,
         aspect_mode="data",
         # z_scale=3.0,
         # marker_size=3,
         show_wells=True,
         surface_count=20,
-        show_surface_marker=False,
+        show_surface_marker=True,
         show_perforations=True,
-        show_cell_outlines=True,
-        show_edges=True,
-        x_slice=(10, 20),
-        z_slice=(0, 5),
+        # show_cell_outlines=True,
+        # show_edges=True,
+        # x_slice=(10, 20),
+        # z_slice=(0, 5),
         # isomin=0.6,
         # cmin=0,
         # cmax=1,

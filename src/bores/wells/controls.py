@@ -603,7 +603,7 @@ class BHPControl(WellControl[WellFluidTcon]):
 
     def __str__(self) -> str:
         """String representation."""
-        return f"BHP Control: BHP={self.bhp:.6f} psi"
+        return f"BHP Control: BHP={self.bhp:.3e} psi"
 
 
 @well_control
@@ -883,7 +883,14 @@ class RateControl(WellControl[WellFluidTcon]):
 
     def __str__(self) -> str:
         """String representation."""
-        return f"Constant Rate Control: Rate={self.target_rate:.6f}"
+        if self.bhp_limit:
+            if self.target_rate < 0:
+                bhp_str = f"\nMin BHP={self.bhp_limit:.3e}psi"
+            else:
+                bhp_str = f"\nMax BHP={self.bhp_limit:.3e}psi"
+        else:
+            bhp_str = ""
+        return f"Constant Rate Control: Rate={self.target_rate:.3e}{bhp_str}"
 
 
 @well_control
@@ -1201,11 +1208,14 @@ class AdaptiveRateControl(WellControl[WellFluidTcon]):
         )
 
     def __str__(self) -> str:
-        return f"""
-        Adaptive Rate Control:
-        Rate={self.target_rate:.6f}, 
-        Min BHP={self.bhp_limit:.6f} psi)
-        """
+        if self.bhp_limit:
+            if self.target_rate < 0:
+                bhp_str = f"\nMin BHP={self.bhp_limit:.3e}psi"
+            else:
+                bhp_str = f"\nMax BHP={self.bhp_limit:.3e}psi"
+        else:
+            bhp_str = ""
+        return f"Adaptive Rate Control:\nRate={self.target_rate:.3e}{bhp_str}"
 
 
 @well_control
@@ -1524,11 +1534,7 @@ class CoupledRateControl(WellControl[WellFluidTcon]):
         }
 
     def __str__(self) -> str:
-        return f"""
-        Coupled Rate Control:
-        Primary phase: {self.primary_phase!s}
-        Control:{self.primary_control!s}
-        """
+        return f"Coupled Rate Control:\nPrimary phase: {self.primary_phase!s}\nControl:\n\t{self.primary_control!s}"
 
 
 @well_control
@@ -1725,9 +1731,4 @@ class MultiPhaseRateControl(WellControl):
         )
 
     def __str__(self) -> str:
-        return f"""
-        Multi-Phase Rate Control:
-        Oil Control: {self.oil_control!s},
-        Gas Control: {self.gas_control!s},
-        Water Control: {self.water_control!s}
-        """
+        return f"Multi-Phase Rate Control:\nOil Control: {self.oil_control!s}\nGas Control: {self.gas_control!s}\nWater Control: {self.water_control!s}"

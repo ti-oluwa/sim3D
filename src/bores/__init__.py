@@ -8,11 +8,10 @@ import os
 
 import numba
 
-# Configure Numba threading before any imports (must be done before numba JIT compilation)
+# Configure Numba threading before any imports
 # Set numba thread count to match available cores (or from environment variable)
 cpu_count = os.cpu_count() or 1
-numba_threads = int(os.environ.get("NUMBA_NUM_THREADS", cpu_count))
-numba.set_num_threads(numba_threads)
+numba.set_num_threads(int(os.environ.get("NUMBA_NUM_THREADS", cpu_count)))
 
 from ._precision import *
 from .analyses import *

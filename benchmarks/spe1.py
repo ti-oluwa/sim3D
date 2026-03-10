@@ -417,7 +417,7 @@ def setup_grid():
         [np.column_stack([water_density_values, water_density_values])], axis=2
     )
 
-    gas_solubility_water_table = np.stack(
+    gas_solubility_in_water_table = np.stack(
         [np.column_stack([gas_solubility_water_values, gas_solubility_water_values])],
         axis=2,
     )
@@ -435,8 +435,8 @@ def setup_grid():
         bores.ThreeDimensionalGrid, water_viscosity_table
     )
     water_density_table = typing.cast(bores.ThreeDimensionalGrid, water_density_table)
-    gas_solubility_water_table = typing.cast(
-        bores.ThreeDimensionalGrid, gas_solubility_water_table
+    gas_solubility_in_water_table = typing.cast(
+        bores.ThreeDimensionalGrid, gas_solubility_in_water_table
     )
 
     # -------------------------------------------------------------------------
@@ -461,7 +461,7 @@ def setup_grid():
         water_formation_volume_factor_table=water_fvf_table,
         water_viscosity_table=water_viscosity_table,
         water_density_table=water_density_table,
-        gas_solubility_in_water_table=gas_solubility_water_table,
+        gas_solubility_in_water_table=gas_solubility_in_water_table,
     )
     pvt_tables = bores.PVTTables(data=pvt_data, interpolation_method="linear")
 
@@ -682,8 +682,8 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     # Config
     # -------------------------------------------------------------------------
     preconditioner_factory = bores.CachedPreconditionerFactory(
-        factory="ilu",
-        name="cached_ilu",
+        factory="amg",
+        name="cached_amg",
         update_frequency=15,
         recompute_threshold=0.3,
     )
@@ -694,8 +694,8 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         rock_fluid_tables=rock_fluid_tables,
         scheme="impes",
         output_frequency=1,
-        pressure_solver="direct",
-        pressure_preconditioner="cached_ilu",
+        pressure_solver="bicgstab",
+        pressure_preconditioner="cached_amg",
         log_interval=10,
         pvt_tables=pvt_tables,
         wells=wells,
@@ -728,14 +728,19 @@ def run_simulation(Path, bores, store):
         pvt_data_path=Path("./benchmarks/runs/spe1/setup/pvt.h5"),
     )
 
+
     def GOR_gte_20_000(state: bores.ModelState[bores.ThreeDimensions]) -> bool:
         analyst = bores.ModelAnalyst([state])
         rates = analyst.instantaneous_production_rates(cells=[(9, 9, 2)])
         return rates.gas_oil_ratio >= 20_000
 
+
+    # with bores.new_task_pool(concurrency=4) as pool:
+    #     run.config = run.config.with_updates(task_pool=pool)
+
     last_state = None
     with bores.StateStream(run, store=store, background_io=True) as stream:
-        for state in stream.until(GOR_gte_20_000):
+        for state in stream:
             last_state = state
 
     if last_state is not None:
@@ -1150,7 +1155,7 @@ def recovery_plots(analyst, bores, np, recovery_efficiency_history):
 @app.cell
 def _(analyst):
     mbe = analyst.material_balance_error()
-    print(mbe.total_mbe)
+    print(mbe.water_mbe)
     return
 
 
@@ -1180,9 +1185,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.pyvista3d.DataVisualizer()
-    property = "oil-saturation"
+    property = "water-saturation"
     figures = []
-    timesteps = [50]
+    timesteps = [100]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

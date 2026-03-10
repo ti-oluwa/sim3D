@@ -185,12 +185,12 @@ class MyData(Serializable):
 
 ### Custom Storage Backends
 
-You can register custom storage backends using the `@storage_backend` decorator:
+You can register custom storage backends using the `@data_store` decorator:
 
 ```python
-from bores.stores import storage_backend, DataStore
+from bores.stores import data_store, DataStore
 
-@storage_backend("parquet")
+@data_store("parquet")
 class ParquetStore(DataStore):
     def dump(self, data, **kwargs):
         ...

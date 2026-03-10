@@ -5,6 +5,7 @@ Stream model state with optional persistence for memory-efficient simulation wor
 import logging
 import queue
 import threading
+import time
 import typing
 
 import numpy as np
@@ -100,15 +101,17 @@ class StateStream(typing.Generic[NDimension]):
     def __init__(
         self,
         states: typing.Optional[typing.Iterable[ModelState[NDimension]]] = None,
-        store: typing.Optional[DataStore[ModelState[NDimension]]] = None,
-        batch_size: int = 10,
+        store: typing.Optional[DataStore[ModelState[NDimension], typing.Any]] = None,
+        batch_size: int = 20,
         validate: bool = False,
         auto_save: bool = True,
         auto_replay: bool = True,
         save: typing.Union[
             typing.Callable[[ModelState[NDimension]], bool], bool
         ] = True,
-        checkpoint_store: typing.Optional[DataStore[ModelState[NDimension]]] = None,
+        checkpoint_store: typing.Optional[
+            DataStore[ModelState[NDimension], typing.Any]
+        ] = None,
         checkpoint_interval: typing.Optional[int] = None,
         max_batch_memory_usage: typing.Optional[float] = None,
         background_io: bool = False,
@@ -122,7 +125,7 @@ class StateStream(typing.Generic[NDimension]):
         :param states: Generator or iterator of `ModelState` instances
         :param store: Optional `DataStore` for persistence. If None, states only yielded (no persistence).
             The data store must support appending new states. that is, `store.supports_append` must be True.
-        :param batch_size: Number of states to accumulate before flushing to disk (default: 10)
+        :param batch_size: Number of states to accumulate before flushing to disk (default: 20)
         :param validate: Validate states before persisting (default: False)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
         :param auto_replay: If True, automatically replay from store when iterating after consumption.
@@ -267,43 +270,44 @@ class StateStream(typing.Generic[NDimension]):
             return
 
         try:
-            while not self._shutdown_event.is_set():
-                try:
-                    # Get batch from queue (timeout to check shutdown periodically)
-                    item = self._io_queue.get(timeout=self.queue_timeout)
-                    if item is _stop_io:
-                        logger.debug("I/O worker received shutdown signal")
-                        self._io_queue.task_done()
-                        break
-
-                    # Process batch
-                    batch: typing.List[ModelState[NDimension]] = item
-                    logger.debug(f"I/O worker writing batch of {len(batch)} states")
-
+            with self.store(mode="a") as store:
+                while not self._shutdown_event.is_set():
                     try:
-                        for state in batch:
-                            self.store.append(
-                                state,
-                                validator=validate_state if self.validate else None,
-                                meta=lambda s: {"step": s.step},
+                        # Get batch from queue (timeout to check shutdown periodically)
+                        item = self._io_queue.get(timeout=self.queue_timeout)
+                        if item is _stop_io:
+                            logger.debug("I/O worker received shutdown signal")
+                            self._io_queue.task_done()
+                            break
+
+                        # Process batch
+                        batch: typing.List[ModelState[NDimension]] = item
+                        logger.debug(f"I/O worker writing batch of {len(batch)} states")
+
+                        try:
+                            for state in batch:
+                                store.append(
+                                    state,
+                                    validator=validate_state if self.validate else None,
+                                    meta=lambda s: {"step": s.step},
+                                )
+
+                            with self._saved_count_lock:
+                                self._saved_count += len(batch)
+
+                            del batch  # Free memory immediately
+                            logger.debug(
+                                f"I/O worker completed batch (total saved: {self._saved_count})"
                             )
+                        except Exception as exc:
+                            logger.error(f"I/O worker error during write: {exc}")
+                            self._io_error = exc
+                            raise
+                        finally:
+                            self._io_queue.task_done()
 
-                        with self._saved_count_lock:
-                            self._saved_count += len(batch)
-
-                        del batch  # Free memory immediately
-                        logger.debug(
-                            f"I/O worker completed batch (total saved: {self._saved_count})"
-                        )
-                    except Exception as exc:
-                        logger.error(f"I/O worker error during write: {exc}")
-                        self._io_error = exc
-                        raise
-                    finally:
-                        self._io_queue.task_done()
-
-                except queue.Empty:
-                    continue
+                    except queue.Empty:
+                        continue
 
         except Exception as exc:
             logger.error(f"I/O worker thread crashed: {exc}")
@@ -325,7 +329,9 @@ class StateStream(typing.Generic[NDimension]):
             return
 
         logger.debug("Waiting for I/O queue to drain...")
-        self._io_queue.join()  # Block until all tasks done
+        t0 = time.perf_counter()
+        self._io_queue.join()
+        logger.debug(f"Queue drain took {time.perf_counter() - t0:.2f}s")
 
         # Check for errors that occurred during drain
         self._check_io_error()
@@ -379,14 +385,14 @@ class StateStream(typing.Generic[NDimension]):
             - If no store exists, raises `StreamError` (create fresh stream)
 
         :return: Iterator over `ModelState` instances
-        :raises `StreamError`: If trying to iterate again after exhaustion (when auto_replay=False or no store)
+        :raises `StreamError`: If trying to iterate again after exhaustion (when `auto_replay=False` or no store)
         """
         # Check if we've already consumed the iterable
         if self._consumed:
             if self.auto_replay and self.store is not None:
                 logger.debug(
                     "Stream already consumed. Auto-replaying from store. "
-                    "Set auto_replay=False to disable this behavior."
+                    "Set `auto_replay=False` to disable this behavior."
                 )
                 yield from self.replay()
                 return
@@ -404,10 +410,7 @@ class StateStream(typing.Generic[NDimension]):
         # No states provided, this shouldn't happen as `_consumed` should already be set to false
         # but still handle it
         if self.states is None:
-            raise StreamError(
-                "No states provided and stream not consumed. "
-                "This is an internal error - please report this bug."
-            )
+            raise StreamError("No states provided and stream not consumed.")
 
         if self.store is None:
             logger.info("No store provided, streaming without persistence")
@@ -421,6 +424,7 @@ class StateStream(typing.Generic[NDimension]):
         logger.debug(
             f"Streaming -> {self.store} ({io_mode}, batch_size={self.batch_size})"
         )
+
         for state in self.states:
             self._yield_count += 1
 
@@ -545,7 +549,7 @@ class StateStream(typing.Generic[NDimension]):
         processing individual states.
 
         The stream's internal mechanisms (__iter__, batching, flushing, checkpointing)
-        still occur normally - only the yielding to caller is skipped.
+        still occur normally, only the yielding to caller is skipped.
 
         Example:
         ```python
@@ -763,12 +767,13 @@ class StateStream(typing.Generic[NDimension]):
             logger.debug(f"Flushing batch of {batch_size} states to {self.store}")
 
             try:
-                for state in self._batch:
-                    self.store.append(
-                        state,
-                        validator=validate_state if self.validate else None,
-                        meta=lambda s: {"step": s.step},
-                    )
+                with self.store(mode="a") as store:
+                    for state in self._batch:
+                        store.append(
+                            state,
+                            validator=validate_state if self.validate else None,
+                            meta=lambda s: {"step": s.step},
+                        )
 
                 self._saved_count += batch_size
                 logger.debug(
