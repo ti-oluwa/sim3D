@@ -52,7 +52,7 @@ def _disallow_flow(
     Check if well should not allow flow and just return zero flow rate
     or same reservoir pressure (wtih zero drawdown).
 
-    :param fluid: Well fluid object (None means no fluid).
+    :param fluid: Well fluid object (`None` means no fluid).
     :param is_active: Whether well is active/open.
     :param phase_mobility: Phase mobility (cP⁻¹).
     :param minimum_mobility: Minimum mobility threshold below which phase is considered immobile (cP⁻¹).

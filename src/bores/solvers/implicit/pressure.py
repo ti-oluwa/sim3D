@@ -1024,7 +1024,7 @@ def compute_well_contributions(
     water_fvf_grid = fluid_properties.water_formation_volume_factor_grid
     oil_fvf_grid = fluid_properties.oil_formation_volume_factor_grid
 
-    # Accumulate contributions into plain Python lists — well perforation count
+    # Accumulate contributions into plain Python lists. Well perforation count
     # is O(10–1000) so list append is perfectly fast here and avoids
     # pre-allocating a fixed-size array that we would need to trim later.
     diagonal_cell_indices: typing.List[int] = []
@@ -1032,7 +1032,7 @@ def compute_well_contributions(
     rhs_cell_indices: typing.List[int] = []
     rhs_values: typing.List[float] = []
 
-    def _record_contribution(
+    def _add_contribution(
         cell_1d_index: int,
         productivity_index: float,
         effective_bhp: float,
@@ -1050,6 +1050,7 @@ def compute_well_contributions(
         rhs_cell_indices.append(cell_1d_index)
         rhs_values.append(productivity_index * effective_bhp)
 
+    bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
     for well in wells.injection_wells:
         if not well.is_open or well.injected_fluid is None:
             continue
@@ -1130,55 +1131,72 @@ def compute_well_contributions(
 
             if is_bhp_controlled:
                 effective_mobility = phase_mobility
+                effective_bhp = well.get_bottom_hole_pressure(
+                    pressure=cell_pressure,
+                    temperature=cell_temperature,
+                    phase_mobility=effective_mobility,
+                    well_index=well_index,
+                    fluid=injected_fluid,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    fluid_compressibility=phase_compressibility,
+                    pvt_tables=None,
+                )
+
+                if not np.isfinite(effective_bhp):
+                    logger.error(
+                        f"Non-finite BHP for injection well {well.name!r} "
+                        f"at cell ({i},{j},{k}): {effective_bhp}. Skipping perforation."
+                    )
+                    continue
+
+                if abs(effective_bhp - cell_pressure) > 1e6:
+                    logger.warning(
+                        f"Extreme BHP for injection well {well.name!r} "
+                        f"at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
+                        f"(reservoir pressure: {cell_pressure:.1f} psi)."
+                    )
+
+                if cell_pressure > effective_bhp and config.warn_well_anomalies:
+                    _warn_injection_pressure_is_low(
+                        bhp=effective_bhp,
+                        cell_pressure=cell_pressure,
+                        well_name=well.name,
+                        time=time_step * time_step_size,
+                        cell=(i, j, k),
+                    )
+
+                productivity_index = (
+                    well_index * effective_mobility * md_per_cp_to_ft2_per_psi_per_day
+                )
+                _add_contribution(cell_1d_index, productivity_index, effective_bhp)
+
             else:
-                # Rate-controlled: BHP is derived from total mobility
+                # Rate-controlled: We use direct rate injection (Neumann Boundary)
                 effective_mobility = typing.cast(
                     float,
                     water_relative_mobility_grid[i, j, k]
                     + oil_relative_mobility_grid[i, j, k]
                     + gas_relative_mobility_grid[i, j, k],
                 )
-
-            effective_bhp = well.get_bottom_hole_pressure(
-                pressure=cell_pressure,
-                temperature=cell_temperature,
-                phase_mobility=effective_mobility,
-                well_index=well_index,
-                fluid=injected_fluid,
-                formation_volume_factor=phase_fvf,
-                allocation_fraction=allocation_fraction,
-                use_pseudo_pressure=use_pseudo_pressure,
-                fluid_compressibility=phase_compressibility,
-                pvt_tables=None,
-            )
-
-            if not np.isfinite(effective_bhp):
-                logger.error(
-                    f"Non-finite BHP for injection well {well.name!r} "
-                    f"at cell ({i},{j},{k}): {effective_bhp}. Skipping perforation."
+                flow_rate = well.get_flow_rate(
+                    pressure=cell_pressure,
+                    temperature=cell_temperature,
+                    phase_mobility=effective_mobility,
+                    well_index=well_index,
+                    fluid=injected_fluid,
+                    formation_volume_factor=phase_fvf,
+                    allocation_fraction=allocation_fraction,
+                    use_pseudo_pressure=use_pseudo_pressure,
+                    fluid_compressibility=phase_compressibility,
+                    pvt_tables=None,
                 )
-                continue
-
-            if abs(effective_bhp - cell_pressure) > 1e6:
-                logger.warning(
-                    f"Extreme BHP for injection well {well.name!r} "
-                    f"at cell ({i},{j},{k}): {effective_bhp:.2e} psi "
-                    f"(reservoir pressure: {cell_pressure:.1f} psi)."
-                )
-
-            if cell_pressure > effective_bhp and config.warn_well_anomalies:
-                _warn_injection_pressure_is_low(
-                    bhp=effective_bhp,
-                    cell_pressure=cell_pressure,
-                    well_name=well.name,
-                    time=time_step * time_step_size,
-                    cell=(i, j, k),
-                )
-
-            productivity_index = (
-                well_index * effective_mobility * md_per_cp_to_ft2_per_psi_per_day
-            )
-            _record_contribution(cell_1d_index, productivity_index, effective_bhp)
+                if injected_phase != FluidPhase.GAS:
+                    flow_rate *= bbl_to_ft3
+                
+                rhs_cell_indices.append(cell_1d_index)
+                rhs_values.append(flow_rate)
 
     for well in wells.production_wells:
         if not well.is_open:
@@ -1319,7 +1337,7 @@ def compute_well_contributions(
                 productivity_index = (
                     well_index * phase_mobility * md_per_cp_to_ft2_per_psi_per_day
                 )
-                _record_contribution(cell_1d_index, productivity_index, effective_bhp)
+                _add_contribution(cell_1d_index, productivity_index, effective_bhp)
 
     return WellContributions(
         diagonal_cell_indices=np.array(diagonal_cell_indices, dtype=np.int32),

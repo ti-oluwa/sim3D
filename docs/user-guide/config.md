@@ -135,6 +135,7 @@ See [Schemes](simulation/schemes.md) for detailed information on each evolution 
 | `pressure_convergence_tolerance` | `float` | `1e-6` | Relative convergence tolerance for pressure |
 | `saturation_convergence_tolerance` | `float` | `1e-4` | Relative convergence tolerance for saturation |
 | `max_iterations` | `int` | `250` | Maximum solver iterations per step (capped at 500) |
+| `task_pool` | `ThreadPoolExecutor` | `None` | Task pool for assembling solver matrices in parrallel |
 
 See [Solvers](simulation/solvers.md) and [Preconditioners](simulation/preconditioners.md) for details.
 
@@ -144,9 +145,9 @@ See [Solvers](simulation/solvers.md) and [Preconditioners](simulation/preconditi
 |---|---|---|---|
 | `saturation_cfl_threshold` | `float` | `0.7` | Maximum saturation CFL number |
 | `pressure_cfl_threshold` | `float` | `0.9` | Maximum pressure CFL number |
-| `max_oil_saturation_change` | `float` | `0.2` | Maximum oil saturation change per step |
-| `max_water_saturation_change` | `float` | `0.2` | Maximum water saturation change per step |
-| `max_gas_saturation_change` | `float` | `0.1` | Maximum gas saturation change per step |
+| `max_oil_saturation_change` | `float` | `0.6` | Maximum oil saturation change per step |
+| `max_water_saturation_change` | `float` | `0.6` | Maximum water saturation change per step |
+| `max_gas_saturation_change` | `float` | `0.5` | Maximum gas saturation change per step |
 | `max_pressure_change` | `float` | `500.0` | Maximum pressure change per step (psi) |
 
 !!! tip "Gas Saturation Change Limits"

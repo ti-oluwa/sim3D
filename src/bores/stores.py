@@ -17,7 +17,6 @@ import numpy as np
 import orjson
 import yaml
 import zarr  # type: ignore[import-untyped]
-from numcodecs import Blosc
 from typing_extensions import ParamSpec, Self
 from zarr.storage import StoreLike  # type: ignore[import-untyped]
 
@@ -55,7 +54,7 @@ class EntryMeta(typing.NamedTuple):
     """Zero-based position in insertion order."""
     group_name: str
     """Internal storage key (opaque to callers)."""
-    meta: typing.Dict[str, str] = {}
+    meta: typing.Dict[str, str]
     """JSON serializable metadata dictionary"""
 
 
@@ -338,7 +337,7 @@ def data_store(
 
     :param name: Name of the data store backend
     :param store_cls: Data store class to register
-    :return: Decorator function if store_cls is None, else None
+    :return: Decorator function if `store_cls` is None, else None
     """
 
     def _decorator(store_cls: typing.Type[StoreT]) -> typing.Type[StoreT]:
@@ -578,6 +577,218 @@ def _get_index_from_group_name(name: str) -> typing.Optional[int]:
     return None
 
 
+"""
+DataStore with flattened entry layout.
+
+Encoding contract
+-----------------
+Path segments are percent-encoded so that the separator character (``→``,
+U+2192) and the escape character (``%``) can never appear unescaped in a
+segment.  This makes path encoding injective: two distinct nested paths can
+never produce the same flat key.
+
+    encode: "%" → "%25",  "→" → "%E2%86%92"
+    decode: reverse of above
+
+Special value types
+-------------------
+The following non-array leaf types need extra round-trip help and are tagged
+in a ``_vtypes`` attr dict stored once per entry group:
+
+    "json" - list/dict that is not a numpy array (serialised via orjson)
+    "none" - Python None  (stored as sentinel string, tagged for safety)
+    "bool" - Python bool  (JSON round-trips fine but we tag for clarity)
+
+Untagged scalars are int, float, or str and survive attrs round-trips natively.
+
+Empty sequences
+---------------
+Written as a zero-length int8 dataset (same as the nested layout) so the
+array-vs-scalar distinction is preserved.
+
+Collision detection
+-------------------
+A debug-mode assertion checks that no two source paths produce the same
+encoded flat key.  This is a safeguard; in practice attrs field names cannot
+collide after encoding.
+"""
+
+
+_SEP = "\u2192"  # → U+2192  RIGHTWARDS ARROW — path segment separator
+_ESC = "%"  # percent   — escape character
+
+_SEP_ENCODED = "%E2%86%92"
+_ESC_ENCODED = "%25"
+
+
+def _encode_segment(s: str) -> str:
+    """Percent-encode `%` and `→` so neither can appear raw in a segment."""
+    return s.replace(_ESC, _ESC_ENCODED).replace(_SEP, _SEP_ENCODED)
+
+
+def _decode_segment(s: str) -> str:
+    """Reverse of `_encode_segment`."""
+    return s.replace(_SEP_ENCODED, _SEP).replace(_ESC_ENCODED, _ESC)
+
+
+def _join_path(*segments: str) -> str:
+    return _SEP.join(_encode_segment(s) for s in segments)
+
+
+def _split_path(flat_key: str) -> typing.List[str]:
+    return [_decode_segment(s) for s in flat_key.split(_SEP)]
+
+
+_VTYPE_JSON = "json"  # list-of-mappings or arbitrary list/dict → orjson
+_VTYPE_NONE = "none"  # Python None
+_VTYPE_BOOL = "bool"  # Python bool
+
+_INTERNAL = {"_vtypes", "_meta", "_index", "_group_name", "count", "version"}
+
+
+def _flatten(
+    data: typing.Mapping[str, typing.Any],
+    prefix: typing.Tuple[str, ...] = (),
+    out_arrays: typing.Optional[typing.Dict[str, np.ndarray]] = None,
+    out_scalars: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    out_vtypes: typing.Optional[typing.Dict[str, str]] = None,
+) -> typing.Tuple[
+    typing.Dict[str, np.ndarray],
+    typing.Dict[str, typing.Any],
+    typing.Dict[str, str],
+]:
+    """
+    Recursively flatten *data* into three parallel flat dicts.
+
+    :param data: Nested mapping to flatten.
+    :param prefix: Current path prefix as a tuple of raw (unencoded) segments.
+    :param out_arrays: Accumulator for `{flat_key: ndarray}` pairs.
+    :param out_scalars: Accumulator for `{flat_key: scalar}` pairs.
+    :param out_vtypes: Accumulator for `{flat_key: vtype_tag}` pairs
+        (only entries that need a tag are included).
+    :returns: `(arrays, scalars, vtypes)` flat dicts.
+    """
+    if out_arrays is None:
+        out_arrays = {}
+    if out_scalars is None:
+        out_scalars = {}
+    if out_vtypes is None:
+        out_vtypes = {}
+
+    for key, value in data.items():
+        path = prefix + (key,)
+        flat_key = _join_path(*path)
+
+        if value is None:
+            out_scalars[flat_key] = _NONE_SENTINEL
+            out_vtypes[flat_key] = _VTYPE_NONE
+            continue
+
+        if isinstance(value, Mapping):
+            _flatten(value, path, out_arrays, out_scalars, out_vtypes)
+            continue
+
+        if isinstance(value, np.ndarray):
+            if value.dtype == object:
+                raise TypeError(f"Cannot store object-dtype array at path {flat_key!r}")
+            out_arrays[flat_key] = value
+            continue
+
+        # Convert numpy scalars to Python native ---
+        if isinstance(value, (np.integer, np.floating)):
+            out_scalars[flat_key] = value.item()
+            continue
+
+        if isinstance(value, np.bool_):
+            out_scalars[flat_key] = bool(value)
+            out_vtypes[flat_key] = _VTYPE_BOOL
+            continue
+
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            if not value:
+                # Empty sequence → zero-length dataset
+                out_arrays[flat_key] = np.empty((0,), dtype=np.int8)
+                continue
+
+            if isinstance(value[0], Mapping):
+                # List of mappings → serialise as JSON scalar; not worth
+                # the complexity of flattening further since these are always
+                # small (well perforations, schedule entries, etc.)
+                out_scalars[flat_key] = orjson.dumps(
+                    [dict(item) for item in value], option=orjson.OPT_SERIALIZE_NUMPY
+                ).decode()
+                out_vtypes[flat_key] = _VTYPE_JSON
+                continue
+
+            # Homogeneous sequence of scalars/arrays → convert to ndarray
+            arr = _sequence_to_ndarray(value, path=flat_key)
+            out_arrays[flat_key] = arr
+            continue
+
+        if isinstance(value, bool):
+            out_scalars[flat_key] = value
+            out_vtypes[flat_key] = _VTYPE_BOOL
+            continue
+
+        # other scalars, int, float, str, etc.
+        out_scalars[flat_key] = value
+
+    return out_arrays, out_scalars, out_vtypes
+
+
+def _unflatten(
+    arrays: typing.Dict[str, np.ndarray],
+    scalars: typing.Dict[str, typing.Any],
+    vtypes: typing.Dict[str, str],
+) -> typing.Dict[str, typing.Any]:
+    """
+    Reconstruct a nested dict from the three flat dicts produced by `_flatten`.
+
+    :param arrays: `{flat_key: ndarray}` — from zarr array datasets.
+    :param scalars: `{flat_key: scalar}` — from zarr group attrs.
+    :param vtypes: `{flat_key: vtype_tag}` — from the `_vtypes` attr.
+    :returns: Reconstructed nested dict.
+    """
+    result: typing.Dict[str, typing.Any] = {}
+
+    def _set_nested(d: typing.Dict, parts: typing.List[str], value: typing.Any) -> None:
+        for part in parts[:-1]:
+            if part not in d:
+                d[part] = {}
+            elif not isinstance(d[part], dict):
+                # A scalar was registered at a prefix that is also a path
+                # prefix for deeper keys. This should never happen with
+                # well-formed attrs classes, but we should guard anyway.
+                raise StorageError(
+                    f"Path conflict at segment {part!r}: "
+                    f"expected dict, got {type(d[part]).__name__}"
+                )
+            d = d[part]
+        d[parts[-1]] = value
+
+    for flat_key, arr in arrays.items():
+        parts = _split_path(flat_key)
+        value = _normalize_loaded_value(arr)
+        _set_nested(result, parts, value)
+
+    for flat_key, raw in scalars.items():
+        parts = _split_path(flat_key)
+        vtype = vtypes.get(flat_key)
+
+        if vtype == _VTYPE_NONE:
+            value = None
+        elif vtype == _VTYPE_JSON:
+            value = orjson.loads(raw)
+        elif vtype == _VTYPE_BOOL:
+            value = bool(raw)
+        else:
+            value = _denormalize_from_storage(raw)
+
+        _set_nested(result, parts, value)
+
+    return result
+
+
 @data_store("zarr")
 class ZarrStore(DataStore[SerializableT, zarr.Group]):
     """
@@ -587,36 +798,37 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
     Best for large 3D numpy arrays.
     Best lazy loading support among available formats.
 
-    Layout:
+    **Layout**
+
     ```mermaid
     <root.zarr>/
-        entry_0000000000/      ← one group per item
-            <field>            ← zarr array  (numpy arrays)
-            <nested>/          ← zarr subgroup (mappings / sequences of mappings)
-                                    attrs hold scalars, strings, None sentinels
+        entry_0000000000/          ← one group per item
+            <encoded→path>         ← zarr dataset  (numpy arrays)
+            attrs:
+                <encoded→path>     ← scalar values
+                _scalars_encoded→path: value
+                _vtypes:           ← type tags for non-trivial scalars
+                _meta:             ← user metadata
+                _index:            ← insertion index
+                _group_name:       ← group name
         entry_0000000001/
         ...
-        (root attrs: count)
+        attrs:
+            count: N
     ```
+
+    All nesting from the original `Serializable.dump(recurse=True)` dict is
+    encoded into flat dataset/attr names using `→`-separated percent-encoded
+    path segments. No sub-groups are created inside entry groups, so every
+    `append` performs exactly `(number of arrays)` `create_dataset` calls
+    plus two `group.attrs.update` calls, one for scalars and one for metadata.
 
     **Persistent-handle notes**
 
-    `open(mode="a")` opens the Zarr root group once and stores it in
-    `self._handle`.  All subsequent `append` / `load` / `entries`
-    calls reuse that group without re-opening the directory.  `close()`
-    consolidates metadata (zarr v2) and sets `self._handle = None`.
-
-    Typical high-throughput usage:
-
-    ```python
-    with store(mode="a"):
-        for state in simulation():
-            store.append(state)
-    ```
-
-    Note: Calling `dump()` while a handle is open will temporarily close the
-    handle (to safely truncate the store), perform the write, then reopen
-    it in `"a"` mode so subsequent `append` calls continue to work.
+    Same as the nested layout. `open(mode="a")` stores the root group in
+    `self._handle`; `close()` flushes `_pending_count` and releases it.
+    `consolidate` defaults to `False`; pass `close(consolidate=True)`
+    when you want fast subsequent reads.
     """
 
     supports_append: bool = True
@@ -627,15 +839,18 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
         compressor: typing.Literal["zstd", "lz4", "blosclz"] = "lz4",
         compression_level: int = 1,
         chunks: typing.Optional[typing.Tuple[int, ...]] = None,
-    ):
+    ) -> None:
         """
-        Initialize the store
+        Initialise the store.
 
-        :param store: Zarr store (file path, directory, or `Store` object)
-        :param compressor: Compression algorithm, e.g, 'zstd', 'lz4', 'blosclz'.
-        :param compression_level: Compression level (1-9)
-        :param chunks: Chunk size for the Zarr arrays
-        :raises StorageError: If filepath is invalid or has incompatible extension
+        :param store: Zarr store (file path, directory, or `Store` object).
+        :param compressor: Compression algorithm — `'lz4'`, `'zstd'`, or
+            `'blosclz'`.
+        :param compression_level: Compression level (1-9).
+        :param chunks: Optional explicit chunk shape.  When `None` the store
+            picks sensible defaults based on array rank.
+        :raises StorageError: If the path is invalid or has an incompatible
+            extension.
         """
         super().__init__()
         self.store = (
@@ -644,11 +859,11 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             else store
         )
         self.chunks = chunks
-        # In-memory count cache. Helps us avoid reading/writing root .zattrs on every append
-        # when a persistent handle is open. Only flushed to disk on `close()`.
         self._pending_count: int = 0
 
         if IS_PYTHON_310_OR_LOWER:
+            from numcodecs import Blosc
+
             self.compressor = Blosc(
                 cname=compressor,
                 clevel=compression_level,
@@ -667,27 +882,22 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
         """
         Open the Zarr root group and attach it to `self._handle`.
 
-        :param mode: Zarr open mode.  Use `"a"` for append/create,
-            `"r"` for read-only, `"w"` to truncate.
+        :param mode: Zarr open mode — `"a"` (append/create), `"r"`
+            (read-only), `"w"` (truncate).
         :raises StorageError: If the group cannot be opened.
         """
         if self._handle is not None:
-            logger.debug(
-                f"`{self.__class__.__name__}.open()` called while handle already open; ignored"
-            )
             return
-
         try:
             self._handle = zarr.open_group(
                 store=self.store,
                 mode=mode,
                 zarr_version=2,  # type: ignore[arg-type]
             )
-            # Seed the in-memory counter from whatever is already on disk so that
-            # `append()` never needs to touch root .zattrs while the handle is open.
+            # Seed in-memory counter
             self._pending_count = int(self._handle.attrs.get("count", 0))
             logger.debug(
-                f"{self.__class__.__name__} opened (mode={mode!r}): {self.store}"
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.store!s}"
             )
         except Exception as exc:
             raise StorageError(
@@ -696,29 +906,35 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
 
     def close(self, consolidate: bool = False) -> None:
         """
-        Consolidate metadata and release the open Zarr handle.
+        Flush `_pending_count` to disk and release the open Zarr handle.
 
-        For zarr v2 directory stores the handle is just a Python object with
-        no explicit close method, but we call `zarr.consolidate_metadata`
-        so subsequent `open(mode="r")` calls can skip scanning every chunk.
+        :param consolidate: If `True`, call `zarr.consolidate_metadata`
+            before releasing. False by default. Pass `True` when you want
+            faster subsequent reads and are willing to pay the one-time
+            directory scan cost.
         """
         if self._handle is None:
+            logger.debug(
+                f"`{self.__class__.__name__}.open()` called while handle already open; ignored."
+            )
             return
         try:
-            # Flush the in-memory count to disk
             self._handle.attrs["count"] = self._pending_count
-            # Consolidate metadata for faster subsequent reads (zarr v2).
-            # Callers opt in when they want fast subsequent reads
-            # and are willing to pay the one-time directory scan cost.
             if consolidate and isinstance(self.store, Path) and self.store.exists():
                 try:
                     zarr.consolidate_metadata(self.store)  # type: ignore[arg-type]
-                except Exception:  # noqa
-                    pass  # Non-fatal: consolidated metadata is an optimisation
+                except Exception as exc:
+                    logger.error(
+                        f"An error occurred while consolidating metadata: {exc}",
+                        exc_info=True,
+                    )
+        except Exception as exc:
+            logger.warning(
+                f"Error closing {self.__class__.__name__}: {exc}", exc_info=True
+            )
         finally:
             self._handle = None
             self._pending_count = 0
-            logger.debug(f"{self.__class__.__name__} closed: {self.store}")
 
     def _get_chunks(
         self, shape: typing.Tuple[int, ...]
@@ -727,14 +943,14 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             return self.chunks
         if len(shape) == 3:
             return (min(20, shape[0]), min(20, shape[1]), min(20, shape[2]))
-        elif len(shape) == 2:
+        if len(shape) == 2:
             return (min(100, shape[0]), min(100, shape[1]))
         return None
 
     def _create_dataset(
-        self, group: zarr.Group, name: str, data: np.typing.NDArray
+        self, group: zarr.Group, name: str, data: np.ndarray
     ) -> zarr.Array:
-        chunks = self._get_chunks(shape=data.shape)
+        chunks = self._get_chunks(data.shape)
         return group.create_dataset(
             name=name,
             data=data,
@@ -743,67 +959,12 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             overwrite=True,
         )
 
-    def _write_data(
-        self, group: zarr.Group, data: typing.Mapping[str, typing.Any]
-    ) -> None:
-        for key, value in data.items():
-            value = _normalize_for_storage(value)
-
-            if isinstance(value, Mapping):
-                sub_group = group.require_group(name=key)
-                self._write_data(group=sub_group, data=value)
-
-            elif isinstance(value, np.ndarray):
-                if value.dtype == object:
-                    raise TypeError(
-                        f"Zarr cannot store object-dtype arrays: {group.name}/{key}"
-                    )
-                self._create_dataset(group=group, name=key, data=value)
-
-            elif isinstance(value, (np.integer, np.floating)):
-                group.attrs[key] = value.item()
-            elif isinstance(value, np.bool_):
-                group.attrs[key] = bool(value)
-
-            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                if not value:
-                    self._create_dataset(
-                        group=group, name=key, data=np.empty((0,), dtype=np.int8)
-                    )
-                    continue
-                if isinstance(value[0], Mapping):
-                    seq_group = group.require_group(key)
-                    for i, item in enumerate(value):
-                        item_group = seq_group.require_group(str(i))
-                        self._write_data(group=item_group, data=item)
-                    continue
-                array = _sequence_to_ndarray(value=value, path=f"{group.name}/{key}")
-                self._create_dataset(group=group, name=key, data=array)
-
-            else:
-                group.attrs[key] = value
-
-    def _load_data(self, group: zarr.Group) -> typing.Dict[str, typing.Any]:
-        data: typing.Dict[str, typing.Any] = {}
-        for key in group.array_keys():  # type: ignore
-            array = group[key]  # type: ignore
-            data[key] = _normalize_loaded_value(array[:])  # type: ignore
-        for key in group.group_keys():  # type: ignore
-            sub_group = typing.cast(zarr.Group, group[key])  # type: ignore
-            loaded = self._load_data(group=sub_group)
-            data[key] = _normalize_loaded_mapping_sequence(loaded)
-        for attr_name in group.attrs:
-            data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
-        return data
-
     def _open_root(self, mode: str) -> zarr.Group:
         """
         Return the active root group.
 
-        If a persistent handle is open, return it directly (ignoring *mode*
-        since the caller must have opened with the correct mode).  Otherwise
-        open a transient group for this call only. The caller is responsible
-        for not holding references after their operation completes.
+        Reuses the persistent handle when open; otherwise opens a transient
+        group for this call only.
         """
         if self._handle is not None:
             return self._handle
@@ -818,60 +979,124 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> EntryMeta:
+        """
+        Write one `Serializable` into *root* at position *index*.
+
+        The entry group contains only flat datasets and two `group.attrs.update`
+        calls; one for all scalar values (keyed by encoded path) and one for
+        entry metadata. No sub-groups are created.
+        """
         group_name = _get_group_name(index)
         item_group = root.require_group(group_name)
-        self._write_data(item_group, item.dump(recurse=True))
+
+        raw = item.dump(recurse=True)
+        arrays, scalars, vtypes = _flatten(raw)
+
+        # Collision guard. Two paths must never produce the same key
+        assert len(arrays) + len(scalars) == len(set(list(arrays) + list(scalars))), (
+            "Flat key collision detected in entry. Field names contain the "
+            "separator character after encoding. This is a bug."
+        )
+
+        # Write all arrays as flat datasets
+        for flat_key, arr in arrays.items():
+            self._create_dataset(item_group, name=flat_key, data=arr)
+
+        # Write all scalars and vtypes in two `attrs.update` calls
+        if scalars:
+            item_group.attrs.update(scalars)
+
         item_group.attrs.update(
             {
+                "_vtypes": vtypes,
                 "_meta": meta(item) if meta is not None else {},
                 "_index": index,
                 "_group_name": group_name,
             }
         )
-        return EntryMeta(idx=index, group_name=group_name)
+        return EntryMeta(idx=index, group_name=group_name, meta={})
+
+    def _read_entry(self, item_group: zarr.Group) -> typing.Dict[str, typing.Any]:
+        """
+        Reconstruct a nested dict from a flat entry group.
+
+        Strips internal metadata keys before returning.
+        """
+        # Collect flat arrays
+        arrays: typing.Dict[str, np.ndarray] = {
+            key: item_group[key][:]  # type: ignore[index]
+            for key in item_group.array_keys()  # type: ignore[attr-defined]
+        }
+
+        # Collect flat scalars, stripping internal keys
+        scalars: typing.Dict[str, typing.Any] = {
+            k: v for k, v in item_group.attrs.items() if k not in _INTERNAL
+        }
+        vtypes: typing.Dict[str, str] = dict(item_group.attrs.get("_vtypes", {}))
+        return _unflatten(arrays, scalars, vtypes)
 
     @reraise_storage_error
     def dump(
         self,
         data: typing.Iterable[SerializableT],
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        validator: typing.Optional[
+            typing.Callable[[SerializableT], SerializableT]
+        ] = None,
         meta: typing.Optional[
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> None:
+        """
+        Persist *data*, always overwriting any existing content.
+
+        :param data: Iterable of `Serializable` instances.
+        :param validator: Optional per-item validator/transformer.
+        :param meta: Optional callable returning a metadata dict for each item.
+        """
         had_open_handle = self._handle is not None
         if had_open_handle:
-            self.close()  # Flush and close existing handle before truncating
+            # Flush and close existing handle before truncating
+            self.close()
 
-        # `dump` always truncates, so we must never reuse a persistent handle for this
         root = zarr.open_group(store=self.store, mode="w", zarr_version=2)  # type: ignore[arg-type]
         count = 0
         for index, item in enumerate(data):
             if validator is not None:
                 item = validator(item)
             self._write_entry(root, index, item, meta)
-            logger.debug(f"{self.__class__.__name__}: wrote entry {index}")
             count += 1
 
         root.attrs["count"] = count
-        logger.debug(f"{self.__class__.__name__}: dump complete, {count} entries")
-
+        logger.debug(
+            f"{self.__class__.__name__}: dump complete, {count} entries → {self.store!s}"
+        )
         if had_open_handle:
-            self.open(mode="a")  # Re-open so subsequent operations still work
+            # Re-open so subsequent operations still work
+            self.open(mode="a")
 
     @reraise_storage_error
     def append(
         self,
         item: SerializableT,
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        validator: typing.Optional[
+            typing.Callable[[SerializableT], SerializableT]
+        ] = None,
         meta: typing.Optional[
             typing.Callable[[SerializableT], typing.Dict[str, typing.Any]]
         ] = None,
     ) -> EntryMeta:
+        """
+        Append a single item without rewriting existing entries.
+
+        :param item: The `Serializable` instance to persist.
+        :param validator: Optional validator/transformer applied before writing.
+        :param meta: Optional callable returning a metadata dict.
+        :returns: The `EntryMeta` record for the appended item.
+        """
         root = self._open_root("a")
 
         if self._handle is not None:
-            # Use the in-memory counter.
+            # Uses the in-memory `_pending_count` when a persistent handle is open
             index = self._pending_count
         else:
             index = int(root.attrs.get("count", 0))
@@ -880,9 +1105,8 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             item = validator(item)
 
         entry = self._write_entry(root, index, item, meta)
-
         if self._handle is not None:
-            self._pending_count += 1  # To be flushed to disk on `close()`
+            self._pending_count += 1
         else:
             root.attrs["count"] = index + 1
 
@@ -891,6 +1115,13 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
 
     @reraise_storage_error
     def entries(self) -> typing.List[EntryMeta]:
+        """
+        Return metadata for every stored item in insertion order.
+
+        Does not deserialise any payload data.
+
+        :returns: List of `EntryMeta` instances in insertion order.
+        """
         try:
             root = self._open_root("r")
         except Exception as exc:
@@ -917,8 +1148,22 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
         typ: typing.Type[SerializableT],
         indices: typing.Optional[typing.Sequence[int]] = None,
         predicate: typing.Optional[typing.Callable[[EntryMeta], bool]] = None,
-        validator: typing.Optional[DataValidator[SerializableT]] = None,
+        validator: typing.Optional[
+            typing.Callable[[SerializableT], SerializableT]
+        ] = None,
     ) -> typing.Generator[SerializableT, None, None]:
+        """
+        Load and yield items from the store in insertion order.
+
+        Filtering is applied before any array data is deserialised.
+
+        :param typ: The `Serializable` subclass to deserialise into.
+        :param indices: If given, load only entries at these positions.
+        :param predicate: If given (and `indices` is `None`), yield only
+            entries for which `predicate(entry_meta)` returns `True`.
+        :param validator: Optional post-load callable applied before yielding.
+        :returns: Generator of deserialised items.
+        """
         root = self._open_root("r")
 
         if indices is not None:
@@ -926,13 +1171,7 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
             for name in sorted(root.group_keys()):  # type: ignore[attr-defined]
                 idx = _get_index_from_group_name(name)
                 if idx is not None and idx in index_set:
-                    item_group = typing.cast(zarr.Group, root[name])  # type: ignore[index]
-                    logger.debug(f"{self.__class__.__name__}: loading entry {idx}")
-                    raw = self._load_data(item_group)
-                    raw.pop("_index", None)
-                    raw.pop("_group_name", None)
-                    raw.pop("count", None)
-                    raw.pop("version", None)
+                    raw = self._read_entry(root[name])  # type: ignore[index]
                     obj = typ.load(raw)
                     yield validator(obj) if validator is not None else obj
         else:
@@ -946,25 +1185,15 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
                         meta=dict(group.attrs.get("_meta", {})),
                     )
                     if predicate is None or predicate(entry_meta):
-                        item_group = typing.cast(
-                            zarr.Group, root[entry_meta.group_name]
-                        )  # type: ignore[index]
-                        logger.debug(
-                            f"{self.__class__.__name__}: loading entry {entry_meta.idx}"
-                        )
-                        raw = self._load_data(item_group)
-                        raw.pop("_index", None)
-                        raw.pop("_group_name", None)
-                        raw.pop("count", None)
-                        raw.pop("version", None)
+                        raw = self._read_entry(group)  # type: ignore[arg-type]
                         obj = typ.load(raw)
                         yield validator(obj) if validator is not None else obj
 
     def flush(self) -> None:
+        """Clear every data item stored (destructive)."""
         store = self.store
-        if not isinstance(store, Path):
-            return
-        shutil.rmtree(store)
+        if isinstance(store, Path):
+            shutil.rmtree(store)
 
     def __repr__(self) -> str:
         cname = getattr(self.compressor, "cname", str(self.compressor))
@@ -1057,11 +1286,10 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
 
         try:
             self._handle = h5py.File(str(self.filepath), mode=mode, **kwargs)
-            # Seed the in-memory counter from whatever is already on disk so that
-            # `append()` never needs to touch file attrs while the handle is open.
+            # Seed the in-memory counter
             self._pending_count = int(self._handle.attrs.get("count", 0))
             logger.debug(
-                f"{self.__class__.__name__} opened (mode={mode!r}): {self.filepath}"
+                f"{self.__class__.__name__} opened (mode={mode!r}): {self.filepath!r}"
             )
         except Exception as exc:
             raise StorageError(
@@ -1070,7 +1298,7 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
 
     def close(self) -> None:
         """
-        Flush and close the open `h5py.File`.
+        Flush the in-memory count to disk and close the open `h5py.File`.
 
         Idempotent. Safe to call when no handle is open.
         """
@@ -1078,16 +1306,35 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
             return
 
         try:
-            # Flush the in-memory count to disk in a single attrs write.
             self._handle.attrs["count"] = self._pending_count
             self._handle.flush()
             self._handle.close()
             logger.debug(f"{self.__class__.__name__} closed: {self.filepath}")
         except Exception as exc:
-            logger.warning(f"Error closing {self.__class__.__name__}: {exc}")
+            logger.warning(
+                f"Error closing {self.__class__.__name__}: {exc}", exc_info=True
+            )
         finally:
             self._handle = None
             self._pending_count = 0
+
+    @contextmanager
+    def _get_file(self, mode: str) -> typing.Generator[h5py.File, None, None]:
+        """
+        Yield an open `h5py.File.`
+
+        If a persistent handle is open, yield it directly (ignoring *mode*).
+        Otherwise open a transient file, yield it, and close it on exit.
+        """
+        if self._handle is not None:
+            yield self._handle
+            return  # Caller owns the handle, hence we must not close it
+        else:
+            f = h5py.File(str(self.filepath), mode=mode)
+            try:
+                yield f
+            finally:
+                f.close()
 
     def _get_chunks(
         self, shape: typing.Tuple[int, ...]
@@ -1150,38 +1397,6 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
             else:
                 group.attrs[key] = value
 
-    def _load_data(self, group: h5py.Group) -> typing.Dict[str, typing.Any]:
-        data: typing.Dict[str, typing.Any] = {}
-        for key in group:
-            item = group[key]
-            if isinstance(item, h5py.Dataset):
-                data[key] = _normalize_loaded_value(item[:])  # type: ignore
-            elif isinstance(item, h5py.Group):
-                loaded = self._load_data(group=item)
-                data[key] = _normalize_loaded_mapping_sequence(loaded)  # type: ignore
-
-        for attr_name in group.attrs:
-            data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
-        return data
-
-    @contextmanager
-    def _get_file(self, mode: str) -> typing.Generator[h5py.File, None, None]:
-        """
-        Yield an open `h5py.File.`
-
-        If a persistent handle is open, yield it directly (ignoring *mode*).
-        Otherwise open a transient file, yield it, and close it on exit.
-        """
-        if self._handle is not None:
-            yield self._handle
-            return  # Caller owns the handle, hence we must not close it
-        else:
-            f = h5py.File(str(self.filepath), mode=mode)
-            try:
-                yield f
-            finally:
-                f.close()
-
     def _write_entry(
         self,
         f: h5py.File,
@@ -1201,7 +1416,21 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
                 "_group_name": group_name,
             }
         )
-        return EntryMeta(idx=index, group_name=group_name)
+        return EntryMeta(idx=index, group_name=group_name, meta={})
+
+    def _read_entry(self, group: h5py.Group) -> typing.Dict[str, typing.Any]:
+        data: typing.Dict[str, typing.Any] = {}
+        for key in group:
+            item = group[key]
+            if isinstance(item, h5py.Dataset):
+                data[key] = _normalize_loaded_value(item[:])  # type: ignore
+            elif isinstance(item, h5py.Group):
+                loaded = self._read_entry(group=item)
+                data[key] = _normalize_loaded_mapping_sequence(loaded)  # type: ignore
+
+        for attr_name in group.attrs:
+            data[attr_name] = _denormalize_from_storage(group.attrs[attr_name])
+        return data
 
     @reraise_storage_error
     def dump(
@@ -1214,7 +1443,8 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
     ) -> None:
         had_open_handle = self._handle is not None
         if had_open_handle:
-            self.close()  # Flush and close existing handle before truncating
+            # Flush and close existing handle before truncating
+            self.close()
 
         # `dump` always truncates. so we open a dedicated truncating file and never
         # reuse a persistent append handle
@@ -1232,7 +1462,8 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
         )
 
         if had_open_handle:
-            self.open(mode="a")  # Re-open so subsequent operations still work
+            # Re-open so subsequent operations still work
+            self.open(mode="a")
 
     @reraise_storage_error
     def append(
@@ -1300,7 +1531,7 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
                     if idx is not None and idx in index_set:
                         item_group = typing.cast(h5py.Group, f[name])
                         logger.debug(f"{self.__class__.__name__}: loading entry {idx}")
-                        raw = self._load_data(item_group)
+                        raw = self._read_entry(item_group)
                         raw.pop("_index", None)
                         raw.pop("_group_name", None)
                         raw.pop("count", None)
@@ -1323,7 +1554,7 @@ class HDF5Store(DataStore[SerializableT, h5py.File]):
                             logger.debug(
                                 f"{self.__class__.__name__}: loading entry {entry_meta.idx}"
                             )
-                            raw = self._load_data(item_group)
+                            raw = self._read_entry(item_group)
                             raw.pop("_index", None)
                             raw.pop("_group_name", None)
                             raw.pop("count", None)

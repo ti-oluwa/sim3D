@@ -192,7 +192,7 @@ class Config(
     residual_gas_drainage_ratio: float = 0.5
     """Ratio to compute gas drainage residual from imbibition value."""
 
-    max_oil_saturation_change: float = 0.2
+    max_oil_saturation_change: float = 0.6
     """
     Maximum allowable oil saturation change (absolute, fractional) per time step.
 
@@ -202,7 +202,7 @@ class Config(
     """
 
     max_water_saturation_change: float = attrs.field(  # type: ignore
-        default=0.2, validator=attrs.validators.ge(0)
+        default=0.6, validator=attrs.validators.ge(0)
     )
     """
     Maximum allowable water saturation change (absolute, fractional) per time step.
@@ -213,7 +213,7 @@ class Config(
     """
 
     max_gas_saturation_change: float = attrs.field(  # type: ignore
-        default=0.1, validator=attrs.validators.ge(0)
+        default=0.5, validator=attrs.validators.ge(0)
     )
     """
     Maximum allowable gas saturation change (absolute, fractional) per time step.

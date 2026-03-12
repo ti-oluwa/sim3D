@@ -18,6 +18,8 @@ BORES is a Python framework for 3D black-oil reservoir simulation of three-phase
 
 **Full documentation**: [https://ti-oluwa.github.io/bores](https://ti-oluwa.github.io/bores)
 
+> NOTE: The latest release does not match the current docs. The release for the current docs is still in development and is almost ready.
+
 ## Installation
 
 ```bash
@@ -128,7 +130,7 @@ producer = bores.production_well(
     well_name="PROD-1",
     perforating_intervals=[((9, 9, 2), (9, 9, 2))],
     radius=0.25,
-    control=bores.PrimaryPhaseRateControl(
+    control=bores.CoupledRateControl(
         primary_phase=bores.FluidPhase.OIL,
         primary_control=bores.AdaptiveBHPRateControl(
             target_rate=-500.0,

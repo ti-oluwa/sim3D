@@ -10,14 +10,14 @@ from bores._precision import get_dtype
 from bores.config import Config
 from bores.constants import c
 from bores.correlations.core import compute_harmonic_mean
+from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
+from bores.models import FluidProperties, RockProperties
 from bores.solvers.base import (
     EvolutionResult,
     _warn_injection_rate_is_negative,
     _warn_production_rate_is_positive,
     compute_mobility_grids,
 )
-from bores.grids.base import CapillaryPressureGrids, RelativeMobilityGrids
-from bores.models import FluidProperties, RockProperties
 from bores.types import (
     FluidPhase,
     OneDimensionalGrid,
@@ -133,7 +133,7 @@ def evolve_saturation(
     water_density_grid = fluid_properties.water_density_grid
     gas_density_grid = fluid_properties.gas_density_grid
 
-    oil_pressure_grid = fluid_properties.pressure_grid  
+    oil_pressure_grid = fluid_properties.pressure_grid
     current_water_saturation_grid = fluid_properties.water_saturation_grid
     current_oil_saturation_grid = fluid_properties.oil_saturation_grid
     current_gas_saturation_grid = fluid_properties.gas_saturation_grid
@@ -974,6 +974,7 @@ def compute_well_rate_grids(
     net_gas_well_rate_grid = np.zeros(
         (cell_count_x, cell_count_y, cell_count_z), dtype=dtype
     )
+    bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
 
     # Process all injection wells (compute total WI + rates in single pass)
     for well in wells.injection_wells:
@@ -1067,7 +1068,7 @@ def compute_well_rate_grids(
                     + gas_relative_mobility_grid[i, j, k]
                 )
                 effective_mobility = typing.cast(float, total_mobility)
-            
+
             cell_injection_rate = well.get_flow_rate(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
@@ -1096,9 +1097,7 @@ def compute_well_rate_grids(
                 cell_gas_injection_rate = cell_injection_rate
                 cell_water_injection_rate = 0.0
             else:
-                cell_water_injection_rate = (
-                    cell_injection_rate * c.BARRELS_TO_CUBIC_FEET
-                )
+                cell_water_injection_rate = cell_injection_rate * bbl_to_ft3
                 cell_gas_injection_rate = 0.0
 
             # Record injection rates for the cell
@@ -1265,13 +1264,9 @@ def compute_well_rate_grids(
                 if produced_fluid.phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
                 elif produced_fluid.phase == FluidPhase.WATER:
-                    cell_water_production_rate += (
-                        production_rate * c.BARRELS_TO_CUBIC_FEET
-                    )
+                    cell_water_production_rate += production_rate * bbl_to_ft3
                 else:
-                    cell_oil_production_rate += (
-                        production_rate * c.BARRELS_TO_CUBIC_FEET
-                    )
+                    cell_oil_production_rate += production_rate * bbl_to_ft3
 
             # Record total production rate for the cell (all phases)
             if production_grid is not None:
@@ -2494,6 +2489,7 @@ def compute_miscible_well_rate_grids(
     gas_injection_rate_grid = np.zeros(
         (cell_count_x, cell_count_y, cell_count_z), dtype=dtype
     )
+    bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
 
     # Process all injection wells (compute total WI + rates in single pass)
     for well in wells.injection_wells:
@@ -2509,7 +2505,7 @@ def compute_miscible_well_rate_grids(
             config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
         is_bhp_controlled = well.control.is_bhp_control()
-        
+
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
         )
@@ -2587,7 +2583,7 @@ def compute_miscible_well_rate_grids(
                     + gas_relative_mobility_grid[i, j, k]
                 )
                 effective_mobility = typing.cast(float, total_mobility)
-            
+
             cell_injection_rate = well.get_flow_rate(
                 pressure=cell_oil_pressure,
                 temperature=cell_temperature,
@@ -2629,9 +2625,7 @@ def compute_miscible_well_rate_grids(
                 cell_gas_injection_rate = cell_injection_rate
 
             else:  # Water injection
-                cell_water_injection_rate = (
-                    cell_injection_rate * c.BARRELS_TO_CUBIC_FEET
-                )
+                cell_water_injection_rate = cell_injection_rate * bbl_to_ft3
 
             if injection_grid is not None:
                 injection_grid[i, j, k] = (
@@ -2799,13 +2793,9 @@ def compute_miscible_well_rate_grids(
                 if produced_phase == FluidPhase.GAS:
                     cell_gas_production_rate += production_rate
                 elif produced_phase == FluidPhase.WATER:
-                    cell_water_production_rate += (
-                        production_rate * c.BARRELS_TO_CUBIC_FEET
-                    )
+                    cell_water_production_rate += production_rate * bbl_to_ft3
                 else:  # OIL
-                    cell_oil_production_rate += (
-                        production_rate * c.BARRELS_TO_CUBIC_FEET
-                    )
+                    cell_oil_production_rate += production_rate * bbl_to_ft3
 
             if production_grid is not None:
                 production_grid[i, j, k] = (

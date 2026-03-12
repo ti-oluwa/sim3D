@@ -65,12 +65,12 @@ class StateStream(typing.Generic[NDimension]):
     States are accumulated in a local batch buffer.  When the buffer reaches
     `batch_size` (or the memory limit), `flush(...)` is called:
 
-    * **Sync path** — each item in the batch is appended to the store directly.
-    * **Async path** — the batch list is enqueued; the I/O worker appends each
+    * **Synchronous path** — each item in the batch is appended to the store directly.
+    * **Asynchronous/background path** — the batch list is enqueued; the I/O worker appends each
       item to the store and then discards the list.
 
-    The store's `append` method is used (not `dump`) so existing entries are
-    never overwritten.  The store must have `supports_append = True`.
+    The store's `append(...)` method is used (not `dump`) so existing entries are
+    never overwritten.  The store must have `supports_append=True`.
 
     **Replay**
     After the generator is exhausted, `replay(...)` loads all saved states back
@@ -78,6 +78,7 @@ class StateStream(typing.Generic[NDimension]):
     `auto_replay=True` (the default).
 
     Example Usage:
+
     ```python
     store = ZarrStore("run01.zarr")
     with StateStream(states=simulate(), store=store, background_io=True) as stream:
@@ -102,7 +103,7 @@ class StateStream(typing.Generic[NDimension]):
         self,
         states: typing.Optional[typing.Iterable[ModelState[NDimension]]] = None,
         store: typing.Optional[DataStore[ModelState[NDimension], typing.Any]] = None,
-        batch_size: int = 20,
+        batch_size: int = 50,
         validate: bool = False,
         auto_save: bool = True,
         auto_replay: bool = True,
@@ -115,7 +116,7 @@ class StateStream(typing.Generic[NDimension]):
         checkpoint_interval: typing.Optional[int] = None,
         max_batch_memory_usage: typing.Optional[float] = None,
         background_io: bool = False,
-        max_queue_size: int = 50,
+        max_queue_size: int = 100,
         io_thread_name: str = "stream-io-worker",
         queue_timeout: float = 1.0,
     ) -> None:
@@ -125,7 +126,7 @@ class StateStream(typing.Generic[NDimension]):
         :param states: Generator or iterator of `ModelState` instances
         :param store: Optional `DataStore` for persistence. If None, states only yielded (no persistence).
             The data store must support appending new states. that is, `store.supports_append` must be True.
-        :param batch_size: Number of states to accumulate before flushing to disk (default: 20)
+        :param batch_size: Number of states to accumulate before flushing to disk (default: 50)
         :param validate: Validate states before persisting (default: False)
         :param auto_save: Automatically flush remaining states on context exit (default: True)
         :param auto_replay: If True, automatically replay from store when iterating after consumption.
@@ -144,9 +145,9 @@ class StateStream(typing.Generic[NDimension]):
         :param background_io: Enable asynchronous I/O for non-blocking disk writes (default: False).
             When enabled, disk writes happen in a background thread, allowing simulation to continue.
             Provides 2-3x speedup when I/O is slower than simulation timesteps.
-        :param max_queue_size: Maximum states/batches in I/O queue before blocking (default: 50).
+        :param max_queue_size: Maximum states/batches in I/O queue before blocking (default: 100).
             Acts as backpressure to prevent unbounded memory growth when I/O can't keep up.
-            Higher values allow more buffering but use more memory.
+            Higher values allow more buffering but use more memory. Use a negative value for unbounded growth.
         :param io_thread_name: Name for I/O worker thread, useful for debugging (default: "state-io-worker")
         :param queue_timeout: Timeout in seconds for queue operations (default: 1.0).
             Used for responsive shutdown and error checking.
@@ -254,7 +255,7 @@ class StateStream(typing.Generic[NDimension]):
         self._io_thread.start()
         logger.info(
             f"Started I/O worker thread '{self.io_thread_name}' "
-            f"(max_queue_size={self.max_queue_size})"
+            f"(max_queue_size={self.max_queue_size if self.max_queue_size >= 0 else 'infinite'})"
         )
 
     def _io_worker(self) -> None:
@@ -264,7 +265,7 @@ class StateStream(typing.Generic[NDimension]):
         Continuously pulls batches from queue and writes to store.
         Exits when stop IO signal is received or shutdown event is set.
         """
-        logger.debug(f"I/O worker thread started (tid={threading.get_ident()})")
+        logger.debug(f"I/O worker thread started (thread_id={threading.get_ident()})")
         if self._io_queue is None or self.store is None or self._shutdown_event is None:
             logger.error("I/O infrastructure not properly initialized")
             return
@@ -285,16 +286,19 @@ class StateStream(typing.Generic[NDimension]):
                         logger.debug(f"I/O worker writing batch of {len(batch)} states")
 
                         try:
+                            count = 0
                             for state in batch:
                                 store.append(
                                     state,
                                     validator=validate_state if self.validate else None,
                                     meta=lambda s: {"step": s.step},
                                 )
+                                count += 1
 
                             with self._saved_count_lock:
-                                self._saved_count += len(batch)
+                                self._saved_count += count
 
+                            batch.clear()
                             del batch  # Free memory immediately
                             logger.debug(
                                 f"I/O worker completed batch (total saved: {self._saved_count})"
@@ -462,7 +466,7 @@ class StateStream(typing.Generic[NDimension]):
         """
         self._started = True
         logger.info(
-            f"Started stream session to {self.store!r}"
+            f"Started stream session to {self.store!s}"
             if self.store
             else "Started stream session (no persistence)"
         )
@@ -747,7 +751,7 @@ class StateStream(typing.Generic[NDimension]):
 
             try:
                 # Put batch in queue. May block if queue is full (backpressure)
-                self._io_queue.put(self._batch.copy(), timeout=10.0)
+                self._io_queue.put(self._batch.copy(), timeout=3.0)
                 logger.debug(f"Batch enqueued (queue size: ~{self._io_queue.qsize()})")
 
                 # Clear batch and reassign to new list to free memory immediately

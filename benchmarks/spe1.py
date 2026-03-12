@@ -611,7 +611,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         radius=0.25,
         control=bores.AdaptiveRateControl(
             target_rate=100.0e6,  # 100 MMscf/D
-            bhp_limit=12_000.0,  # Max injection BHP (psia)
+            bhp_limit=7600.0,  # Max injection BHP (psia)
             clamp=bores.InjectionClamp(),
         ),
         injected_fluid=bores.InjectedFluid(
@@ -667,7 +667,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     # Timer
     # -------------------------------------------------------------------------
     timer = bores.Timer(
-        initial_step_size=bores.Time(days=5.0),
+        initial_step_size=bores.Time(days=3.0),
         max_step_size=bores.Time(days=30.0),
         min_step_size=bores.Time(minutes=20.0),
         simulation_time=bores.Time(years=10.0),
@@ -684,7 +684,7 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
     preconditioner_factory = bores.CachedPreconditionerFactory(
         factory="amg",
         name="cached_amg",
-        update_frequency=15,
+        update_frequency=10,
         recompute_threshold=0.3,
     )
     preconditioner_factory.register(override=True)
@@ -703,8 +703,8 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         disable_capillary_effects=True,
         freeze_saturation_pressure=True,
         miscibility_model="immiscible",
-        max_gas_saturation_change=0.2,
-        max_oil_saturation_change=0.4,
+        max_gas_saturation_change=0.5,
+        max_oil_saturation_change=0.6,
         max_water_saturation_change=0.3,
         max_pressure_change=800.0,
         use_pseudo_pressure=True,
@@ -734,9 +734,6 @@ def run_simulation(Path, bores, store):
         rates = analyst.instantaneous_production_rates(cells=[(9, 9, 2)])
         return rates.gas_oil_ratio >= 20_000
 
-
-    # with bores.new_task_pool(concurrency=4) as pool:
-    #     run.config = run.config.with_updates(task_pool=pool)
 
     last_state = None
     with bores.StateStream(run, store=store, background_io=True) as stream:
@@ -1172,10 +1169,10 @@ def _(bores, states, wells):
         plot_type="cell_blocks",
         width=1200,
         height=720,
-        opacity=0.7,
+        # opacity=0.7,
         # labels=labels,
         aspect_mode="data",
-        z_scale=10.0,
+        z_scale=5.0,
         marker_size=6,
         show_wells=True,
         show_surface_marker=True,
@@ -1185,9 +1182,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.pyvista3d.DataVisualizer()
-    property = "water-saturation"
+    property = "oil-saturation"
     figures = []
-    timesteps = [100]
+    timesteps = [30]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],
