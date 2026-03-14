@@ -701,13 +701,14 @@ def setup_config(Path, bores, oil_specific_gravity, pvt_tables):
         wells=wells,
         boundary_conditions=None,
         disable_capillary_effects=True,
-        freeze_saturation_pressure=True,
+        freeze_saturation_pressure=False,
         miscibility_model="immiscible",
         max_gas_saturation_change=0.5,
         max_oil_saturation_change=0.6,
         max_water_saturation_change=0.3,
         max_pressure_change=800.0,
         use_pseudo_pressure=True,
+        normalize_saturations=True,
     )
 
     config.save(Path("./benchmarks/runs/spe1/setup/config.yaml"))
@@ -742,12 +743,13 @@ def run_simulation(Path, bores, store):
 
     if last_state is not None:
         last_state.model.save(Path("./benchmarks/runs/spe1/results/model.h5"))
-    return (stream,)
+    return
 
 
 @app.cell
-def load_states(stream):
-    states = list(stream.replay(steps=lambda s: s % 10 == 0))
+def load_states(bores, store):
+    store_stream = bores.StateStream(store=store)
+    states = list(store_stream.replay(steps=lambda s: s % 10 == 0))
     return (states,)
 
 
@@ -992,7 +994,7 @@ def oil_production_plot(analyst, bores, np):
 
 @app.cell
 def gas_production_plot(analyst, bores, np):
-    gas_production_history = analyst.free_gas_production_history(
+    gas_production_history = analyst.gas_production_history(
         interval=1, cumulative=False, from_step=1
     )
     gas_production_fig = bores.make_series_plot(
@@ -1182,9 +1184,9 @@ def _(bores, states, wells):
     )
 
     viz = bores.pyvista3d.DataVisualizer()
-    property = "oil-saturation"
+    property = "oil-fvf"
     figures = []
-    timesteps = [30]
+    timesteps = [240]
     for timestep in timesteps:
         figure = viz.make_plot(
             states[timestep],

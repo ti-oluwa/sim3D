@@ -274,7 +274,7 @@ def update_pvt_grids(
     # before the gas to oil ratio grid, as the latter depends on the former.
 
     if pvt_tables is None:
-        # Step 1: Compute New bubble point using Current Rs
+        # Compute New bubble point using Current Rs
         if freeze_saturation_pressure:
             # Keep current bubble point constant
             new_oil_bubble_point_pressure_grid = (
@@ -289,7 +289,7 @@ def update_pvt_grids(
                 solution_gas_to_oil_ratio_grid=fluid_properties.solution_gas_to_oil_ratio_grid,
             )
 
-        # Step 2: Compute Rs at New bubble point
+        # Compute Rs at New bubble point
         gor_at_bubble_point_pressure_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=new_oil_bubble_point_pressure_grid,  # New bubble point here
             temperature_grid=temperature_grid,
@@ -297,7 +297,7 @@ def update_pvt_grids(
             gas_gravity_grid=fluid_properties.gas_gravity_grid,
             oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
         )
-        # Step 3: Compute New Rs at current pressure
+        # Compute New Rs at current pressure
         new_solution_gas_to_oil_ratio_grid = build_solution_gas_to_oil_ratio_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
@@ -306,7 +306,7 @@ def update_pvt_grids(
             oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
             gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,  # GOR at new bubble point here
         )
-        # Step 4: Compute oil FVF (may use lagged compressibility - acceptable)
+        # Compute oil FVF (may use lagged compressibility which still acceptable)
         # Oil FVF does not depend necessarily on the new compressibility grid,
         # so we can use the old one (compressibility changes are small, hence, it can be lagged).
         # FVF is a function of pressure and phase behavior. Only when pressure changes,
@@ -320,7 +320,7 @@ def update_pvt_grids(
             solution_gas_to_oil_ratio_grid=new_solution_gas_to_oil_ratio_grid,
             oil_compressibility_grid=fluid_properties.oil_compressibility_grid,
         )
-        # Step 5: Compute oil compressibility
+        # Compute oil compressibility
         new_oil_compressibility_grid = build_oil_compressibility_grid(
             pressure_grid=pressure_grid,
             temperature_grid=temperature_grid,
@@ -331,7 +331,7 @@ def update_pvt_grids(
             gas_formation_volume_factor_grid=new_gas_formation_volume_factor_grid,  # type: ignore
             oil_formation_volume_factor_grid=new_oil_formation_volume_factor_grid,
         )
-        # Step 6: Compute oil density and viscosity
+        # Compute oil density and viscosity
         new_oil_density_grid = build_live_oil_density_grid(
             oil_api_gravity_grid=fluid_properties.oil_api_gravity_grid,
             gas_gravity_grid=fluid_properties.gas_gravity_grid,
@@ -348,7 +348,7 @@ def update_pvt_grids(
             gor_at_bubble_point_pressure_grid=gor_at_bubble_point_pressure_grid,
         )
     else:
-        # Step 1: Compute New bubble point using Current Rs
+        # Compute New bubble point using Current Rs
         if freeze_saturation_pressure:
             # Keep current bubble point constant
             new_oil_bubble_point_pressure_grid = (
@@ -361,13 +361,13 @@ def update_pvt_grids(
                 solution_gor=fluid_properties.solution_gas_to_oil_ratio_grid,
             )
 
-        # Step 2: Compute New Rs at current pressure
+        # Compute New Rs at current pressure
         new_solution_gas_to_oil_ratio_grid = pvt_tables.solution_gas_to_oil_ratio(
             pressure=pressure_grid,
             temperature=temperature_grid,
             solution_gor=fluid_properties.solution_gas_to_oil_ratio_grid,
         )
-        # Step 4: Compute oil FVF (may use lagged compressibility - acceptable)
+        # Compute oil FVF (may use lagged compressibility which is acceptable)
         # Oil FVF does not depend necessarily on the new compressibility grid,
         # so we can use the old one (compressibility changes are small, hence, it can be lagged).
         # FVF is a function of pressure and phase behavior. Only when pressure changes,
@@ -377,12 +377,12 @@ def update_pvt_grids(
             temperature=temperature_grid,
             solution_gor=new_solution_gas_to_oil_ratio_grid,
         )
-        # Step 5: Compute oil compressibility
+        # Compute oil compressibility
         new_oil_compressibility_grid = pvt_tables.oil_compressibility(
             pressure=pressure_grid,
             temperature=temperature_grid,
         )
-        # Step 6: Compute oil density and viscosity
+        # Compute oil density and viscosity
         new_oil_density_grid = pvt_tables.oil_density(
             pressure=pressure_grid,
             temperature=temperature_grid,
@@ -540,45 +540,39 @@ def apply_solution_gas_liberation(
 
     # For Gas Re-dissolution
     if np.any(redissolution_mask):
-        # Maximum Rs increase limited by available free gas
-        # Available gas in SCF per unit pore volume = Sg / Bg
-        # Available gas per STB oil = (Sg / Bg) / (So / (Bo_old * bbl_to_ft3))
-        #                           = Sg * Bo_old * bbl_to_ft3 / (So * Bg)
         safe_oil_saturation = np.maximum(oil_saturation_grid[redissolution_mask], 1e-30)
-        safe_gas_formation_volume_factor = np.maximum(
+        safe_bg = np.maximum(
             new_gas_formation_volume_factor_grid[redissolution_mask], 1e-30
         )
-        max_dissolvable_gas_to_oil_ratio = (
+
+        max_dissolvable_gor = (
             gas_saturation_grid[redissolution_mask]
             * old_oil_formation_volume_factor_grid[redissolution_mask]
             * bbl_to_ft3
-            / (safe_oil_saturation * safe_gas_formation_volume_factor)
+            / (safe_oil_saturation * safe_bg)
         )
-        # delta is negative here; cap magnitude at max dissolvable
-        actual_delta_solution_gas_to_oil_ratio = np.maximum(
+        # `actual_delta` is negative; cap magnitude at what gas is available
+        actual_delta = np.maximum(
             delta_solution_gas_to_oil_ratio[redissolution_mask],
-            -max_dissolvable_gas_to_oil_ratio,
+            -max_dissolvable_gor,
         )
         # Gas consumed (positive value subtracted from Sg)
         dissolved_gas_saturation = (
-            -actual_delta_solution_gas_to_oil_ratio
+            -actual_delta
             * oil_saturation_grid[redissolution_mask]
-            * new_gas_formation_volume_factor_grid[redissolution_mask]
+            * safe_bg
             / (old_oil_formation_volume_factor_grid[redissolution_mask] * bbl_to_ft3)
         )
-        gas_saturation_grid[redissolution_mask] = (
-            gas_saturation_grid[redissolution_mask] - dissolved_gas_saturation
-        )
-        # Oil swells (Bo increases when more gas dissolves)
+        gas_saturation_grid[redissolution_mask] -= dissolved_gas_saturation
+        # Oil swells via Bo ratio (symmetric with liberation path)
         oil_saturation_grid[redissolution_mask] = (
             oil_saturation_grid[redissolution_mask]
             * new_oil_formation_volume_factor_grid[redissolution_mask]
             / old_oil_formation_volume_factor_grid[redissolution_mask]
         )
-        # Correct Rs if PVT update over-estimated dissolution
+        # Correct Rs to match how much gas actually dissolved
         corrected_solution_gas_to_oil_ratio_grid[redissolution_mask] = (
-            old_solution_gas_to_oil_ratio_grid[redissolution_mask]
-            - actual_delta_solution_gas_to_oil_ratio
+            old_solution_gas_to_oil_ratio_grid[redissolution_mask] - actual_delta
         )
 
     # No free gas to dissolve

@@ -201,20 +201,21 @@ coarse_porosity = bores.coarsen_grid(
     method="mean",  # Use arithmetic average for porosity
 )
 
-# Coarsen permeability using harmonic mean (more physically correct)
-fine_perm = np.random.uniform(10.0, 500.0, size=(100, 100, 50))
-coarse_perm = bores.coarsen_grid(
-    fine_perm,
-    batch_size=(2, 2, 2),
-    method="mean",  # For permeability, harmonic mean is ideal but "mean" is a quick approximation
+# Coarsen permeability using direction-appropriate averaging
+fine_kx = np.random.uniform(10.0, 500.0, size=(100, 100, 50))
+fine_ky = np.random.uniform(10.0, 500.0, size=(100, 100, 50))
+fine_kz = np.random.uniform(1.0, 50.0, size=(100, 100, 50))
+
+coarse_kx, coarse_ky, coarse_kz = bores.coarsen_permeability_grids(
+    fine_kx, fine_ky, fine_kz, batch_size=(2, 2, 2)
 )
 ```
 
-The `method` parameter supports `"mean"`, `"sum"`, `"max"`, and `"min"`. Choose the aggregation method that is physically appropriate for each property: arithmetic mean for porosity, harmonic mean (or cautious arithmetic as an approximation) for permeability, and sum for pore volume-weighted quantities.
+The `method` parameter on `coarsen_grid` supports `"mean"`, `"sum"`, `"max"`, `"min"`, and `"harmonic"`. Choose the aggregation method that is physically appropriate for each property: arithmetic mean for porosity, sum for pore volume-weighted quantities, and `coarsen_permeability_grids` for permeability (which applies harmonic averaging in the flow direction and arithmetic averaging perpendicular to it).
 
 ## Grid Visualization
 
-BORES includes Plotly-based visualization tools for inspecting your grid. The `bores.visualization.plotly3d` module provides interactive 3D volume rendering that lets you rotate, zoom, and slice through your model to verify that properties are assigned correctly before running a simulation.
+BORES includes visualization tools for inspecting your grid. The `bores.visualization.plotly3d` module provides browser-based 3D volume rendering, and the optional `bores.visualization.pyvista3d` module provides GPU-accelerated cell-block rendering with interactive slice planes. Both let you rotate, zoom, and slice through your model to verify that properties are assigned correctly before running a simulation.
 
 ```python
 import bores

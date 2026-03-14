@@ -10,6 +10,10 @@ Every plot method returns a Plotly `Figure` object with full 3D interactivity. Y
 
 3D rendering is computationally more demanding than 2D maps. BORES includes configurable cell count limits (set through environment variables) to prevent browser crashes on large grids. For very large models, you can use the slicing feature to render a subvolume, or reduce resolution with grid coarsening before visualization.
 
+!!! tip "Cell Block Rendering and Interactive Slice Planes"
+
+    If you need true voxel cell-block displays, interactive slice planes, or GPU-accelerated volume rendering, see the [PyVista 3D Rendering](pyvista3d.md) module. The PyVista module provides a `CELL_BLOCKS` plot type and interactive widgets that are not available in the browser-based Plotly module.
+
 ---
 
 ## Data Sources
@@ -102,7 +106,7 @@ fig = viz.make_plot(
 fig.show()
 ```
 
-The `plot_type` parameter accepts either a `PlotType` enum value or a string. Available types are `"volume"`, `"isosurface"`, `"scatter_3d"`, and `"cell_blocks"`.
+The `plot_type` parameter accepts either a `PlotType` enum value or a string. Available types are `"volume"`, `"isosurface"`, and `"scatter_3d"`.
 
 The `source` parameter accepts a `ModelState`, `ReservoirModel`, or raw 3D numpy array. When using a `ModelState` or `ReservoirModel`, the `property` parameter is required and must match a key in the `PropertyRegistry`. When using a raw array, `property` is optional.
 
@@ -190,26 +194,9 @@ fig.show()
 
 Scatter plots are lighter weight than volume rendering, making them a good choice for quick exploration of large grids where full volume rendering would be slow.
 
-### Cell Blocks
+!!! tip "Cell Block Rendering"
 
-Cell block plots render each reservoir cell as a 3D box, creating a voxel-style visualization. This gives an accurate representation of the grid geometry, especially for models with variable cell sizes or non-uniform layering.
-
-```python
-viz = DataVisualizer(config=PlotConfig(
-    show_cell_outlines=True,
-    cell_outline_color="#404040",
-    cell_outline_width=1.0,
-))
-
-fig = viz.make_plot(
-    states[-1],
-    property="permeability",
-    plot_type="cell_blocks",
-)
-fig.show()
-```
-
-The `show_cell_outlines` option draws wireframe edges around each cell, making individual cells visually distinct. This is useful for verifying grid construction and identifying thin layers or small cells. Cell block plots are the most computationally expensive plot type, so they work best for small to medium grids.
+    For true voxel cell-block displays with wireframe outlines, use the [PyVista 3D module](pyvista3d.md). The `CELL_BLOCKS` plot type renders each reservoir cell as a solid 3D box with optional outlines, giving an accurate representation of the grid geometry. This plot type is only available in the PyVista module because it requires VTK rendering.
 
 ---
 
@@ -388,9 +375,6 @@ The `PlotConfig` class for 3D plots provides extensive control over rendering:
 | `show_colorbar` | `True` | Display color scale bar |
 | `show_axes` | `True` | Display 3D axis labels and grid |
 | `title` | `""` | Default plot title |
-| `show_cell_outlines` | `False` | Show wireframe around cells (cell blocks) |
-| `cell_outline_color` | `"#404040"` | Color for cell outlines |
-| `cell_outline_width` | 1.0 | Width of cell outline wireframes |
 | `use_opacity_scaling` | `False` | Data-driven opacity scaling |
 | `opacity_scale_values` | `[[0,0.8],[0.5,0.9],[1,1.0]]` | Opacity scale mapping |
 | `aspect_mode` | `None` | Aspect mode: `"cube"`, `"data"`, or `"auto"` |
@@ -553,6 +537,7 @@ When the grid exceeds these limits, the visualizer logs a warning. To handle lar
 1. **Slice the data** to render only the region of interest
 2. **Use scatter plots** instead of volume rendering (lighter weight)
 3. **Increase step_size** for animations (render fewer frames)
-4. **Coarsen the grid** before visualization using `bores.grids.base.coarsen_grid()`
+4. **Coarsen the grid** before visualization using `bores.coarsen_grid()`
+5. **Use the PyVista module** for grids above 500,000 cells (GPU-accelerated rendering handles large grids better than WebGL)
 
 For publication-quality static images, you can export at high resolution using `.write_image()` without performance concerns, since the rendering is done once rather than interactively.

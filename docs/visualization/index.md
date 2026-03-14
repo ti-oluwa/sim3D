@@ -1,10 +1,12 @@
 # Visualization
 
-BORES includes a built-in visualization system based on Plotly for creating interactive plots of simulation results. The system covers three levels of visualization: 1D time series plots for production histories and performance metrics, 2D maps for spatial property distributions across reservoir layers, and 3D volume renderings for full-field property visualization with well overlays.
+BORES includes a built-in visualization system for creating interactive plots of simulation results. The system covers three levels of visualization: 1D time series plots for production histories and performance metrics, 2D maps for spatial property distributions across reservoir layers, and 3D renderings for full-field property visualization with well overlays.
 
-All visualization is handled through `DataVisualizer` classes, one for each dimensionality. Each visualizer uses a registry of renderers that map plot types to rendering strategies. You pass in your data (typically from a `ModelState`) and get back a Plotly `Figure` object that you can display interactively, save as an image, or embed in a report.
+The default 3D module uses Plotly and renders in the browser. For GPU-accelerated rendering, interactive slice planes, and true voxel cell-block displays, BORES also provides an optional PyVista-based 3D module that renders in a native desktop window. Both 3D modules share the same API design and accept the same data sources.
 
-The visualization modules are designed to work directly with BORES data structures. The 3D visualizer accepts `ModelState` or `ReservoirModel` objects and can extract any registered property by name. The 1D and 2D visualizers work with numpy arrays, which you extract from states yourself. This gives you full control over data selection and transformation while keeping the plotting API clean.
+All visualization is handled through `DataVisualizer` classes, one for each module. Each visualizer uses a registry of renderers that map plot types to rendering strategies. You pass in your data (typically from a `ModelState`) and get back a Plotly `Figure` or PyVista `Plotter` object that you can display interactively, save as an image, or embed in a report.
+
+The visualization modules are designed to work directly with BORES data structures. The 3D visualizers accept `ModelState` or `ReservoirModel` objects and can extract any registered property by name. The 1D and 2D visualizers work with numpy arrays, which you extract from states yourself. This gives you full control over data selection and transformation while keeping the plotting API clean.
 
 ## Visualization Modules
 
@@ -12,8 +14,13 @@ The visualization modules are designed to work directly with BORES data structur
 | --- | --- | --- |
 | 1D Series | `bores.visualization.plotly1d` | Production rates, pressure decline, recovery factors |
 | 2D Maps | `bores.visualization.plotly2d` | Layer slices, areal distributions, cross-sections |
-| 3D Volumes | `bores.visualization.plotly3d` | Full-field properties, isosurfaces, well locations |
+| 3D Volumes (Plotly) | `bores.visualization.plotly3d` | Browser-based 3D: volumes, isosurfaces, well locations |
+| 3D Volumes (PyVista) | `bores.visualization.pyvista3d` | GPU-accelerated 3D: cell blocks, slice planes, batch export |
 | Base | `bores.visualization.base` | Color schemes, property registry, plot merging |
+
+!!! info "PyVista is Optional"
+
+    The PyVista module requires an additional dependency. Install it with `pip install "bores-framework[pyvista]"`. If PyVista is not installed, all other visualization modules continue to work normally.
 
 ## Quick Start
 
@@ -41,10 +48,16 @@ viz2d = plotly2d.DataVisualizer()
 fig = viz2d.make_plot(So_layer, plot_type="heatmap")
 fig.show()
 
-# 3D: Volume rendering of pressure
+# 3D (Plotly): Volume rendering of pressure in the browser
 viz3d = plotly3d.DataVisualizer()
 fig = viz3d.make_plot(state, "pressure")
 fig.show()
+
+# 3D (PyVista): Cell block rendering in a native window
+from bores.visualization import pyvista3d
+viz_pv = pyvista3d.DataVisualizer()
+plotter = viz_pv.make_plot(state, "pressure", plot_type="cell_blocks")
+plotter.show()
 ```
 
 ## Color Schemes
@@ -61,11 +74,11 @@ BORES provides colorblind-friendly color schemes through the `ColorScheme` enum.
 | `RdBu` | Diverging | Pressure changes, saturation differences |
 | `RdYlBu` | Diverging | Multi-value diverging data |
 
-The `ColorbarPresets` class provides pre-configured colorbar settings for common reservoir properties with appropriate scales and formatting.
+Each registered property in the `PropertyRegistry` has a default color scheme assigned, so you do not need to specify one manually unless you want to override the default.
 
 ## Property Registry
 
-The 3D visualizer uses a `PropertyRegistry` that maps property names to metadata including display names, units, color schemes, and scaling options. When you call `viz3d.make_plot(state, "pressure")`, the registry looks up the property metadata to determine how to label, scale, and color the visualization.
+The 3D visualizers use a `PropertyRegistry` that maps property names to metadata including display names, units, color schemes, and scaling options. When you call `viz3d.make_plot(state, "pressure")`, the registry looks up the property metadata to determine how to label, scale, and color the visualization.
 
 You can access the registry directly:
 
@@ -73,8 +86,14 @@ You can access the registry directly:
 from bores.visualization.base import property_registry
 
 # List all registered properties
-for name, meta in property_registry.items():
+for name in property_registry:
+    meta = property_registry[name]
     print(f"{name}: {meta.display_name} ({meta.unit})")
+
+# Check if a property exists
+if "pressure" in property_registry:
+    meta = property_registry["pressure"]
+    print(f"Color scheme: {meta.color_scheme}")
 ```
 
 Properties with `log_scale=True` (like viscosity and compressibility) are automatically log-transformed for visualization while showing the original physical values in hover text and colorbar labels.
@@ -101,7 +120,7 @@ combined.show()
 
 ## Exporting Images
 
-Configure image export settings globally with `image_config()`:
+Configure Plotly image export settings globally with `image_config()`:
 
 ```python
 from bores.visualization.base import image_config
@@ -109,8 +128,34 @@ from bores.visualization.base import image_config
 # Set default export format and resolution
 image_config(fmt="png", scale=3)
 
-# Save a figure
+# Save a Plotly figure
 fig.write_image("pressure_map.png")
+```
+
+For PyVista plots, use the plotter's screenshot method:
+
+```python
+plotter = viz_pv.make_plot(state, "pressure")
+plotter.screenshot("pressure_map.png")
+```
+
+## Animation Export
+
+Both 3D modules support animation export. The Plotly module exports to HTML with interactive play/pause controls. The PyVista module exports to GIF, MP4, or WebP frame sequences:
+
+```python
+# Plotly: Interactive HTML animation
+from bores.visualization import plotly3d
+viz3d = plotly3d.DataVisualizer()
+fig = viz3d.animate(states, "oil_saturation", save="animation.html")
+
+# PyVista: GIF animation
+from bores.visualization import pyvista3d
+viz_pv = pyvista3d.DataVisualizer()
+viz_pv.animate(states, "oil_saturation", save="animation.gif")
+
+# PyVista: MP4 video
+viz_pv.animate(states, "oil_saturation", save="animation.mp4")
 ```
 
 ## Environment Configuration

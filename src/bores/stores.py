@@ -906,7 +906,7 @@ class ZarrStore(DataStore[SerializableT, zarr.Group]):
 
     def close(self, consolidate: bool = False) -> None:
         """
-        Flush `_pending_count` to disk and release the open Zarr handle.
+        Flush in-memory count` to disk and release the open Zarr handle.
 
         :param consolidate: If `True`, call `zarr.consolidate_metadata`
             before releasing. False by default. Pass `True` when you want

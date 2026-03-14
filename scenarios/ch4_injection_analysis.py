@@ -340,7 +340,7 @@ def _(analyst, bores, np):
 
 @app.cell
 def _(analyst, bores, np):
-    gas_production_history = analyst.free_gas_production_history(
+    gas_production_history = analyst.gas_production_history(
         interval=1, cumulative=False, from_step=1
     )
     gas_production_fig = bores.make_series_plot(
@@ -431,7 +431,7 @@ def _(analyst, bores, np):
 
 @app.cell
 def _(analyst, bores, np):
-    cumulative_gas_production_history = analyst.free_gas_production_history(
+    cumulative_gas_production_history = analyst.gas_production_history(
         interval=1, cumulative=True, from_step=1
     )
 

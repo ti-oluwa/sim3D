@@ -449,7 +449,9 @@ with StateStream(
 
 # Analyze saved results
 from bores.states import ModelState
-analyst = ModelAnalyst(store.load(ModelState))
+
+with store(mode="r") as s:
+    analyst = ModelAnalyst(s.load(ModelState))
 print(f"Recovery factor: {analyst.oil_recovery_factor:.2%}")
 ```
 

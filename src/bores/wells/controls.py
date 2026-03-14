@@ -1424,7 +1424,7 @@ class CoupledRateControl(WellControl[WellFluidTcon]):
 
         if phase_mobility is None:
             raise ValidationError(
-                "Phase mobility is required to get the effective bottom hole pressure (BHP) for the controlling secondary phases."
+                "Phase mobility is required to get the effective bottom hole pressure (BHP) for the secondary phases."
             )
 
         if _disallow_flow(
@@ -1505,10 +1505,10 @@ class CoupledRateControl(WellControl[WellFluidTcon]):
         gas_compressibility: float,
     ) -> dict[str, typing.Any]:
         """
-        Build a kwargs dict with primary phase cell properties for passing to
+        Build kwargs for the primary phase cell properties for passing to
         `get_flow_rate(...)` / `get_bottom_hole_pressure(...)`.
 
-        Call once per cell before iterating over produced fluids. The returned dict
+        Call once per cell before iterating over produced fluids. The returned dictionary
         can be unpacked as `**kwargs`.
         """
         primary_fluid = None

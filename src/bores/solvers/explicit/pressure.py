@@ -763,7 +763,6 @@ def compute_well_rate_grid(
         use_pseudo_pressure = (
             config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
-        is_bhp_controlled = well.control.is_bhp_control()
 
         # First pass over perforated cells: compute total WI and cache well indices
         # Offset well coordinates by pad_width to account for ghost cells
@@ -834,17 +833,14 @@ def compute_well_rate_grid(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            if is_bhp_controlled:
-                # BHP-controlled injection: use phase mobility
-                effective_mobility = phase_mobility
-            else:
-                # Rate-controlled injection
-                total_mobility = (
-                    water_relative_mobility_grid[i, j, k]
-                    + oil_relative_mobility_grid[i, j, k]
-                    + gas_relative_mobility_grid[i, j, k]
-                )
-                effective_mobility = typing.cast(float, total_mobility)
+            # Injection wells use total mobility since injected fluid
+            # displaces all existing phases in the cell
+            total_mobility = (
+                water_relative_mobility_grid[i, j, k]
+                + oil_relative_mobility_grid[i, j, k]
+                + gas_relative_mobility_grid[i, j, k]
+            )
+            effective_mobility = typing.cast(float, total_mobility)
 
             cell_injection_rate = well.get_flow_rate(
                 pressure=cell_oil_pressure,
@@ -926,9 +922,9 @@ def compute_well_rate_grid(
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
 
-            primary_phase_kwargs: dict = {}
+            primary_phase_context: dict = {}
             if isinstance(well.control, CoupledRateControl):
-                primary_phase_kwargs = well.control.build_primary_phase_context(
+                primary_phase_context = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
                     oil_mobility=typing.cast(
                         float, oil_relative_mobility_grid[i, j, k]
@@ -1010,7 +1006,7 @@ def compute_well_rate_grid(
                     formation_volume_factor=phase_fvf,
                     allocation_fraction=allocation_fraction,
                     pvt_tables=config.pvt_tables,
-                    **primary_phase_kwargs,
+                    **primary_phase_context,
                 )
 
                 # Check for backflow (positive production = injection)

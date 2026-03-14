@@ -260,6 +260,21 @@ class Config(
     Note: Larger changes can cause density/viscosity jumps and well control issues.
     """
 
+    normalize_saturations: bool = True
+    """
+    Whether to normalize saturations so that So + Sw + Sg = 1.0 after each timestep.
+
+    When True (default), the simulator rescales all three phase saturations at the end
+    of each saturation update so their sum is exactly 1.0. This corrects small
+    numerical drift from the explicit transport solve and maintains strict pore-volume
+    conservation. The normalization uses safe division to avoid issues in cells with
+    near-zero total saturation.
+
+    Set to False only when debugging saturation solver mass balance, since the raw
+    (unnormalized) values reveal how much drift the transport step actually produces.
+    For production simulations, always leave this enabled.
+    """
+
     freeze_saturation_pressure: bool = False
     """
     If True, keeps oil bubble point pressure (Pb) constant at its initial value throughout the simulation.
@@ -373,10 +388,10 @@ class Config(
         :return: New `Config` instance with updated values
         :raises AttributeError: If any key is not a valid `Config` attribute
         """
+        for key in kwargs:
+            if not hasattr(self, key):
+                raise AttributeError(f"Config has no attribute '{key}'")
         with self._lock:
-            for key in kwargs:
-                if not hasattr(self, key):
-                    raise AttributeError(f"Config has no attribute '{key}'")
             return attrs.evolve(self, **kwargs)
 
 
@@ -427,9 +442,9 @@ def new_task_pool(
     Example: Conditional pool based on grid size:
 
     ```python
-    interior_cells = (nx - 2) * (ny - 2) * (nz - 2)
+    cell_count = nx * ny * nz
 
-    if interior_cells > 10_000:
+    if cell_count > 10_000:
         with new_task_pool(concurrency=3) as pool:
             config = Config(..., task_pool=pool)
             for state in run(model, config):

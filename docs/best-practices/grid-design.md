@@ -100,20 +100,28 @@ BORES provides the `coarsen_grid` function to reduce grid resolution by averagin
 ```python
 import bores
 
-# Original fine grid
+# Original fine grid: shape (40, 40, 20)
 pressure_fine = bores.build_uniform_grid((40, 40, 20), 3000.0)
 
-# Coarsened 2x in each direction
-pressure_coarse = bores.coarsen_grid(pressure_fine, factor=2)
-# Result shape: (20, 20, 10)
+# Coarsen by 2x in each direction: (40,40,20) -> (20,20,10)
+pressure_coarse = bores.coarsen_grid(pressure_fine, batch_size=(2, 2, 2), method="mean")
 
-# For permeability, use harmonic averaging
-kx_coarse = bores.coarsen_permeability_grids(kx_fine, factor=2)
+# For permeability, use direction-appropriate averaging
+# coarsen_permeability_grids takes all directional grids and applies
+# harmonic mean in the flow direction, arithmetic mean perpendicular
+kx_coarse, ky_coarse, kz_coarse = bores.coarsen_permeability_grids(
+    kx_fine, ky_fine, kz_fine, batch_size=(2, 2, 2)
+)
+
+# 2D case (no kz)
+kx_coarse_2d, ky_coarse_2d = bores.coarsen_permeability_grids(
+    kx_fine_2d, ky_fine_2d, batch_size=(2, 2)
+)
 ```
 
 !!! warning "Permeability Coarsening"
 
-    Never coarsen permeability using arithmetic averaging. Arithmetic averaging of permeability overpredicts flow through heterogeneous media. Always use `coarsen_permeability_grids`, which applies harmonic averaging in the flow direction. This is the physically correct approach for series-flow configurations.
+    Never coarsen permeability using arithmetic averaging (`bores.coarsen_grid` with `method="mean"`). Arithmetic averaging of permeability overpredicts flow through heterogeneous media. Always use `coarsen_permeability_grids`, which applies harmonic averaging in the flow direction and arithmetic averaging perpendicular to it. This is the physically correct approach for series-flow configurations.
 
 ---
 

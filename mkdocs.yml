@@ -198,6 +198,7 @@ nav:
     - 1D Time Series: visualization/1d-plots.md
     - 2D Maps: visualization/2d-maps.md
     - 3D Volume Rendering: visualization/3d-rendering.md
+    - PyVista 3D Rendering: visualization/pyvista3d.md
 
   - API Reference:
     - api-reference/index.md

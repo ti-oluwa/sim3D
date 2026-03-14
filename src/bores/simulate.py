@@ -615,13 +615,14 @@ def _run_impes_step(
             ),
         )
 
-    # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
-    normalize_saturations(
-        oil_saturation_grid=padded_fluid_properties.oil_saturation_grid,
-        water_saturation_grid=padded_fluid_properties.water_saturation_grid,
-        gas_saturation_grid=padded_fluid_properties.gas_saturation_grid,
-        saturation_epsilon=c.SATURATION_EPSILON,
-    )
+    if config.normalize_saturations:
+        # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
+        normalize_saturations(
+            oil_saturation_grid=padded_fluid_properties.oil_saturation_grid,
+            water_saturation_grid=padded_fluid_properties.water_saturation_grid,
+            gas_saturation_grid=padded_fluid_properties.gas_saturation_grid,
+            saturation_epsilon=c.SATURATION_EPSILON,
+        )
 
     # Update residual saturation grids based on new saturations
     padded_rock_properties, padded_saturation_history = (
@@ -953,13 +954,14 @@ def _run_explicit_step(
             ),
         )
 
-    # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
-    normalize_saturations(
-        oil_saturation_grid=padded_fluid_properties.oil_saturation_grid,
-        water_saturation_grid=padded_fluid_properties.water_saturation_grid,
-        gas_saturation_grid=padded_fluid_properties.gas_saturation_grid,
-        saturation_epsilon=c.SATURATION_EPSILON,
-    )
+    if config.normalize_saturations:
+        # Normalize saturations (in-place) to ensure So + Sw + Sg = 1.0
+        normalize_saturations(
+            oil_saturation_grid=padded_fluid_properties.oil_saturation_grid,
+            water_saturation_grid=padded_fluid_properties.water_saturation_grid,
+            gas_saturation_grid=padded_fluid_properties.gas_saturation_grid,
+            saturation_epsilon=c.SATURATION_EPSILON,
+        )
 
     # Update PVT properties with new state (pressure and saturations)
     logger.debug("Updating PVT fluid properties after explicit solve...")

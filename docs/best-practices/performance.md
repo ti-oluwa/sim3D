@@ -117,6 +117,39 @@ For stable simulations (constant rate production, steady boundary conditions), y
 
 ---
 
+## Parallel Assembly
+
+During each timestep, the pressure and saturation solvers assemble coefficient matrices from fluid properties, transmissibilities, and well contributions. These assembly stages are independent of each other: in IMPES, the pressure solver builds accumulation terms, face transmissibilities, and well contributions separately, while the saturation solver builds flux contributions and well rate grids. By default these run sequentially, but you can run them concurrently using a thread pool.
+
+BORES provides the `new_task_pool()` context manager for this. You create a pool once, pass it to the `Config`, and all solver assembly stages run concurrently for the duration of the simulation. When the `with` block exits, the pool shuts down cleanly.
+
+```python
+import bores
+
+with bores.new_task_pool(concurrency=3) as pool:
+    config = bores.Config(
+        timer=timer,
+        rock_fluid_tables=rock_fluid_tables,
+        wells=wells,
+        task_pool=pool,
+    )
+
+    run = bores.Run(model=model, config=config)
+    with bores.StateStream(run, store=store) as stream:
+        for state in stream:
+            process(state)
+```
+
+The benefit depends on grid size. Below 10,000 cells, the overhead of thread synchronisation exceeds the time saved. At 50,000 cells, concurrent assembly reduces assembly time by roughly 30 to 50%, which translates to approximately 7 to 10% reduction in total per-step wall time (the linear solve is unaffected and typically dominates at this scale). At 200,000 or more cells, assembly cost becomes comparable to solve cost and the benefit is clearly measurable.
+
+Pass `concurrency=3` for IMPES. The pressure solver submits at most 3 tasks and the saturation solver submits at most 2, so 3 workers covers both without waste. Higher values provide no benefit because the assembly design never submits more than 3 tasks per solver call.
+
+!!! info "Why Threads, Not Processes"
+
+    The assembly functions operate on large numpy arrays shared by reference between threads. A process pool would need to pickle and copy those arrays on every call - for a 100x100x30 grid, this is 30 to 50 MB of serialisation overhead per timestep, which eliminates any parallelism gain. Numba JIT-compiled functions release the Python GIL during execution, so threads achieve true parallel CPU utilisation without GIL contention.
+
+---
+
 ## Timestep Optimization
 
 The total number of timesteps directly affects runtime. Fewer, larger timesteps are faster, but accuracy and stability impose upper bounds. The adaptive timer in BORES handles this automatically, but you can influence its behavior:
@@ -198,5 +231,6 @@ For benchmarking, always exclude the first run (which includes compilation) from
 | Preconditioner caching | 20-40% faster solver | 3-5 lines of code | Medium and large models |
 | PVT tables | 10-20% faster | Moderate setup | Large models, many timesteps |
 | Coarser grid | Proportional to cell count | Model redesign | Screening, sensitivity |
+| Parallel assembly | 7-10% faster per step | 3-5 lines of code | Grids with 50,000+ cells |
 | Fully implicit scheme | Fewer total timesteps | Configuration change | Long simulations, large timesteps |
 | HDF5/Zarr compression | Reduces disk and I/O | One line of code | All saved simulations |

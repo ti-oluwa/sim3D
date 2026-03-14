@@ -135,7 +135,7 @@ See [Schemes](simulation/schemes.md) for detailed information on each evolution 
 | `pressure_convergence_tolerance` | `float` | `1e-6` | Relative convergence tolerance for pressure |
 | `saturation_convergence_tolerance` | `float` | `1e-4` | Relative convergence tolerance for saturation |
 | `max_iterations` | `int` | `250` | Maximum solver iterations per step (capped at 500) |
-| `task_pool` | `ThreadPoolExecutor` | `None` | Task pool for assembling solver matrices in parrallel |
+| `task_pool` | `ThreadPoolExecutor` | `None` | Thread pool for concurrent solver matrix assembly |
 
 See [Solvers](simulation/solvers.md) and [Preconditioners](simulation/preconditioners.md) for details.
 
@@ -152,7 +152,11 @@ See [Solvers](simulation/solvers.md) and [Preconditioners](simulation/preconditi
 
 !!! tip "Gas Saturation Change Limits"
 
-    The default `max_gas_saturation_change` of 0.1 is intentionally lenient. Gas saturation can change rapidly during solution gas liberation or gas injection, and tightening this limit forces very small timesteps that slow the simulation significantly without meaningful accuracy gains. Only lower this value when you specifically need fine resolution of gas saturation evolution, such as detailed gas coning studies or near-critical fluid behavior. For most simulations, leave it at the default or increase it further.
+    The default `max_gas_saturation_change` of 0.5 is intentionally lenient. Gas saturation can change rapidly during solution gas liberation or gas injection, and tightening this limit forces very small timesteps that slow the simulation significantly without meaningful accuracy gains. Only lower this value when you specifically need fine resolution of gas saturation evolution, such as detailed gas coning studies or near-critical fluid behavior. For most simulations, leave it at the default or increase it further.
+
+!!! tip "Pressure Change Limits"
+
+    The default `max_pressure_change` of 500 psi is appropriate for most field-scale models with initial pressures above 3,000 psi. For lower-pressure reservoirs or simulations with rapid pressure transients (well shutins, gas breakthrough), you may need a tighter limit. A useful rule of thumb is to keep `max_pressure_change` below 10 to 15% of the initial reservoir pressure. For example, a shallow reservoir at 1,500 psi might use `max_pressure_change=150.0`, while a deep HPHT reservoir at 12,000 psi can comfortably use the default or even `max_pressure_change=800.0`.
 
 See [Time Step Control](simulation/timestep-control.md) for guidance on adjusting these.
 
@@ -197,6 +201,82 @@ These ranges prevent division by zero and numerical overflow in mobility calcula
 | `output_frequency` | `int` | `1` | Yield a state every N steps |
 | `log_interval` | `int` | `5` | Log progress every N steps |
 | `warn_well_anomalies` | `bool` | `True` | Warn about anomalous well flow rates |
+
+---
+
+## Parallel Assembly with Task Pools
+
+During each timestep, the pressure and saturation solvers assemble coefficient matrices from fluid properties, transmissibilities, and well contributions. In the IMPES scheme, the pressure solver has three independent assembly stages (accumulation terms, face transmissibilities, and well contributions) and the saturation solver has two independent stages (flux contributions and well rate grids). By default, these stages run sequentially on the calling thread. For larger grids, you can run them concurrently using a thread pool.
+
+The `task_pool` parameter accepts a `ThreadPoolExecutor` that BORES uses to submit independent assembly stages in parallel. The calling thread blocks until all submitted stages complete, so the effective assembly time approaches the duration of the slowest stage rather than their sum. This can reduce assembly time by 30 to 50% for grids with 50,000 or more cells.
+
+BORES provides the `new_task_pool()` context manager as the standard way to create and manage a pool. It creates the pool, yields it for use, and shuts it down cleanly when the block exits, whether normally or due to an exception.
+
+```python
+import bores
+
+with bores.new_task_pool(concurrency=3) as pool:
+    config = bores.Config(
+        timer=timer,
+        rock_fluid_tables=rock_fluid_tables,
+        wells=wells,
+        task_pool=pool,
+    )
+
+    run = bores.Run(model=model, config=config)
+    with bores.StateStream(run, store=store) as stream:
+        for state in stream:
+            process(state)
+# Pool shuts down cleanly here
+```
+
+### When to Use a Task Pool
+
+The break-even point depends on grid size. Below about 10,000 cells, the overhead of thread synchronisation and future creation exceeds the time saved by concurrent execution. The benefit becomes noticeable around 50,000 cells and clearly measurable above 200,000 cells.
+
+| Grid Size | Recommendation |
+|---|---|
+| < 10,000 cells | Leave `task_pool` as `None` (sequential is faster) |
+| 10,000 to 50,000 | Marginal benefit, profile before committing |
+| 50,000 to 200,000 | Noticeable benefit, 3 workers recommended |
+| > 200,000 | Clearly beneficial, assembly cost approaches solve cost |
+
+### Concurrency Settings
+
+Pass `concurrency=3` for IMPES simulations. The pressure solver submits at most 3 tasks per call and the saturation solver submits at most 2, so 3 workers covers both without waste. If your machine has only 2 physical cores, use `concurrency=2`. Higher values provide no additional benefit because the current assembly design never submits more than 3 tasks per solver call.
+
+### Conditional Pool Based on Grid Size
+
+If you want your code to work efficiently across different model sizes, you can conditionally create a pool:
+
+```python
+import bores
+from contextlib import nullcontext
+
+nx, ny, nz = 50, 50, 20
+cell_count = nx * ny * nz  # 50,000
+
+if cell_count > 10_000:
+    pool_context = bores.new_task_pool(concurrency=3)
+else:
+    pool_context = nullcontext(None)
+
+with pool_context as pool:
+    config = bores.Config(
+        timer=timer,
+        rock_fluid_tables=rock_fluid_tables,
+        task_pool=pool,  # None for small grids, `ThreadPoolExecutor` for large
+    )
+    # ... run simulation
+```
+
+!!! info "Why Threads, Not Processes"
+
+    BORES uses `ThreadPoolExecutor` rather than `ProcessPoolExecutor` because the assembly functions operate on large numpy arrays that are shared by reference between threads. A process pool would need to pickle and copy those arrays into child processes on every call. For a 100x100x30 grid, this is 30 to 50 MB of serialisation overhead per timestep, which eliminates any parallelism gain. Numba JIT-compiled functions release the Python GIL during execution, so threads achieve true parallel CPU utilisation without GIL contention.
+
+!!! warning "Pool Lifetime"
+
+    Do not share a single pool between concurrent simulation runs. Each simulation submits up to 3 tasks per solver call, so two concurrent runs would need 6 workers to avoid queuing, and the assembly functions are not designed for that usage. Create one pool per simulation run.
 
 ---
 

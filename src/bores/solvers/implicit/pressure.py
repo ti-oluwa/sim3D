@@ -1057,7 +1057,7 @@ def compute_well_contributions(
 
         injected_fluid = well.injected_fluid
         injected_phase = injected_fluid.phase
-        is_bhp_controlled = well.control.is_bhp_control()
+        is_bhp_controlled = not well.control.is_rate_control()
         use_pseudo_pressure = (
             config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
@@ -1128,9 +1128,13 @@ def compute_well_contributions(
                     **compressibility_kwargs,
                 ),
             )
-
+            effective_mobility = typing.cast(
+                float,
+                water_relative_mobility_grid[i, j, k]
+                + oil_relative_mobility_grid[i, j, k]
+                + gas_relative_mobility_grid[i, j, k],
+            )
             if is_bhp_controlled:
-                effective_mobility = phase_mobility
                 effective_bhp = well.get_bottom_hole_pressure(
                     pressure=cell_pressure,
                     temperature=cell_temperature,
@@ -1174,12 +1178,6 @@ def compute_well_contributions(
 
             else:
                 # Rate-controlled: We use direct rate injection (Neumann Boundary)
-                effective_mobility = typing.cast(
-                    float,
-                    water_relative_mobility_grid[i, j, k]
-                    + oil_relative_mobility_grid[i, j, k]
-                    + gas_relative_mobility_grid[i, j, k],
-                )
                 flow_rate = well.get_flow_rate(
                     pressure=cell_pressure,
                     temperature=cell_temperature,
@@ -1194,7 +1192,7 @@ def compute_well_contributions(
                 )
                 if injected_phase != FluidPhase.GAS:
                     flow_rate *= bbl_to_ft3
-                
+
                 rhs_cell_indices.append(cell_1d_index)
                 rhs_values.append(flow_rate)
 
@@ -1235,9 +1233,9 @@ def compute_well_contributions(
                 well_index / total_well_index if total_well_index > 0.0 else 1.0
             )
 
-            primary_phase_kwargs: dict = {}
+            primary_phase_context: dict = {}
             if isinstance(well.control, CoupledRateControl):
-                primary_phase_kwargs = well.control.build_primary_phase_context(
+                primary_phase_context = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
                     oil_mobility=typing.cast(
                         float, oil_relative_mobility_grid[i, j, k]
@@ -1308,7 +1306,7 @@ def compute_well_contributions(
                     use_pseudo_pressure=use_pseudo_pressure,
                     fluid_compressibility=phase_compressibility,
                     pvt_tables=config.pvt_tables,
-                    **primary_phase_kwargs,
+                    **primary_phase_context,
                 )
 
                 if not np.isfinite(effective_bhp):

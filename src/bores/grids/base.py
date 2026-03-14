@@ -1106,7 +1106,7 @@ def flatten_multilayer_grid_to_surface(
 
     Notes:
     - For permeability, consider using directional averaging instead of simple flattening
-    - NaN values are handled appropriately if ignore_nan=True
+    - NaN values are handled appropriately if `ignore_nan=True`
     - Weighted mean normalizes weights automatically (no need to pre-normalize)
     """
     if multilayer_grid.ndim != 3:

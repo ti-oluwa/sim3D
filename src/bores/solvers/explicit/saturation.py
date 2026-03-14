@@ -988,7 +988,6 @@ def compute_well_rate_grids(
         use_pseudo_pressure = (
             config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
-        is_bhp_controlled = well.control.is_bhp_control()
 
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
@@ -1058,16 +1057,14 @@ def compute_well_rate_grids(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            if is_bhp_controlled:
-                # BHP-controlled injection: use phase mobility
-                effective_mobility = phase_mobility
-            else:
-                total_mobility = (
-                    water_relative_mobility_grid[i, j, k]
-                    + oil_relative_mobility_grid[i, j, k]
-                    + gas_relative_mobility_grid[i, j, k]
-                )
-                effective_mobility = typing.cast(float, total_mobility)
+            # Injection wells use total mobility since injected fluid
+            # displaces all existing phases in the cell
+            total_mobility = (
+                water_relative_mobility_grid[i, j, k]
+                + oil_relative_mobility_grid[i, j, k]
+                + gas_relative_mobility_grid[i, j, k]
+            )
+            effective_mobility = typing.cast(float, total_mobility)
 
             cell_injection_rate = well.get_flow_rate(
                 pressure=cell_oil_pressure,
@@ -1165,9 +1162,9 @@ def compute_well_rate_grids(
             cell_oil_production_rate = 0.0
             cell_gas_production_rate = 0.0
 
-            primary_phase_kwargs: dict = {}
+            primary_phase_context: dict = {}
             if isinstance(well.control, CoupledRateControl):
-                primary_phase_kwargs = well.control.build_primary_phase_context(
+                primary_phase_context = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
                     oil_mobility=typing.cast(
                         float, oil_relative_mobility_grid[i, j, k]
@@ -1247,7 +1244,7 @@ def compute_well_rate_grids(
                     formation_volume_factor=phase_fvf,
                     allocation_fraction=allocation_fraction,
                     pvt_tables=config.pvt_tables,
-                    **primary_phase_kwargs,
+                    **primary_phase_context,
                 )
 
                 if production_rate > 0.0 and config.warn_well_anomalies:
@@ -2504,7 +2501,6 @@ def compute_miscible_well_rate_grids(
         use_pseudo_pressure = (
             config.use_pseudo_pressure and injected_phase == FluidPhase.GAS
         )
-        is_bhp_controlled = well.control.is_bhp_control()
 
         water_bubble_point_pressure_grid = (
             fluid_properties.water_bubble_point_pressure_grid
@@ -2573,16 +2569,14 @@ def compute_miscible_well_rate_grids(
             allocation_fraction = (
                 well_index / total_well_index if total_well_index > 0 else 1.0
             )
-            if is_bhp_controlled:
-                # BHP-controlled injection: use phase mobility
-                effective_mobility = phase_mobility
-            else:
-                total_mobility = (
-                    water_relative_mobility_grid[i, j, k]
-                    + oil_relative_mobility_grid[i, j, k]
-                    + gas_relative_mobility_grid[i, j, k]
-                )
-                effective_mobility = typing.cast(float, total_mobility)
+            # Injection wells use total mobility since injected fluid
+            # displaces all existing phases in the cell
+            total_mobility = (
+                water_relative_mobility_grid[i, j, k]
+                + oil_relative_mobility_grid[i, j, k]
+                + gas_relative_mobility_grid[i, j, k]
+            )
+            effective_mobility = typing.cast(float, total_mobility)
 
             cell_injection_rate = well.get_flow_rate(
                 pressure=cell_oil_pressure,
@@ -2697,9 +2691,9 @@ def compute_miscible_well_rate_grids(
             cell_gas_production_rate = 0.0
 
             # Build primary phase context if using CoupledRateControl
-            primary_phase_kwargs: dict = {}
+            primary_phase_context: dict = {}
             if isinstance(well.control, CoupledRateControl):
-                primary_phase_kwargs = well.control.build_primary_phase_context(
+                primary_phase_context = well.control.build_primary_phase_context(
                     produced_fluids=well.produced_fluids,
                     oil_mobility=typing.cast(
                         float, oil_relative_mobility_grid[i, j, k]
@@ -2775,7 +2769,7 @@ def compute_miscible_well_rate_grids(
                     formation_volume_factor=fluid_formation_volume_factor,
                     allocation_fraction=allocation_fraction,
                     pvt_tables=config.pvt_tables,
-                    **primary_phase_kwargs,
+                    **primary_phase_context,
                 )
 
                 if production_rate > 0.0 and config.warn_well_anomalies:

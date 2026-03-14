@@ -28,7 +28,9 @@ analyst = ModelAnalyst(stream.replay())
 
 # From a store directly
 from bores.states import ModelState
-analyst = ModelAnalyst(store.load(ModelState))
+
+with store(mode="r") as s:
+    analyst = ModelAnalyst(s.load(ModelState))
 ```
 
 The analyst stores all states internally in a dictionary keyed by step number. This means it needs to load all states into memory. For very large simulations, consider replaying only a subset of states (using `replay(steps=...)` or `replay(indices=...)`) to reduce memory.
@@ -40,9 +42,9 @@ When the earliest available state is not step 0, or when you want to override th
 ```python
 analyst = ModelAnalyst(
     states,
-    initial_stoiip=5_000_000.0,     # STB
-    initial_stgiip=2_000_000_000.0, # SCF
-    initial_stwiip=10_000_000.0,    # STB
+    stoiip=5_000_000.0,     # STB
+    stgiip=2_000_000_000.0, # SCF
+    stwiip=10_000_000.0,    # STB
 )
 ```
 
@@ -89,14 +91,19 @@ These methods compute the volume of each phase remaining in the reservoir at a g
 ```python
 # Oil, gas, and water in place at the final step
 oil_remaining = analyst.oil_in_place(step=-1)      # STB
-gas_remaining = analyst.gas_in_place(step=-1)       # SCF
+gas_remaining = analyst.gas_in_place(step=-1)       # SCF (free + solution gas)
 water_in_place = analyst.water_in_place(step=-1)    # STB
+
+# Free gas only (excludes solution gas dissolved in oil)
+free_gas_remaining = analyst.free_gas_in_place(step=-1)  # SCF
 
 # At a specific step
 oil_at_50 = analyst.oil_in_place(step=50)
 ```
 
-All three methods accept a `step` parameter that defaults to `-1` (the last available step). Negative indices work like Python lists.
+All four methods accept a `step` parameter that defaults to `-1` (the last available step). Negative indices work like Python lists.
+
+The distinction between `gas_in_place()` and `free_gas_in_place()` matters for reservoirs with significant solution gas. `gas_in_place()` returns the total gas volume including gas dissolved in oil (computed from the solution GOR and oil volume), while `free_gas_in_place()` counts only the free gas phase occupying pore space. In an undersaturated reservoir with no gas cap, `free_gas_in_place()` returns zero even though `gas_in_place()` may be large because of dissolved gas.
 
 ### In-Place History
 
@@ -185,6 +192,11 @@ For quick access to full-simulation cumulative values, the analyst provides read
 print(f"Cumulative oil: {analyst.cumulative_oil_produced:,.0f} STB")
 print(f"Cumulative gas: {analyst.cumulative_free_gas_produced:,.0f} SCF")
 print(f"Cumulative water: {analyst.cumulative_water_produced:,.0f} STB")
+
+# Short aliases using standard petroleum notation
+print(f"Np: {analyst.No:,.0f} STB")   # Same as cumulative_oil_produced
+print(f"Gp: {analyst.Ng:,.0f} SCF")   # Same as cumulative_gas_produced
+print(f"Wp: {analyst.Nw:,.0f} STB")   # Same as cumulative_water_produced
 ```
 
 ---
@@ -197,17 +209,11 @@ Recovery factors express cumulative production as a fraction of the original vol
 # Oil recovery factor (cumulative oil / STOIIP)
 print(f"Oil RF: {analyst.oil_recovery_factor:.2%}")
 
-# Free gas recovery factor (free gas produced / STGIIP)
-print(f"Free gas RF: {analyst.free_gas_recovery_factor:.2%}")
-
-# Total gas recovery factor (free gas + solution gas / STGIIP)
-print(f"Total gas RF: {analyst.total_gas_recovery_factor:.2%}")
-
-# Alias for free_gas_recovery_factor
+# Gas recovery factor (free gas + solution gas produced / STGIIP)
 print(f"Gas RF: {analyst.gas_recovery_factor:.2%}")
 ```
 
-The `total_gas_recovery_factor` includes solution gas that was dissolved in oil at initial conditions but has since come out of solution due to pressure decline. The `free_gas_recovery_factor` (aliased as `gas_recovery_factor`) only counts free gas that was initially in the gas cap.
+The `gas_recovery_factor` is a comprehensive metric that accounts for both free gas produced from the gas phase and solution gas liberated from produced oil. The denominator is the total initial gas in place (free gas cap plus gas dissolved in oil at initial conditions). This gives a true measure of total gas resource recovery.
 
 ### Recovery Factor History
 
@@ -215,13 +221,10 @@ To track recovery factors over time:
 
 ```python
 for step, rf in analyst.oil_recovery_factor_history(interval=10):
-    print(f"Step {step}: RF = {rf:.2%}")
+    print(f"Step {step}: Oil RF = {rf:.2%}")
 
-for step, rf in analyst.free_gas_recovery_factor_history(interval=10):
+for step, rf in analyst.gas_recovery_factor_history(interval=10):
     print(f"Step {step}: Gas RF = {rf:.2%}")
-
-for step, rf in analyst.total_gas_recovery_factor_history(interval=10):
-    print(f"Step {step}: Total Gas RF = {rf:.2%}")
 ```
 
 ---
@@ -240,7 +243,7 @@ for step, cum in analyst.oil_production_history(cumulative=True):
     print(f"Step {step}: {cum:,.0f} STB cumulative")
 
 # Gas production from a specific well
-for step, rate in analyst.free_gas_production_history(cells="PROD-1"):
+for step, rate in analyst.gas_production_history(cells="PROD-1"):
     print(f"Step {step}: {rate:.0f} SCF")
 
 # Water production
@@ -423,6 +426,66 @@ for step, mbal in analyst.material_balance_history(interval=20):
 
 ---
 
+## Material Balance Error
+
+The `material_balance_error()` method quantifies how well the simulator conserves mass over a simulation interval. It computes two complementary error metrics: per-phase material balance errors (oil, water, gas) that test whether the saturation solver conserved pore-volume occupancy for each phase, and a total Havlena-Odeh material balance error that tests whether expansion energy accounts for underground withdrawal.
+
+The per-phase errors are computed as the difference between the change in pore volume occupied by a phase and the net flux of that phase, divided by the initial pore volume. A value of zero means the simulator perfectly conserved that phase. The total error uses the standard Havlena-Odeh formulation where expansion terms (solution gas drive, gas cap drive, water drive, and compaction drive) should account for all underground withdrawal. Together, the two checks diagnose different problems: a large phase error points to a numerical conservation bug in the simulator, while a large total error suggests a PVT or STOIIP mismatch.
+
+Each result includes a `quality` rating based on standard industry thresholds. An absolute MBE below 0.1% is rated "excellent" and indicates reliable results. Between 0.1% and 1% is "acceptable" but worth monitoring for drift. Between 1% and 5% is "marginal", suggesting you should refine the grid or reduce the timestep. Above 5% is "unacceptable", and you should investigate before using the results.
+
+```python
+mbe = analyst.material_balance_error(from_step=0, to_step=-1)
+
+print(f"Quality: {mbe.quality}")
+print(f"Total MBE: {mbe.total_mbe:.4%}")
+print(f"Oil MBE: {mbe.oil_mbe:.4%}")
+print(f"Water MBE: {mbe.water_mbe:.4%}")
+print(f"Gas MBE: {mbe.gas_mbe:.4%}")
+
+# Drive mechanism breakdown
+print(f"Solution gas drive: {mbe.solution_gas_drive_index:.2%}")
+print(f"Gas cap drive: {mbe.gas_cap_drive_index:.2%}")
+print(f"Water drive: {mbe.water_drive_index:.2%}")
+print(f"Compaction drive: {mbe.compaction_drive_index:.2%}")
+```
+
+The short alias `analyst.mbe(...)` is equivalent to `analyst.material_balance_error(...)`.
+
+The `MaterialBalanceError` result class contains:
+
+| Field | Unit | Description |
+| --- | --- | --- |
+| `total_mbe` | dimensionless | Havlena-Odeh total material balance error |
+| `oil_mbe` | dimensionless | Oil phase conservation error |
+| `water_mbe` | dimensionless | Water phase conservation error |
+| `gas_mbe` | dimensionless | Gas phase conservation error |
+| `solution_gas_drive` | bbl | Solution gas expansion energy |
+| `gas_cap_drive` | bbl | Gas cap expansion energy |
+| `water_drive` | bbl | Aquifer influx energy |
+| `compaction_drive` | bbl | Rock and connate water compression energy |
+| `solution_gas_drive_index` | fraction | Fraction from solution gas expansion |
+| `gas_cap_drive_index` | fraction | Fraction from gas cap expansion |
+| `water_drive_index` | fraction | Fraction from water influx |
+| `compaction_drive_index` | fraction | Fraction from compaction |
+| `underground_withdrawal` | bbl | Total underground withdrawal (F) |
+| `quality` | string | `"excellent"`, `"acceptable"`, `"marginal"`, or `"unacceptable"` |
+| `from_step` | int | Start of the analysis interval |
+| `to_step` | int | End of the analysis interval |
+
+### Material Balance Error History
+
+You can track how the MBE evolves over time to detect drift. The `material_balance_error_history()` method computes the cumulative MBE from `from_step` to each successive timestep, so you can see whether the error grows, stays constant, or oscillates.
+
+```python
+for step, mbe in analyst.material_balance_error_history(from_step=0, interval=20):
+    print(f"Step {step}: Total MBE = {mbe.total_mbe:.4%} ({mbe.quality})")
+```
+
+The alias `analyst.mbe_history(...)` is also available.
+
+---
+
 ## Sweep Efficiency Analysis
 
 The `sweep_efficiency_analysis()` method evaluates how effectively the displacing phase has contacted and displaced oil in the reservoir. It decomposes recovery into the product of volumetric sweep efficiency (what fraction of the original oil was reached) and displacement efficiency (how much oil was removed from the contacted zones).
@@ -480,6 +543,63 @@ for step, sweep in analyst.sweep_efficiency_history(
 
 ---
 
+## Injection Front Analysis
+
+The `injection_front_analysis()` method tracks the spatial position and character of an injection fluid front as it moves through the reservoir. While `sweep_efficiency_analysis()` reports aggregate efficiency scalars, this method returns the full saturation-delta grid and a front centroid so you can track plume migration step by step.
+
+The front is defined as every cell whose displacing-phase saturation has risen by at least the `threshold` above its value in the earliest available state. This is consistent with the contact detection used in sweep efficiency analysis. The method returns a boolean mask of contacted cells, the saturation change per cell, and a saturation-delta-weighted centroid that gives a physically representative centre of the plume.
+
+This method is particularly useful for monitoring CO2 plume migration in storage studies, tracking waterflood front advancement, or validating that injected fluid is reaching the intended parts of the reservoir. By comparing front centroids at successive timesteps, you can estimate front velocity and direction.
+
+```python
+front = analyst.injection_front_analysis(step=-1, phase="gas", threshold=0.02)
+
+print(f"Contacted cells: {front.front_cell_count}")
+print(f"Pore volume contacted: {front.front_volume_fraction:.2%}")
+print(f"Average front saturation: {front.average_front_saturation:.3f}")
+print(f"Maximum front saturation: {front.max_front_saturation:.3f}")
+print(f"Front centroid (i,j,k): {front.front_centroid}")
+
+# Access the saturation change grid for visualization
+delta_grid = front.saturation_delta_grid  # 3D numpy array
+contact_mask = front.front_cells          # 3D boolean array
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `step` | -1 | Time step to analyze |
+| `phase` | `"water"` | Displacing phase to track: `"water"` or `"gas"` |
+| `threshold` | 0.02 | Minimum saturation increase to declare a cell as contacted |
+
+### Result Fields
+
+The `InjectionFrontAnalysis` result class contains:
+
+| Field | Unit | Description |
+| --- | --- | --- |
+| `phase` | string | Displacing phase tracked |
+| `front_cells` | ndarray (bool) | Boolean mask of contacted cells |
+| `front_cell_count` | int | Number of contacted cells |
+| `front_volume_fraction` | fraction | Pore-volume-weighted fraction of reservoir contacted |
+| `average_front_saturation` | fraction | Mean displacing-phase saturation in contacted cells |
+| `max_front_saturation` | fraction | Maximum displacing-phase saturation in contacted cells |
+| `saturation_delta_grid` | ndarray (float) | Per-cell saturation change from initial conditions |
+| `front_centroid` | tuple(float,float,float) | Saturation-delta-weighted centre of the plume in (i,j,k) |
+
+### Injection Front History
+
+```python
+for step, front in analyst.injection_front_history(phase="water", threshold=0.02, interval=20):
+    print(
+        f"Step {step}: {front.front_cell_count} cells contacted, "
+        f"centroid at {front.front_centroid}"
+    )
+```
+
+---
+
 ## Well Productivity Analysis
 
 The `productivity_analysis()` method evaluates well performance using actual flow rates and reservoir properties at the perforation intervals. It does not require bottom-hole pressure data. Instead, it computes metrics from production rates, formation permeability, relative mobility, and the skin factor assigned to each well.
@@ -521,6 +641,29 @@ The `ProductivityAnalysis` result class contains:
 for step, prod in analyst.productivity_history(phase="oil", cells="PROD-1", interval=10):
     print(f"Step {step}: Rate={prod.total_flow_rate:.0f}, FE={prod.flow_efficiency:.2%}")
 ```
+
+---
+
+## IPR Method Recommendation
+
+The `recommend_ipr_method()` method analyzes the current reservoir state and suggests the most appropriate inflow performance relationship (IPR) correlation for your wells. It examines average oil and gas saturations and compares reservoir pressure to the bubble point to determine which IPR model best fits the current flow regime.
+
+The method returns one of four IPR methods. It selects `"fetkovich"` for gas-dominated reservoirs (average gas saturation above 0.6), `"linear"` for undersaturated oil reservoirs where pressure remains above the bubble point, `"jones"` for complex multi-phase systems with significant oil and gas saturations, and `"vogel"` as the default for solution gas drive reservoirs with two-phase oil and gas flow.
+
+This is useful when you need to construct an IPR curve for well design or artificial lift optimization and want a data-driven recommendation rather than guessing which correlation to apply.
+
+```python
+ipr_method = analyst.recommend_ipr_method(step=-1)
+print(f"Recommended IPR method: {ipr_method}")
+# Output: "vogel", "linear", "fetkovich", or "jones"
+```
+
+| Return Value | Best For |
+| --- | --- |
+| `"vogel"` | Two-phase oil/gas systems (solution gas drive) |
+| `"linear"` | Undersaturated oil (single-phase, above bubble point) |
+| `"fetkovich"` | Gas wells and gas-dominated reservoirs |
+| `"jones"` | Complex multi-phase systems with significant oil and gas |
 
 ---
 
@@ -720,7 +863,8 @@ with StateStream(
     stream.consume()
 
 # Create analyst from saved states
-analyst = ModelAnalyst(store.load(ModelState))
+with store(mode="r") as s:
+    analyst = ModelAnalyst(s.load(ModelState))
 
 # Summary
 print(f"STOIIP: {analyst.stoiip:,.0f} STB")

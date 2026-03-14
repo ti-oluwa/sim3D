@@ -38,7 +38,7 @@ class ReservoirVolumetrics:
     oil_in_place: float
     """Total oil in place in stock tank barrels (STB)."""
     gas_in_place: float
-    """Total gas in place in standard cubic feet (SCF)."""
+    """Total gas in place (including solution gas) in standard cubic feet (SCF)."""
     water_in_place: float
     """Total water in place in stock tank barrels (STB)."""
     pore_volume: float
@@ -86,23 +86,390 @@ class CumulativeProduction:
 
 
 @attrs.frozen(slots=True)
-class MaterialBalanceAnalysis:
-    """Material balance analysis results."""
+class MaterialBalance:
+    """
+    Results of a Havlena-Odeh material balance analysis at a specific time step.
+
+    The generalized material balance equation expresses that total underground
+    withdrawal must equal the sum of all expansion and influx terms:
+
+        F = N*(Eo + m*Eg + Efw) + We
+
+    Where:
+        F    = Underground withdrawal (reservoir bbl)
+        N    = Stock tank oil initially in place (STB)
+        Eo   = Oil + dissolved gas expansion (bbl/STB)
+        m    = Gas cap ratio (dimensionless)
+        Eg   = Gas cap expansion (bbl/STB)
+        Efw  = Rock + connate water expansion (bbl/STB)
+        We   = Water influx (bbl)
+
+    Drive indices partition F into the fraction supplied by each mechanism
+    and always sum to 1.0.
+    """
 
     pressure: float
-    """Current reservoir pressure in pounds per square inch absolute (psia)."""
+    """Current reservoir pressure (psia), oil-saturation weighted mean."""
+
+    pressure_decline: float
+    """Pressure decline from initial conditions (psi). Positive = depleting."""
+
     oil_expansion_factor: float
-    """Oil expansion factor relative to initial conditions."""
+    """
+    Ratio of current to initial oil FVF (dimensionless).
+
+        oil_expansion_factor = Bo / Boi
+
+    > 1.0 while reservoir is above bubble point (undersaturated expansion).
+    Peaks at bubble point, then declines as gas comes out of solution.
+    """
+
+    producing_gor: float
+    """
+    Cumulative producing gas-oil ratio (SCF/STB).
+
+        Rp = (cumulative free gas + cumulative solution gas) / cumulative oil
+
+    Equal to Rsi early in life when only solution gas is produced. Rises
+    sharply once free gas starts being produced below bubble point.
+    """
+
+    gas_cap_ratio: float
+    """
+    Ratio of initial gas cap reservoir volume to initial oil reservoir volume
+    (dimensionless).
+
+        m = (GIIP * Bgi) / (N * Boi)
+
+    Zero for reservoirs with no initial free gas cap.
+    """
+
+    underground_withdrawal: float
+    """
+    Total underground withdrawal F (reservoir bbl).
+
+        F = Np*(Bo + (Rp - Rs)*Bg) + Wp*Bw - Wi*Bwi - Gi*Bginj
+
+    The left-hand side of the MBE. Primary normaliser for drive indices.
+    """
+
+    solution_gas_drive: float
+    """
+    Energy supplied by oil and dissolved gas expansion (reservoir bbl).
+
+        solution_gas_drive = N * Eo
+                           = N * [(Bo - Boi) + (Rsi - Rs)*Bg]
+
+    Primary mechanism in solution-gas-drive reservoirs. Typical recovery: 5-30% STOIIP.
+    """
+
+    gas_cap_drive: float
+    """
+    Energy supplied by free gas cap expansion (reservoir bbl).
+
+        gas_cap_drive = N * m * Eg
+                      = N * m * Boi * [(Bg/Bgi) - 1]
+
+    Zero if no initial free gas cap exists. Typical recovery with gas cap: 20-40% STOIIP.
+    """
+
+    water_drive: float
+    """
+    Energy supplied by water influx (reservoir bbl).
+
+        water_drive = We = max(0, F - N*(Eo + m*Eg + Efw))
+
+    Captures natural aquifer influx. Water injection is already subtracted
+    from F so this represents aquifer support only.
+    Typical recovery with strong water drive: 35-75% STOIIP.
+    """
+
+    compaction_drive: float
+    """
+    Energy supplied by rock and connate water compressibility (reservoir bbl).
+
+        compaction_drive = N * Efw
+                         = N * (1+m) * Boi * [(Swi*cw + cf) / (1-Swi)] * ΔP
+
+    Small in most conventional reservoirs (1-5% of total). Dominant above
+    bubble point where no gas expansion is available.
+    """
+
     solution_gas_drive_index: float
-    """Solution gas drive index as a fraction of total production mechanism."""
+    """
+    Fraction of total withdrawal supplied by oil and dissolved gas expansion
+    (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0.
+    """
+
     gas_cap_drive_index: float
-    """Gas cap drive index as a fraction of total production mechanism."""
+    """
+    Fraction of total withdrawal supplied by gas cap expansion
+    (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0. Zero if no initial free gas cap.
+    """
+
     water_drive_index: float
-    """Water drive index as a fraction of total production mechanism."""
+    """
+    Fraction of total withdrawal supplied by water influx
+    (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0. High values (> 0.5) indicate
+    strong aquifer support.
+    """
+
     compaction_drive_index: float
-    """Compaction drive index as a fraction of total production mechanism."""
+    """
+    Fraction of total withdrawal supplied by rock and connate water
+    compressibility (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0. Typically < 0.05 in conventional
+    reservoirs.
+    """
+
     aquifer_influx: float
-    """Estimated aquifer influx in stock tank barrels (STB)."""
+    """
+    Estimated natural aquifer influx We (reservoir bbl).
+
+    Identical to `water_drive`. Exposed separately as a named field for
+    convenience since aquifer influx is commonly reported standalone in
+    reservoir engineering workflows.
+    """
+
+
+@attrs.frozen(slots=True)
+class MaterialBalanceError:
+    """
+    Results of a material balance error analysis over a simulation interval.
+
+    Combines two complementary checks:
+
+    1. Phase-level MBE - simulator volume conservation check:
+
+        MBE_phase = (ΔPV_phase - net_flux_phase) / PV_phase_initial
+
+       All volumes at reservoir conditions (ft³). Directly tests whether the
+       saturation solver conserved pore-volume occupancy for each phase.
+       Zero means perfect volume conservation for that phase.
+
+    2. Total MBE - Havlena-Odeh physical balance check:
+
+        total_mbe = (F - N*(Eo + m*Eg + Efw) - We) / F
+
+       Where F is total underground withdrawal (reservoir bbl). Checks whether
+       observed production is physically explained by fluid and rock expansion.
+       Zero means expansion exactly accounts for withdrawal.
+
+    The two checks diagnose different problems:
+        - Large phase MBE  → simulator numerical conservation error
+        - Large total MBE  → PVT / STOIIP / drive mechanism mismatch
+
+    Drive indices are sourced from the Havlena-Odeh terms and always sum to 1.0:
+
+        solution_gas_drive_index + gas_cap_drive_index +
+        water_drive_index + compaction_drive_index = 1.0
+
+    MBE Quality Thresholds (based on worst of all four MBE values):
+        < 0.1%      Excellent    - results are reliable
+        0.1% - 1%   Acceptable   - monitor for drift
+        1% - 5%     Marginal     - refine grid or reduce timestep
+        > 5%        Unacceptable - investigate before using results
+
+    References:
+        Havlena, D. and Odeh, A.S.: "The Material Balance as an Equation of a
+        Straight Line," JPT (August 1963).
+    """
+
+    total_mbe: float
+    """
+    Fractional Havlena-Odeh material balance error (dimensionless).
+
+        total_mbe = (F - N*(Eo + m*Eg + Efw) - We) / F
+
+    Where We = max(0, F - N*(Eo + m*Eg + Efw)).  Because water influx is
+    computed as the residual between withdrawal and expansion (clamped to
+    zero), this value is always <= 0.0 by construction.
+
+    Interpretation:
+        0.0    Perfect balance (expansion + aquifer influx accounts for withdrawal)
+        < 0.0  Expansion exceeds withdrawal (overestimated STOIIP or PVT errors)
+    """
+
+    oil_mbe: float
+    """
+    Fractional volume conservation error for the oil phase (dimensionless).
+
+    Computed as:
+
+        oil_mbe = (ΔPV_oil - net_oil_flux) / PV_oil_initial
+
+    Where:
+        ΔPV_oil        = current_oil_pv - initial_oil_pv                (ft³)
+        net_oil_flux   = oil_injected - oil_produced                    (ft³)
+        PV_oil_initial = initial pore volume occupied by oil            (ft³)
+
+    All volumes at reservoir conditions (ft³). Directly tests whether the
+    saturation solver conserved oil pore-volume occupancy (PV * So).
+
+    Zero means the simulator perfectly conserved oil volume over the interval.
+
+    Common causes of large `oil_mbe`:
+        - Time step too large (explicit solver instability)
+        - Grid refinement needed near wells
+        - Convergence tolerance too loose
+        - Phase transfer (gas liberation/dissolution) volume imbalance
+    """
+
+    water_mbe: float
+    """
+    Fractional volume conservation error for the water phase (dimensionless).
+
+    Computed as:
+
+        water_mbe = (ΔPV_water - net_water_flux) / PV_water_initial
+
+    Where:
+        ΔPV_water        = current_water_pv - initial_water_pv          (ft³)
+        net_water_flux   = water_injected - water_produced              (ft³)
+        PV_water_initial = initial pore volume occupied by water        (ft³)
+
+    All volumes at reservoir conditions (ft³).
+
+    Zero means the simulator perfectly conserved water volume over the interval.
+
+    Common causes of large `water_mbe`:
+        - Water injection rates not correctly accounted for
+        - Capillary pressure discontinuities causing numerical water movement
+        - Time step too large during water breakthrough
+    """
+
+    gas_mbe: float
+    """
+    Fractional volume conservation error for the gas phase (dimensionless).
+
+    Computed as:
+
+        gas_mbe = (ΔPV_gas - net_gas_flux) / PV_gas_initial
+
+    Where:
+        ΔPV_gas        = current_gas_pv - initial_gas_pv                (ft³)
+        net_gas_flux   = gas_injected - gas_produced                    (ft³)
+        PV_gas_initial = initial pore volume occupied by free gas       (ft³)
+
+    All volumes at reservoir conditions (ft³). Directly tests whether the
+    saturation solver conserved gas pore-volume occupancy (PV * Sg).
+
+    Zero means the simulator perfectly conserved gas volume over the interval.
+
+    Note: `gas_mbe` will be 0.0 if there is no initial free gas
+    (PV_gas_initial = 0), since a fractional error is undefined
+    without an initial free gas volume to normalise against.
+    """
+
+    solution_gas_drive: float
+    """
+    Energy supplied by oil and dissolved gas expansion over the interval
+    (reservoir bbl).
+
+        solution_gas_drive = N * Eo
+                           = N * [(Bo - Boi) + (Rsi - Rs) * Bg]
+    """
+
+    gas_cap_drive: float
+    """
+    Energy supplied by free gas cap expansion over the interval (reservoir bbl).
+
+        gas_cap_drive = N * m * Eg
+                      = N * m * Boi * [(Bg/Bgi) - 1]
+    """
+
+    water_drive: float
+    """
+    Energy supplied by water influx over the interval (reservoir bbl).
+
+        water_drive = We = max(0, F - N*(Eo + m*Eg + Efw))
+
+    See `MaterialBalance.water_drive` for full documentation.
+    """
+
+    compaction_drive: float
+    """
+    Energy supplied by rock and connate water compressibility over the interval
+    (reservoir bbl).
+
+        compaction_drive = N * Efw
+                         = N * (1+m) * Boi * [(Swi*cw + cf) / (1-Swi)] * ΔP
+
+    See `MaterialBalance.compaction_drive` for full documentation.
+    """
+
+    solution_gas_drive_index: float
+    """
+    Fraction of total withdrawal supplied by oil and dissolved gas expansion
+    (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0.
+    """
+
+    gas_cap_drive_index: float
+    """
+    Fraction of total withdrawal supplied by gas cap expansion
+    (dimensionless, 0.0 to 1.0).
+
+    All four drive indices sum to 1.0. Zero if no initial free gas cap.
+    """
+
+    water_drive_index: float
+    """
+    Fraction of total withdrawal supplied by water influx
+    (dimensionless, 0.0 to 1.0). 
+
+    All four drive indices sum to 1.0.
+    """
+
+    compaction_drive_index: float
+    """
+    Fraction of total withdrawal supplied by rock and connate water
+    compressibility (dimensionless, 0.0 to 1.0). 
+
+    All four drive indices sum to 1.0.
+    """
+
+    underground_withdrawal: float
+    """
+    Total underground withdrawal F over the interval (reservoir bbl).
+
+        F = Np*(Bo + (Rp - Rs)*Bg) + Wp*Bw - Wi*Bwi - Gi*Bginj
+
+    Primary normaliser for `total_mbe`. See `MaterialBalance.underground_withdrawal`
+    for full documentation.
+    """
+
+    quality: typing.Literal["excellent", "acceptable", "marginal", "unacceptable"]
+    """
+    Qualitative rating based on the worst of all four MBE values
+    (`total_mbe`, `oil_mbe`, `water_mbe`, `gas_mbe`).
+
+    ==================  ===========================  ================================
+    Rating              max(|MBE|) threshold         Recommended action
+    ==================  ===========================  ================================
+    `"excellent"`     < 0.1%                       Results are reliable
+    `"acceptable"`    0.1% - 1%                    Monitor for systematic drift
+    `"marginal"`      1% - 5%                      Refine grid or reduce timestep
+    `"unacceptable"`  > 5%                         Investigate before using results
+    ==================  ===========================  ================================
+
+    Using the worst of all four MBEs means a perfect Havlena-Odeh balance
+    cannot mask a simulator phase conservation error, and vice versa.
+    """
+
+    from_step: int
+    """The starting time step of the analysis interval (inclusive)."""
+
+    to_step: int
+    """The ending time step of the analysis interval (inclusive)."""
 
 
 @attrs.frozen(slots=True)
@@ -194,7 +561,8 @@ class InjectionFrontAnalysis:
     """Number of cells on/inside the front (i.e. contacted cells)."""
 
     front_volume_fraction: float
-    """Fraction of total grid cells that are contacted (0-1)."""
+    """Fraction of total pore volume that is contacted (0-1), weighted by
+    cell pore volume (thickness * porosity * NTG * cell area)."""
 
     average_front_saturation: float
     """
@@ -217,75 +585,12 @@ class InjectionFrontAnalysis:
 
     front_centroid: typing.Tuple[float, float, float]
     """
-    Approximate centre-of-mass of the contacted region expressed as
-    (i_centroid, j_centroid, k_centroid) in cell-index units.
-    Useful for tracking plume migration direction over time.
+    Saturation-delta weighted centre-of-mass of the contacted region
+    expressed as (i_centroid, j_centroid, k_centroid) in cell-index units.
+    Cells with larger saturation changes pull the centroid toward them,
+    giving a more physically representative plume centre than an unweighted
+    geometric mean.  Useful for tracking plume migration direction over time.
     """
-
-
-@attrs.frozen(slots=True)
-class MaterialBalanceError:
-    """
-    Per-phase material balance error for a simulation interval.
-
-    The error is computed as:
-
-        MBE = (ΔPV_phase - (V_injected - V_produced)) / PV_phase_initial
-
-    where all volumes are at *reservoir conditions* (ft³).
-
-    A positive MBE means the simulator has created fluid; negative means it has
-    lost fluid.  The absolute value is what matters for quality control.
-    """
-
-    oil_mbe: float
-    """
-    Oil phase material balance error as a fraction of initial oil pore volume.
-    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
-    """
-
-    water_mbe: float
-    """
-    Water phase material balance error as a fraction of initial water pore volume.
-    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
-    """
-
-    gas_mbe: float
-    """
-    Gas phase material balance error as a fraction of initial gas pore volume.
-    Ideal value: 0.0.  Acceptable: |MBE| < 0.001 (0.1 %).
-    """
-
-    total_mbe: float
-    """
-    Aggregate (pore-volume-weighted) material balance error across all three
-    phases.  This is the single headline quality metric.
-    """
-
-    oil_pore_volume_initial: float
-    """Initial oil pore volume at reservoir conditions (ft³), used as denominator."""
-
-    water_pore_volume_initial: float
-    """Initial water pore volume at reservoir conditions (ft³)."""
-
-    gas_pore_volume_initial: float
-    """Initial gas pore volume at reservoir conditions (ft³)."""
-
-    quality: typing.Literal["excellent", "acceptable", "marginal", "unacceptable"]
-    """
-    Qualitative rating of `total_mbe` per standard reservoir-engineering thresholds:
-
-    - `"excellent"`     - |total_mbe| < 0.001  (< 0.1 %)
-    - `"acceptable"`    - |total_mbe| < 0.01   (< 1 %)
-    - `"marginal"`      - |total_mbe| < 0.05   (< 5 %)
-    - `"unacceptable"`  - |total_mbe| ≥ 0.05   (≥ 5 %)
-    """
-
-    from_step: int
-    """Starting time step of the interval checked."""
-
-    to_step: int
-    """Ending time step of the interval checked."""
 
 
 def _build_injected_fvf_grids(
@@ -299,7 +604,7 @@ def _build_injected_fvf_grids(
     injector's actual InjectedFluid properties and vectorized PVT correlations.
 
     Cells with no injection activity are NaN. Handles WAG and multi-fluid
-    scenarios correctly — each injector's fluid is used only for the cells
+    scenarios correctly - each injector's fluid is used only for the cells
     it perforates, using that fluid's specific gravity / salinity for FVF.
 
     :param wells: Wells object containing injection wells.
@@ -364,21 +669,24 @@ class ModelAnalyst(typing.Generic[NDimension]):
     def __init__(
         self,
         states: typing.Iterable[ModelState[NDimension]],
-        initial_stoiip: typing.Optional[float] = None,
-        initial_stgiip: typing.Optional[float] = None,
-        initial_stwiip: typing.Optional[float] = None,
+        stoiip: typing.Optional[float] = None,
+        stgiip: typing.Optional[float] = None,
+        free_giip: typing.Optional[float] = None,
+        stwiip: typing.Optional[float] = None,
     ) -> None:
         """
         Initializes the model analyst with a series of model states.
 
         :param states: An iterable of `ModelState` objects representing the reservoir model states
             captured at different time steps during a simulation run.
-        :param initial_stoiip: Optional pre-calculated stock tank oil initially in place (STB).
+        :param stoiip: Optional pre-calculated stock tank oil initially in place (STB).
             Use this when the initial state (step 0) is not available, e.g., in EOR simulations
             that start from a depleted state.
-        :param initial_stgiip: Optional pre-calculated stock tank gas initially in place (SCF).
+        :param stgiip: Optional pre-calculated stock tank gas initially in place (including solution gas) (SCF).
             Use this when the initial state (step 0) is not available.
-        :param initial_stwiip: Optional pre-calculated stock tank water initially in place (STB).
+        :param free_giip: Optional pre-calculated free gas initially in place (no solution gas included) (SCF).
+            Use this when the initial state (step 0) is not available.
+        :param stwiip: Optional pre-calculated stock tank water initially in place (STB).
             Use this when the initial state (step 0) is not available.
         """
         self._states = {int(state.step): state for state in states}
@@ -394,9 +702,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         self._sorted_steps = sorted(self._states.keys())
 
         # Store user-provided initial values for EOR/continuation scenarios
-        self._initial_stoiip = initial_stoiip
-        self._initial_stgiip = initial_stgiip
-        self._initial_stwiip = initial_stwiip
+        self._stoiip = stoiip
+        self._stgiip = stgiip
+        self._stwiip = stwiip
+        self._free_giip = free_giip
 
         if self._max_step != (self._state_count - 1 + self._min_step):
             logger.debug(
@@ -409,10 +718,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         # preventing garbage collection for the lifetime of the class.
         self._cell_area_cache: typing.Dict[typing.Tuple, float] = {}
         self._oil_in_place_cache: typing.Dict[int, float] = {}
-        self._gas_in_place_cache: typing.Dict[int, float] = {}
+        self._free_gas_in_place_cache: typing.Dict[int, float] = {}
+        self._total_gas_in_place_cache: typing.Dict[int, float] = {}
         self._water_in_place_cache: typing.Dict[int, float] = {}
         self._oil_produced_cache: typing.Dict[typing.Tuple, float] = {}
-        self._free_gas_produced_cache: typing.Dict[typing.Tuple, float] = {}
+        self._gas_produced_cache: typing.Dict[typing.Tuple, float] = {}
         self._water_produced_cache: typing.Dict[typing.Tuple, float] = {}
         self._oil_injected_cache: typing.Dict[typing.Tuple, float] = {}
         self._gas_injected_cache: typing.Dict[typing.Tuple, float] = {}
@@ -479,12 +789,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         The stock tank oil initially in place (STOIIP) in stock tank barrels (STB).
 
-        If `initial_stoiip` was provided at initialization, returns that value.
+        If `stoiip` was provided at initialization, returns that value.
         Otherwise, computes from the earliest available state (which may not be step 0
         in EOR/continuation scenarios).
         """
-        if self._initial_stoiip is not None:
-            return self._initial_stoiip
+        if self._stoiip is not None:
+            return self._stoiip
         return self.oil_in_place(self._min_step)
 
     stoiip = stock_tank_oil_initially_in_place
@@ -493,13 +803,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
     @property
     def stock_tank_gas_initially_in_place(self) -> float:
         """
-        The stock tank gas initially in place (STGIIP) in standard cubic feet (SCF).
+        The stock tank gas initially in place (STGIIP) (including solution gas) in standard cubic feet (SCF).
 
-        If `initial_stgiip` was provided at initialization, returns that value.
+        If `stgiip` was provided at initialization, returns that value.
         Otherwise, computes from the earliest available state.
         """
-        if self._initial_stgiip is not None:
-            return self._initial_stgiip
+        if self._stgiip is not None:
+            return self._stgiip
         return self.gas_in_place(self._min_step)
 
     stgiip = stock_tank_gas_initially_in_place
@@ -510,11 +820,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         The stock tank water initially in place in stock tank barrels (STB).
 
-        If `initial_stwiip` was provided at initialization, returns that value.
+        If `stwiip` was provided at initialization, returns that value.
         Otherwise, computes from the earliest available state.
         """
-        if self._initial_stwiip is not None:
-            return self._initial_stwiip
+        if self._stwiip is not None:
+            return self._stwiip
         return self.water_in_place(self._min_step)
 
     @property
@@ -526,12 +836,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
     """Cumulative oil produced in stock tank barrels (STB)."""
 
     @property
-    def cumulative_free_gas_produced(self) -> float:
-        """Return the cumulative gas produced in standard cubic feet (SCF) from the earliest available state to the latest."""
-        return self.free_gas_produced(self._min_step, -1)
+    def cumulative_gas_produced(self) -> float:
+        """Return the cumulative free gas produced in standard cubic feet (SCF) from the earliest available state to the latest."""
+        return self.gas_produced(self._min_step, -1)
 
-    Ng = cumulative_free_gas_produced
-    """Cumulative gas produced in standard cubic feet (SCF)."""
+    Ng = cumulative_gas_produced
+    """Cumulative free gas produced in standard cubic feet (SCF)."""
 
     @property
     def cumulative_water_produced(self) -> float:
@@ -630,38 +940,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         return self.cumulative_oil_produced / self.stock_tank_oil_initially_in_place
 
     @property
-    def free_gas_recovery_factor(self) -> float:
-        """
-        The recovery factor for free gas only, based on initial free gas in place
-        and cumulative free gas produced over the entire simulation period.
-
-        This recovery factor specifically tracks depletion of the free gas phase
-        (gas cap or gas reservoir) and does not include solution gas.
-
-        Free Gas Recovery Factor = Free Gas Produced / Initial Free Gas in Place
-
-        Typical Values:
-            - Gas reservoirs: 60-90% (high recovery due to expansion drive)
-            - Gas caps: 40-70% (depends on pressure maintenance)
-            - Dry gas fields: 70-95% (highest recovery)
-            - Wet gas/condensate: 50-80% (liquid dropout reduces recovery)
-
-        Use this metric for:
-            - Gas cap drive reservoirs
-            - Pure gas reservoirs
-            - Tracking gas cap depletion separately from solution gas
-            - Comparing with initial free gas estimates
-
-        :return: The free gas recovery factor as a fraction (0 to 1)
-        """
-        if self.stock_tank_gas_initially_in_place == 0:
-            return 0.0
-        return (
-            self.cumulative_free_gas_produced / self.stock_tank_gas_initially_in_place
-        )
-
-    @property
-    def total_gas_recovery_factor(self) -> float:
+    def gas_recovery_factor(self) -> float:
         """
         The total gas recovery factor based on all initial gas (free + solution)
         and all cumulative gas produced over the entire simulation period.
@@ -698,75 +977,34 @@ class ModelAnalyst(typing.Generic[NDimension]):
             - Gas sales and revenue calculations
             - Material balance validation
 
-        Note:
-            For pure gas reservoirs with minimal oil, this equals `free_gas_recovery_factor`.
-            For oil reservoirs, this provides a complete picture of gas recovery from all sources.
-
         :return: The total gas recovery factor as a fraction (0 to 1)
         """
-        # Get initial free gas in place
-        initial_free_gas = self.stock_tank_gas_initially_in_place  # scf
-
-        # Get initial solution gas in oil
-        initial_state = self.get_state(self._min_step)
-        if initial_state is None:
-            raise ValueError(
-                f"Initial state (time step {self._min_step}) is not available. Cannot compute total gas recovery factor."
-            )
-
-        avg_initial_gor = np.nanmean(
-            initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-        )  # scf/STB
-        initial_oil = self.stock_tank_oil_initially_in_place  # STB
-        initial_solution_gas = initial_oil * avg_initial_gor  # scf
-
-        # Total initial gas
-        total_initial_gas = initial_free_gas + initial_solution_gas
-        if total_initial_gas == 0:
+        # Get initial gas in place
+        stgiip = self.stock_tank_gas_initially_in_place  # scf
+        if stgiip == 0:
             return 0.0
 
         # Get cumulative free gas produced
-        cumulative_free_gas_produced = (
-            self.cumulative_free_gas_produced
-        )  # scf (free gas only)
+        free_gas_produced = self.cumulative_gas_produced  # scf (free gas only)
 
-        # Track per-step Rs weighted by oil production rather than applying avg_initial_gor
-        # uniformly. Solution gas released at each step depends on Rs at that step's pressure.
-        cumulative_solution_gas_produced = 0.0
+        solution_gas_produced = 0.0
         for s in self._sorted_steps:
             st = self._states[s]
-            rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            solution_gor_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
             oil_production = st.production.oil
             if oil_production is None:
                 continue
 
             step_in_days = st.step_size * c.DAYS_PER_SECOND
             oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_production_stb_day = (
-                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
-            cumulative_solution_gas_produced += float(
-                np.nansum(rs_grid * oil_production_stb_day) * step_in_days
+            oil_production_stb = oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
+            solution_gas_produced += float(
+                np.nansum(solution_gor_grid * oil_production_stb) * step_in_days
             )
 
         # Total gas produced
-        total_gas_produced = (
-            cumulative_free_gas_produced + cumulative_solution_gas_produced
-        )
-        return float(total_gas_produced / total_initial_gas)
-
-    @property
-    def gas_recovery_factor(self) -> float:
-        """
-        The recovery factor based on initial free gas in place and cumulative free gas produced
-        over the entire simulation period.
-
-        Note: This only considers free gas. For total gas recovery including solution gas,
-        use total_gas_recovery_factor property.
-
-        :return: The free gas recovery factor as a fraction (0 to 1)
-        """
-        return self.free_gas_recovery_factor
+        total_gas_produced = free_gas_produced + solution_gas_produced
+        return float(total_gas_produced / stgiip)
 
     def compute_cell_area(self, x_dim: float, y_dim: float) -> float:
         """
@@ -789,81 +1027,195 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :param step: The time step index to compute oil in place for.
         :return: The total oil in place in STB
         """
-        # Resolve step first so cache key is canonical
         step = self._resolve_step(step)
         if step in self._oil_in_place_cache:
             return self._oil_in_place_cache[step]
 
-        state = self.get_state(step)
-        if state is None:
-            logger.debug(
-                f"State at time step {step} not available. Returning 0.0 for oil in place."
-            )
-            return 0.0
+        stoiip = self._stoiip
+        if stoiip is None:
+            if self._min_step in self._oil_in_place_cache:
+                stoiip = self._oil_in_place_cache[self._min_step]
+            else:
+                initial_state = self.get_state(self._min_step)
+                if initial_state is None:
+                    logger.debug(
+                        f"State at initial time step {self._min_step} not available. Returning 0.0 for oil in place."
+                    )
+                    return 0.0
 
-        model = state.model
-        cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
-        logger.debug(
-            f"Computing oil in place at time step {step}, cell area={cell_area_in_acres:.4f} acres"
+                model = initial_state.model
+                cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
+                logger.debug(
+                    f"Computing oil in place at time step {self._min_step}, cell area={cell_area_in_acres:.4f} acres"
+                )
+                cell_area_grid = uniform_grid(
+                    grid_shape=model.grid_shape, value=cell_area_in_acres
+                )
+                stoiip_grid = compute_hydrocarbon_in_place(
+                    area=cell_area_grid,
+                    thickness=model.thickness_grid,
+                    porosity=model.rock_properties.porosity_grid,
+                    phase_saturation=model.fluid_properties.oil_saturation_grid,
+                    formation_volume_factor=model.fluid_properties.oil_formation_volume_factor_grid,
+                    net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
+                    hydrocarbon_type="oil",
+                    acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                    acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
+                )
+                stoiip = float(np.nansum(stoiip_grid))  # type: ignore[return-value]
+                self._oil_in_place_cache[self._min_step] = stoiip
+
+        self._oil_in_place_cache[step] = stoiip - self.oil_produced(
+            from_step=self._min_step, to_step=step
         )
-        cell_area_grid = uniform_grid(
-            grid_shape=model.grid_shape, value=cell_area_in_acres
-        )
-        stoiip_grid = compute_hydrocarbon_in_place(
-            area=cell_area_grid,
-            thickness=model.thickness_grid,
-            porosity=model.rock_properties.porosity_grid,
-            phase_saturation=model.fluid_properties.oil_saturation_grid,
-            formation_volume_factor=model.fluid_properties.oil_formation_volume_factor_grid,
-            net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
-            hydrocarbon_type="oil",
-            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
-            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
-        )
-        result = np.nansum(stoiip_grid)  # type: ignore[return-value]
-        self._oil_in_place_cache[step] = float(result)
         return self._oil_in_place_cache[step]
 
-    def gas_in_place(self, step: int = -1) -> float:
+    def free_gas_in_place(self, step: int = -1) -> float:
         """
-        Computes the total free gas in place at a specific time step.
+        Computes the free gas in place at a specific time step.
 
         :param step: The time step index to compute gas in place for.
         :return: The total free gas in place in SCF
         """
         step = self._resolve_step(step)
-        if step in self._gas_in_place_cache:
-            return self._gas_in_place_cache[step]
+        if step in self._free_gas_in_place_cache:
+            return self._free_gas_in_place_cache[step]
 
-        state = self.get_state(step)
-        if state is None:
-            logger.debug(
-                f"State at time step {step} not available. Returning 0.0 for gas in place."
+        free_giip = self._free_giip
+        if free_giip is None:
+            if self._min_step in self._free_gas_in_place_cache:
+                free_giip = self._free_gas_in_place_cache[self._min_step]
+            else:
+                initial_state = self.get_state(self._min_step)
+                if initial_state is None:
+                    logger.debug(
+                        f"State at initial time step {self._min_step} not available. Returning 0.0 for free gas in place."
+                    )
+                    return 0.0
+
+                model = initial_state.model
+                cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
+                logger.debug(
+                    f"Computing free gas in place at time step {self._min_step}, cell area={cell_area_in_acres:.4f} acres"
+                )
+                cell_area_grid = uniform_grid(
+                    grid_shape=model.grid_shape, value=cell_area_in_acres
+                )
+                giip_grid = compute_hydrocarbon_in_place(
+                    area=cell_area_grid,
+                    thickness=model.thickness_grid,
+                    porosity=model.rock_properties.porosity_grid,
+                    phase_saturation=model.fluid_properties.gas_saturation_grid,
+                    formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
+                    net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
+                    hydrocarbon_type="gas",
+                    acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                    acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
+                )
+                free_giip = float(np.nansum(giip_grid))
+                self._free_gas_in_place_cache[self._min_step] = free_giip
+
+        # Current free gas = GIIP - cumulative free gas produced + cumulative gas injected
+        self._free_gas_in_place_cache[step] = (
+            free_giip
+            + self.gas_injected(from_step=self._min_step, to_step=step)
+            - self.gas_produced(from_step=self._min_step, to_step=step)
+        )
+        return self._free_gas_in_place_cache[step]
+
+    def gas_in_place(self, step: int = -1) -> float:
+        """
+        Computes the total gas in place (including solution gas) at a specific time step.
+
+        :param step: The time step index to compute gas in place for.
+        :return: The total gas in place (free + solution) in SCF
+        """
+        step = self._resolve_step(step)
+        if step in self._total_gas_in_place_cache:
+            return self._total_gas_in_place_cache[step]
+
+        # STGIIP = GIIP_free + (STOIIP * Rs_initial)
+        stgiip = self._stgiip
+        if stgiip is None:
+            if self._min_step in self._total_gas_in_place_cache:
+                stgiip = self._total_gas_in_place_cache[self._min_step]
+            else:
+                initial_state = self.get_state(self._min_step)
+                if initial_state is None:
+                    logger.debug(
+                        f"State at initial time step {self._min_step} not available. Returning 0.0 for total gas in place."
+                    )
+                    return 0.0
+
+                model = initial_state.model
+                cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
+                logger.debug(
+                    f"Computing total gas in place at time step {self._min_step}, cell area={cell_area_in_acres:.4f} acres"
+                )
+                cell_area_grid = uniform_grid(
+                    grid_shape=model.grid_shape, value=cell_area_in_acres
+                )
+                acre_ft_to_bbl = c.ACRE_FOOT_TO_BARRELS
+                acre_ft_to_ft3 = c.ACRE_FOOT_TO_CUBIC_FEET
+
+                giip_grid = compute_hydrocarbon_in_place(
+                    area=cell_area_grid,
+                    thickness=model.thickness_grid,
+                    porosity=model.rock_properties.porosity_grid,
+                    phase_saturation=model.fluid_properties.gas_saturation_grid,
+                    formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
+                    net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
+                    hydrocarbon_type="gas",
+                    acre_ft_to_bbl=acre_ft_to_bbl,
+                    acre_ft_to_ft3=acre_ft_to_ft3,
+                )
+                stoiip_grid = compute_hydrocarbon_in_place(
+                    area=cell_area_grid,
+                    thickness=model.thickness_grid,
+                    porosity=model.rock_properties.porosity_grid,
+                    phase_saturation=model.fluid_properties.oil_saturation_grid,
+                    formation_volume_factor=model.fluid_properties.oil_formation_volume_factor_grid,
+                    net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
+                    hydrocarbon_type="oil",
+                    acre_ft_to_bbl=acre_ft_to_bbl,
+                    acre_ft_to_ft3=acre_ft_to_ft3,
+                )
+                stgiip_grid = giip_grid + (
+                    stoiip_grid * model.fluid_properties.solution_gas_to_oil_ratio_grid
+                )
+                stgiip = float(np.nansum(stgiip_grid))
+                self._total_gas_in_place_cache[self._min_step] = stgiip
+
+        # Total gas change = free gas produced (net of injection) + solution gas produced with oil
+        # Solution gas produced = sum over steps of Rs * oil_production_stb * dt
+        # (Rs varies with pressure so we must integrate step by step, not use a single average)
+        free_gas_produced = self.gas_produced(from_step=self._min_step, to_step=step)
+        free_gas_injected = self.gas_injected(from_step=self._min_step, to_step=step)
+
+        solution_gas_produced = 0.0
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
+        for s in self._sorted_steps:
+            if s > step:
+                break
+
+            st = self._states[s]
+            oil_production = st.production.oil
+            if oil_production is None:
+                continue
+
+            step_in_days = st.step_size * days_per_second
+            oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
+            solution_gor_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            oil_production_stb = oil_production * ft3_to_bbl / oil_fvf_grid
+            solution_gas_produced += float(
+                np.nansum(solution_gor_grid * oil_production_stb) * step_in_days
             )
-            return 0.0
 
-        model = state.model
-        cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
-        logger.debug(
-            f"Computing gas in place at time step {step}, cell area={cell_area_in_acres:.4f} acres"
+        self._total_gas_in_place_cache[step] = (
+            stgiip + free_gas_injected - free_gas_produced - solution_gas_produced
         )
-        cell_area_grid = uniform_grid(
-            grid_shape=model.grid_shape, value=cell_area_in_acres
-        )
-        stgiip_grid = compute_hydrocarbon_in_place(
-            area=cell_area_grid,
-            thickness=model.thickness_grid,
-            porosity=model.rock_properties.porosity_grid,
-            phase_saturation=model.fluid_properties.gas_saturation_grid,
-            formation_volume_factor=model.fluid_properties.gas_formation_volume_factor_grid,
-            net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
-            hydrocarbon_type="gas",
-            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
-            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
-        )
-        result = np.nansum(stgiip_grid)  # type: ignore[return-value]
-        self._gas_in_place_cache[step] = float(result)
-        return self._gas_in_place_cache[step]
+        return self._total_gas_in_place_cache[step]
 
     def water_in_place(self, step: int = -1) -> float:
         """
@@ -876,32 +1228,44 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if step in self._water_in_place_cache:
             return self._water_in_place_cache[step]
 
-        state = self.get_state(step)
-        if state is None:
-            logger.debug(
-                f"State at time step {step} not available. Returning 0.0 for water in place."
-            )
-            return 0.0
+        stwiip = self._stwiip
+        if stwiip is None:
+            if self._min_step in self._water_in_place_cache:
+                stwiip = self._water_in_place_cache[self._min_step]
+            else:
+                initial_state = self.get_state(self._min_step)
+                if initial_state is None:
+                    logger.debug(
+                        f"State at initial time step {self._min_step} not available. Returning 0.0 for water in place."
+                    )
+                    return 0.0
 
-        model = state.model
-        logger.debug(f"Computing water in place at time step {step}")
-        cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
-        cell_area_grid = uniform_grid(
-            grid_shape=model.grid_shape, value=cell_area_in_acres
+                model = initial_state.model
+                logger.debug(f"Computing water in place at time step {self._min_step}")
+                cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
+                cell_area_grid = uniform_grid(
+                    grid_shape=model.grid_shape, value=cell_area_in_acres
+                )
+                stwiip_grid = compute_hydrocarbon_in_place(
+                    area=cell_area_grid,
+                    thickness=model.thickness_grid,
+                    porosity=model.rock_properties.porosity_grid,
+                    phase_saturation=model.fluid_properties.water_saturation_grid,
+                    formation_volume_factor=model.fluid_properties.water_formation_volume_factor_grid,
+                    net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
+                    hydrocarbon_type="water",
+                    acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
+                    acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
+                )
+                stwiip = float(np.nansum(stwiip_grid))
+                self._water_in_place_cache[self._min_step] = stwiip
+
+        # Current water = initial water + injected - produced
+        self._water_in_place_cache[step] = (
+            stwiip
+            + self.water_injected(from_step=self._min_step, to_step=step)
+            - self.water_produced(from_step=self._min_step, to_step=step)
         )
-        water_in_place_grid = compute_hydrocarbon_in_place(
-            area=cell_area_grid,
-            thickness=model.thickness_grid,
-            porosity=model.rock_properties.porosity_grid,
-            phase_saturation=model.fluid_properties.water_saturation_grid,
-            formation_volume_factor=model.fluid_properties.water_formation_volume_factor_grid,
-            net_to_gross_ratio=model.rock_properties.net_to_gross_ratio_grid,
-            hydrocarbon_type="oil",  # Use "oil" since there's no "water" hydrocarbon_type and they use equivalent calculation
-            acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
-            acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
-        )
-        result = np.nansum(water_in_place_grid)  # type: ignore[return-value]
-        self._water_in_place_cache[step] = float(result)
         return self._water_in_place_cache[step]
 
     def oil_in_place_history(
@@ -934,7 +1298,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         for t in range(from_step, to_step + 1, interval):
             if t in self._states:
-                yield (t, self.gas_in_place(t))
+                yield (t, self.free_gas_in_place(t))
 
     def water_in_place_history(
         self, from_step: int = 0, to_step: int = -1, interval: int = 1
@@ -1016,6 +1380,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1026,24 +1392,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if oil_production is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            # Compute production in STB
-            oil_production_stb_day = (
-                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
+            oil_production_stb = oil_production * ft3_to_bbl / oil_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                oil_production_stb_day = oil_production_stb_day * mask
+                oil_production_stb = oil_production_stb * mask
 
-            total_production += np.nansum(oil_production_stb_day * step_in_days)
+            total_production += np.nansum(oil_production_stb * step_in_days)
 
-        result = float(total_production)
-        self._oil_produced_cache[key] = result
-        return result
+        self._oil_produced_cache[key] = float(total_production)
+        return self._oil_produced_cache[key]
 
-    def free_gas_produced(
+    def gas_produced(
         self,
         from_step: int,
         to_step: int,
@@ -1069,18 +1431,18 @@ class ModelAnalyst(typing.Generic[NDimension]):
         """
         to_step = self._resolve_step(to_step)
         cells_obj = _ensure_cells(cells)
-        return self._free_gas_produced(from_step, to_step, cells_obj)
+        return self._gas_produced(from_step, to_step, cells_obj)
 
-    def _free_gas_produced(
+    def _gas_produced(
         self,
         from_step: int,
         to_step: int,
         cells_obj: typing.Optional[Cells],
     ) -> float:
-        """Internal cached implementation of `free_gas_produced`."""
+        """Internal cached implementation of `gas_produced`."""
         key = (from_step, to_step, cells_obj)
-        if key in self._free_gas_produced_cache:
-            return self._free_gas_produced_cache[key]
+        if key in self._gas_produced_cache:
+            return self._gas_produced_cache[key]
 
         total_production = 0.0
         mask = None
@@ -1098,6 +1460,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1108,19 +1471,18 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if gas_production is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            gas_production_SCF_day = gas_production / gas_fvf_grid
+            gas_production_scf = gas_production / gas_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                gas_production_SCF_day = gas_production_SCF_day * mask
+                gas_production_scf = gas_production_scf * mask
 
-            total_production += np.nansum(gas_production_SCF_day * step_in_days)
+            total_production += np.nansum(gas_production_scf * step_in_days)
 
-        result = float(total_production)
-        self._free_gas_produced_cache[key] = result
-        return result
+        self._gas_produced_cache[key] = float(total_production)
+        return self._gas_produced_cache[key]
 
     def water_produced(
         self,
@@ -1177,6 +1539,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1187,23 +1551,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if water_production is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_production_stb_day = (
-                water_production * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
-            )
+            water_production_stb = water_production * ft3_to_bbl / water_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                water_production_stb_day = water_production_stb_day * mask
+                water_production_stb = water_production_stb * mask
 
-            total_production += np.nansum(water_production_stb_day * step_in_days)
+            total_production += np.nansum(water_production_stb * step_in_days)
 
-        result = float(total_production)
-        self._water_produced_cache[key] = result
-        return result
+        self._water_produced_cache[key] = float(total_production)
+        return self._water_produced_cache[key]
 
     def oil_injected(
         self,
@@ -1261,6 +1622,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1271,21 +1634,18 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if oil_injection is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_injection_stb_day = (
-                oil_injection * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
+            oil_injection_stb = oil_injection * ft3_to_bbl / oil_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                oil_injection_stb_day = oil_injection_stb_day * mask
+                oil_injection_stb = oil_injection_stb * mask
 
-            total_injection += np.nansum(oil_injection_stb_day * step_in_days)
+            total_injection += np.nansum(oil_injection_stb * step_in_days)
 
-        result = float(total_injection)
-        self._oil_injected_cache[key] = result
-        return result
+        self._oil_injected_cache[key] = float(total_injection)
+        return self._oil_injected_cache[key]
 
     def gas_injected(
         self,
@@ -1343,6 +1703,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1353,25 +1714,24 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if gas_injection is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             injected_gas_fvf_grid, _ = _build_injected_fvf_grids(
                 wells=state.wells,
                 pressure_grid=state.model.fluid_properties.pressure_grid,
                 temperature_grid=state.model.fluid_properties.temperature_grid,
                 grid_shape=state.model.grid_shape,
             )
-            # NaN where no injector: gas_injection is also 0 there, nansum skips correctly
-            gas_injection_scf_day = gas_injection / injected_gas_fvf_grid
+            # NaN where no injector: `gas_injection` is also 0 there, nansum skips correctly
+            gas_injection_scf = gas_injection / injected_gas_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                gas_injection_scf_day = gas_injection_scf_day * mask
+                gas_injection_scf = gas_injection_scf * mask
 
-            total_injection += np.nansum(gas_injection_scf_day * step_in_days)
+            total_injection += np.nansum(gas_injection_scf * step_in_days)
 
-        result = float(total_injection)
-        self._gas_injected_cache[key] = result
-        return result
+        self._gas_injected_cache[key] = float(total_injection)
+        return self._gas_injected_cache[key]
 
     def water_injected(
         self,
@@ -1428,6 +1788,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     first_state.model.grid_shape, first_state.wells
                 )
 
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
         for t in range(from_step, to_step + 1):
             if t not in self._states:
                 continue
@@ -1438,26 +1800,23 @@ class ModelAnalyst(typing.Generic[NDimension]):
             if water_injection is None:
                 continue
 
-            step_in_days = state.step_size * c.DAYS_PER_SECOND
+            step_in_days = state.step_size * days_per_second
             _, injected_water_fvf_grid = _build_injected_fvf_grids(
                 wells=state.wells,
                 pressure_grid=state.model.fluid_properties.pressure_grid,
                 temperature_grid=state.model.fluid_properties.temperature_grid,
                 grid_shape=state.model.grid_shape,
             )
-            water_injection_stb_day = (
-                water_injection * c.CUBIC_FEET_TO_BARRELS / injected_water_fvf_grid
-            )
+            water_injection_stb = water_injection * ft3_to_bbl / injected_water_fvf_grid
 
             # Apply mask if filtering
             if mask is not None:
-                water_injection_stb_day = water_injection_stb_day * mask
+                water_injection_stb = water_injection_stb * mask
 
-            total_injection += np.nansum(water_injection_stb_day * step_in_days)
+            total_injection += np.nansum(water_injection_stb * step_in_days)
 
-        result = float(total_injection)
-        self._water_injected_cache[key] = result
-        return result
+        self._water_injected_cache[key] = float(total_injection)
+        return self._water_injected_cache[key]
 
     def oil_production_history(
         self,
@@ -1513,7 +1872,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 # Use time step t for both from and to to get production at that step
                 yield (t, self.oil_produced(t, t, cells=cells_obj))
 
-    def free_gas_production_history(
+    def gas_production_history(
         self,
         from_step: int = 0,
         to_step: int = -1,
@@ -1544,20 +1903,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
             cumulative_total = 0.0
             # First, catch up from `min_step` to `from_step` - 1 (if needed)
             if from_step > self._min_step:
-                cumulative_total = self.free_gas_produced(
+                cumulative_total = self.gas_produced(
                     self._min_step, from_step - 1, cells=cells_obj
                 )
 
             for t in range(from_step, to_step + 1, interval):
                 # Add production for steps since last yield
                 if t == from_step:
-                    cumulative_total += self.free_gas_produced(
+                    cumulative_total += self.gas_produced(
                         from_step, from_step, cells=cells_obj
                     )
                 else:
                     # Add production from last yielded step to current step
                     prev_t = t - interval
-                    cumulative_total += self.free_gas_produced(
+                    cumulative_total += self.gas_produced(
                         prev_t + 1, t, cells=cells_obj
                     )
                 yield (t, cumulative_total)
@@ -1565,7 +1924,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             for t in range(from_step, to_step + 1, interval):
                 # Calculate production at time step t (exclusive)
                 # Use time step t for both from and to to get production at that step
-                yield (t, self.free_gas_produced(t, t, cells=cells_obj))
+                yield (t, self.gas_produced(t, t, cells=cells_obj))
 
     def water_production_history(
         self,
@@ -1891,102 +2250,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 rf = cumulative_oil_produced / oiip
                 yield (t, rf)
 
-    def free_gas_recovery_factor_history(
-        self,
-        from_step: int = 0,
-        to_step: int = -1,
-        interval: int = 1,
-        cells: CellFilter = None,
-        stgiip: typing.Optional[float] = None,
-    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
-        """
-        Get the free gas recovery factor history over time.
-
-        This function computes the free gas recovery factor at each time step, showing
-        how the recovery of free gas (gas cap or gas phase) evolves throughout the simulation.
-
-        Free Gas RF(t) = Cumulative Free Gas Produced(0, t) / Initial Free Gas in Place
-
-        :param from_step: The starting time step index (inclusive). Default is 0.
-        :param to_step: The ending time step index (inclusive). Default is -1 (last time step).
-        :param interval: Time step interval for sampling. Default is 1.
-        :param cells: Optional filter for specific cells, well name, or region.
-            - None: Entire reservoir (default)
-            - str: Well name (e.g., "PROD-1")
-            - (i, j, k): Single cell
-            - [(i1,j1,k1), ...]: List of cells
-            - (slice, slice, slice): Region
-            When cells is specified, GIIP is also calculated for the same filtered region.
-        :param stgiip: Optional pre-calculated Stock Tank Gas Initially in Place (STGIIP) value to use instead of computing from initial state.
-            This will be needed if the initial state of the reservoir is not available in the states provided.
-            Especially the the case of EOR simulations where the initial state may not be included, and its starting
-            point is after some production has already occurred.
-        :return: A generator yielding tuples of (step, recovery_factor).
-
-        Example:
-        ```python
-        analyst = ModelAnalyst(states)
-
-        # Track gas cap depletion over time
-        for t, rf in analyst.free_gas_recovery_factor_history():
-            print(f"Time step {t}: Free Gas RF = {rf:.2%}")
-        ```
-        """
-        cells_obj = _ensure_cells(cells)
-        to_step = self._resolve_step(to_step)
-
-        # If cells filter is specified, compute GIIP for that region
-        if stgiip is not None:
-            giip = stgiip
-        elif cells_obj is None:
-            giip = self.stock_tank_gas_initially_in_place
-        else:
-            initial_state = self.get_state(self._min_step)
-            if initial_state is None:
-                raise ValidationError(
-                    f"Initial state (step {self._min_step}) not available"
-                )
-
-            mask = cells_obj.get_mask(
-                initial_state.model.grid_shape, initial_state.wells
-            )
-            model = initial_state.model
-            gas_saturation = model.fluid_properties.gas_saturation_grid
-            gas_fvf = model.fluid_properties.gas_formation_volume_factor_grid
-            porosity = model.rock_properties.porosity_grid
-            net_to_gross = model.rock_properties.net_to_gross_ratio_grid
-            thickness = model.thickness_grid
-            cell_area_in_acres = self.compute_cell_area(*model.cell_dimension[:2])
-            cell_area_grid = uniform_grid(
-                grid_shape=model.grid_shape, value=cell_area_in_acres
-            )
-            giip_grid = compute_hydrocarbon_in_place(
-                area=cell_area_grid,
-                thickness=thickness,
-                porosity=porosity,
-                phase_saturation=gas_saturation,
-                formation_volume_factor=gas_fvf,
-                net_to_gross_ratio=net_to_gross,
-                hydrocarbon_type="gas",
-                acre_ft_to_bbl=c.ACRE_FOOT_TO_BARRELS,
-                acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
-            )
-            if mask is not None:
-                giip_grid = np.where(mask, giip_grid, 0.0)
-            giip = float(np.nansum(giip_grid))
-
-        if giip == 0:
-            for t in range(from_step, to_step + 1, interval):
-                yield (t, 0.0)
-        else:
-            for t in range(from_step, to_step + 1, interval):
-                cumulative_gas_produced = self.free_gas_produced(
-                    self._min_step, t, cells=cells_obj
-                )
-                rf = cumulative_gas_produced / giip
-                yield (t, rf)
-
-    def total_gas_recovery_factor_history(
+    def gas_recovery_factor_history(
         self,
         from_step: int = 0,
         to_step: int = -1,
@@ -2019,7 +2283,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         analyst = ModelAnalyst(states)
 
         # Track total gas recovery (free + solution) over time
-        for t, rf in analyst.total_gas_recovery_factor_history():
+        for t, rf in analyst.gas_recovery_factor_history():
             print(f"Time step {t}: Total Gas RF = {rf:.2%}")
         ```
         """
@@ -2034,8 +2298,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # Get initial total gas
         if cells_obj is None:
-            initial_free_gas = self.stock_tank_gas_initially_in_place
-            initial_oil = self.stock_tank_oil_initially_in_place
+            total_initial_gas = self.stock_tank_gas_initially_in_place
         else:
             mask = cells_obj.get_mask(
                 initial_state.model.grid_shape, initial_state.wells
@@ -2065,12 +2328,11 @@ class ModelAnalyst(typing.Generic[NDimension]):
             )
             if mask is not None:
                 giip_grid = np.where(mask, giip_grid, 0.0)
-            initial_free_gas = float(np.nansum(giip_grid))
 
             # Calculate STOIIP for the filtered region
             oil_saturation = model.fluid_properties.oil_saturation_grid
             oil_fvf = model.fluid_properties.oil_formation_volume_factor_grid
-            stoiip_grid = compute_hydrocarbon_in_place(
+            oiip_grid = compute_hydrocarbon_in_place(
                 area=cell_area_grid,
                 thickness=thickness,
                 porosity=porosity,
@@ -2082,95 +2344,68 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 acre_ft_to_ft3=c.ACRE_FOOT_TO_CUBIC_FEET,
             )
             if mask is not None:
-                stoiip_grid = np.where(mask, stoiip_grid, 0.0)
-            initial_oil = float(np.nansum(stoiip_grid))
+                oiip_grid = np.where(mask, oiip_grid, 0.0)
 
-        avg_initial_gor = np.nanmean(
-            initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-        )
-        initial_solution_gas = initial_oil * avg_initial_gor
-        total_initial_gas = initial_free_gas + initial_solution_gas
+            initial_solution_gas_grid = (
+                oiip_grid
+                * initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            )
+            total_initial_gas_grid = giip_grid + initial_solution_gas_grid
+            total_initial_gas = np.nansum(total_initial_gas_grid)
 
         if total_initial_gas == 0:
             for t in range(from_step, to_step + 1, interval):
                 yield (t, 0.0)
         else:
+            # Pre-compute per-step solution gas contributions in O(N),
+            # then accumulate incrementally to avoid O(N²) re-summation.
+            step_solution_gas: dict[int, float] = {}
+            days_per_second = c.DAYS_PER_SECOND
+            ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
+            for s in self._sorted_steps:
+                if s > to_step:
+                    break
+                st = self._states[s]
+                oil_production = st.production.oil
+                if oil_production is None:
+                    continue
+
+                step_in_days = st.step_size * days_per_second
+                oil_fvf_grid = (
+                    st.model.fluid_properties.oil_formation_volume_factor_grid
+                )
+                solution_gor_grid = (
+                    st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+                )
+                oil_production_stb = oil_production * ft3_to_bbl / oil_fvf_grid
+                if cells_obj is not None:
+                    mask = cells_obj.get_mask(st.model.grid_shape, st.wells)
+                    oil_production_stb = np.where(
+                        mask,  # type: ignore[arg-type]
+                        oil_production_stb,
+                        0.0,
+                    )
+                    solution_gor_grid = np.where(mask, solution_gor_grid, 0.0)  # type: ignore[arg-type]
+
+                step_solution_gas[s] = float(
+                    np.nansum(solution_gor_grid * oil_production_stb) * step_in_days
+                )
+
+            cumulative_solution_gas = 0.0
+            sorted_idx = 0
             for t in range(from_step, to_step + 1, interval):
-                cumulative_free_gas = self.free_gas_produced(
+                # Accumulate solution gas contributions up to step t
+                while sorted_idx < len(self._sorted_steps) and self._sorted_steps[sorted_idx] <= t:
+                    s = self._sorted_steps[sorted_idx]
+                    cumulative_solution_gas += step_solution_gas.get(s, 0.0)
+                    sorted_idx += 1
+
+                cumulative_free_gas = self.gas_produced(
                     self._min_step, t, cells=cells_obj
                 )
-                # Calculate solution gas step-by-step to account for pressure-dependent Rs
-                cumulative_solution_gas = 0.0
-                for s in self._sorted_steps:
-                    if s > t:
-                        break
-                    st = self._states[s]
-                    rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
-                    oil_production = st.production.oil
-                    if oil_production is None:
-                        continue
-
-                    step_in_days = st.step_size * c.DAYS_PER_SECOND
-                    oil_fvf_grid = (
-                        st.model.fluid_properties.oil_formation_volume_factor_grid
-                    )
-                    oil_production_stb_day = (
-                        oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-                    )
-                    if cells_obj is not None:
-                        mask = cells_obj.get_mask(st.model.grid_shape, st.wells)
-                        oil_production_stb_day = np.where(
-                            mask,  # type: ignore[arg-type]
-                            oil_production_stb_day,
-                            0.0,
-                        )
-                        rs_grid = np.where(mask, rs_grid, 0.0)  # type: ignore[arg-type]
-
-                    cumulative_solution_gas += float(
-                        np.nansum(rs_grid * oil_production_stb_day) * step_in_days
-                    )
-
                 total_gas_produced = cumulative_free_gas + cumulative_solution_gas
                 rf = float(total_gas_produced / total_initial_gas)
                 yield (t, rf)
-
-    def gas_recovery_factor_history(
-        self,
-        from_step: int = 0,
-        to_step: int = -1,
-        interval: int = 1,
-        cells: CellFilter = None,
-        stgiip: typing.Optional[float] = None,
-    ) -> typing.Generator[typing.Tuple[int, float], None, None]:
-        """
-        Get the gas recovery factor history over time.
-
-        This is an alias for free_gas_recovery_factor_history. For total gas recovery
-        including solution gas, use total_gas_recovery_factor_history.
-
-        :param from_step: The starting time step index (inclusive). Default is 0.
-        :param to_step: The ending time step index (inclusive). Default is -1 (last time step).
-        :param interval: Time step interval for sampling. Default is 1.
-        :param cells: Optional filter for specific cells, well name, or region.
-            - None: Entire reservoir (default)
-            - str: Well name (e.g., "PROD-1")
-            - (i, j, k): Single cell
-            - [(i1,j1,k1), ...]: List of cells
-            - (slice, slice, slice): Region
-            When cells is specified, GIIP is also calculated for the same filtered region.
-        :param stgiip: Optional pre-calculated Stock Tank Gas Initially in Place (STGIIP) value to use instead of computing from initial state.
-            This will be needed if the initial state of the reservoir is not available in the states provided.
-            Especially the the case of EOR simulations where the initial state may not be included, and its starting
-            point is after some production has already occurred.
-        :return: A generator yielding tuples of (step, recovery_factor).
-        """
-        yield from self.free_gas_recovery_factor_history(
-            from_step=from_step,
-            to_step=to_step,
-            interval=interval,
-            cells=cells,
-            stgiip=stgiip,
-        )
 
     def reservoir_volumetrics_analysis(self, step: int = -1) -> ReservoirVolumetrics:
         """
@@ -2212,7 +2447,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
         return ReservoirVolumetrics(
             oil_in_place=self.oil_in_place(step),
-            gas_in_place=self.gas_in_place(step),
+            gas_in_place=self.free_gas_in_place(step),
             water_in_place=self.water_in_place(step),
             pore_volume=total_pore_volume,
             hydrocarbon_pore_volume=hydrocarbon_pore_volume,
@@ -2265,32 +2500,32 @@ class ModelAnalyst(typing.Generic[NDimension]):
         free_gas_rate = 0.0
         solution_gas_rate = 0.0
         water_rate = 0.0
-        oil_production_stb_day = None
+        oil_production_stb = None
 
         # Sum production rates from all grid cells
         if (oil_production := state.production.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_production_stb_day = (
-                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
+            oil_production_stb = oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
             if mask is not None:
-                oil_production_stb_day = np.where(mask, oil_production_stb_day, 0.0)
-            oil_rate = np.nansum(oil_production_stb_day)
+                oil_production_stb = np.where(mask, oil_production_stb, 0.0)
+            oil_rate = np.nansum(oil_production_stb)
 
         if (gas_production := state.production.gas) is not None:
             # Convert from ft³/day to SCF/day using gas FVF (free gas phase only)
             gas_fvf_grid = state.model.fluid_properties.gas_formation_volume_factor_grid
-            gas_production_scf_day = gas_production / gas_fvf_grid
+            gas_production_scf = gas_production / gas_fvf_grid
             if mask is not None:
-                gas_production_scf_day = np.where(mask, gas_production_scf_day, 0.0)
-            free_gas_rate = float(np.nansum(gas_production_scf_day))
+                gas_production_scf = np.where(mask, gas_production_scf, 0.0)
+            free_gas_rate = float(np.nansum(gas_production_scf))
 
         # Solution gas: gas dissolved in produced oil that flashes out at surface conditions.
         # Amount = Rs (SCF/STB) * oil production (STB/day)
-        if oil_production_stb_day is not None:
-            rs_grid = state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-            solution_gas_rate = float(np.nansum(rs_grid * oil_production_stb_day))
+        if oil_production_stb is not None:
+            solution_gor_grid = (
+                state.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            )
+            solution_gas_rate = float(np.nansum(solution_gor_grid * oil_production_stb))
 
         # Total gas = free gas phase + solution gas from oil
         gas_rate = free_gas_rate + solution_gas_rate
@@ -2300,12 +2535,12 @@ class ModelAnalyst(typing.Generic[NDimension]):
             water_fvf_grid = (
                 state.model.fluid_properties.water_formation_volume_factor_grid
             )
-            water_production_stb_day = (
+            water_production_stb = (
                 water_production * c.CUBIC_FEET_TO_BARRELS / water_fvf_grid
             )
             if mask is not None:
-                water_production_stb_day = np.where(mask, water_production_stb_day, 0.0)
-            water_rate = np.nansum(water_production_stb_day)
+                water_production_stb = np.where(mask, water_production_stb, 0.0)
+            water_rate = np.nansum(water_production_stb)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
@@ -2381,12 +2616,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
         if (oil_injection := state.injection.oil) is not None:
             # Convert from ft³/day to STB/day using oil FVF
             oil_fvf_grid = state.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_injection_stb_day = (
-                oil_injection * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
+            oil_injection_stb = oil_injection * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
             if mask is not None:
-                oil_injection_stb_day = np.where(mask, oil_injection_stb_day, 0.0)
-            oil_rate = np.nansum(oil_injection_stb_day)
+                oil_injection_stb = np.where(mask, oil_injection_stb, 0.0)
+            oil_rate = np.nansum(oil_injection_stb)
 
         injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
             wells=state.wells,
@@ -2395,18 +2628,18 @@ class ModelAnalyst(typing.Generic[NDimension]):
             grid_shape=state.model.grid_shape,
         )
         if (gas_injection := state.injection.gas) is not None:
-            gas_injection_scf_day = gas_injection / injected_gas_fvf_grid
+            gas_injection_scf = gas_injection / injected_gas_fvf_grid
             if mask is not None:
-                gas_injection_scf_day = np.where(mask, gas_injection_scf_day, 0.0)
-            gas_rate = np.nansum(gas_injection_scf_day)
+                gas_injection_scf = np.where(mask, gas_injection_scf, 0.0)
+            gas_rate = np.nansum(gas_injection_scf)
 
         if (water_injection := state.injection.water) is not None:
-            water_injection_stb_day = (
+            water_injection_stb = (
                 water_injection * c.CUBIC_FEET_TO_BARRELS / injected_water_fvf_grid
             )
             if mask is not None:
-                water_injection_stb_day = np.where(mask, water_injection_stb_day, 0.0)
-            water_rate = np.nansum(water_injection_stb_day)
+                water_injection_stb = np.where(mask, water_injection_stb, 0.0)
+            water_rate = np.nansum(water_injection_stb)
 
         total_liquid_rate = oil_rate + water_rate
         gas_oil_ratio = gas_rate / oil_rate if oil_rate > 0 else 0.0
@@ -2432,7 +2665,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         :return: `CumulativeProduction` containing detailed cumulative analysis.
         """
         cumulative_oil = self.oil_produced(self._min_step, step)
-        cumulative_free_gas = self.free_gas_produced(self._min_step, step)
+        cumulative_free_gas = self.gas_produced(self._min_step, step)
         cumulative_water = self.water_produced(self._min_step, step)
         return CumulativeProduction(
             cumulative_oil=cumulative_oil,
@@ -2442,47 +2675,51 @@ class ModelAnalyst(typing.Generic[NDimension]):
             gas_recovery_factor=self.gas_recovery_factor,
         )
 
-    def material_balance_analysis(self, step: int = -1) -> MaterialBalanceAnalysis:
+    def material_balance(self, step: int = -1) -> MaterialBalance:
         """
-        Material balance analysis for reservoir drive mechanism identification.
+        Material balance analysis for reservoir drive mechanism identification
+        using the Havlena-Odeh formulation.
 
-        Uses the generalized material balance equation to quantify drive mechanisms:
-        - Solution gas drive (oil expansion + gas coming out of solution)
-        - Gas cap drive (free gas expansion)
-        - Natural water drive (aquifer influx)
-        - Rock and fluid compressibility drive
-        - Combined drive indices
+        Computes drive mechanisms, drive indices, and diagnostic pressure/GOR
+        metrics at a specific time step using:
 
-        The generalized material balance equation is:
-
-        N * (Boi - Bo) + N * (Rsi - Rs) * Bg + G * (Bg - Bgi) + W * (Bw - Bwi) = V * ct * ΔP + We
+            F = N*(Eo + m*Eg + Efw) + We
 
         Where:
-        - N = Initial oil in place (STB)
-        - G = Initial gas in place (SCF)
-        - W = Initial water in place (STB)
-        - Boi, Bo = Initial and current oil formation volume factors (bbl/STB)
-        - Rsi, Rs = Initial and current solution gas-oil ratios (SCF/STB)
-        - Bg, Bgi = Current and initial gas formation volume factors (bbl/SCF)
-        - Bw, Bwi = Current and initial water formation volume factors (bbl/STB)
-        - V = Pore volume (ft³)
-        - ct = Total compressibility (1/psi)
-        - ΔP = Pressure decline (psi)
-        - We = Cumulative water influx (STB)
-        - All volumes are in stock tank barrels (STB) unless otherwise noted.
+            F    = Underground withdrawal (reservoir bbl)
+            Eo   = Oil + dissolved gas expansion term (bbl/STB)
+            Eg   = Gas cap expansion term (bbl/STB)
+            Efw  = Rock + connate water expansion term (bbl/STB)
+            We   = Water influx (bbl)
+            m    = Gas cap ratio = (GIIP*Bgi) / (N*Boi)
 
-        :param step: The time step index to analyze material balance for.
-        :return: `MaterialBalanceAnalysis` containing drive mechanism analysis.
+        All PVT values are weighted by oil saturation so that gas cap cells
+        do not skew Boi, Rsi, or Bgi.
+
+        :param step: The time step index to analyze. Use -1 for the latest step.
+        :return: `MaterialBalance` containing drive volumes, drive indices,
+            pressure, producing GOR, and aquifer influx.
         """
+        step = self._resolve_step(step)
         state = self.get_state(step)
         initial_state = self.get_state(self._min_step)
+
         if state is None or initial_state is None:
             logger.debug(
-                f"State at time step {step} or initial state (step {self._min_step}) is not available. Returning zero material balance analysis."
+                f"State at time step {step} or initial state (step {self._min_step}) "
+                "is not available. Returning zero material balance."
             )
-            return MaterialBalanceAnalysis(
+            return MaterialBalance(
                 pressure=0.0,
+                pressure_decline=0.0,
                 oil_expansion_factor=0.0,
+                producing_gor=0.0,
+                gas_cap_ratio=0.0,
+                underground_withdrawal=0.0,
+                solution_gas_drive=0.0,
+                gas_cap_drive=0.0,
+                water_drive=0.0,
+                compaction_drive=0.0,
                 solution_gas_drive_index=0.0,
                 gas_cap_drive_index=0.0,
                 water_drive_index=0.0,
@@ -2490,179 +2727,245 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 aquifer_influx=0.0,
             )
 
-        # Current reservoir conditions
-        current_pressure = np.nanmean(state.model.fluid_properties.pressure_grid)
-        initial_pressure = np.nanmean(
-            initial_state.model.fluid_properties.pressure_grid
+        initial_model = initial_state.model
+        current_model = state.model
+
+        # Oil-saturation weighted means for Bo, Rs, Bw, pressure
+        # (prevents gas cap cells from skewing oil-zone PVT)
+        initial_oil_saturation_grid = initial_model.fluid_properties.oil_saturation_grid
+        initial_oil_weights = np.where(
+            initial_oil_saturation_grid > 0, initial_oil_saturation_grid, 0.0
+        )
+        initial_oil_weight_sum = float(np.nansum(initial_oil_weights))
+
+        current_oil_saturation_grid = current_model.fluid_properties.oil_saturation_grid
+        current_oil_weights = np.where(
+            current_oil_saturation_grid > 0, current_oil_saturation_grid, 0.0
+        )
+        current_oil_weight_sum = float(np.nansum(current_oil_weights))
+
+        # Gas-saturation weighted means for gas cap Bg/Bgi
+        # (gas cap expansion Eg needs FVF representative of the gas cap, not the oil zone)
+        initial_gas_saturation_grid = initial_model.fluid_properties.gas_saturation_grid
+        initial_gas_weights = np.where(
+            initial_gas_saturation_grid > 0, initial_gas_saturation_grid, 0.0
+        )
+        initial_gas_weight_sum = float(np.nansum(initial_gas_weights))
+
+        current_gas_saturation_grid = current_model.fluid_properties.gas_saturation_grid
+        current_gas_weights = np.where(
+            current_gas_saturation_grid > 0, current_gas_saturation_grid, 0.0
+        )
+        current_gas_weight_sum = float(np.nansum(current_gas_weights))
+
+        def _initial_oil_weighted_mean(grid: np.ndarray) -> float:
+            if initial_oil_weight_sum == 0:
+                return float(np.nanmean(grid))
+            return float(np.nansum(grid * initial_oil_weights) / initial_oil_weight_sum)
+
+        def _current_oil_weighted_mean(grid: np.ndarray) -> float:
+            if current_oil_weight_sum == 0:
+                return float(np.nanmean(grid))
+            return float(np.nansum(grid * current_oil_weights) / current_oil_weight_sum)
+
+        def _initial_gas_weighted_mean(grid: np.ndarray) -> float:
+            if initial_gas_weight_sum == 0:
+                return float(np.nanmean(grid))
+            return float(np.nansum(grid * initial_gas_weights) / initial_gas_weight_sum)
+
+        def _current_gas_weighted_mean(grid: np.ndarray) -> float:
+            if current_gas_weight_sum == 0:
+                return float(np.nanmean(grid))
+            return float(np.nansum(grid * current_gas_weights) / current_gas_weight_sum)
+
+        initial_oil_fvf = _initial_oil_weighted_mean(
+            initial_model.fluid_properties.oil_formation_volume_factor_grid
+        )
+        initial_solution_gor = _initial_oil_weighted_mean(
+            initial_model.fluid_properties.solution_gas_to_oil_ratio_grid
+        )
+        # Gas-weighted Bgi for gas cap expansion Eg (representative of gas cap conditions)
+        # Oil-zone Bgi is not needed: Eo and F only use current Bg.
+        initial_gas_cap_fvf = _initial_gas_weighted_mean(
+            initial_model.fluid_properties.gas_formation_volume_factor_grid
+        )
+
+        initial_water_sat = _initial_oil_weighted_mean(
+            initial_model.fluid_properties.water_saturation_grid
+        )
+        initial_pressure = _initial_oil_weighted_mean(
+            initial_model.fluid_properties.pressure_grid
+        )
+
+        current_oil_fvf = _current_oil_weighted_mean(
+            current_model.fluid_properties.oil_formation_volume_factor_grid
+        )
+        current_solution_gor = _current_oil_weighted_mean(
+            current_model.fluid_properties.solution_gas_to_oil_ratio_grid
+        )
+        # Oil-weighted Bg for Eo and F
+        current_gas_fvf = _current_oil_weighted_mean(
+            current_model.fluid_properties.gas_formation_volume_factor_grid
+        )
+        # Gas-weighted Bg for gas cap expansion Eg
+        current_gas_cap_fvf = _current_gas_weighted_mean(
+            current_model.fluid_properties.gas_formation_volume_factor_grid
+        )
+        current_water_fvf = _current_oil_weighted_mean(
+            current_model.fluid_properties.water_formation_volume_factor_grid
+        )
+        current_pressure = _current_oil_weighted_mean(
+            current_model.fluid_properties.pressure_grid
         )
         pressure_decline = initial_pressure - current_pressure
-        # Formation volume factors
-        current_oil_fvf = np.nanmean(
-            state.model.fluid_properties.oil_formation_volume_factor_grid
+
+        rock_compressibility = float(initial_model.rock_properties.compressibility)
+        water_compressibility = float(
+            np.nanmean(initial_model.fluid_properties.water_compressibility_grid)
         )
-        initial_oil_fvf = np.nanmean(
-            initial_state.model.fluid_properties.oil_formation_volume_factor_grid
+
+        initial_oil_in_place = self.oil_in_place(self._min_step)
+        initial_free_gas_in_place = self.free_gas_in_place(self._min_step)
+
+        gas_cap_ratio = (
+            (initial_free_gas_in_place * initial_gas_cap_fvf)
+            / (initial_oil_in_place * initial_oil_fvf)
+            if (initial_oil_in_place * initial_oil_fvf) > 0
+            else 0.0
         )
-        current_gas_fvf = np.nanmean(
-            state.model.fluid_properties.gas_formation_volume_factor_grid
-        )
-        current_water_fvf = np.nanmean(
-            state.model.fluid_properties.water_formation_volume_factor_grid
-        )
-        # Gas-oil ratio evolution
-        current_gor = np.nanmean(
-            state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-        )
-        initial_gor = np.nanmean(
-            initial_state.model.fluid_properties.solution_gas_to_oil_ratio_grid
-        )
-        # Saturation changes
-        current_oil_sat = np.nanmean(state.model.fluid_properties.oil_saturation_grid)
-        current_gas_sat = np.nanmean(state.model.fluid_properties.gas_saturation_grid)
-        initial_gas_sat = np.nanmean(
-            initial_state.model.fluid_properties.gas_saturation_grid
-        )
-        current_water_sat = np.nanmean(
-            state.model.fluid_properties.water_saturation_grid
-        )
-        initial_water_sat = np.nanmean(
-            initial_state.model.fluid_properties.water_saturation_grid
-        )
-        # Compressibilities
-        rock_compressibility = state.model.rock_properties.compressibility
-        oil_compressibility = np.nanmean(
-            state.model.fluid_properties.oil_compressibility_grid
-        )
-        water_compressibility = np.nanmean(
-            state.model.fluid_properties.water_compressibility_grid
-        )
-        gas_compressibility = np.nanmean(
-            state.model.fluid_properties.gas_compressibility_grid
-        )
-        # Cumulative production
+
         cumulative_oil_produced = self.oil_produced(self._min_step, step)
         cumulative_water_produced = self.water_produced(self._min_step, step)
-
-        # Initial volumes in place
-        initial_oil = self.oil_in_place(self._min_step)
-        initial_gas = self.gas_in_place(self._min_step)
-        initial_water = self.water_in_place(self._min_step)
-
-        # Calculate total compressibility (rock + fluid)
-        total_compressibility = (
-            rock_compressibility
-            + (current_oil_sat * oil_compressibility)
-            + (current_water_sat * water_compressibility)
-            + (current_gas_sat * gas_compressibility)
-        )
-
-        # DRIVE MECHANISM CALCULATIONS
-        # Solution Gas Drive (oil expansion + liberated gas)
-        # ΔVo = N * (Bo - Boi) + N * (Rsi - Rs) * Bg
-        oil_expansion_factor = current_oil_fvf / initial_oil_fvf
-        # Oil expansion contribution (dimensionally consistent: fraction x volume factor)
-        oil_expansion_drive = (
-            (cumulative_oil_produced / initial_oil)
-            * (current_oil_fvf - initial_oil_fvf)
-            if initial_oil > 0
-            else 0.0
-        )
-
-        # Gas liberation from oil (solution gas released as pressure drops)
-        gas_liberation_drive = (
-            (cumulative_oil_produced / initial_oil)
-            * (initial_gor - current_gor)
-            * current_gas_fvf
-            if initial_oil > 0
-            else 0.0
-        )
-        solution_gas_drive = oil_expansion_drive + gas_liberation_drive
-
-        # Gas Cap Drive (free gas expansion)
-        # Estimated from gas saturation increase beyond solution gas effects
-        gas_saturation_increase = current_gas_sat - initial_gas_sat
-        gas_cap_expansion = gas_saturation_increase * current_gas_fvf
-        gas_cap_drive = (
-            gas_cap_expansion * (initial_gas / initial_oil) if initial_oil > 0 else 0.0
-        )
-
-        # Water Drive (aquifer influx + water injection)
-        # Calculate net water influx considering production and saturation changes
-        water_saturation_change = current_water_sat - initial_water_sat
-        water_influx_from_saturation = water_saturation_change * current_water_fvf
-        # Natural aquifer influx estimation
-        # Aquifer influx = (Current water - Initial water) + Water produced - Water injected
-        current_water = self.water_in_place(step)
+        cumulative_free_gas_produced = self.gas_produced(self._min_step, step)
         cumulative_water_injected = self.water_injected(self._min_step, step)
-        aquifer_influx = max(
-            0.0,
-            (
-                (current_water - initial_water)
-                + (cumulative_water_produced - cumulative_water_injected)
-            ),
+        cumulative_gas_injected = self.gas_injected(self._min_step, step)
+
+        cumulative_solution_gas_produced = 0.0
+        days_per_second = c.DAYS_PER_SECOND
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
+        for s in self._sorted_steps:
+            if s > step:
+                break
+
+            st = self._states[s]
+            oil_production = st.production.oil
+            if oil_production is None:
+                continue
+            step_in_days = st.step_size * days_per_second
+            oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
+            solution_gor_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            oil_production_stb = oil_production * ft3_to_bbl / oil_fvf_grid
+            cumulative_solution_gas_produced += float(
+                np.nansum(solution_gor_grid * oil_production_stb) * step_in_days
+            )
+
+        cumulative_total_gas_produced = (
+            cumulative_free_gas_produced + cumulative_solution_gas_produced
         )
-        water_drive = (
-            (aquifer_influx + water_influx_from_saturation) / initial_oil
-            if initial_oil > 0
+        producing_gor = (
+            cumulative_total_gas_produced / cumulative_oil_produced
+            if cumulative_oil_produced > 0
+            else initial_solution_gor
+        )
+
+        injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
+            wells=state.wells,
+            pressure_grid=current_model.fluid_properties.pressure_grid,
+            temperature_grid=current_model.fluid_properties.temperature_grid,
+            grid_shape=current_model.grid_shape,
+        )
+        injected_water_fvf = (
+            float(np.nanmean(injected_water_fvf_grid))
+            if not np.all(np.isnan(injected_water_fvf_grid))
+            else current_water_fvf
+        )
+        injected_gas_fvf = (
+            float(np.nanmean(injected_gas_fvf_grid))
+            if not np.all(np.isnan(injected_gas_fvf_grid))
+            else current_gas_fvf
+        )
+
+        # Havlena-Odeh terms
+        # Underground withdrawal, `F` in bbl
+        underground_withdrawal = (
+            cumulative_oil_produced
+            * (
+                current_oil_fvf
+                + (producing_gor - current_solution_gor) * current_gas_fvf
+            )
+            + cumulative_water_produced * current_water_fvf
+            - cumulative_water_injected * injected_water_fvf
+            - cumulative_gas_injected * injected_gas_fvf
+        )
+
+        # Expansion terms (bbl/STB)
+        oil_expansion = (current_oil_fvf - initial_oil_fvf) + (
+            initial_solution_gor - current_solution_gor
+        ) * current_gas_fvf
+        gas_cap_expansion = (
+            initial_oil_fvf * ((current_gas_cap_fvf / initial_gas_cap_fvf) - 1)
+            if initial_gas_cap_fvf > 0
+            else 0.0
+        )
+        rock_and_water_expansion = (
+            (1 + gas_cap_ratio)
+            * initial_oil_fvf
+            * (
+                (initial_water_sat * water_compressibility + rock_compressibility)
+                / (1 - initial_water_sat)
+            )
+            * pressure_decline
+            if (1 - initial_water_sat) > 0
             else 0.0
         )
 
-        # Rock and Fluid Compressibility Drive
-        # ΔVc = V * ct * ΔP
-        # Use initial_model pore volume for compaction drive (current state pressure
-        # decline is referenced against initial conditions; using the current state's geometry
-        # double-counts compression effects)
-        pore_volume = (
-            np.nansum(
-                initial_state.model.thickness_grid
-                * initial_state.model.rock_properties.porosity_grid
-                * initial_state.model.rock_properties.net_to_gross_ratio_grid
-            )
-            * self.compute_cell_area(*initial_state.model.cell_dimension[:2])
-            * c.ACRE_FOOT_TO_CUBIC_FEET
-        )
-        compressibility_expansion = (
-            pore_volume
-            * total_compressibility
-            * pressure_decline
-            * c.CUBIC_FEET_TO_BARRELS
-        )
-        compaction_drive = (
-            compressibility_expansion / initial_oil if initial_oil > 0 else 0.0
-        )
+        # Drive volumes in bbl
+        solution_gas_drive = initial_oil_in_place * oil_expansion
+        gas_cap_drive = initial_oil_in_place * gas_cap_ratio * gas_cap_expansion
+        compaction_drive = initial_oil_in_place * rock_and_water_expansion
+        drive_from_expansion = solution_gas_drive + gas_cap_drive + compaction_drive
 
-        # Normalize drive contributions to get drive indices
-        total_drive = (
-            solution_gas_drive + gas_cap_drive + water_drive + compaction_drive
-        )
+        # Water influx `We`: residual between withdrawal and expansion in bbl
+        water_drive = max(0.0, underground_withdrawal - drive_from_expansion)
+
+        total_drive = drive_from_expansion + water_drive
         if total_drive > 0:
             solution_gas_drive_index = solution_gas_drive / total_drive
             gas_cap_drive_index = gas_cap_drive / total_drive
-            water_drive_index = water_drive / total_drive
             compaction_drive_index = compaction_drive / total_drive
+            water_drive_index = water_drive / total_drive
         else:
-            solution_gas_drive_index = 0.0
-            gas_cap_drive_index = 0.0
-            water_drive_index = 0.0
-            compaction_drive_index = 0.0
+            solution_gas_drive_index = gas_cap_drive_index = compaction_drive_index = (
+                water_drive_index
+            ) = 0.0
 
         logger.debug(
-            f"Material balance analysis at time step {step}: "
-            f"P={current_pressure:.2f} psi, ΔP={pressure_decline:.2f} psi, "
-            f"solution_gas={solution_gas_drive_index:.3f}, gas_cap={gas_cap_drive_index:.3f}, "
-            f"water={water_drive_index:.3f}, compaction={compaction_drive_index:.3f}"
+            f"Material balance at step {step}: "
+            f"P={current_pressure:.2f} psia, ΔP={pressure_decline:.2f} psi, "
+            f"Rp={producing_gor:.1f} scf/STB, m={gas_cap_ratio:.4f}, "
+            f"F={underground_withdrawal:.1f} bbl, We={water_drive:.1f} bbl | "
+            f"SGD={solution_gas_drive_index:.3f}, GCD={gas_cap_drive_index:.3f}, "
+            f"WD={water_drive_index:.3f}, CD={compaction_drive_index:.3f}"
         )
-        return MaterialBalanceAnalysis(
+        return MaterialBalance(
             pressure=float(current_pressure),
-            oil_expansion_factor=float(oil_expansion_factor),
+            pressure_decline=float(pressure_decline),
+            oil_expansion_factor=float(current_oil_fvf / initial_oil_fvf),
+            producing_gor=float(producing_gor),
+            gas_cap_ratio=float(gas_cap_ratio),
+            underground_withdrawal=float(underground_withdrawal),
+            solution_gas_drive=float(solution_gas_drive),
+            gas_cap_drive=float(gas_cap_drive),
+            water_drive=float(water_drive),
+            compaction_drive=float(compaction_drive),
             solution_gas_drive_index=float(solution_gas_drive_index),
             gas_cap_drive_index=float(gas_cap_drive_index),
             water_drive_index=float(water_drive_index),
             compaction_drive_index=float(compaction_drive_index),
-            aquifer_influx=float(aquifer_influx),
+            aquifer_influx=float(water_drive),
         )
 
-    mbal = material_balance_analysis
+    mbal = material_balance
 
     def material_balance_error(
         self,
@@ -2670,47 +2973,41 @@ class ModelAnalyst(typing.Generic[NDimension]):
         to_step: int = -1,
     ) -> MaterialBalanceError:
         """
-        Compute the per-phase material balance error over a simulation interval.
+        Compute material balance error over a simulation interval using two
+        complementary approaches.
 
-        The check is based on the fundamental conservation equation expressed at
-        *reservoir conditions*:
+        Phase-level MBE (oil, water, gas) - simulator volume conservation check:
 
-        ```
-        MBE_phase = (ΔPV_phase - (V_inj - V_prod)) / PV_phase_initial
-        ```
+            MBE_phase = (ΔPV_phase - net_flux_phase) / PV_phase_initial
 
-        Where:
-            - `ΔPV_phase` is the change in pore volume occupied by the phase
-            (computed from saturation grids) between *from_step* and *to_step*,
-            converted to ft³ using the average formation volume factor.
-            - `V_inj` and `V_prod` are cumulative injected / produced volumes at
-            reservoir conditions (ft³) over the same interval.
-            - `PV_phase_initial` is the initial pore volume of the phase (ft³),
-            used only as a normaliser.
+        Where all volumes are at reservoir conditions (ft³). Directly tests
+        whether the saturation solver conserved pore-volume occupancy for each
+        phase. A value of 0.0 means the simulator perfectly conserved that phase.
 
-        Because the MBE denominator is the *initial* pore volume of each phase,
-        phases with very small initial volumes (e.g. an initially dry gas cap) can
-        show large fractional errors even for small absolute discrepancies.  Watch
-        `total_mbe` (which uses the combined hydrocarbon pore volume) as the
-        headline metric.
+        Total MBE - Havlena-Odeh physical balance check, sourced directly from
+        `material_balance()` to avoid recomputing PVT terms:
 
-        **Thresholds** (per your documentation):
+            total_mbe = (F - N*(Eo + m*Eg + Efw) - We) / F
 
-        ==================  =================================================
-        |MBE|               Interpretation
-        ==================  =================================================
-        < 0.1 %             Excellent - results are reliable
-        0.1 % - 1 %         Acceptable - monitor for drift
-        1 % - 5 %           Marginal - refine grid or reduce timestep
-        > 5 %               Unacceptable - investigate before using results
-        ==================  =================================================
+        Where F is the total underground withdrawal (reservoir bbl). A value of
+        0.0 means expansion exactly accounts for withdrawal.
+
+        The two checks diagnose different problems:
+            - Large phase MBE → simulator numerical conservation error
+            - Large total MBE → PVT / STOIIP / drive mechanism mismatch
+
+        MBE Quality Thresholds:
+            |MBE| < 0.1%      Excellent   - results are reliable
+            |MBE| < 1%        Acceptable  - monitor for drift
+            |MBE| < 5%        Marginal    - refine grid or reduce timestep
+            |MBE| >= 5%       Unacceptable - investigate before using results
 
         :param from_step: Starting time step of the interval (inclusive).
-            Defaults to `self._min_step` when *None*.
+            Defaults to `self._min_step` when None.
         :param to_step: Ending time step of the interval (inclusive).
             Use -1 for the latest available state.
-        :return: `MaterialBalanceError` with per-phase errors and a
-            quality rating.
+        :return: `MaterialBalanceError` with per-phase and total MBE, drive
+            terms, drive indices, and quality rating.
         """
         if from_step is None:
             from_step = self._min_step
@@ -2725,189 +3022,207 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 water_mbe=0.0,
                 gas_mbe=0.0,
                 total_mbe=0.0,
-                oil_pore_volume_initial=0.0,
-                water_pore_volume_initial=0.0,
-                gas_pore_volume_initial=0.0,
+                solution_gas_drive=0.0,
+                gas_cap_drive=0.0,
+                water_drive=0.0,
+                compaction_drive=0.0,
+                solution_gas_drive_index=0.0,
+                gas_cap_drive_index=0.0,
+                water_drive_index=0.0,
+                compaction_drive_index=0.0,
+                underground_withdrawal=0.0,
                 quality="unacceptable",
                 from_step=from_step,
                 to_step=to_step,
             )
 
-        # Cell geometry
         initial_model = initial_state.model
         current_model = current_state.model
 
-        cell_dim = initial_model.cell_dimension  # (dx, dy) in ft
-        cell_area_ft2 = cell_dim[0] * cell_dim[1]  # ft²
+        mbal = self.material_balance(to_step)
 
-        thickness = initial_model.thickness_grid  # ft
-        porosity = initial_model.rock_properties.porosity_grid
-        net_to_gross = initial_model.rock_properties.net_to_gross_ratio_grid
+        # total_mbe = (F - expansion - We) / F
+        # By construction We = max(0, F - expansion), so if `We` was clamped to 0
+        # (expansion > F, which shouldn't happen physically but can numerically)
+        # `total_mbe` will be non-zero. We = water_drive.
+        drive_from_expansion = (
+            mbal.solution_gas_drive + mbal.gas_cap_drive + mbal.compaction_drive
+        )
+        total_mbe = (
+            (mbal.underground_withdrawal - drive_from_expansion - mbal.water_drive)
+            / mbal.underground_withdrawal
+            if abs(mbal.underground_withdrawal) > 0
+            else 0.0
+        )
 
-        # Pore volume per cell (ft³)
-        pore_volume_grid = cell_area_ft2 * thickness * porosity * net_to_gross  # ft³
+        # Phase-level MBE in reservoir ft³
+        # The saturation solver operates in reservoir space so this is the
+        # correct basis for checking simulator volume conservation.
+        # Pore volume changes with pressure via rock compressibility:
+        #   PV(P) = PV_ref * (1 + cf * (P - P_ref))
+        cell_area_ft2 = (
+            initial_model.cell_dimension[0] * initial_model.cell_dimension[1]
+        )
+        reference_pore_volume_grid = (
+            cell_area_ft2
+            * initial_model.thickness_grid
+            * initial_model.rock_properties.porosity_grid
+            * initial_model.rock_properties.net_to_gross_ratio_grid
+        )
+        rock_compressibility = float(initial_model.rock_properties.compressibility)
+        initial_pressure_grid = initial_model.fluid_properties.pressure_grid
+        current_pressure_grid = current_model.fluid_properties.pressure_grid
 
-        def _phase_pore_volume(saturation_grid: np.ndarray) -> np.ndarray:
-            """ft³ of pore space occupied by the phase."""
-            return pore_volume_grid * saturation_grid
+        initial_pore_volume_grid = reference_pore_volume_grid
+        current_pore_volume_grid = reference_pore_volume_grid * (
+            1.0 + rock_compressibility * (current_pressure_grid - initial_pressure_grid)
+        )
 
-        # Initial pore volumes (ft³)
-        oil_initial_pore_volume = float(
+        initial_oil_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(initial_model.fluid_properties.oil_saturation_grid)
+                initial_pore_volume_grid
+                * initial_model.fluid_properties.oil_saturation_grid
             )
         )
-        water_initial_pore_volume = float(
+        initial_water_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(initial_model.fluid_properties.water_saturation_grid)
+                initial_pore_volume_grid
+                * initial_model.fluid_properties.water_saturation_grid
             )
         )
-        gas_initial_pore_volume = float(
+        initial_gas_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(initial_model.fluid_properties.gas_saturation_grid)
+                initial_pore_volume_grid
+                * initial_model.fluid_properties.gas_saturation_grid
             )
         )
 
-        # Final pore volumes (ft³)
-        oil_current_pore_volume = float(
+        current_oil_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(current_model.fluid_properties.oil_saturation_grid)
+                current_pore_volume_grid
+                * current_model.fluid_properties.oil_saturation_grid
             )
         )
-        water_current_pore_volume = float(
+        current_water_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(current_model.fluid_properties.water_saturation_grid)
+                current_pore_volume_grid
+                * current_model.fluid_properties.water_saturation_grid
             )
         )
-        gas_current_pore_volume = float(
+        current_gas_pv_ft3 = float(
             np.nansum(
-                _phase_pore_volume(current_model.fluid_properties.gas_saturation_grid)
+                current_pore_volume_grid
+                * current_model.fluid_properties.gas_saturation_grid
             )
         )
 
-        # Change in reservoir-condition pore volume for each phase
-        # (positive = phase has grown in the reservoir)
-        oil_pore_volume_change = oil_current_pore_volume - oil_initial_pore_volume
-        water_pore_volume_change = water_current_pore_volume - water_initial_pore_volume
-        gas_pore_volume_change = gas_current_pore_volume - gas_initial_pore_volume
+        oil_pv_change_ft3 = current_oil_pv_ft3 - initial_oil_pv_ft3
+        water_pv_change_ft3 = current_water_pv_ft3 - initial_water_pv_ft3
+        gas_pv_change_ft3 = current_gas_pv_ft3 - initial_gas_pv_ft3
 
-        # The analyst methods already return stock-tank volumes, so we convert back
-        # to reservoir conditions using average FVFs.
-        avg_oil_fvf = float(
-            np.nanmean(current_model.fluid_properties.oil_formation_volume_factor_grid)
-        )
-        avg_water_fvf = float(
-            np.nanmean(
-                current_model.fluid_properties.water_formation_volume_factor_grid
+        # Net flux in reservoir ft³
+        # Production/injection grids are all in ft³/day
+        oil_produced_ft3 = 0.0
+        oil_injected_ft3 = 0.0
+        water_produced_ft3 = 0.0
+        water_injected_ft3 = 0.0
+        gas_produced_ft3 = 0.0
+        gas_injected_ft3 = 0.0
+        days_per_second = c.DAYS_PER_SECOND
+        for s in self._sorted_steps:
+            if s < from_step or s > to_step:
+                continue
+
+            st = self._states[s]
+            step_in_days = st.step_size * days_per_second
+            production = st.production
+            oil_produced_ft3 += (
+                float(np.nansum(production.oil)) * step_in_days
+                if production.oil is not None
+                else 0.0
             )
-        )
-        avg_gas_fvf = float(
-            np.nanmean(current_model.fluid_properties.gas_formation_volume_factor_grid)
-        )
+            water_produced_ft3 += (
+                float(np.nansum(production.water)) * step_in_days
+                if production.water is not None
+                else 0.0
+            )
+            gas_produced_ft3 += (
+                float(np.nansum(production.gas)) * step_in_days
+                if production.gas is not None
+                else 0.0
+            )
 
-        bbl_to_ft3 = c.BARRELS_TO_CUBIC_FEET
+            injection = st.injection
+            oil_injected_ft3 += (
+                float(np.nansum(injection.oil)) * step_in_days
+                if injection.oil is not None
+                else 0.0
+            )
+            water_injected_ft3 += (
+                float(np.nansum(injection.water)) * step_in_days
+                if injection.water is not None
+                else 0.0
+            )
+            gas_injected_ft3 += (
+                float(np.nansum(injection.gas)) * step_in_days
+                if injection.gas is not None
+                else 0.0
+            )
 
-        oil_produced_stb = self.oil_produced(from_step, to_step)
-        oil_injected_stb = self.oil_injected(from_step, to_step)
-        oil_produced_ft3 = oil_produced_stb * avg_oil_fvf * bbl_to_ft3
-        oil_injected_ft3 = oil_injected_stb * avg_oil_fvf * bbl_to_ft3
+        # Positive net flux indicates net flow into reservoir
+        oil_net_flux_ft3 = oil_injected_ft3 - oil_produced_ft3
+        water_net_flux_ft3 = water_injected_ft3 - water_produced_ft3
+        gas_net_flux_ft3 = gas_injected_ft3 - gas_produced_ft3
 
-        injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
-            wells=current_state.wells,
-            pressure_grid=current_model.fluid_properties.pressure_grid,
-            temperature_grid=current_model.fluid_properties.temperature_grid,
-            grid_shape=current_model.grid_shape,
+        oil_mbe = (
+            (oil_pv_change_ft3 - oil_net_flux_ft3) / initial_oil_pv_ft3
+            if initial_oil_pv_ft3 > 0
+            else 0.0
         )
-        avg_injected_gas_fvf = (
-            float(np.nanmean(injected_gas_fvf_grid))
-            if not np.all(np.isnan(injected_gas_fvf_grid))
-            else avg_gas_fvf
+        water_mbe = (
+            (water_pv_change_ft3 - water_net_flux_ft3) / initial_water_pv_ft3
+            if initial_water_pv_ft3 > 0
+            else 0.0
         )
-        avg_injected_water_fvf = (
-            float(np.nanmean(injected_water_fvf_grid))
-            if not np.all(np.isnan(injected_water_fvf_grid))
-            else avg_water_fvf
-        )
-
-        water_produced_stb = self.water_produced(from_step, to_step)
-        water_injected_stb = self.water_injected(from_step, to_step)
-        water_produced_ft3 = water_produced_stb * avg_water_fvf * bbl_to_ft3
-        water_injected_ft3 = water_injected_stb * avg_injected_water_fvf * bbl_to_ft3
-
-        gas_produced_scf = self.free_gas_produced(from_step, to_step)
-        gas_injected_scf = self.gas_injected(from_step, to_step)
-        gas_produced_ft3 = gas_produced_scf * avg_gas_fvf
-        gas_injected_ft3 = gas_injected_scf * avg_injected_gas_fvf
-
-        # MBE = (ΔPV - (V_inj - V_prod)) / PV_initial
-        # Net flux into the reservoir is (injection - production).
-        # If conservation holds: ΔPV == V_inj - V_prod & MBE == 0.
-        def _mbe(
-            pore_volume_change: float,
-            injected_volume: float,
-            produced_volume: float,
-            initial_pore_volume: float,
-        ) -> float:
-            """Computes phase material balance error"""
-            net_flux = injected_volume - produced_volume  # ft³ entering the reservoir
-            discrepancy = pore_volume_change - net_flux
-            if initial_pore_volume == 0.0:
-                return 0.0
-            return discrepancy / initial_pore_volume
-
-        oil_mbe = _mbe(
-            oil_pore_volume_change,
-            oil_injected_ft3,
-            oil_produced_ft3,
-            oil_initial_pore_volume,
-        )
-        water_mbe = _mbe(
-            water_pore_volume_change,
-            water_injected_ft3,
-            water_produced_ft3,
-            water_initial_pore_volume,
-        )
-        gas_mbe = _mbe(
-            gas_pore_volume_change,
-            gas_injected_ft3,
-            gas_produced_ft3,
-            gas_initial_pore_volume,
+        gas_mbe = (
+            (gas_pv_change_ft3 - gas_net_flux_ft3) / initial_gas_pv_ft3
+            if initial_gas_pv_ft3 > 0
+            else 0.0
         )
 
-        # Weighted aggregate: weight each phase by its initial pore volume
-        total_initial_pore_volume = (
-            oil_initial_pore_volume
-            + water_initial_pore_volume
-            + gas_initial_pore_volume
-        )
-        if total_initial_pore_volume > 0:
-            total_mbe = (
-                oil_mbe * oil_initial_pore_volume
-                + water_mbe * water_initial_pore_volume
-                + gas_mbe * gas_initial_pore_volume
-            ) / total_initial_pore_volume
-        else:
-            total_mbe = 0.0
-
-        # quality rating
-        abs_total = abs(total_mbe)
-        if abs_total < 0.001:
+        # Quality rate using the worst of all four MBEs
+        worst_mbe = max(abs(total_mbe), abs(oil_mbe), abs(water_mbe), abs(gas_mbe))
+        if worst_mbe < 0.001:
             quality = "excellent"
-        elif abs_total < 0.01:
+        elif worst_mbe < 0.01:
             quality = "acceptable"
-        elif abs_total < 0.05:
+        elif worst_mbe < 0.05:
             quality = "marginal"
         else:
             quality = "unacceptable"
 
+        logger.debug(
+            f"MBE [{from_step} → {to_step}]: "
+            f"oil={oil_mbe:.4%}, water={water_mbe:.4%}, gas={gas_mbe:.4%}, "
+            f"total={total_mbe:.4%}, quality={quality} | "
+            f"F={mbal.underground_withdrawal:.1f} bbl, "
+            f"SGD={mbal.solution_gas_drive_index:.3f}, GCD={mbal.gas_cap_drive_index:.3f}, "
+            f"WD={mbal.water_drive_index:.3f}, CD={mbal.compaction_drive_index:.3f}"
+        )
         return MaterialBalanceError(
             oil_mbe=float(oil_mbe),
             water_mbe=float(water_mbe),
             gas_mbe=float(gas_mbe),
             total_mbe=float(total_mbe),
-            oil_pore_volume_initial=oil_initial_pore_volume,
-            water_pore_volume_initial=water_initial_pore_volume,
-            gas_pore_volume_initial=gas_initial_pore_volume,
+            solution_gas_drive=float(mbal.solution_gas_drive),
+            gas_cap_drive=float(mbal.gas_cap_drive),
+            water_drive=float(mbal.water_drive),
+            compaction_drive=float(mbal.compaction_drive),
+            solution_gas_drive_index=float(mbal.solution_gas_drive_index),
+            gas_cap_drive_index=float(mbal.gas_cap_drive_index),
+            water_drive_index=float(mbal.water_drive_index),
+            compaction_drive_index=float(mbal.compaction_drive_index),
+            underground_withdrawal=float(mbal.underground_withdrawal),
             quality=quality,
             from_step=from_step,
             to_step=to_step,
@@ -2997,20 +3312,14 @@ class ModelAnalyst(typing.Generic[NDimension]):
             current_model.cell_dimension[0],
             current_model.cell_dimension[1],
         )
-        cell_area_ft2 = cell_dimension_x * cell_dimension_y  # ft^2
-
-        # thickness grid (ft)
+        cell_area_ft2 = cell_dimension_x * cell_dimension_y
         thickness_grid = current_model.thickness_grid
-
-        # porosity and net-to-gross
         porosity_grid = current_model.rock_properties.porosity_grid
         net_to_gross_grid = current_model.rock_properties.net_to_gross_ratio_grid
 
-        # initial Bo (bbl/STB) -> convert to ft³/STB for volume calculations
         oil_formation_volume_factor_initial_grid = (
             initial_model.fluid_properties.oil_formation_volume_factor_grid
         )
-
         # Convert Bo from bbl/STB to ft³/STB
         initial_oil_formation_volume_factor_grid_ft3_per_stb = (
             oil_formation_volume_factor_initial_grid * c.BARRELS_TO_CUBIC_FEET
@@ -3021,58 +3330,64 @@ class ModelAnalyst(typing.Generic[NDimension]):
             initial_oil_formation_volume_factor_grid_ft3_per_stb,
         )
 
-        # Compute initial oil pore volume per cell (ft³) and convert to STB using initial Bo
-        initial_oil_pore_volume_ft3 = (
+        # Compute initial oil (pore) volume per cell (ft³)
+        initial_oil_volume_ft3 = (
             cell_area_ft2
             * thickness_grid
             * porosity_grid
             * net_to_gross_grid
             * initial_oil_saturation
         )
-        oil_initial_stb = np.divide(
-            initial_oil_pore_volume_ft3,
+        initial_oil_volume_stb = np.divide(
+            initial_oil_volume_ft3,
             initial_oil_formation_volume_factor_grid_ft3_per_stb,
-            out=np.zeros_like(initial_oil_pore_volume_ft3),
+            out=np.zeros_like(initial_oil_volume_ft3),
             where=~np.isnan(initial_oil_formation_volume_factor_grid_ft3_per_stb),
         )
 
-        total_initial_oil_stb = float(np.nansum(oil_initial_stb))
+        total_initial_oil_volume_stb = float(np.nansum(initial_oil_volume_stb))
         # Current oil (convert using initial Bo for STB conversion)
-        current_oil_pore_volume_ft3 = (
+        current_oil_volume_ft3 = (
             cell_area_ft2
             * thickness_grid
             * porosity_grid
             * net_to_gross_grid
             * current_oil_saturation
         )
-        current_oil_stb = np.divide(
-            current_oil_pore_volume_ft3,
+        current_oil_volume_stb = np.divide(
+            current_oil_volume_ft3,
             initial_oil_formation_volume_factor_grid_ft3_per_stb,
-            out=np.zeros_like(current_oil_pore_volume_ft3),
+            out=np.zeros_like(current_oil_volume_ft3),
             where=~np.isnan(initial_oil_formation_volume_factor_grid_ft3_per_stb),
         )
 
         # Contacted / uncontacted oil volumes (STB) based on mask
-        contacted_oil_initial_stb = float(np.nansum(oil_initial_stb[contacted_mask]))
-        contacted_oil_remaining_stb = float(np.nansum(current_oil_stb[contacted_mask]))
-        uncontacted_oil_stb = float(np.nansum(oil_initial_stb[~contacted_mask]))
+        contacted_initial_oil_volume_stb = float(
+            np.nansum(initial_oil_volume_stb[contacted_mask])
+        )
+        contacted_oil_volume_remaining_stb = float(
+            np.nansum(current_oil_volume_stb[contacted_mask])
+        )
+        uncontacted_oil_volume_stb = float(
+            np.nansum(initial_oil_volume_stb[~contacted_mask])
+        )
 
         # Volumetric sweep efficiency: fraction of initial oil contacted
         volumetric_sweep_efficiency = (
-            contacted_oil_initial_stb / total_initial_oil_stb
-            if total_initial_oil_stb > 0
+            contacted_initial_oil_volume_stb / total_initial_oil_volume_stb
+            if total_initial_oil_volume_stb > 0
             else 0.0
         )
 
         # Displacement efficiency in contacted volume (saturation-weighted/volume-weighted)
         # numerator: oil removed in contacted cells (STB)
-        if contacted_oil_initial_stb > 0:
+        if contacted_initial_oil_volume_stb > 0:
             oil_removed_contacted_stb = (
-                contacted_oil_initial_stb - contacted_oil_remaining_stb
+                contacted_initial_oil_volume_stb - contacted_oil_volume_remaining_stb
             )
             displacement_efficiency = float(
                 clip(
-                    oil_removed_contacted_stb / contacted_oil_initial_stb,
+                    oil_removed_contacted_stb / contacted_initial_oil_volume_stb,
                     0.0,
                     1.0,
                 )
@@ -3094,6 +3409,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             # 2D grid: every cell is its own planform column
             contacted_planform_cells = int(np.count_nonzero(contacted_mask))
             total_planform_cells = int(np.prod(grid_shape))
+
         areal_sweep_efficiency = (
             (contacted_planform_cells * cell_area_ft2)
             / (total_planform_cells * cell_area_ft2)
@@ -3126,13 +3442,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 porosity_thickness_oil_saturation_delta.reshape(grid_shape),
                 axis=2,
             )
-            oil_initial_stb_per_column = np.nansum(
-                oil_initial_stb.reshape(grid_shape), axis=2
+            initial_oil_volume_stb_per_column = np.nansum(
+                initial_oil_volume_stb.reshape(grid_shape), axis=2
             )
         else:
             denominator_per_column = porosity_thickness_initial_oil_saturation
             numerator_per_column = porosity_thickness_oil_saturation_delta
-            oil_initial_stb_per_column = oil_initial_stb
+            initial_oil_volume_stb_per_column = initial_oil_volume_stb
 
         # Avoid division by zero
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -3143,12 +3459,13 @@ class ModelAnalyst(typing.Generic[NDimension]):
             )
 
         # Weight by initial oil (denominator_per_column * cell_area_ft2 / Bo)
-        # oil_initial_stb_per_column already computed above with 2D guard
-        total_initial_oil_stb_columns = np.nansum(oil_initial_stb_per_column)
-        if total_initial_oil_stb_columns > 0.0:
+        total_initial_oil_volume_stb_columns = np.nansum(
+            initial_oil_volume_stb_per_column
+        )
+        if total_initial_oil_volume_stb_columns > 0.0:
             vertical_sweep_efficiency = (
-                np.nansum(column_fraction * oil_initial_stb_per_column)
-                / total_initial_oil_stb_columns
+                np.nansum(column_fraction * initial_oil_volume_stb_per_column)
+                / total_initial_oil_volume_stb_columns
             )
         else:
             vertical_sweep_efficiency = 0.0
@@ -3156,8 +3473,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             volumetric_sweep_efficiency=float(volumetric_sweep_efficiency),
             displacement_efficiency=float(displacement_efficiency),
             recovery_efficiency=float(recovery_efficiency),
-            contacted_oil=contacted_oil_initial_stb,
-            uncontacted_oil=uncontacted_oil_stb,
+            contacted_oil=contacted_initial_oil_volume_stb,
+            uncontacted_oil=uncontacted_oil_volume_stb,
             areal_sweep_efficiency=float(areal_sweep_efficiency),
             vertical_sweep_efficiency=float(vertical_sweep_efficiency),
         )
@@ -3213,25 +3530,49 @@ class ModelAnalyst(typing.Generic[NDimension]):
         delta = current_sat - initial_sat
         front_mask = delta > threshold  # contacted cells
 
-        total_cells = int(delta.size)
         front_cell_count = int(np.count_nonzero(front_mask))
+
+        # Pore-volume weighted volume fraction (accounts for heterogeneous
+        # thickness, porosity, and NTG across the grid)
+        grid_shape = state.model.grid_shape
+        model = state.model
+        cell_area_ft2 = model.cell_dimension[0] * model.cell_dimension[1]
+        pore_volume_grid = (
+            cell_area_ft2
+            * model.thickness_grid
+            * model.rock_properties.porosity_grid
+            * model.rock_properties.net_to_gross_ratio_grid
+        )
+        total_pore_volume = float(np.nansum(pore_volume_grid))
         front_volume_fraction = (
-            front_cell_count / total_cells if total_cells > 0 else 0.0
+            float(np.nansum(pore_volume_grid[front_mask])) / total_pore_volume
+            if total_pore_volume > 0
+            else 0.0
         )
 
-        avg_front_sat = (
+        avg_front_saturation = (
             float(np.nanmean(current_sat[front_mask])) if front_cell_count > 0 else 0.0
         )
-        max_front_sat = (
+        max_front_saturation = (
             float(np.nanmax(current_sat[front_mask])) if front_cell_count > 0 else 0.0
         )
 
-        # Centre-of-mass of the contacted region (in cell-index units)
-        grid_shape = state.model.grid_shape
+        # Saturation-delta weighted centroid (in cell-index units)
+        # Weights the centre-of-mass toward cells with larger saturation
+        # changes, giving a more physically representative plume centre.
         reshaped_mask = front_mask.reshape(grid_shape)
+        reshaped_delta = delta.reshape(grid_shape)
         if front_cell_count > 0:
             idx = np.argwhere(reshaped_mask)  # shape (N, ndim)
-            centroid = tuple(float(np.mean(idx[:, d])) for d in range(idx.shape[1]))
+            weights = reshaped_delta[reshaped_mask]  # saturation delta per front cell
+            weight_sum = float(np.nansum(weights))
+            if weight_sum > 0:
+                centroid = tuple(
+                    float(np.nansum(idx[:, d] * weights) / weight_sum)
+                    for d in range(idx.shape[1])
+                )
+            else:
+                centroid = tuple(float(np.mean(idx[:, d])) for d in range(idx.shape[1]))
             # Pad to 3-tuple if the grid is 2-D
             while len(centroid) < 3:
                 centroid = centroid + (0.0,)
@@ -3243,8 +3584,8 @@ class ModelAnalyst(typing.Generic[NDimension]):
             front_cells=front_mask.reshape(grid_shape),
             front_cell_count=front_cell_count,
             front_volume_fraction=front_volume_fraction,
-            average_front_saturation=avg_front_sat,
-            max_front_saturation=max_front_sat,
+            average_front_saturation=avg_front_saturation,
+            max_front_saturation=max_front_saturation,
             saturation_delta_grid=delta.reshape(grid_shape),
             front_centroid=centroid,  # type: ignore[arg-type]
         )
@@ -3268,23 +3609,27 @@ class ModelAnalyst(typing.Generic[NDimension]):
             )
             return "vogel"
 
-        oil_saturation = np.nanmean(state.model.fluid_properties.oil_saturation_grid)
-        gas_saturation = np.nanmean(state.model.fluid_properties.gas_saturation_grid)
+        avg_oil_saturation = np.nanmean(
+            state.model.fluid_properties.oil_saturation_grid
+        )
+        avg_gas_saturation = np.nanmean(
+            state.model.fluid_properties.gas_saturation_grid
+        )
         reservoir_pressure = np.nanmean(state.model.fluid_properties.pressure_grid)
         estimated_bubble_point = np.nanmean(
             state.model.fluid_properties.oil_bubble_point_pressure_grid
         )
 
         # Check if this is primarily a gas reservoir
-        if gas_saturation >= 0.6:
+        if avg_gas_saturation >= 0.6:
             return "fetkovich"  # Best for gas wells
 
         # Check if we're above bubble point (single-phase oil)
-        elif reservoir_pressure > estimated_bubble_point and oil_saturation > 0.7:
+        elif reservoir_pressure > estimated_bubble_point and avg_oil_saturation > 0.7:
             return "linear"  # Best for undersaturated oil
 
         # Check if we have significant multi-phase flow
-        elif oil_saturation > 0.3 and gas_saturation > 0.2:
+        elif avg_oil_saturation > 0.3 and avg_gas_saturation > 0.2:
             return "jones"  # Best for complex multi-phase systems
 
         # Default to Vogel for solution gas drive reservoirs
@@ -3374,6 +3719,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
         active_wells = 0
         active_cells = 0
 
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
         for well in production_wells:
             if not well.is_open:
                 continue
@@ -3408,11 +3754,9 @@ class ModelAnalyst(typing.Generic[NDimension]):
                             i, j, k
                         ]
                     )
-                    cell_flow_rate_ft3 = state.production.oil[
-                        i, j, k
-                    ]  # ft³/day (reservoir bbl)
+                    cell_flow_rate_ft3 = state.production.oil[i, j, k]  # ft³/day
                     cell_flow_rate_stb = (
-                        cell_flow_rate_ft3 * c.CUBIC_FEET_TO_BARRELS / oil_fvf
+                        cell_flow_rate_ft3 * ft3_to_bbl / oil_fvf
                     )  # STB/day
 
                 elif phase == "water":
@@ -3425,7 +3769,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                     )
                     cell_flow_rate_ft3 = state.production.water[i, j, k]  # ft³/day
                     cell_flow_rate_stb = (
-                        cell_flow_rate_ft3 * c.CUBIC_FEET_TO_BARRELS / water_fvf
+                        cell_flow_rate_ft3 * ft3_to_bbl / water_fvf
                     )  # STB/day
 
                 else:  # gas
@@ -3574,24 +3918,20 @@ class ModelAnalyst(typing.Generic[NDimension]):
             )
             return 0.0
 
-        # Get cumulative injection volumes (with optional cell filter)
+        # Get cumulative injection/production volumes
         cumulative_water_injected = self.water_injected(
             self._min_step, step, cells=cells_obj
-        )  # STB
+        )
         cumulative_gas_injected = self.gas_injected(
             self._min_step, step, cells=cells_obj
-        )  # SCF (free gas only)
-
-        # Get cumulative production volumes (with optional cell filter)
+        )
         cumulative_oil_produced = self.oil_produced(
             self._min_step, step, cells=cells_obj
-        )  # STB
+        )
         cumulative_water_produced = self.water_produced(
             self._min_step, step, cells=cells_obj
-        )  # STB
-        cumulative_free_gas_produced = self.free_gas_produced(
-            self._min_step, step, cells=cells_obj
-        )  # SCF (free gas only)
+        )
+        free_gas_produced = self.gas_produced(self._min_step, step, cells=cells_obj)
 
         injected_gas_fvf_grid, injected_water_fvf_grid = _build_injected_fvf_grids(
             wells=state.wells,
@@ -3600,25 +3940,21 @@ class ModelAnalyst(typing.Generic[NDimension]):
             grid_shape=state.model.grid_shape,
         )
 
-        # Get average formation volume factors
         avg_oil_fvf = np.nanmean(
             state.model.fluid_properties.oil_formation_volume_factor_grid
-        )  # bbl/STB
+        )
         avg_gas_fvf = np.nanmean(
             state.model.fluid_properties.gas_formation_volume_factor_grid
-        )  # bbl/SCF
+        )
         avg_water_fvf_produced = np.nanmean(
             state.model.fluid_properties.water_formation_volume_factor_grid
-        )  # bbl/STB
-        # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
+        )
+
         avg_injected_water_fvf = (
             float(np.nanmean(injected_water_fvf_grid))
             if not np.all(np.isnan(injected_water_fvf_grid))
             else avg_water_fvf_produced
         )
-
-        # Get gas formation volume factor for injected gas
-        # nanmean ignores non-injecting cells; falls back to reservoir avg if no injectors
         avg_injected_gas_fvf = (
             float(np.nanmean(injected_gas_fvf_grid))
             if not np.all(np.isnan(injected_gas_fvf_grid))
@@ -3626,58 +3962,40 @@ class ModelAnalyst(typing.Generic[NDimension]):
         )
 
         # Calculate injected reservoir volumes (numerator)
-        injected_water_reservoir_volume = (
-            cumulative_water_injected * avg_injected_water_fvf
-        )  # bbl
-        injected_gas_reservoir_volume = (
-            cumulative_gas_injected * avg_injected_gas_fvf
-        )  # bbl
-        total_injected_volume = (
-            injected_water_reservoir_volume + injected_gas_reservoir_volume
-        )
+        ft3_to_bbl = c.CUBIC_FEET_TO_BARRELS
+        injected_water_bbl = cumulative_water_injected * avg_injected_water_fvf
+        injected_gas_bbl = cumulative_gas_injected * avg_injected_gas_fvf * ft3_to_bbl
+        total_injected_volume = injected_water_bbl + injected_gas_bbl
 
         # Calculate produced reservoir volumes (denominator)
-        produced_oil_reservoir_volume = cumulative_oil_produced * avg_oil_fvf  # bbl
-        produced_water_reservoir_volume = (
-            cumulative_water_produced * avg_water_fvf_produced
-        )  # bbl
+        produced_oil_bbl = cumulative_oil_produced * avg_oil_fvf
+        produced_water_bbl = cumulative_water_produced * avg_water_fvf_produced
 
-        # Free gas produced (already free gas only from free_gas_produced)
+        # Free gas produced (already free gas only from `gas_produced`)
         # Plus solution gas that came out of the oil
         # Calculate solution gas step-by-step to account for pressure-dependent Rs
-        solution_free_gas_produced = 0.0
+        solution_gas_produced = 0.0
+        days_per_second = c.DAYS_PER_SECOND
         for s in self._sorted_steps:
             if s > step:
                 break
             st = self._states[s]
-            rs_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
+            solution_gor_grid = st.model.fluid_properties.solution_gas_to_oil_ratio_grid
             oil_production = st.production.oil
             if oil_production is None:
                 continue
-            step_in_days = st.step_size * c.DAYS_PER_SECOND
+            step_in_days = st.step_size * days_per_second
             oil_fvf_grid = st.model.fluid_properties.oil_formation_volume_factor_grid
-            oil_production_stb_day = (
-                oil_production * c.CUBIC_FEET_TO_BARRELS / oil_fvf_grid
-            )
-            solution_free_gas_produced += float(
-                np.nansum(rs_grid * oil_production_stb_day) * step_in_days
+            oil_production_stb = oil_production * ft3_to_bbl / oil_fvf_grid
+            solution_gas_produced += float(
+                np.nansum(solution_gor_grid * oil_production_stb) * step_in_days
             )
 
-        total_free_gas_produced = (
-            cumulative_free_gas_produced + solution_free_gas_produced
-        )  # SCF
-
-        # Produced reservoir free gas = cumulative_free_gas_produced * avg_gas_fvf
-        # Directly use the already-computed total_free_gas_produced value rather than
-        # re-deriving from produced GOR, which would introduce floating-point drift.
-        produced_gas_reservoir_volume = total_free_gas_produced * avg_gas_fvf  # bbl
-        total_produced_volume = (
-            produced_oil_reservoir_volume
-            + produced_water_reservoir_volume
-            + produced_gas_reservoir_volume
-        )
+        total_gas_produced = free_gas_produced + solution_gas_produced  # SCF
+        produced_gas_bbl = total_gas_produced * avg_gas_fvf * ft3_to_bbl
 
         # Calculate VRR
+        total_produced_volume = produced_oil_bbl + produced_water_bbl + produced_gas_bbl
         if total_produced_volume <= 0:
             return 0.0
 
@@ -3966,7 +4284,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             f"Decline curve analysis: phase={phase}, decline_type={decline_type}, "
             f"steps={from_step} to {to_step}, positive_rates={positive_count}"
         )
-
         if positive_count < 2:
             logger.warning(
                 f"Insufficient positive {phase} rate data for decline curve analysis: "
@@ -4016,7 +4333,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 else 0.0
             )
 
-            #  return fitted qi as initial_rate (last_actual_rate leads to forecast
+            # Return fitted qi as `initial_rate` (using last actual rate leads to forecast
             # discontinuities and doesn't reflect the regression result)
             return DeclineCurveResult(
                 decline_type="exponential",
@@ -4058,8 +4375,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
                 if harmonic_total_sum_squares > 0
                 else 0.0
             )
-
-            #  return fitted qi as initial_rate
             return DeclineCurveResult(
                 decline_type="harmonic",
                 initial_rate=float(harmonic_initial_production_rate),
@@ -4075,7 +4390,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         # decline_type == "hyperbolic":
         # Hyperbolic decline: q = qi / (1 + b*Di*t)^(1/b)
-        # This requires non-linear regression using scipy curve_fit
+        # This requires non-linear regression using SciPy `curve_fit`
         def hyperbolic_decline_function(
             time_array, initial_rate_param, decline_rate_param, b_factor_param
         ):
@@ -4206,7 +4521,7 @@ class ModelAnalyst(typing.Generic[NDimension]):
             (no error flag set).
         :param steps: Number of time steps to forecast into the future.
         :param economic_limit: Optional minimum economic production rate in per-day units
-            (STB/day for oil/water, scf/day for gas). Forecasting stops when predicted
+            (STB/day for oil/water, SCF/day for gas). Forecasting stops when predicted
             rate falls below this value. Default is None (no economic limit applied).
         :return: List of tuples containing (step, forecasted_rate). Rates are in
             per-day units (STB/day or scf/day). Time steps are absolute values continuing
@@ -4242,7 +4557,6 @@ class ModelAnalyst(typing.Generic[NDimension]):
             else:
                 rate = 0.0
 
-            # Economic limit is already in per-day units (same as rate), so direct comparison works
             if economic_limit is not None and rate < economic_limit:
                 break
 
@@ -4299,16 +4613,17 @@ class ModelAnalyst(typing.Generic[NDimension]):
             errors or if parameters are invalid.
         """
         if decline_result.error:
+            logger.error(decline_result.error)
             return 0.0
 
         qi = decline_result.initial_rate  # STB/day or scf/day
-        di = decline_result.decline_rate_per_timestep  # per timestep
+        di = decline_result.decline_rate_per_timestep
         b = decline_result.b_factor
 
         if di <= 0:
             return 0.0
 
-        # Calculate final rate after forecast_steps (in STB/day or scf/day)
+        # Calculate final rate after `forecast_steps` (in STB/day or scf/day)
         if decline_result.decline_type == "exponential":
             q_final = qi * np.exp(-di * forecast_steps)
         elif decline_result.decline_type == "harmonic":
@@ -4408,10 +4723,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
         Mobility (λ) is calculated as:
 
-            λ = kα / μ
+            λ = kr_α / μ
 
         Where:
-        - kα = Relative permeability of the phase (fraction)
+        - kr_α = Relative permeability of the phase (fraction)
         - μ = viscosity of the phase (cP)
 
         A mobility ratio less than 1 (M < 1) indicates a stable displacement,
@@ -4480,10 +4795,10 @@ class ModelAnalyst(typing.Generic[NDimension]):
             where=displaced_viscosity_grid != 0,
         )
         avg_displaced_mobility = np.mean(displaced_mobility_grid)
-        # Calculate mobility ratio
         if avg_displaced_mobility == 0:
             return float("inf")
 
+        # Calculate mobility ratio
         return float(avg_displacing_mobility / avg_displaced_mobility)
 
     mr = mobility_ratio
@@ -4550,19 +4865,19 @@ class ModelAnalyst(typing.Generic[NDimension]):
 
     def material_balance_history(
         self, from_step: int = 0, to_step: int = -1, interval: int = 1
-    ) -> typing.Generator[typing.Tuple[int, MaterialBalanceAnalysis], None, None]:
+    ) -> typing.Generator[typing.Tuple[int, MaterialBalance], None, None]:
         """
-        Generator for material balance analysis history over time.
+        Generator for material balance history over time.
 
         :param from_step: Starting time step index.
         :param to_step: Ending time step index.
         :param interval: Time step interval.
-        :return: Generator yielding (step, `MaterialBalanceAnalysis`) tuples.
+        :return: Generator yielding (step, `MaterialBalance`) tuples.
         """
         to_step = self._resolve_step(to_step)
 
         for t in range(from_step, to_step + 1, interval):
-            yield (t, self.material_balance_analysis(t))
+            yield (t, self.material_balance(t))
 
     mbal_history = material_balance_history
 
